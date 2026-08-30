@@ -55,6 +55,25 @@ struct EmptyChartState: View {
     static let noaaDownloads = URL(string: "https://www.charts.noaa.gov/ENCs/ENCs.shtml")!
 
     var body: some View {
+        // Centred while it fits, and scrollable when it does not. An overlay
+        // child that does not fill is allocated its natural height, so on a
+        // phone in landscape, or at an accessibility text size, the page was
+        // taller than the screen and clipped at both ends with no way to
+        // reach either.
+        GeometryReader { geo in
+            ScrollView {
+                page
+                    .frame(maxWidth: 430, alignment: .leading)
+                    // A page with no inset runs its text into both edges of a
+                    // phone, which is where it was losing the end of a line.
+                    .padding(.horizontal, Chrome.margin)
+                    .padding(.vertical, Chrome.margin)
+                    .frame(minWidth: geo.size.width, minHeight: geo.size.height)
+            }
+        }
+    }
+
+    private var page: some View {
         VStack(alignment: .leading, spacing: 0) {
             Image(systemName: "map")
                 .font(.system(size: 26, weight: .light))
@@ -89,15 +108,34 @@ struct EmptyChartState: View {
 
             HStack(spacing: 10) {
                 Button { model.requestOpenPicker() } label: {
-                    Label("Choose Charts…", systemImage: "folder")
+                    // The Files picker runs in another process, and starting
+                    // it takes about three seconds the first time. The button
+                    // says it is working for that whole wait: three seconds of
+                    // an unchanged screen reads as a button that did nothing.
+                    if model.showImporter {
+                        Label {
+                            Text("Choose Charts…")
+                        } icon: {
+                            ProgressView().controlSize(.small)
+                        }
+                    } else {
+                        Label("Choose Charts…", systemImage: "folder")
+                    }
                 }
                 .controlSize(.large)
                 .buttonStyle(.borderedProminent)
+                .disabled(model.showImporter)
                 .keyboardShortcut("o", modifiers: .command)
+                .accessibilityIdentifier("choose-charts")
 
+                #if os(macOS)
+                // The Mac takes a drop on the window. A touch device does not:
+                // there is no window to drop on, and the picker below reaches
+                // everywhere the Files app does, a folder of cells included.
                 Text("or drop them anywhere in this window")
                     .font(.system(size: 12))
                     .foregroundStyle(Chrome.muted)
+                #endif
             }
             .padding(.bottom, 14)
 
@@ -163,6 +201,5 @@ struct EmptyChartState: View {
                 }
             }
         }
-        .frame(maxWidth: 430, alignment: .leading)
     }
 }

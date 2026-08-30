@@ -405,6 +405,11 @@ schemes:
       targets:
         LookoutMarine: all
     test:
+      # The tests are hosted by the app, and the app hands over to a copy
+      # already running and exits. With one open, the test host exited 0 before
+      # the runner could connect and the failure named neither cause.
+      environmentVariables:
+        LOOKOUT_MULTI: "1"
       targets:
         - LookoutMarineTests
   LookoutMarine-iOS:

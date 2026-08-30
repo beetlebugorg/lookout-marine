@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		01E9C851AE2AFBF1C12F09F9 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 7DE881BB41EFEF6FD7443244 /* Assets.xcassets */; };
+		01F7E57414B914883ACB6649 /* FirstRunTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 607E7979DEB0E1563E586E09 /* FirstRunTests.swift */; };
 		02BEB8DB1EBC2B61CC1CEB36 /* Chrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8ABF98AA4261380DCAF4621C /* Chrome.swift */; };
 		048482DA2781F36826865895 /* DisplaySection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3257A1088AC4BCC3FBBFB97E /* DisplaySection.swift */; };
 		05B3C13F16FF445356BDE836 /* AppModel+Pick.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC2B81875DB89ACFDD3F044A /* AppModel+Pick.swift */; };
@@ -301,6 +302,7 @@
 		5A0B8C7B273A6E8D538848ED /* ChartSets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartSets.swift; sourceTree = "<group>"; };
 		5B63D868A70DE2456FE76DF5 /* AppModel+Alerts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppModel+Alerts.swift"; sourceTree = "<group>"; };
 		5E856FD037203427CE8B9E9C /* CompactHudTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompactHudTests.swift; sourceTree = "<group>"; };
+		607E7979DEB0E1563E586E09 /* FirstRunTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirstRunTests.swift; sourceTree = "<group>"; };
 		6152AE14014203A46906CD92 /* PluginConsentSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginConsentSheet.swift; sourceTree = "<group>"; };
 		6473AB9A6EC7604E642EB8B9 /* LicenseManifestTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LicenseManifestTests.swift; sourceTree = "<group>"; };
 		6B35807C0ABB9C564DABEC58 /* Store.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Store.swift; sourceTree = "<group>"; };
@@ -406,6 +408,7 @@
 				A9B414D76B8FFB4298A58494 /* ChartFixture.swift */,
 				F71C72C16BAED59FED342AD2 /* ChartInteractionTests.swift */,
 				5E856FD037203427CE8B9E9C /* CompactHudTests.swift */,
+				607E7979DEB0E1563E586E09 /* FirstRunTests.swift */,
 				289ADF58E60CB5CBBD3FF7EF /* HudTests.swift */,
 				9FAE0C61602607D05CF24596 /* LicensesTests.swift */,
 				1E0D029EF275F380E404C6A3 /* PickReportTests.swift */,
@@ -1135,6 +1138,7 @@
 				DDB11483FF3DEE919A04B9C8 /* ChartFixture.swift in Sources */,
 				DAFCDF511109AE0461E947F2 /* ChartInteractionTests.swift in Sources */,
 				C82892E31FE36680817F7113 /* CompactHudTests.swift in Sources */,
+				01F7E57414B914883ACB6649 /* FirstRunTests.swift in Sources */,
 				5DD02716900498D0448E04AB /* HudTests.swift in Sources */,
 				1BF3259967105BE75AEBE75F /* LicensesTests.swift in Sources */,
 				090026F5B8DB917F9CE93BA7 /* PickReportTests.swift in Sources */,
