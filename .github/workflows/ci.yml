@@ -148,55 +148,30 @@ jobs:
         with:
           version: ${{ env.ZIG_VERSION }}
 
-      # The target's script phases build WAMR and the Zig cores, so xcodebuild
-      # is the whole build. There is no signing identity on a runner: ad-hoc
-      # for the Mac app, none at all for a simulator build.
-      - name: Build macOS
-        run: |
-          xcodebuild -project macos/LookoutMarine.xcodeproj -scheme LookoutMarine \
-            -configuration Debug -destination 'platform=macOS' \
-            -derivedDataPath macos/build-mac \
-            CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= build
-
-      - name: Build iOS
-        run: |
-          xcodebuild -project macos/LookoutMarine.xcodeproj -scheme LookoutMarine-iOS \
-            -configuration Debug -destination 'generic/platform=iOS Simulator' \
-            -derivedDataPath macos/build-mac \
-            CODE_SIGNING_ALLOWED=NO build
-
-      # The unit tests. Both bundles are hosted by the app target above, so
-      # they reach the shell through `@testable import` and the C ABI through
-      # the host.
-      - name: Test macOS
+      # Two invocations, not five. Each one re-runs the target's script
+      # phases, which build WAMR and the Zig cores and are marked
+      # basedOnDependencyAnalysis: false so they always run, and each one that
+      # names a simulator boots it and installs the app. `test` builds, so a
+      # separate build step pays that twice for nothing.
+      - name: Build and test macOS
         run: |
           xcodebuild test -project macos/LookoutMarine.xcodeproj -scheme LookoutMarine \
             -configuration Debug -destination 'platform=macOS' \
             -derivedDataPath macos/build-mac \
-            CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= \
-            -only-testing:LookoutMarineTests
+            CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=
 
-      - name: Test iOS
-        run: |
-          xcodebuild test -project macos/LookoutMarine.xcodeproj -scheme LookoutMarine-iOS \
-            -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17' \
-            -derivedDataPath macos/build-mac \
-            CODE_SIGNING_ALLOWED=NO \
-            -only-testing:LookoutMarine-iOSTests
-
-      # The UI tests open the baked cell this repository carries, so a runner
-      # has a chart. They answer what only a real touch delivery can: that a
-      # press raises the chart menu, that a chrome button is not swallowed by
-      # the pass-through window, and that the report and the form behave. Some
+      # The unit tests and the UI tests in one run: the UI tests open the baked
+      # cell this repository carries, so a runner has a chart. They answer what
+      # only a real touch delivery can, that a press raises the chart menu and
+      # that a chrome button is not swallowed by the pass-through window. Some
       # skip: a raster chart is a 3.7 GB download, and a synthesized pinch does
       # not reach the chart on a simulator (see ChartInteractionTests).
-      - name: UI test iOS
+      - name: Build and test iOS
         run: |
           xcodebuild test -project macos/LookoutMarine.xcodeproj -scheme LookoutMarine-iOS \
             -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17' \
             -derivedDataPath macos/build-mac \
-            CODE_SIGNING_ALLOWED=NO \
-            -only-testing:LookoutMarine-iOS-UITests
+            CODE_SIGNING_ALLOWED=NO
 
       # Tar first: an artifact zip drops the executable bit, which leaves an
       # .app that will not launch.
