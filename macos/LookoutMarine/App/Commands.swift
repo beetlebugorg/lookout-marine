@@ -54,10 +54,10 @@ struct AppCommands: Commands {
         // looks like. Every declaration lands here, whatever its `menu` names,
         // until there is a second place to put one.
         CommandMenu("Vessels") {
-            if model.pluginTables.isEmpty {
+            if model.plugins.tables.isEmpty {
                 Text("No Vessel Tables").foregroundStyle(.secondary)
             } else {
-                ForEach(model.pluginTables) { spec in
+                ForEach(model.plugins.tables) { spec in
                     Button("\(spec.title)…") { model.showPluginTable(spec) }
                 }
             }

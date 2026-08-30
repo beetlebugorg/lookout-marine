@@ -63,16 +63,16 @@ struct ContentView: View {
             // The .lkplug consent sheet. Every install entry point sets
             // pendingInstall; the sheet is the only way from there to disk.
             .sheet(item: Binding(
-                get: { model.pendingInstall },
-                set: { model.pendingInstall = $0 })) { pkg in
+                get: { model.plugins.pendingInstall },
+                set: { model.plugins.pendingInstall = $0 })) { pkg in
                 PluginConsentSheet(model: model, pkg: pkg)
             }
             .alert("Couldn't install plugin", isPresented: Binding(
-                get: { model.installError != nil },
-                set: { if !$0 { model.installError = nil } })) {
-                Button("OK", role: .cancel) { model.installError = nil }
+                get: { model.plugins.installError != nil },
+                set: { if !$0 { model.plugins.installError = nil } })) {
+                Button("OK", role: .cancel) { model.plugins.installError = nil }
             } message: {
-                Text(model.installError ?? "")
+                Text(model.plugins.installError ?? "")
             }
             #if os(macOS)
             // A file dropped on the chart takes the path the Open panel takes:

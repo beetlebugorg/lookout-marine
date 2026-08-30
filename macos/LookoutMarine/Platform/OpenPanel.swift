@@ -195,10 +195,10 @@ extension AppModel {
                                    withIntermediateDirectories: true)
             try fm.copyItem(at: url, to: dest)
         } catch {
-            installError = "Couldn't read \(url.lastPathComponent):\n\(error.localizedDescription)"
+            plugins.installError = "Couldn't read \(url.lastPathComponent):\n\(error.localizedDescription)"
             return
         }
-        pendingInstallCopy = dest.deletingLastPathComponent()
+        plugins.pendingInstallCopy = dest.deletingLastPathComponent()
         beginPluginInstall(dest.path)
     }
 

@@ -32,64 +32,22 @@ final class AppModel {
     var openError: String?
     var openSeq = 0
 
-    // MARK: Plugin install
-    /// The package on the consent sheet: set by beginPluginInstall, cleared by
-    /// Install or Cancel. The sheet presents while this is non-nil.
-    var pendingInstall: PluginPackage?
-    /// The sentence of the last refused install, for its own alert — an
-    /// install refusal is not a chart error.
-    var installError: String?
-    /// A .lkplug opened before any chart was: kept until the chart (and with
-    /// it the plugin layer) is up, then inspected.
-    var pendingInstallPath: String?
-    /// The temporary directory holding a package copied off the Files picker,
-    /// deleted once the sheet is answered either way.
-    var pendingInstallCopy: URL?
-
     /// Start the install flow: read the package, and put what it asks for in
     /// front of the mariner. Every entry point lands here — Finder, a drop on
     /// the window, and Settings > Plugins > Install Plugin….
     func beginPluginInstall(_ path: String) {
-        guard hasChart, let controller else {
-            pendingInstallPath = path
+        guard hasChart else {
+            plugins.pendingInstallPath = path
             return
         }
-        guard let json = controller.inspectPlugin(path) else {
-            installError = "The plugin layer could not start."
-            return
-        }
-        let pkg = PluginPackage.parse(json, path: path)
-        if let err = pkg.error {
-            installError = err
-            return
-        }
-        pendingInstall = pkg
-    }
-
-    /// The Install button: the consent happened, so the package goes in and
-    /// starts drawing. A refusal lands in its own alert.
-    func confirmPluginInstall() {
-        guard let pkg = pendingInstall else { return }
-        pendingInstall = nil
-        if let err = controller?.installPlugin(pkg.path) {
-            installError = err
-        }
-        dropPluginCopy()
-    }
-
-    /// Throw away a package copied off the Files picker. The core keeps its own
-    /// copy of anything it installed, and a cancel keeps nothing.
-    func dropPluginCopy() {
-        guard let dir = pendingInstallCopy else { return }
-        pendingInstallCopy = nil
-        try? FileManager.default.removeItem(at: dir)
+        plugins.begin(path)
     }
 
     /// A .lkplug that arrived before the chart did, now that the chart is up.
     func drainPendingInstall() {
-        guard hasChart, let path = pendingInstallPath else { return }
-        pendingInstallPath = nil
-        beginPluginInstall(path)
+        guard hasChart, let path = plugins.pendingInstallPath else { return }
+        plugins.pendingInstallPath = nil
+        plugins.begin(path)
     }
 
     // MARK: Startup loader state
@@ -154,9 +112,6 @@ final class AppModel {
     /// Course up as the core reports it: 0 off, 1 turning with own ship, 2 on
     /// and waiting for a heading. Polled like followState.
     var courseUpState: Int = 0
-    /// True while the plugin layer is up. Own ship comes from a plugin, so the
-    /// follow control is only shown when one can supply a position.
-    var pluginsActive = false
     /// What the position readout may say, as the core reports it. Polled on
     /// the render tick beside the position itself, so the two can never
     /// disagree: a readout holding the last numbers through a lost fix would
@@ -255,6 +210,7 @@ final class AppModel {
         didSet {
             chartLinks.controller = controller
             raster.controller = controller
+            plugins.controller = controller
         }
     }
 
@@ -265,6 +221,7 @@ final class AppModel {
 
     let chartLinks = ChartLinksModel()
     let raster = RasterModel()
+    let plugins = PluginsModel()
 
 
     // MARK: State the extensions own
@@ -298,17 +255,6 @@ final class AppModel {
     /// question.
     var pendingRemoval: ChartSet?
 
-    // AppModel+Alerts.swift
-
-    /// Every alert the plugins have raised, most urgent first. The banner over
-    /// the chart is built from this.
-    var alerts: [PluginAlert] = []
-
-    var alertTimer: Timer?
-    let siren = AlarmSiren()
-    /// The last set the core reported. The list is rebuilt only when it moves.
-    var alertSeq = -1
-
     init() {
         // Anything a previous run renamed on its way to being deleted.
         ChartBake.sweepTrash()
@@ -334,19 +280,6 @@ final class AppModel {
             lkLog("chart link: $LOOKOUT_CHART_LINK=\(spec)")
             chartLinks.add(spec)
         }
-    }
-
-    /// Every table the loaded plugins declare, in declaration order. The
-    /// Vessels menu and the settings row are built from this, so what is
-    /// offered follows the plugins that are up: a plugin that unloads takes its
-    /// item with it.
-    var pluginTables: [PluginTableSpec] = []
-
-    /// The tables the loaded plugins declare. The menu and the settings row are
-    /// built from this, so setting it is all it takes to make them appear.
-    func refreshPluginTables() {
-        guard let c = controller else { return }
-        pluginTables = c.tableSpecs()
     }
 
     /// Add a chart style the mariner has on disk. macOS opens a panel; iOS

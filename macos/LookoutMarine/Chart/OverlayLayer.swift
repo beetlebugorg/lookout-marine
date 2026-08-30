@@ -201,8 +201,8 @@ struct OverlayLayer: View {
                 // it takes the pointer because the mariner has to be able to
                 // press Acknowledge.
                 .overlay(alignment: .top) {
-                    if !model.alerts.isEmpty {
-                        AlertBanner(alerts: model.alerts) { model.acknowledgeAlert($0) }
+                    if !model.plugins.alerts.isEmpty {
+                        AlertBanner(alerts: model.plugins.alerts) { model.plugins.acknowledge($0) }
                             .chromeHitRegion("plugin-alerts")
                             .padding(.top, Chrome.margin)
                     }

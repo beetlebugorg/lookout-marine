@@ -192,7 +192,7 @@ struct PluginTableRows: View {
     let tab: String
 
     private var specs: [PluginTableSpec] {
-        model.pluginTables.filter { $0.menu.lowercased() == tab }
+        model.plugins.tables.filter { $0.menu.lowercased() == tab }
     }
 
     var body: some View {

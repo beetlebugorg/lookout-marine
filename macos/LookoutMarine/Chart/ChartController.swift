@@ -273,10 +273,10 @@ final class ChartController: NSObject {
 
         // And their declared tables can take their place: the menu bar on the
         // Mac, a row in the settings form on a phone.
-        model?.refreshPluginTables()
+        model?.plugins.refreshTables()
         // Anything they raise from here on reaches the mariner — on both
         // platforms; the banner and siren are cross-platform.
-        model?.startAlertWatch()
+        model?.plugins.startAlertWatch()
 
         startDisplayLink()
         pushReadouts()
@@ -332,7 +332,7 @@ final class ChartController: NSObject {
         stopDisplayLink()
         // The plugins go with the handle, so nothing is left watching the
         // conditions their alarms describe.
-        model?.stopAlertWatch()
+        model?.plugins.stopAlertWatch()
         // The render queue is the only other caller into the handle; a sync
         // barrier here means close never destroys a lookout mid-render (the
         // ABI's api_mu cannot protect against its own destruction).
@@ -793,7 +793,7 @@ final class ChartController: NSObject {
         let cup = courseUpState
         if model.courseUpState != cup { model.courseUpState = cup }
         let plugged = pluginsActive
-        if model.pluginsActive != plugged { model.pluginsActive = plugged }
+        if model.plugins.active != plugged { model.plugins.active = plugged }
         // The chart-link list, the credit and the error, from the core. A
         // landing answer raises needs-redraw, so a resolve keeps this ticking
         // until it is done.

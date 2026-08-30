@@ -114,7 +114,7 @@ struct SettingsView: View {
         // A plugin that declares a table and no settings still fills the
         // section its table is opened from, since on a touch device that row is
         // the only way to reach it.
-        filled.formUnion(model.pluginTables.map { $0.menu.lowercased() })
+        filled.formUnion(model.plugins.tables.map { $0.menu.lowercased() })
         #endif
         return SettingsSection.all.filter { s in
             return s.core || filled.contains(s.id)
