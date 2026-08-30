@@ -211,12 +211,21 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate {
         // only route to all five.
         let press = UILongPressGestureRecognizer(target: self, action: #selector(onPress(_:)))
         press.minimumPressDuration = 0.45
+        // The wheel and a trackpad's two-finger scroll zoom about the
+        // pointer, as they do on the Mac.
+        //
+        // A recognizer of its own, with no touch types at all. Giving the PAN
+        // an `allowedScrollTypesMask` is the obvious way and is wrong: that
+        // recognizer then fires on a pointer DRAG as well, and the chart
+        // zoomed when the mariner meant to pan. Empty `allowedTouchTypes`
+        // leaves this one deaf to everything but a scroll.
+        let scroll = UIPanGestureRecognizer(target: self, action: #selector(onScroll(_:)))
+        scroll.allowedScrollTypesMask = .all
+        scroll.allowedTouchTypes = []
+        addGestureRecognizer(scroll)
         // No hover recognizer: it fed the cursor lat/lon readout, and the
         // readout carries own ship now. It comes back with this shell's own
         // press menu, which is what will need a pointer position again.
-        // (No scroll-to-zoom recognizer either: `allowedScrollTypesMask` also
-        // fires on a pointer *drag*, which then zoomed instead of panned.
-        // Pinch is the zoom gesture; +/- and double-tap cover pointer users.)
         //
         // The pan needs a delegate too. UIKit asks both recognizers of a
         // pair whether they may run together, and a recognizer with no
@@ -355,6 +364,33 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate {
     private func inChromeSpace(_ p: CGPoint) -> CGPoint {
         guard let inset = chromeWindow?.safeAreaInsets else { return p }
         return CGPoint(x: p.x - inset.left, y: p.y - inset.top)
+    }
+
+    /// How much of a zoom level one point of scroll is worth. A wheel notch
+    /// arrives as about ten points, so a notch is about a third of a level:
+    /// enough to feel, small enough to stop where the mariner meant to.
+    private static let scrollZoom = 0.03
+
+    /// The running total, so each report zooms by its own delta. The
+    /// recognizer reports the translation since the scroll began.
+    private var lastScrollY: CGFloat = 0
+
+    @objc private func onScroll(_ g: UIPanGestureRecognizer) {
+        switch g.state {
+        case .began:
+            notePointerInput("scroll")
+            lastScrollY = 0
+            controller?.flingStart(vx: 0, vy: 0)   // a scroll stops any coast
+        case .changed:
+            let y = g.translation(in: self).y
+            let dy = y - lastScrollY
+            lastScrollY = y
+            guard dy != 0 else { return }
+            // Scrolling up zooms in, which is the direction the Mac takes.
+            controller?.zoom(Double(dy) * Self.scrollZoom, atPt: g.location(in: self))
+        default:
+            break
+        }
     }
 
     @objc private func onDoubleTap(_ g: UITapGestureRecognizer) {
