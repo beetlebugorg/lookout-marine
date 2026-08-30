@@ -40,7 +40,7 @@
       "license_short": "MIT",
       "license_note": "",
       "version": "",
-      "commit": "0d137fa893e3215d02d0237c7d3112136734d4bd",
+      "commit": "788d36a621eb29ef5891aa18fd9dc7042f6d0f2c",
       "pinned_in": "build.zig.zon",
       "copyright": "© 2026 Jeremy Collins",
       "url": "https://github.com/beetlebugorg/charttable",
