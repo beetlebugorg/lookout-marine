@@ -41,7 +41,7 @@ extension AppModel {
         // a raster archive from a vector one without opening it, so it takes
         // the answer the last scan already worked out: anything installed as a
         // raster stays out. Opening one as a vector chart composes nonsense.
-        var seen = Set(Store.shared.strings(rasterKey) ?? [])
+        var seen = Set(Store.shared.strings(RasterModel.pathsKey) ?? [])
         for dir in ChartSetStore.savedPaths() where !off.contains(dir) {
             for p in cellPaths(for: dir) where !seen.contains(p) {
                 seen.insert(p)
@@ -98,7 +98,7 @@ extension AppModel {
         //
         // A set of pictures with no survey in it still draws, so the test is
         // whether anything is aboard, not whether any CELL is.
-        guard !paths.isEmpty || !rasterPaths.isEmpty else { closeChart(); return }
+        guard !paths.isEmpty || !raster.paths.isEmpty else { closeChart(); return }
         openSeq += 1
         openRequest = OpenRequest(id: openSeq, paths: paths)
         // Show the loader BEFORE the (synchronous, possibly seconds-long) open
@@ -171,7 +171,7 @@ extension AppModel {
                 // for cells, and finds none. Open what the scan found once it
                 // knows, or a mariner carrying only imagery gets the first-run
                 // page every time with their charts sitting on the list.
-                if !self.hasChart && (!self.openPaths.isEmpty || !self.rasterPaths.isEmpty) {
+                if !self.hasChart && (!self.openPaths.isEmpty || !self.raster.paths.isEmpty) {
                     self.requestOpen(self.openPaths)
                 }
                 // The saved list is NOT rewritten here. A folder that did not
@@ -263,16 +263,16 @@ extension AppModel {
             }
         }
         // Anything the mariner added before sets existed stays aboard.
-        for p in rasterPaths where !seen.contains(p) && !ChartBake.isDerived(p) {
+        for p in raster.paths where !seen.contains(p) && !ChartBake.isDerived(p) {
             let inAnySet = chartSets.contains { $0.rasterPaths.contains(p) }
             if !inAnySet {
                 seen.insert(p)
                 wanted.append(p)
             }
         }
-        guard wanted != rasterPaths else { return }
-        rasterPaths = wanted
-        Store.shared.set(rasterPaths, rasterKey)
+        guard wanted != raster.paths else { return }
+        raster.paths = wanted
+        Store.shared.set(raster.paths, RasterModel.pathsKey)
     }
 
     /// Any chart work running now: a scan or a bake. The pill, the first-run
@@ -431,10 +431,10 @@ extension AppModel {
         chartSets.removeAll { $0.path == path }
         ChartSetStore.remove(path)
         if !carried.isEmpty {
-            let kept = rasterPaths.filter { !carried.contains($0) }
-            if kept != rasterPaths {
-                rasterPaths = kept
-                Store.shared.set(rasterPaths, rasterKey)
+            let kept = raster.paths.filter { !carried.contains($0) }
+            if kept != raster.paths {
+                raster.paths = kept
+                Store.shared.set(raster.paths, RasterModel.pathsKey)
             }
         }
         syncRasterFromSets()

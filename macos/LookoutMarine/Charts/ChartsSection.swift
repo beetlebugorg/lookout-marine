@@ -282,16 +282,16 @@ private struct ChartSetRow: View {
             // The pictures in this set, by provider. One switch each: a
             // provider is what covers a piece of water, and a folder of two
             // hundred tiles from one survey is one decision, not two hundred.
-            ForEach(set.rasterGroups(label: AppModel.providerLabel), id: \.name) { group in
+            ForEach(set.rasterGroups(label: RasterModel.providerLabel), id: \.name) { group in
                 HStack(spacing: 8) {
                     Toggle("", isOn: Binding(
-                        get: { model.rasterGroupOn(group.paths) },
-                        set: { model.setRasterGroupEnabled(group.paths, $0) }
+                        get: { model.raster.groupOn(group.paths) },
+                        set: { model.raster.setGroupEnabled(group.paths, $0) }
                     ))
                     .labelsHidden().toggleStyle(.switch).controlSize(.mini)
                     Image(systemName: "photo").font(.caption2).foregroundStyle(.secondary)
                     Text(group.name).font(.caption)
-                        .foregroundStyle(model.rasterGroupOn(group.paths) ? .primary : .secondary)
+                        .foregroundStyle(model.raster.groupOn(group.paths) ? .primary : .secondary)
                     Spacer()
                     Text(group.paths.count == 1 ? "1 file" : "\(group.paths.count) files")
                         .font(.caption2).foregroundStyle(.secondary)

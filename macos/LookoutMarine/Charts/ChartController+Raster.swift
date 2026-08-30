@@ -136,7 +136,7 @@ extension ChartController {
     /// that drew the first of them, so showing the mariner's pick before hiding
     /// its rival would leave the rival to turn the pick straight back off.
     func restoreRasterShown() {
-        guard let hidden = model?.rasterHidden else { return }
+        guard let hidden = model?.raster.hidden else { return }
         let sets = rasterSets()
         guard !sets.isEmpty else { return }
         for s in sets where hidden.contains(s.name) { rasterSetShown(s.id, false) }

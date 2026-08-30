@@ -19,42 +19,6 @@ struct OpenRequest: Equatable {
 final class AppModel {
     // MARK: Chart state
     var hasChart = false
-    /// The active raster chart set's name, or "" for no picture. Shown at all times
-    /// while a picture is on: the chart drops its opaque water and land fills to
-    /// let the picture through, and the mariner must never mistake that display
-    /// for the full chart.
-    var rasterName = ""
-    /// Every raster chart file the mariner has installed, in the order added. The
-    /// controller replays these into each newly opened chart, so a raster chart
-    /// survives switching charts and relaunching.
-    var rasterPaths: [String] = []
-    /// True only while a picture is really beneath the view and the chart is
-    /// therefore drawing without its opaque fills. The HUD badge keys off this,
-    /// not off the selected set — a badge that appeared whenever a raster chart was
-    /// merely installed would claim the chart was reduced when it was not.
-    var rasterInView = false
-    /// True while the vector chart is hidden and only the picture shows.
-    var chartHidden = false
-    /// The set that covers this view, DRAWN OR NOT. Empty when none does. The
-    /// pill appears only when this is set: a control that is useless here is
-    /// noise, and one that says nothing about what is available teaches nothing.
-    var rasterAvailable = ""
-    /// The installed charts the mariner has switched OFF. They stay installed:
-    /// these are half-gigabyte downloads, and carrying four providers for one
-    /// coast means wanting three of them quiet, not deleted.
-    var rasterOff: Set<String> = []
-    /// The sets the mariner has turned off at the pill, by set name. Read at
-    /// launch and applied before the first frame; written whenever the drawn set
-    /// changes. Without it the engine's own rule wins every launch — adding a
-    /// source draws it — and a chart switched off comes back.
-    var rasterHidden: Set<String> = []
-    /// Was the ENC hidden over the picture when the app last quit? Applied at
-    /// open; `chartHidden` is the live state.
-    var chartHiddenSaved = false
-    /// Every set, with whether it is in view. The pill's menu is built from it.
-    var rasterSets: [ChartController.RasterSet] = []
-    /// The drawn set's index, or -1.
-    var rasterActive = -1
     var chartPath: String?
     /// The folders of charts aboard, in the order added. A set on this list has
     /// been looked through and holds charts, so it always opens.
@@ -288,7 +252,10 @@ final class AppModel {
 
     /// The single chart controller (owned by ChartView; referenced for commands).
     weak var controller: ChartController? {
-        didSet { chartLinks.controller = controller }
+        didSet {
+            chartLinks.controller = controller
+            raster.controller = controller
+        }
     }
 
     // MARK: The models for each area
@@ -297,22 +264,7 @@ final class AppModel {
     // it. The chrome reads them through this one: model.chartLinks.list.
 
     let chartLinks = ChartLinksModel()
-
-    /// The raster charts the mariner installed. Persisted, because a chart set is a
-    /// half-gigabyte download they picked deliberately — asking again every
-    /// launch would be its own bug.
-    let rasterKey = "lookout.rastercharts"
-    let rasterOffKey = "lookout.rastercharts.off"
-    /// Which SETS are not drawn, by set name. Beside the installed list and the
-    /// switched-off list, because all three describe the same charts and any one
-    /// of them living somewhere else is a way for them to drift apart.
-    ///
-    /// Not the same thing as rasterOff. Off means "installed and quiet" and
-    /// takes a set out of the pill's list entirely; this is the pill's own
-    /// choice of which picture covers this water, and a set that is not drawn is
-    /// still offered.
-    let rasterHiddenKey = "lookout.rastercharts.hidden"
-    let chartHiddenKey = "lookout.chart.hidden"
+    let raster = RasterModel()
 
 
     // MARK: State the extensions own
@@ -358,14 +310,6 @@ final class AppModel {
     var alertSeq = -1
 
     init() {
-        // Drop anything that has since been deleted or unplugged, so a stale
-        // entry never becomes an error the mariner has to dismiss at every
-        // launch.
-        rasterPaths = (Store.shared.strings(rasterKey) ?? [])
-            .filter { FileManager.default.fileExists(atPath: $0) }
-        rasterOff = Set(Store.shared.strings(rasterOffKey) ?? [])
-        rasterHidden = Set(Store.shared.strings(rasterHiddenKey) ?? [])
-        chartHiddenSaved = Store.shared.bool(chartHiddenKey)
         // Anything a previous run renamed on its way to being deleted.
         ChartBake.sweepTrash()
         // The panel's list. The open itself does not wait on this: it takes
@@ -412,6 +356,21 @@ final class AppModel {
         showSettingsStyleImporter = true
         #else
         presentChartStylePanel()
+        #endif
+    }
+
+    /// Install the raster charts the mariner chose. What would not open is
+    /// reported as a chart error, which is the alert the shell already has.
+    func addRasterCharts(_ picked: [String]) {
+        if let err = raster.add(picked) { openError = err }
+    }
+
+    /// Step to the next picture. Nothing installed: the cycle has nowhere to
+    /// go, so offer the picker rather than letting the key press do nothing.
+    func cycleRaster() {
+        guard !raster.cycle() else { return }
+        #if os(macOS)
+        presentRasterPanel()
         #endif
     }
 

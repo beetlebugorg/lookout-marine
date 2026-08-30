@@ -183,22 +183,22 @@ final class ChartController: NSObject {
         // lookout handle, and `close()` above destroyed the old one, so every
         // open has to replay them — that is what makes a raster chart survive both
         // switching charts and relaunching the app.
-        if let paths = model?.rasterPaths, !paths.isEmpty {
+        if let paths = model?.raster.paths, !paths.isEmpty {
             var ok = 0
             for p in paths where addRaster(p) {
                 ok += 1
-                if model?.rasterOff.contains(p) == true { setRasterEnabled(p, false) }
+                if model?.raster.off.contains(p) == true { setRasterEnabled(p, false) }
             }
             // After every source is in, because switching one chart off can move
             // which set is drawn, and the saved answer is the one that wins.
             restoreRasterShown()
-            lkLog("raster: \(ok)/\(paths.count) source(s) re-installed, \(model?.rasterHidden.count ?? 0) set(s) off")
-            model?.rasterName = rasterName()
+            lkLog("raster: \(ok)/\(paths.count) source(s) re-installed, \(model?.raster.hidden.count ?? 0) set(s) off")
+            model?.raster.name = rasterName()
         }
         // The ENC-over-picture state belongs to the mariner too, and it only
         // does anything where a picture covers, so it is safe to put back before
         // knowing whether one does.
-        if model?.chartHiddenSaved == true { setChartHidden(true) }
+        if model?.raster.chartHiddenSaved == true { setChartHidden(true) }
         // A linked chart, if one was picked. Its style is re-fetched, so this
         // lands a moment later than the rest of the replay.
         model?.chartDidOpen()
@@ -773,19 +773,19 @@ final class ChartController: NSObject {
         var v = lookout_view()
         lookout_get_view(h, &v)
         let over = rasterOverChart()
-        if model.rasterInView != over { model.rasterInView = over }
+        if model.raster.inView != over { model.raster.inView = over }
         let hidden = chartHidden()
-        if model.chartHidden != hidden { model.chartHidden = hidden }
+        if model.raster.chartHidden != hidden { model.raster.chartHidden = hidden }
         let avail = rasterAvailableName()
-        if model.rasterAvailable != avail { model.rasterAvailable = avail }
+        if model.raster.available != avail { model.raster.available = avail }
         let sets = rasterSets()
-        if model.rasterSets.map(\.id) != sets.map(\.id)
-            || model.rasterSets.map(\.inView) != sets.map(\.inView)
-            || model.rasterSets.map(\.shown) != sets.map(\.shown) { model.rasterSets = sets }
+        if model.raster.sets.map(\.id) != sets.map(\.id)
+            || model.raster.sets.map(\.inView) != sets.map(\.inView)
+            || model.raster.sets.map(\.shown) != sets.map(\.shown) { model.raster.sets = sets }
         let ai = rasterActiveIndex()
-        if model.rasterActive != ai { model.rasterActive = ai }
+        if model.raster.active != ai { model.raster.active = ai }
         let active = rasterName()
-        if model.rasterName != active { model.rasterName = active }
+        if model.raster.name != active { model.raster.name = active }
         // The core turns follow off itself on a pan; polling here is what makes
         // the lock button follow the core instead of its own last tap.
         let follow = followState

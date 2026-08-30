@@ -103,30 +103,30 @@ final class ProviderLabelTests: XCTestCase {
     /// A community MBTiles names its provider, and that is what a mariner
     /// chooses between.
     func testAProviderInTheFileName() {
-        XCTAssertEqual(AppModel.providerLabel("/a/ArcGIS-Chesapeake.mbtiles"), "ArcGIS")
-        XCTAssertEqual(AppModel.providerLabel("/a/bing_z16.mbtiles"), "Bing")
-        XCTAssertEqual(AppModel.providerLabel("/a/NAVIONICS.mbtiles"), "Navionics")
-        XCTAssertEqual(AppModel.providerLabel("/a/sentinel2.mbtiles"), "Sentinel")
+        XCTAssertEqual(RasterModel.providerLabel("/a/ArcGIS-Chesapeake.mbtiles"), "ArcGIS")
+        XCTAssertEqual(RasterModel.providerLabel("/a/bing_z16.mbtiles"), "Bing")
+        XCTAssertEqual(RasterModel.providerLabel("/a/NAVIONICS.mbtiles"), "Navionics")
+        XCTAssertEqual(RasterModel.providerLabel("/a/sentinel2.mbtiles"), "Sentinel")
     }
 
     /// ESRI and Esri are both listed and the match ignores case, so the first
     /// entry answers for either spelling.
     func testTheCaseInsensitiveMatchAnswersOnce() {
-        XCTAssertEqual(AppModel.providerLabel("/a/Esri-World.mbtiles"), "ESRI")
-        XCTAssertEqual(AppModel.providerLabel("/a/ESRI-World.mbtiles"), "ESRI")
+        XCTAssertEqual(RasterModel.providerLabel("/a/Esri-World.mbtiles"), "ESRI")
+        XCTAssertEqual(RasterModel.providerLabel("/a/ESRI-World.mbtiles"), "ESRI")
     }
 
     /// A baked sheet does not name a provider: tile57 writes one directory per
     /// sheet under a bake root, so they belong to the bake they came from.
     func testABakedSheetBelongsToItsBake() {
-        XCTAssertEqual(AppModel.providerLabel("/bakes/Chesapeake/US5MD1MC/US5MD1MC.pmtiles"),
+        XCTAssertEqual(RasterModel.providerLabel("/bakes/Chesapeake/US5MD1MC/US5MD1MC.pmtiles"),
                        "Chesapeake")
     }
 
     /// Anything else is its own file name.
     func testOtherwiseTheFileNamesItself() {
-        XCTAssertEqual(AppModel.providerLabel("/a/photo.mbtiles"), "photo")
-        XCTAssertEqual(AppModel.providerLabel("/a/US5MD1MC.pmtiles"), "US5MD1MC")
-        XCTAssertEqual(AppModel.providerLabel("photo.mbtiles"), "photo")
+        XCTAssertEqual(RasterModel.providerLabel("/a/photo.mbtiles"), "photo")
+        XCTAssertEqual(RasterModel.providerLabel("/a/US5MD1MC.pmtiles"), "US5MD1MC")
+        XCTAssertEqual(RasterModel.providerLabel("photo.mbtiles"), "photo")
     }
 }

@@ -75,39 +75,39 @@ struct AppCommands: Commands {
             // The same list the HUD pill opens: every set that covers the
             // view, marked with the one being drawn.
             Menu("Raster Chart") {
-                ForEach(model.rasterSets.filter(\.inView)) { set in
+                ForEach(model.raster.sets.filter(\.inView)) { set in
                     Button {
-                        model.selectRasterSet(set.id)
+                        model.raster.select(set.id)
                     } label: {
-                        if set.id == model.rasterActive {
+                        if set.id == model.raster.active {
                             Label(set.name, systemImage: "checkmark")
                         } else {
                             Text(set.name)
                         }
                     }
                 }
-                if model.rasterSets.contains(where: \.inView) { Divider() }
+                if model.raster.sets.contains(where: \.inView) { Divider() }
                 Button {
-                    model.selectRasterSet(-1)
+                    model.raster.select(-1)
                 } label: {
-                    if model.rasterActive < 0 {
+                    if model.raster.active < 0 {
                         Label("None", systemImage: "checkmark")
                     } else {
                         Text("None")
                     }
                 }
             }
-            .disabled(model.rasterPaths.isEmpty)
+            .disabled(model.raster.paths.isEmpty)
             Button("Next Raster Chart") { model.cycleRaster() }
                 .keyboardShortcut("i", modifiers: .command)
-                .disabled(model.rasterPaths.isEmpty)
+                .disabled(model.raster.paths.isEmpty)
             Button("Add Raster Charts…") { model.presentRasterPanel() }
                 .keyboardShortcut("i", modifiers: [.command, .shift])
-            Button(model.chartHidden ? "Show ENC Over Raster" : "Hide ENC Over Raster") { model.toggleChart() }
+            Button(model.raster.chartHidden ? "Show ENC Over Raster" : "Hide ENC Over Raster") { model.raster.toggleChart() }
                 .keyboardShortcut("h", modifiers: [.command, .shift])
                 .help("Hide the ENC where a raster chart covers it.")
-            if !model.rasterPaths.isEmpty {
-                Button("Forget Raster Charts (\(model.rasterPaths.count))") { model.clearRasterCharts() }
+            if !model.raster.paths.isEmpty {
+                Button("Forget Raster Charts (\(model.raster.paths.count))") { model.raster.clear() }
                     .help("Takes effect the next time a chart is opened.")
             }
             Divider()

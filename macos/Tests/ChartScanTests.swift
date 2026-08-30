@@ -192,7 +192,7 @@ final class ChartSetTests: XCTestCase {
             ScannedCell(path: "/a/Bing-1.mbtiles", name: "Bing-1.mbtiles", kind: "raster",
                         band: 0, bytes: 1),
         ]
-        let groups = set(rasters: rasters).rasterGroups(label: AppModel.providerLabel)
+        let groups = set(rasters: rasters).rasterGroups(label: RasterModel.providerLabel)
         XCTAssertEqual(groups.map(\.name), ["ArcGIS", "Bing"])
         XCTAssertEqual(groups.map { $0.paths.count }, [2, 1])
     }
@@ -202,6 +202,6 @@ final class ChartSetTests: XCTestCase {
         let s = set(rasters: [ScannedCell(path: "/a/x.kap", name: "x.kap",
                                           kind: "raster_source", band: 0, bytes: 1)])
         XCTAssertTrue(s.rasterPaths.isEmpty)
-        XCTAssertTrue(s.rasterGroups(label: AppModel.providerLabel).isEmpty)
+        XCTAssertTrue(s.rasterGroups(label: RasterModel.providerLabel).isEmpty)
     }
 }

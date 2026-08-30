@@ -196,25 +196,25 @@ struct ReadoutsCapsule: View {
     @ViewBuilder private var rasterMenuItems: some View {
         ForEach(pill.inView) { set in
             Button {
-                model.selectRasterSet(set.id)
+                model.raster.select(set.id)
             } label: {
-                if set.id == model.rasterActive {
+                if set.id == model.raster.active {
                     Label(set.name, systemImage: "checkmark")
                 } else {
                     Text(set.name)
                 }
             }
         }
-        Button { model.selectRasterSet(-1) } label: {
-            if model.rasterActive < 0 {
+        Button { model.raster.select(-1) } label: {
+            if model.raster.active < 0 {
                 Label("None", systemImage: "checkmark")
             } else {
                 Text("None")
             }
         }
         Divider()
-        Button(model.chartHidden ? "Show ENC Over Raster" : "Hide ENC Over Raster") {
-            model.toggleChart()
+        Button(model.raster.chartHidden ? "Show ENC Over Raster" : "Hide ENC Over Raster") {
+            model.raster.toggleChart()
         }
         Button("Add Raster Charts…") { model.showRasterImporter = true }
     }
@@ -234,16 +234,16 @@ struct ReadoutsCapsule: View {
             let item = NSMenuItem(title: set.name, action: #selector(RasterMenuTarget.pick(_:)), keyEquivalent: "")
             item.target = target
             item.tag = set.id
-            item.state = (set.id == model.rasterActive) ? .on : .off
+            item.state = (set.id == model.raster.active) ? .on : .off
             menu.addItem(item)
         }
         let none = NSMenuItem(title: "None", action: #selector(RasterMenuTarget.pick(_:)), keyEquivalent: "")
         none.target = target
         none.tag = -1
-        none.state = (model.rasterActive < 0) ? .on : .off
+        none.state = (model.raster.active < 0) ? .on : .off
         menu.addItem(none)
         menu.addItem(.separator())
-        let hide = NSMenuItem(title: model.chartHidden ? "Show ENC Over Raster" : "Hide ENC Over Raster",
+        let hide = NSMenuItem(title: model.raster.chartHidden ? "Show ENC Over Raster" : "Hide ENC Over Raster",
                               action: #selector(RasterMenuTarget.toggleChart), keyEquivalent: "")
         hide.target = target
         menu.addItem(hide)
@@ -258,8 +258,8 @@ struct ReadoutsCapsule: View {
 
     /// What the pill says, from the sets in view and which one is drawn.
     private var pill: RasterPill {
-        RasterPill(inView: model.rasterSets.filter(\.inView),
-                   active: model.rasterActive, chartHidden: model.chartHidden)
+        RasterPill(inView: model.raster.sets.filter(\.inView),
+                   active: model.raster.active, chartHidden: model.raster.chartHidden)
     }
 
     private var separator: some View {
@@ -276,8 +276,8 @@ struct ReadoutsCapsule: View {
 private final class RasterMenuTarget: NSObject {
     let model: AppModel
     init(model: AppModel) { self.model = model }
-    @objc func pick(_ sender: NSMenuItem) { model.selectRasterSet(sender.tag) }
-    @objc func toggleChart() { model.toggleChart() }
+    @objc func pick(_ sender: NSMenuItem) { model.raster.select(sender.tag) }
+    @objc func toggleChart() { model.raster.toggleChart() }
     @objc func add() { model.presentRasterPanel() }
 }
 #endif
