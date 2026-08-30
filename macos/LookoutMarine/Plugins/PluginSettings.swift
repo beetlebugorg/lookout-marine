@@ -427,6 +427,11 @@ final class PluginSettings: ObservableObject {
         discovery.browse(plugins.flatMap { $0.lists }.flatMap { $0.discover }.map(\.service))
     }
 
+    /// True while the window is watching. The Mac's window controller stops the
+    /// poll from windowWillClose as well as the view's onDisappear, so this has
+    /// to be safe to call twice.
+    var isPolling: Bool { pollCancellable != nil }
+
     func stopPolling() {
         pollCancellable?.cancel()
         pollCancellable = nil

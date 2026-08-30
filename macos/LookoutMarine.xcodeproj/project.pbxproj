@@ -92,6 +92,7 @@
 		7D0993B29FF0B336545055B6 /* AuxFileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFAB0A8EAF5C8563D93EA939 /* AuxFileView.swift */; };
 		7E88421B782228FB3E978EC7 /* ChartScanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A443DE42C30306D7110F731 /* ChartScanTests.swift */; };
 		802999D48E4D4AC4C8FE3C51 /* alerts.json in Resources */ = {isa = PBXBuildFile; fileRef = D6C25F5333751E53B1C677E5 /* alerts.json */; };
+		8042BD77A8379128A5DC8B69 /* PluginPollTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7275481E39C90E641E17E551 /* PluginPollTests.swift */; };
 		830C2CB5F625B40225EE8AF2 /* Instruments.swift in Sources */ = {isa = PBXBuildFile; fileRef = E99E812450B1710B0945A9EE /* Instruments.swift */; };
 		836E43B2A7A2E7EE94E21D2D /* CalloutPlacement.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D9C576826C26FDC1702FDD5 /* CalloutPlacement.swift */; };
 		841C835197E484DA0A66E250 /* ChartController+Plugins.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51ECDDE552CF03F985815D94 /* ChartController+Plugins.swift */; };
@@ -165,6 +166,7 @@
 		CD8608AD6B1FD02089DE519F /* ChartController+Raster.swift in Sources */ = {isa = PBXBuildFile; fileRef = AACCF77D4F5568A745094D65 /* ChartController+Raster.swift */; };
 		CDEDF34B3202F6D9F0746A37 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10E8D550447A14C284967EEB /* ContentView.swift */; };
 		CEFBD3E91B5295073ECB3BDE /* PluginRegistryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48FA710C0489FE5DE3CDB3BE /* PluginRegistryTests.swift */; };
+		D0C7BEA75DBF27CF969CAD07 /* PluginPollTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7275481E39C90E641E17E551 /* PluginPollTests.swift */; };
 		D140C3EBA8F42641232C0369 /* ChartUIView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB61B848C1E900A1F3615B91 /* ChartUIView.swift */; };
 		D1B707AE0BF481BB0E24C5F9 /* ChartSets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0B8C7B273A6E8D538848ED /* ChartSets.swift */; };
 		D27C7A5C6C930EFAA6ECF045 /* SettingsWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4548244FA1C95958287A425 /* SettingsWindow.swift */; };
@@ -289,6 +291,7 @@
 		6CED6DE8C50508326D0E097C /* SettingsRows.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsRows.swift; sourceTree = "<group>"; };
 		6D9C576826C26FDC1702FDD5 /* CalloutPlacement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalloutPlacement.swift; sourceTree = "<group>"; };
 		6EA86C2284DD80FD535E34EE /* StoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreTests.swift; sourceTree = "<group>"; };
+		7275481E39C90E641E17E551 /* PluginPollTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginPollTests.swift; sourceTree = "<group>"; };
 		7391C6EA25BA24468EDAD1AD /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
 		7C90666B68F88AA600900DFB /* SearchField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchField.swift; sourceTree = "<group>"; };
 		7DE881BB41EFEF6FD7443244 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -481,6 +484,7 @@
 				28D24F09A3F5CB1D1A2E3E49 /* PluginAlertTests.swift */,
 				0CAC9F938CDB51E28B5E98CE /* PluginConfigTests.swift */,
 				821B5ED7454E2C00FA897B56 /* PluginPackageTests.swift */,
+				7275481E39C90E641E17E551 /* PluginPollTests.swift */,
 				48FA710C0489FE5DE3CDB3BE /* PluginRegistryTests.swift */,
 				1CA144ED7593A8DDDC3229B5 /* PluginStatusTests.swift */,
 				9C7090FA8708C087510A6B66 /* PluginTableTests.swift */,
@@ -1002,6 +1006,7 @@
 				8D0769C29DF1033756668E4F /* PluginAlertTests.swift in Sources */,
 				424454A97A24F08E54F8DB86 /* PluginConfigTests.swift in Sources */,
 				606C8CB59EE44B3D51EA08DE /* PluginPackageTests.swift in Sources */,
+				D0C7BEA75DBF27CF969CAD07 /* PluginPollTests.swift in Sources */,
 				CEFBD3E91B5295073ECB3BDE /* PluginRegistryTests.swift in Sources */,
 				F90571A0AA9530A60178D684 /* PluginStatusTests.swift in Sources */,
 				8DA009DEDAE728D38DFE062E /* PluginTableTests.swift in Sources */,
@@ -1114,6 +1119,7 @@
 				1CC2EEC8A6FA6384EAD7A66B /* PluginAlertTests.swift in Sources */,
 				5C6439B656E0C69AEFF5F5F2 /* PluginConfigTests.swift in Sources */,
 				89A4726EAB6D55604C60CD2E /* PluginPackageTests.swift in Sources */,
+				8042BD77A8379128A5DC8B69 /* PluginPollTests.swift in Sources */,
 				F9DAA35B47AAB4FBC066A103 /* PluginRegistryTests.swift in Sources */,
 				F984A32A1476162974FEF564 /* PluginStatusTests.swift in Sources */,
 				A9D1AA03743D4E13ED98E4E8 /* PluginTableTests.swift in Sources */,

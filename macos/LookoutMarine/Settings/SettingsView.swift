@@ -43,7 +43,17 @@ struct SettingsSection: Identifiable {
 struct SettingsView: View {
     @ObservedObject var model: AppModel
     @StateObject private var m = MarinerSettings()
-    @StateObject private var p = PluginSettings()
+    @StateObject private var p: PluginSettings
+
+    /// The Mac's window controller hands in the PluginSettings it holds, so it
+    /// can stop the poll and the mDNS browse when the window closes. On iOS the
+    /// form is a sheet and its own onDisappear is the whole story.
+    @MainActor
+    init(model: AppModel, plugins: PluginSettings? = nil) {
+        self.model = model
+        let made = plugins ?? PluginSettings()
+        _p = StateObject(wrappedValue: made)
+    }
 
     var body: some View {
         content
