@@ -59,6 +59,7 @@
 		79ADA8573328C109282E8A80 /* SettingsRows.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CED6DE8C50508326D0E097C /* SettingsRows.swift */; };
 		7E88421B782228FB3E978EC7 /* ChartScanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A443DE42C30306D7110F731 /* ChartScanTests.swift */; };
 		802999D48E4D4AC4C8FE3C51 /* alerts.json in Resources */ = {isa = PBXBuildFile; fileRef = D6C25F5333751E53B1C677E5 /* alerts.json */; };
+		830C2CB5F625B40225EE8AF2 /* Instruments.swift in Sources */ = {isa = PBXBuildFile; fileRef = E99E812450B1710B0945A9EE /* Instruments.swift */; };
 		84349904142B421A21417AF1 /* PickReportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CFF9284FC01F1CF6E286197 /* PickReportTests.swift */; };
 		869FF3B20BF6417C1F0FFF4A /* Fixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD2C1E199441E57327C292F6 /* Fixture.swift */; };
 		882229E32D58BFFB90A121A7 /* MarinerSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F7AFFDA812DB39C72788868 /* MarinerSettingsTests.swift */; };
@@ -110,6 +111,7 @@
 		D1B707AE0BF481BB0E24C5F9 /* ChartSets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0B8C7B273A6E8D538848ED /* ChartSets.swift */; };
 		D27C7A5C6C930EFAA6ECF045 /* SettingsWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4548244FA1C95958287A425 /* SettingsWindow.swift */; };
 		D4053EFD7BBC6FD277438F1D /* CoordFormatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80A6678722FC01CA46E10CE0 /* CoordFormatTests.swift */; };
+		D8DE92A54522E48CF85722DE /* Instruments.swift in Sources */ = {isa = PBXBuildFile; fileRef = E99E812450B1710B0945A9EE /* Instruments.swift */; };
 		D98D644F63B6A27A5BA219F7 /* LicenseManifestTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6473AB9A6EC7604E642EB8B9 /* LicenseManifestTests.swift */; };
 		DAFCDF511109AE0461E947F2 /* ChartInteractionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F71C72C16BAED59FED342AD2 /* ChartInteractionTests.swift */; };
 		DDB11483FF3DEE919A04B9C8 /* ChartFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9B414D76B8FFB4298A58494 /* ChartFixture.swift */; };
@@ -235,6 +237,7 @@
 		C57FD68791CA2B301D43ADBC /* alerts-empty.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "alerts-empty.json"; sourceTree = "<group>"; };
 		D31BFC1DAC5265A5DAC8F20D /* ChartLinkFetch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartLinkFetch.swift; sourceTree = "<group>"; };
 		D6C25F5333751E53B1C677E5 /* alerts.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = alerts.json; sourceTree = "<group>"; };
+		E99E812450B1710B0945A9EE /* Instruments.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Instruments.swift; sourceTree = "<group>"; };
 		ED13ED6F6331B15BF3108AC5 /* Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Bridging-Header.h"; sourceTree = "<group>"; };
 		F025332072E90FBEB0445CEB /* LookoutMarine.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LookoutMarine.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		F0BD7776E04E596B3F3FC90E /* PickReport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PickReport.swift; sourceTree = "<group>"; };
@@ -402,6 +405,7 @@
 			children = (
 				C315E2FD12D936B349662AB2 /* ChartController.swift */,
 				F1DA5C09C3392CDE0D28D1AE /* ChartView.swift */,
+				E99E812450B1710B0945A9EE /* Instruments.swift */,
 				0D36819F503E24F82BD18F6B /* ViewState.swift */,
 			);
 			path = Chart;
@@ -794,6 +798,7 @@
 				E554375935120FD341B56223 /* CoordinateParser.swift in Sources */,
 				689E24910C8ECF894D1FA847 /* Discovery.swift in Sources */,
 				375666A105DF99B820839F79 /* HUDOverlay.swift in Sources */,
+				D8DE92A54522E48CF85722DE /* Instruments.swift in Sources */,
 				9EF506240F429BE5ECA1D33A /* Licenses.swift in Sources */,
 				C2A7920E23D12CA2B606E75C /* LookoutMarineApp.swift in Sources */,
 				B3ED2372659B6AA2D4F07172 /* MarinerSettings.swift in Sources */,
@@ -860,6 +865,7 @@
 				377B308C3F481575E1DD5FEC /* CoordinateParser.swift in Sources */,
 				0BFBE84D0B1DE20C265E75D1 /* Discovery.swift in Sources */,
 				9B7752E1FD183B4597CA5E3F /* HUDOverlay.swift in Sources */,
+				830C2CB5F625B40225EE8AF2 /* Instruments.swift in Sources */,
 				B65E3546E971AC80B295ECF0 /* Licenses.swift in Sources */,
 				1D784EA4414260DF4C62E8B4 /* LookoutMarineApp.swift in Sources */,
 				8A8814B7709EC3A575C8ECBC /* MarinerSettings.swift in Sources */,
