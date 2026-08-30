@@ -113,7 +113,10 @@ struct PluginConsentSheet: View {
 
             HStack {
                 Spacer()
-                Button("Cancel") { model.pendingInstall = nil }
+                Button("Cancel") {
+                    model.pendingInstall = nil
+                    model.dropPluginCopy()
+                }
                     .keyboardShortcut(.cancelAction)
                 Button("Install") { model.confirmPluginInstall() }
                     .keyboardShortcut(.defaultAction)

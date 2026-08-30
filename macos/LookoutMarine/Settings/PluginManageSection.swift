@@ -42,16 +42,19 @@ struct PluginsManageSections: View {
             ForEach(managed) { plug in
                 PluginManageRow(p: p, pluginID: plug.id, confirmUninstall: $confirmUninstall)
             }
-            #if os(macOS)
             Button { model.presentInstallPluginPanel() } label: {
                 Label("Install Plugin…", systemImage: "plus")
             }
-            #endif
+            .accessibilityIdentifier("install-plugin")
         } header: {
             SectionHead("Plugins")
         } footer: {
             #if os(macOS)
             Text("A plugin file (.lkplug) can also be opened from the Finder or dropped on the chart. Nothing is installed before its permissions are shown.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            #else
+            Text("A plugin file (.lkplug) comes from wherever the Files app can reach: iCloud Drive, a server, or a drive. Nothing is installed before its permissions are shown.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             #endif
@@ -182,11 +185,26 @@ struct PluginManageRow: View {
 
 
 
-#if os(macOS)
 extension AppModel {
     /// Settings > Plugins > Install Plugin…: a picker filtered to .lkplug,
     /// then the same consent sheet every other entry point lands on.
+    ///
+    /// On iOS the picker belongs to the FORM, not to this view: a sheet cannot
+    /// present another one from the view it came up over, which is the same
+    /// reason the chart importers have a second set of flags.
     func presentInstallPluginPanel() {
+        #if os(macOS)
+        presentInstallPluginOpenPanel()
+        #else
+        showSettingsPluginImporter = true
+        #endif
+    }
+}
+
+#if os(macOS)
+extension AppModel {
+    /// The Mac's own panel.
+    func presentInstallPluginOpenPanel() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = false

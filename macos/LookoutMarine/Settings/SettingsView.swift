@@ -91,6 +91,16 @@ struct SettingsView: View {
                     if case .success(let url) = result { model.importChartStyle(url) }
                 }
             )
+            // And a fourth, for a plugin package. Not filtered to the exported
+            // type: a .lkplug that reached the device through a service that
+            // does not know the type arrives as data, and greying it out would
+            // leave the mariner unable to install a file they are holding.
+            .background(
+                Color.clear.fileImporter(isPresented: $model.showSettingsPluginImporter,
+                              allowedContentTypes: [.item]) { result in
+                    if case .success(let url) = result { model.importPluginPackage(url) }
+                }
+            )
             #endif
     }
 
@@ -107,18 +117,6 @@ struct SettingsView: View {
         filled.formUnion(model.pluginTables.map { $0.menu.lowercased() })
         #endif
         return SettingsSection.all.filter { s in
-            #if os(iOS)
-            // NOTHING ON IOS INSTALLS A PLUGIN: the app claims no .lkplug
-            // type, there is no Finder to open one from and no panel to pick
-            // one with. On a device carrying only the shipped set the section
-            // could say nothing but "No plugins installed" under a heading
-            // with no button, which reads as a broken page rather than an
-            // empty one. So it follows the rule Vessels, Alarms and
-            // Connections already follow — a section appears while it holds
-            // something — and a developer copy or an installed plugin brings
-            // it back with its grant switches, which is the part that matters.
-            if s.id == "plugins" { return p.plugins.contains { $0.origin != "bundled" } }
-            #endif
             return s.core || filled.contains(s.id)
         }
     }

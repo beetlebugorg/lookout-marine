@@ -176,6 +176,32 @@ extension AppModel {
         if isDir.boolValue { openChartDirectory(dest.path) } else { openFileOrChart(dest.path) }
     }
 
+    /// A plugin package the mariner picked in the Files app.
+    ///
+    /// Copied into the container first. The picker's security scope ends when
+    /// the URL is released, and the consent sheet stands between the pick and
+    /// the install: by the time the mariner presses Install, the original is
+    /// out of reach. The copy is deleted either way, since the core keeps its
+    /// own copy of what it installs.
+    func importPluginPackage(_ url: URL) {
+        let fm = FileManager.default
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        let dest = fm.temporaryDirectory
+            .appendingPathComponent("lookout-plugin-" + UUID().uuidString, isDirectory: true)
+            .appendingPathComponent(url.lastPathComponent)
+        do {
+            try fm.createDirectory(at: dest.deletingLastPathComponent(),
+                                   withIntermediateDirectories: true)
+            try fm.copyItem(at: url, to: dest)
+        } catch {
+            installError = "Couldn't read \(url.lastPathComponent):\n\(error.localizedDescription)"
+            return
+        }
+        pendingInstallCopy = dest.deletingLastPathComponent()
+        beginPluginInstall(dest.path)
+    }
+
     /// Install the raster charts picked on iOS.
     ///
     /// A chart ALREADY IN THE APP'S OWN DOCUMENTS is used where it lies. The

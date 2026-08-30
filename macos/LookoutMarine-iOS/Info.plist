@@ -27,6 +27,46 @@
 	     the chart (Assets.xcassets/LaunchBackground). The Metal layer clears to
 	     that color and StartupLoader paints it. The launch screen, the loader
 	     and the first frame are therefore one surface. -->
+	<!-- The plugin package. A .lkplug is a zip holding exactly manifest.json
+	     and the plugin's wasm. Owning the type is what puts Lookout in the
+	     Files app's Share sheet for one, and what stops the picker greying
+	     them out. -->
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Lookout Marine Plugin</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Owner</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>org.beetlebug.lookout-marine.lkplug</string>
+			</array>
+		</dict>
+	</array>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>org.beetlebug.lookout-marine.lkplug</string>
+			<key>UTTypeDescription</key>
+			<string>Lookout Marine Plugin</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>com.pkware.zip-archive</string>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>lkplug</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
 	<key>UILaunchScreen</key>
 	<dict>
 		<key>UIColorName</key>

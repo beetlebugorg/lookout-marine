@@ -77,6 +77,9 @@ final class AppModel: ObservableObject {
     /// A .lkplug opened before any chart was: kept until the chart (and with
     /// it the plugin layer) is up, then inspected.
     var pendingInstallPath: String?
+    /// The temporary directory holding a package copied off the Files picker,
+    /// deleted once the sheet is answered either way.
+    var pendingInstallCopy: URL?
 
     /// Start the install flow: read the package, and put what it asks for in
     /// front of the mariner. Every entry point lands here — Finder, a drop on
@@ -106,6 +109,15 @@ final class AppModel: ObservableObject {
         if let err = controller?.installPlugin(pkg.path) {
             installError = err
         }
+        dropPluginCopy()
+    }
+
+    /// Throw away a package copied off the Files picker. The core keeps its own
+    /// copy of anything it installed, and a cancel keeps nothing.
+    func dropPluginCopy() {
+        guard let dir = pendingInstallCopy else { return }
+        pendingInstallCopy = nil
+        try? FileManager.default.removeItem(at: dir)
     }
 
     /// A .lkplug that arrived before the chart did, now that the chart is up.
@@ -249,6 +261,8 @@ final class AppModel: ObservableObject {
     @Published var showSettingsImporter = false
     @Published var showSettingsRasterImporter = false
     @Published var showSettingsStyleImporter = false
+    /// Install Plugin… on iOS. A plugin file arrives through the Files app.
+    @Published var showSettingsPluginImporter = false
     @Published var showSettings = false
     /// Which settings section shows, by its core name — "display", "depths",
     /// "text", "charts", "vessels", "alarms", "connections", "advanced". A
