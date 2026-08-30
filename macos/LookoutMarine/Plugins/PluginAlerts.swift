@@ -194,6 +194,7 @@ struct AlertBanner: View {
                     Text("\(unanswered.count - Self.maxVisible) more")
                         .font(.system(size: 12))
                         .foregroundStyle(Chrome.muted)
+                        .accessibilityIdentifier("alerts-more")
                         .padding(.horizontal, 12)
                         .padding(.vertical, 6)
                 }
@@ -201,6 +202,7 @@ struct AlertBanner: View {
             .frame(maxWidth: Self.maxWidth)
             .fixedSize(horizontal: false, vertical: true)
             .panelSurface(opaque: true)
+            .accessibilityIdentifier("alert-banner")
         }
     }
 }
@@ -241,6 +243,7 @@ private struct AlertRow: View {
             }
             .buttonStyle(ChromeFlatStyle(resting: Chrome.hoverFill, cornerRadius: 6))
             .help("Silence this alert and take it off the chart")
+            .accessibilityIdentifier("acknowledge")
             .fixedSize()
         }
         .padding(.leading, 14)

@@ -87,6 +87,7 @@ struct ReadoutsCapsule: View {
             Text(CoordFormat.band(model.scaleDenominator))
                 .fontWeight(.semibold)
                 .foregroundStyle(Chrome.ink)
+                .accessibilityIdentifier("band")
             separator
             Button(action: onScaleTap) {
                 Text(CoordFormat.scale(model.scaleDenominator))
@@ -98,6 +99,7 @@ struct ReadoutsCapsule: View {
             .buttonStyle(ChromeFlatStyle(cornerRadius: 6))
             .help("Zoom to a scale…")
             .accessibilityLabel("Scale \(CoordFormat.scale(model.scaleDenominator)). Zoom to a scale.")
+            .accessibilityIdentifier("scale-readout")
             .chromeHitRegion("scale-readout")
             if withPosition {
                 separator
@@ -108,6 +110,7 @@ struct ReadoutsCapsule: View {
             }
             if model.overscale > 1.05 {
                 Text(String(format: "×%.1f", model.overscale))
+                    .accessibilityIdentifier("overscale")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(Chrome.overscale)
                     .padding(.horizontal, 6)

@@ -82,6 +82,7 @@ private struct PickControls: View {
             .foregroundStyle(Chrome.muted)
             .help("Copy this report")
             .accessibilityLabel("Copy this report")
+            .accessibilityIdentifier("copy-report")
 
             Button { model.closePick() } label: {
                 Image(systemName: "xmark").font(.system(size: 13, weight: .medium)).padding(5)
@@ -89,6 +90,7 @@ private struct PickControls: View {
             .buttonStyle(ChromeFlatStyle(cornerRadius: 6))
             .foregroundStyle(Chrome.muted)
             .accessibilityLabel("Close the pick report")
+            .accessibilityIdentifier("close-report")
         }
     }
 
@@ -186,6 +188,7 @@ private struct FoldButton: View {
         .buttonStyle(.plain)
         .accessibilityLabel(open ? "Hide the S-57 source attributes"
                                  : "Show the S-57 source attributes")
+        .accessibilityIdentifier("s57-fold")
     }
 }
 

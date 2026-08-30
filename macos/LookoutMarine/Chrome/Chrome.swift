@@ -212,6 +212,9 @@ struct ChromeBubble: View {
         .disabled(!enabled)
         .help(help)
         .accessibilityLabel(help)
+        // The glyph names the control. It is the one thing about a bubble that
+        // does not change with its state, so a test can find it by that.
+        .accessibilityIdentifier(system)
     }
 }
 
@@ -258,9 +261,22 @@ struct NorthBubble: View {
         .buttonStyle(ChromeButtonStyle(activeFill: locked ? Chrome.accent : nil))
         .help(help)
         .accessibilityLabel(help)
+        .accessibilityIdentifier("compass")
+        // The state as one stable word, for assistive technology and the UI
+        // tests. The help text reads well and changes freely; this does not.
+        .accessibilityValue(stateName)
     }
 
     private var locked: Bool { orientation == .northUp || orientation == .courseUp }
+
+    private var stateName: String {
+        switch orientation {
+        case .unlocked: return "free"
+        case .armed: return "armed"
+        case .northUp: return "north up"
+        case .courseUp: return "course up"
+        }
+    }
     private var ink: Color { locked ? .white : Chrome.ink }
 
     private var help: String {
@@ -329,6 +345,7 @@ struct ScaleBarView: View {
                 Text(bar.label)
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(Chrome.ink)
+                    .accessibilityIdentifier("scale-bar")
                     // The chart below the label can be light or dark. The white
                     // shadow keeps the label readable.
                     .shadow(color: .white.opacity(0.9), radius: 2)
@@ -342,6 +359,7 @@ struct ScaleBarView: View {
                 .overlay(Rectangle().stroke(Chrome.ink, lineWidth: 1))
                 if let credit {
                     Text(credit)
+                        .accessibilityIdentifier("chart-credit")
                         .font(.system(size: 10))
                         .foregroundStyle(Chrome.muted)
                         .shadow(color: .white.opacity(0.9), radius: 2)
