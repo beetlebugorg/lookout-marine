@@ -8,13 +8,6 @@ import Foundation
 
 @MainActor
 extension AppModel {
-    /// Scheme changes from the MENU must persist like ones from the settings
-    /// form (the form saves in its own apply path).
-    func cycleScheme() {
-        guard let c = controller else { return }
-        c.cycleScheme()
-        MarinerSettings.save(c.getMariner())
-    }
     /// Hide or show the vector chart, leaving the picture beneath it.
     func toggleChart() {
         guard let c = controller else { return }
@@ -193,15 +186,4 @@ extension AppModel {
         // rather than waiting on the next frame's readouts.
         refreshRasterState()
     }
-    /// Set the color scheme directly (0 day / 1 dusk / 2 night).
-    func setScheme(_ s: Int) {
-        guard let c = controller else { return }
-        var m = c.getMariner()
-        m.scheme = tile57_scheme(UInt32(s))
-        c.setMariner(m)
-        MarinerSettings.save(m)
-    }
-    func toggleText() { controller?.toggleText() }
-    func toggleSoundings() { controller?.toggleSoundings() }
-    func toggleOtherCategory() { controller?.toggleOtherCategory() }
 }
