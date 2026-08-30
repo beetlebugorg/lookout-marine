@@ -111,8 +111,7 @@ jobs:
 
       # The unit tests. Both bundles are hosted by the app target above, so
       # they reach the shell through `@testable import` and the C ABI through
-      # the host. The UI tests need a chart the runner does not carry and stay
-      # out of this job.
+      # the host.
       - name: Test macOS
         run: |
           xcodebuild test -project macos/LookoutMarine.xcodeproj -scheme LookoutMarine \
@@ -131,8 +130,10 @@ jobs:
 
       # The UI tests open the baked cell this repository carries, so a runner
       # has a chart. They answer what only a real touch delivery can: that a
-      # pinch reaches the chart across the two-window stack, and that a chrome
-      # button is not swallowed by it.
+      # press raises the chart menu, that a chrome button is not swallowed by
+      # the pass-through window, and that the report and the form behave. Some
+      # skip: a raster chart is a 3.7 GB download, and a synthesized pinch does
+      # not reach the chart on a simulator (see ChartInteractionTests).
       - name: UI test iOS
         run: |
           xcodebuild test -project macos/LookoutMarine.xcodeproj -scheme LookoutMarine-iOS \
