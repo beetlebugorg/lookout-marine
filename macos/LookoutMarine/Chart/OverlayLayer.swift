@@ -95,7 +95,31 @@ struct OverlayLayer: View {
                             .padding(.bottom, corner)
                     }
                 }
+                // Bottom center: the readout capsule. The scale entry opens
+                // above it. A sheet folds the readouts into its own footer,
+                // so the capsule stands down and the entry clears the sheet.
+                // Drawn BEFORE the pick report, which may stand over it.
+                .overlay(alignment: .bottom) {
+                    VStack(spacing: Chrome.gap) {
+                        if model.chrome.showScaleEntry {
+                            ScaleEntryPanel(model: model)
+                                .chromeHitRegion("scale-entry")
+                                .transition(.opacity.combined(with: .move(edge: .bottom)))
+                        }
+                        if model.charts.hasChart, form == nil || form == .callout {
+                            ReadoutsCapsule(model: model, compact: compact,
+                                            onScaleTap: toggleScaleEntry)
+                                .measureSize { capsuleHeight = $0.height }
+                        }
+                    }
+                    .padding(.bottom, form == .bottomSheet
+                             ? Self.bottomSheetSize(in: geo.size).height + Chrome.gap
+                             : capsuleBottom)
+                }
                 // The mark on what was picked, then the report beside it.
+                // After the capsule, because the report is what the mariner
+                // opened and is reading: where the two meet, the report wins.
+                // The alarm banner and the picture are still drawn over it.
                 .overlay(alignment: .topLeading) {
                     if let point = model.overlay.pickPoint {
                         PickMarker()
@@ -172,26 +196,6 @@ struct OverlayLayer: View {
                             }
                         }
                     }
-                }
-                // Bottom center: the readout capsule. The scale entry opens
-                // above it. A sheet folds the readouts into its own footer,
-                // so the capsule stands down and the entry clears the sheet.
-                .overlay(alignment: .bottom) {
-                    VStack(spacing: Chrome.gap) {
-                        if model.chrome.showScaleEntry {
-                            ScaleEntryPanel(model: model)
-                                .chromeHitRegion("scale-entry")
-                                .transition(.opacity.combined(with: .move(edge: .bottom)))
-                        }
-                        if model.charts.hasChart, form == nil || form == .callout {
-                            ReadoutsCapsule(model: model, compact: compact,
-                                            onScaleTap: toggleScaleEntry)
-                                .measureSize { capsuleHeight = $0.height }
-                        }
-                    }
-                    .padding(.bottom, form == .bottomSheet
-                             ? Self.bottomSheetSize(in: geo.size).height + Chrome.gap
-                             : capsuleBottom)
                 }
                 .overlay(alignment: .top) {
                     if model.readouts.isBuilding { BuildingPill().padding(.top, 10) }
