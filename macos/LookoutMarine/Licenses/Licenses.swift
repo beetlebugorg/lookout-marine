@@ -220,6 +220,9 @@ struct LicensesView: View {
             }
         }
         .navigationTitle("Licenses")
+        // Named, because the first-run page behind the sheet is a scroll view
+        // of its own and a test looking for the biggest one found that.
+        .accessibilityIdentifier("licenses-list")
         #if os(macOS)
         .toolbar(removing: .sidebarToggle)
         #endif

@@ -1,16 +1,47 @@
-//  AppModel.swift — shared, platform-neutral app state.
+//  AppModel.swift — the models for each area, and the chart controller.
 //
-//  Single source of truth the SwiftUI chrome binds to: the chart sets aboard, the
-//  live HUD readouts the render loop pushes, and the menu/search actions. It
-//  holds a weak reference to the one ChartController (owned by ChartView) and
-//  funnels every command through it. No AppKit/UIKit here — reused as-is on iOS.
+//  It holds no state of its own. Each subject has a model beside this one, and
+//  the chrome reads them through it: model.raster.paths, model.overlay.pickPoint.
+//  What is left here is the controller, the commands that forward to it, and the
+//  few actions that reach across two areas.
+//
+//  It holds a weak reference to the one ChartController (owned by ChartView) and
+//  hands each model the seam it uses. No AppKit/UIKit here — reused as-is on iOS.
 
 import Foundation
-import Combine
 
 @MainActor
 @Observable
 final class AppModel {
+    /// The single chart controller (owned by ChartView; referenced for commands).
+    weak var controller: ChartController? {
+        didSet {
+            // Each model gets the one seam it uses, not the controller. See
+            // ChartEngine.swift.
+            charts.engine = controller
+            chartLinks.engine = controller
+            raster.engine = controller
+            plugins.engine = controller
+            overlay.engine = controller
+        }
+    }
+
+    // MARK: The models for each area
+    //
+    // One per subject, each holding its own state and the calls that act on it.
+
+    let chartLinks = ChartLinksModel()
+    let raster = RasterModel()
+    let plugins = PluginsModel()
+    let overlay = OverlayModel()
+    let readouts = ReadoutsModel()
+    let chrome = ChromeModel()
+    /// Adding a set installs the pictures it carries, so this one is built
+    /// with the raster model rather than beside it.
+    let charts: ChartsModel
+
+    // MARK: Across two areas
+
     /// Start the install flow: read the package, and put what it asks for in
     /// front of the mariner. Every entry point lands here — Finder, a drop on
     /// the window, and Settings > Plugins > Install Plugin….
@@ -28,35 +59,6 @@ final class AppModel {
         plugins.pendingInstallPath = nil
         plugins.begin(path)
     }
-
-    /// The single chart controller (owned by ChartView; referenced for commands).
-    weak var controller: ChartController? {
-        didSet {
-            // Each model gets the one seam it uses, not the controller. See
-            // ChartEngine.swift.
-            charts.engine = controller
-            chartLinks.engine = controller
-            raster.engine = controller
-            plugins.engine = controller
-            overlay.engine = controller
-        }
-    }
-
-    // MARK: The models for each area
-    //
-    // One per subject, each holding its own state and the calls that act on
-    // it. The chrome reads them through this one: model.chartLinks.list.
-
-    let chartLinks = ChartLinksModel()
-    let raster = RasterModel()
-    let plugins = PluginsModel()
-    let overlay = OverlayModel()
-    let readouts = ReadoutsModel()
-    let chrome = ChromeModel()
-    /// Adding a set installs the pictures it carries, so this one is built
-    /// with the raster model rather than beside it.
-    let charts: ChartsModel
-
 
     init() {
         charts = ChartsModel(raster: raster)

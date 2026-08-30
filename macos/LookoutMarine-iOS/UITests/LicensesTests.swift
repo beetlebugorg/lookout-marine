@@ -404,6 +404,12 @@ final class LicensesTests: UITestCase {
     /// columns, and a swipe at the middle of the app lands on the sections
     /// list, which scrolls nothing: the pane being read is the wider one.
     private func scroller(_ app: XCUIApplication) -> XCUIElement {
+        // The list itself, when it names itself. The chart page behind the
+        // sheet is a scroll view too, and on a phone it is the bigger one.
+        for query in [app.collectionViews, app.scrollViews, app.tables] {
+            let named = query["licenses-list"]
+            if named.exists { return named }
+        }
         var best: XCUIElement?
         var bestArea: CGFloat = 0
         for query in [app.collectionViews, app.scrollViews, app.tables] {
