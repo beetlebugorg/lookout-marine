@@ -145,6 +145,7 @@
 		AEBA4C83E10709EB75193F0B /* AppModel+Alerts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B63D868A70DE2456FE76DF5 /* AppModel+Alerts.swift */; };
 		AF4BB50C34E59C394C6AD379 /* PluginAlerts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4908F0A3B9D1ECDF91411BE7 /* PluginAlerts.swift */; };
 		B1774F9EA0735A56300C1850 /* MarinerSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F7AFFDA812DB39C72788868 /* MarinerSettingsTests.swift */; };
+		B32B89A37A49BA618336DBD3 /* UITestCase.swift in Sources */ = {isa = PBXBuildFile; fileRef = A53C303F269185DBB7200970 /* UITestCase.swift */; };
 		B372E30B227615DF4350B502 /* PickReportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CFF9284FC01F1CF6E286197 /* PickReportTests.swift */; };
 		B3ED2372659B6AA2D4F07172 /* MarinerSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B88B8511C390ECCC17E905E /* MarinerSettings.swift */; };
 		B4FA78A0F7B85E81C4F28CB2 /* HoverTip.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CE71623E18E6C2ED36FEF9D /* HoverTip.swift */; };
@@ -332,6 +333,7 @@
 		9D5D7B15F4286B70544A80B2 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
 		9FAE0C61602607D05CF24596 /* LicensesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LicensesTests.swift; sourceTree = "<group>"; };
 		A03D3BC7A7816F10B65863B0 /* LookoutMarineApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LookoutMarineApp.swift; sourceTree = "<group>"; };
+		A53C303F269185DBB7200970 /* UITestCase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UITestCase.swift; sourceTree = "<group>"; };
 		A9B414D76B8FFB4298A58494 /* ChartFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartFixture.swift; sourceTree = "<group>"; };
 		AACCF77D4F5568A745094D65 /* ChartController+Raster.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChartController+Raster.swift"; sourceTree = "<group>"; };
 		AAEA99096E77BC63671F921D /* About.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = About.swift; sourceTree = "<group>"; };
@@ -410,6 +412,7 @@
 				58C86FCD4EE381351EDD9D9E /* PluginInstallTests.swift */,
 				2FC4787E7CFF2D99B0290ED1 /* PluginTableTests.swift */,
 				F3F841BB92E185C6D2C47A7A /* RasterChartTests.swift */,
+				A53C303F269185DBB7200970 /* UITestCase.swift */,
 			);
 			path = UITests;
 			sourceTree = "<group>";
@@ -1138,6 +1141,7 @@
 				E9FFEE36804207C41DC2E1CA /* PluginInstallTests.swift in Sources */,
 				52E4163448CFFE05D94E59F4 /* PluginTableTests.swift in Sources */,
 				50C214AAD062B26FCB84D7BE /* RasterChartTests.swift in Sources */,
+				B32B89A37A49BA618336DBD3 /* UITestCase.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

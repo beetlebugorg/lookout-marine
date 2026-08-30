@@ -6,15 +6,19 @@
 
 import XCTest
 
-final class PluginTableTests: XCTestCase {
+final class PluginTableTests: UITestCase {
 
     private func settingsApp() throws -> XCUIApplication {
-        let app = XCUIApplication()
-        app.launchEnvironment["LOOKOUT_OPEN"] = try ChartFixture.chart()
-        app.launchEnvironment["LOOKOUT_VIEW"] = "-76.4767,38.9763,15"
-        app.launchEnvironment["LOOKOUT_SHOW"] = "settings:vessels"
-        app.launch()
-        return app
+        try app(["LOOKOUT_VIEW": "-76.4767,38.9763,15",
+                 "LOOKOUT_SHOW": "settings:vessels"])
+    }
+
+    /// Two tests push the table. Back returns to the section the next one
+    /// starts from.
+    override func resetToStart(_ app: XCUIApplication) -> Bool {
+        let bar = app.navigationBars["AIS Targets"]
+        if bar.exists { bar.buttons.firstMatch.tap() }
+        return app.buttons["plugin-table-targets"].waitForExistence(timeout: 5)
     }
 
     /// The AIS plugin declares one table, and it lands in Vessels because that

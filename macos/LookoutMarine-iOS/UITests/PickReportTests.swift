@@ -6,13 +6,13 @@
 
 import XCTest
 
-final class PickReportTests: XCTestCase {
+final class PickReportTests: UITestCase {
 
+    /// The app on the chart with a report open. The process is reused across
+    /// the class; the report is raised again for each test, which is the state
+    /// every test here starts from.
     private func report() throws -> XCUIApplication {
-        let app = XCUIApplication()
-        app.launchEnvironment["LOOKOUT_OPEN"] = try ChartFixture.chart()
-        app.launchEnvironment["LOOKOUT_VIEW"] = "-76.4767,38.9763,15"
-        app.launch()
+        let app = try app(["LOOKOUT_VIEW": "-76.4767,38.9763,15"])
         XCTAssertTrue(app.staticTexts["band"].waitForExistence(timeout: 60),
                       "the chart never came up")
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 1.0)
@@ -22,6 +22,12 @@ final class PickReportTests: XCTestCase {
         try XCTSkipUnless(app.buttons["close-report"].waitForExistence(timeout: 5),
                           "the press found no object to report")
         return app
+    }
+
+    /// One test opens the scale entry from the footer.
+    override func resetToStart(_ app: XCUIApplication) -> Bool {
+        if app.buttons["Close scale entry"].exists { app.buttons["Close scale entry"].tap() }
+        return super.resetToStart(app) && app.staticTexts["band"].waitForExistence(timeout: 5)
     }
 
     /// The controls the report is read with: copy, close, and the fold.

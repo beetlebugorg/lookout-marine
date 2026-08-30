@@ -5,14 +5,10 @@
 
 import XCTest
 
-final class PluginInstallTests: XCTestCase {
+final class PluginInstallTests: UITestCase {
 
     private func pluginsPane() throws -> XCUIApplication {
-        let app = XCUIApplication()
-        app.launchEnvironment["LOOKOUT_OPEN"] = try ChartFixture.chart()
-        app.launchEnvironment["LOOKOUT_SHOW"] = "settings:plugins"
-        app.launch()
-        return app
+        try app(["LOOKOUT_SHOW": "settings:plugins"])
     }
 
     /// The section is listed whatever is installed. It used to appear only when
@@ -35,8 +31,11 @@ final class PluginInstallTests: XCTestCase {
     }
 
     /// Install Plugin… opens the Files picker rather than doing nothing.
+    ///
+    /// Its own launch: the picker belongs to another process and there is no
+    /// reliable way to put it away again from here.
     func testInstallOpensThePicker() throws {
-        let app = try pluginsPane()
+        let app = try freshApp(["LOOKOUT_SHOW": "settings:plugins"])
         let button = app.buttons["install-plugin"]
         XCTAssertTrue(button.waitForExistence(timeout: 60))
         button.tap()

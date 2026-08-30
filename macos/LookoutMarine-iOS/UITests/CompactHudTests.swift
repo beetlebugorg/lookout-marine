@@ -11,15 +11,17 @@
 
 import XCTest
 
-final class CompactHudTests: XCTestCase {
+final class CompactHudTests: UITestCase {
     private let bands = ["Overview", "General", "Coastal", "Approach", "Harbor", "Berthing"]
 
     private func launch() throws -> XCUIApplication {
-        let app = XCUIApplication()
-        app.launchEnvironment["LOOKOUT_OPEN"] = try ChartFixture.chart()
-        app.launchEnvironment["LOOKOUT_VIEW"] = "-76.4767,38.9763,14"
-        app.launch()
-        return app
+        try app(["LOOKOUT_VIEW": "-76.4767,38.9763,14"])
+    }
+
+    /// One test opens the scale entry.
+    override func resetToStart(_ app: XCUIApplication) -> Bool {
+        if app.buttons["Close scale entry"].exists { app.buttons["Close scale entry"].tap() }
+        return super.resetToStart(app)
     }
 
     /// The band readout, which is also the part of the row that carries no

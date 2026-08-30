@@ -6,21 +6,37 @@
 
 import XCTest
 
-final class HudTests: XCTestCase {
+final class HudTests: UITestCase {
 
-    private func app(view: String = "-76.4767,38.9763,15") throws -> XCUIApplication {
-        let app = XCUIApplication()
-        app.launchEnvironment["LOOKOUT_OPEN"] = try ChartFixture.chart()
-        app.launchEnvironment["LOOKOUT_VIEW"] = view
-        app.launch()
+    private static let view = ["LOOKOUT_VIEW": "-76.4767,38.9763,15"]
+
+    /// The app on the chart, reused across the class.
+    private func chart() throws -> XCUIApplication {
+        let app = try app(Self.view)
         XCTAssertTrue(app.staticTexts["band"].waitForExistence(timeout: 60),
                       "the readouts never appeared")
         return app
     }
 
+    /// A launch of its own, for a test about the state the app starts in.
+    private func newChart() throws -> XCUIApplication {
+        let app = try freshApp(Self.view)
+        XCTAssertTrue(app.staticTexts["band"].waitForExistence(timeout: 60),
+                      "the readouts never appeared")
+        return app
+    }
+
+    /// Three tests leave the form or the scale entry open over the chart.
+    override func resetToStart(_ app: XCUIApplication) -> Bool {
+        let done = app.buttons["Done"].firstMatch
+        if done.exists { done.tap() }
+        if app.buttons["Close scale entry"].exists { app.buttons["Close scale entry"].tap() }
+        return super.resetToStart(app) && app.staticTexts["band"].waitForExistence(timeout: 5)
+    }
+
     /// Nothing is dropped when the row will not fit: it falls to two lines.
     func testEveryReadoutIsOnScreen() throws {
-        let app = try app()
+        let app = try chart()
         XCTAssertTrue(app.staticTexts["band"].exists)
         XCTAssertTrue(app.buttons["scale-readout"].exists)
         // The zoom, which is the one readout with no control on it.
@@ -31,7 +47,7 @@ final class HudTests: XCTestCase {
 
     /// The band names the navigational purpose the chart is drawn for.
     func testTheBandIsAPurposeAndNotANumber() throws {
-        let app = try app()
+        let app = try chart()
         XCTAssertTrue(["Overview", "General", "Coastal", "Approach", "Harbor", "Berthing"]
             .contains(app.staticTexts["band"].label),
             "the band read \(app.staticTexts["band"].label)")
@@ -40,7 +56,7 @@ final class HudTests: XCTestCase {
     /// With no source of position the readout shows NO NUMBERS, and offers the
     /// one thing that would fix it.
     func testWithNoSourceItOffersTheFix() throws {
-        let app = try app()
+        let app = try chart()
         XCTAssertTrue(app.buttons["configure-gps"].exists,
                       "no way to say where the position should come from")
         XCTAssertFalse(app.staticTexts.matching(
@@ -52,7 +68,7 @@ final class HudTests: XCTestCase {
     /// is added. This is the one place the app tells a mariner they have no
     /// position, so it carries the fix.
     func testConfigureGpsRoutesToConnections() throws {
-        let app = try app()
+        let app = try chart()
         app.buttons["configure-gps"].tap()
         XCTAssertTrue(app.navigationBars["Connections"].waitForExistence(timeout: 10)
                         || app.staticTexts["Connections"].waitForExistence(timeout: 5),
@@ -62,7 +78,7 @@ final class HudTests: XCTestCase {
     /// The scale readout opens the scale entry, which starts at the scale it
     /// was showing.
     func testTheScaleReadoutOpensTheScaleEntry() throws {
-        let app = try app()
+        let app = try chart()
         app.buttons["scale-readout"].tap()
         XCTAssertTrue(app.staticTexts["Zoom to scale"].waitForExistence(timeout: 10),
                       "the scale readout opened nothing")
@@ -75,7 +91,7 @@ final class HudTests: XCTestCase {
 
     /// The zoom bubbles reach the chart across the window split.
     func testTheZoomBubblesMoveTheChart() throws {
-        let app = try app()
+        let app = try chart()
         let zoom = app.staticTexts.matching(
             NSPredicate(format: "label BEGINSWITH 'z1'")).firstMatch
         let before = zoom.label
@@ -87,7 +103,7 @@ final class HudTests: XCTestCase {
     /// The compass locks the chart to own ship. With no fix it is armed and
     /// waiting, which is a state of its own and not a failure.
     func testTheCompassArmsWithNoFix() throws {
-        let app = try app()
+        let app = try newChart()
         let compass = app.buttons["compass"]
         XCTAssertEqual(compass.value as? String, "free")
         compass.tap()
@@ -98,7 +114,7 @@ final class HudTests: XCTestCase {
 
     /// The scale bar is a round distance, and the chart credit rides with it.
     func testTheScaleBarIsARoundDistance() throws {
-        let app = try app()
+        let app = try chart()
         let bar = app.staticTexts["scale-bar"]
         XCTAssertTrue(bar.exists, "no scale bar")
         XCTAssertTrue(bar.label.hasSuffix(" m") || bar.label.hasSuffix(" km"), bar.label)
@@ -106,7 +122,7 @@ final class HudTests: XCTestCase {
 
     /// The settings bubble opens the form, and Done puts it away.
     func testTheSettingsBubbleOpensTheForm() throws {
-        let app = try app()
+        let app = try chart()
         app.buttons["gearshape"].tap()
         XCTAssertTrue(app.navigationBars["Mariner Settings"].waitForExistence(timeout: 10),
                       "the gear opened nothing")
