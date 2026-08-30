@@ -682,3 +682,9 @@ struct SchemePalette {
               blue: Double(v & 0xff) / 255)
     }
 }
+
+/// A section footer's type. Used from every section file, so it lives here with
+/// the rest of the row grammar.
+extension Text {
+    func captionFooter() -> some View { self.font(.caption).foregroundStyle(.secondary) }
+}
