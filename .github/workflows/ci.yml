@@ -25,8 +25,60 @@ env:
   ZIG_VERSION: "0.16.0"
 
 jobs:
+  # Which jobs have anything to do. Every shell links the core, so a change
+  # under src/, include/, build.zig*, plugins/ or scripts/ runs all of them; a
+  # change under one shell's own directory runs that shell alone. A change to
+  # this file runs everything.
+  #
+  # git rather than a paths-filter action: the diff is one command, and a
+  # workflow that decides what to build should not need a dependency to do it.
+  changes:
+    name: What changed
+    runs-on: ubuntu-latest
+    outputs:
+      core: ${{ steps.filter.outputs.core }}
+      linux: ${{ steps.filter.outputs.linux }}
+      apple: ${{ steps.filter.outputs.apple }}
+      windows: ${{ steps.filter.outputs.windows }}
+      android: ${{ steps.filter.outputs.android }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - id: filter
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base=$(git merge-base origin/${{ github.base_ref }} HEAD)
+          elif [ -n "${{ github.event.before }}" ] \
+               && git cat-file -e "${{ github.event.before }}^{commit}" 2>/dev/null; then
+            base="${{ github.event.before }}"
+          else
+            # A first push, a force push, or a manual run: build everything.
+            base=""
+          fi
+          if [ -z "$base" ]; then
+            changed="ALL"
+          else
+            changed=$(git diff --name-only "$base" HEAD)
+          fi
+          echo "changed:"; echo "$changed"
+
+          has () { [ "$changed" = "ALL" ] || echo "$changed" | grep -qE "$1"; }
+          core='^(src/|include/|plugins/|scripts/|tools/|test/|build\.zig|vendor/|\.github/workflows/ci\.yml)'
+          for pair in "linux:^linux/" "apple:^apple/" "windows:^windows/" "android:^android/"; do
+            name=${pair%%:*}; own=${pair#*:}
+            if has "$core" || has "$own"; then echo "$name=true" >> "$GITHUB_OUTPUT"
+            else echo "$name=false" >> "$GITHUB_OUTPUT"; fi
+          done
+          if has "$core"; then echo "core=true" >> "$GITHUB_OUTPUT"
+          else echo "core=false" >> "$GITHUB_OUTPUT"; fi
+
   test:
     name: Tests
+    needs: changes
+    if: needs.changes.outputs.core == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -48,6 +100,8 @@ jobs:
 
   linux:
     name: Linux app
+    needs: changes
+    if: needs.changes.outputs.linux == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -93,6 +147,8 @@ jobs:
 
   apple:
     name: macOS and iOS apps
+    needs: changes
+    if: needs.changes.outputs.apple == 'true'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
@@ -100,28 +156,41 @@ jobs:
         with:
           version: ${{ env.ZIG_VERSION }}
 
-      # The target's script phases build WAMR and the Zig cores, so xcodebuild
-      # is the whole build. There is no signing identity on a runner: ad-hoc
-      # for the Mac app, none at all for a simulator build.
-      - name: Build macOS
+      # Two invocations, not five. Each one re-runs the target's script
+      # phases, which build WAMR and the Zig cores and are marked
+      # basedOnDependencyAnalysis: false so they always run, and each one that
+      # names a simulator boots it and installs the app. `test` builds, so a
+      # separate build step pays that twice for nothing.
+      - name: Build and test macOS
         run: |
-          xcodebuild -project macos/LookoutMarine.xcodeproj -scheme LookoutMarine \
+          xcodebuild test -project apple/LookoutMarine.xcodeproj -scheme LookoutMarine \
             -configuration Debug -destination 'platform=macOS' \
-            -derivedDataPath macos/build-mac \
-            CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= build
+            -derivedDataPath apple/build-mac \
+            CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=
 
-      - name: Build iOS
+      # The unit tests only. The XCUITests boot a simulator and drive one app
+      # launch per test class, which was 18 of this job's 25 minutes, and they
+      # cover touch delivery rather than anything a change to the core can
+      # break. Run them by hand against a change to the chrome:
+      #
+      #   xcodebuild test -project apple/LookoutMarine.xcodeproj \
+      #     -scheme LookoutMarine-iOS -configuration Debug \
+      #     -destination 'platform=iOS Simulator,name=iPhone 17' \
+      #     -derivedDataPath apple/build-mac CODE_SIGNING_ALLOWED=NO \
+      #     -only-testing:LookoutMarine-iOS-UITests
+      - name: Build and test iOS
         run: |
-          xcodebuild -project macos/LookoutMarine.xcodeproj -scheme LookoutMarine-iOS \
-            -configuration Debug -destination 'generic/platform=iOS Simulator' \
-            -derivedDataPath macos/build-mac \
-            CODE_SIGNING_ALLOWED=NO build
+          xcodebuild test -project apple/LookoutMarine.xcodeproj -scheme LookoutMarine-iOS \
+            -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17' \
+            -derivedDataPath apple/build-mac \
+            CODE_SIGNING_ALLOWED=NO \
+            -skip-testing:LookoutMarine-iOS-UITests
 
       # Tar first: an artifact zip drops the executable bit, which leaves an
       # .app that will not launch.
       - name: Package
         run: |
-          products=macos/build-mac/Build/Products
+          products=apple/build-mac/Build/Products
           tar -czf LookoutMarine-macos.tar.gz -C "$products/Debug" LookoutMarine.app
           tar -czf LookoutMarine-iossimulator.tar.gz \
             -C "$products/Debug-iphonesimulator" LookoutMarine.app
@@ -138,6 +207,9 @@ jobs:
 
   windows:
     name: Windows app
+    needs: changes
+    if: needs.changes.outputs.windows == 'true'
+
     # x64, not ARM64: the aarch64-windows Zig 0.16.0 binary segfaults whenever
     # it resolves the MSVC libc, which is every core and WAMR compile there.
     runs-on: windows-latest
@@ -176,6 +248,8 @@ jobs:
 
   android:
     name: Android app
+    needs: changes
+    if: needs.changes.outputs.android == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

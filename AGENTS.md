@@ -15,7 +15,7 @@ to find out where something lives.
 | `src/plugin/` | the plugin host: WAMR, the broker, the stores, sockets |
 | `plugins/common/` | the plugin SDK the plugins import |
 | `plugins/<name>/` | the shipped plugins: nmea0183, signalk, ownship, ais, laylines |
-| `macos/LookoutMarine/` | the macOS and iOS shell, SwiftUI. THE REFERENCE SHELL |
+| `apple/LookoutMarine/` | the macOS and iOS shell, SwiftUI. THE REFERENCE SHELL |
 | `android/`, `linux/`, `windows/` | the other shells |
 | `include/lookout.h` | the C API every shell calls. Read this first for anything cross-shell |
 | `specs/plugins/` | design contracts, gitignored. Read the one for your feature BEFORE coding |
@@ -74,8 +74,8 @@ The day-run bar passes when there is **exactly one CPA alarm** (MMSI
 `zig build` alone does NOT rebuild plugin wasm. Run `zig build plugins`. A
 stale wasm has sent this project chasing a phantom bug more than once.
 
-macOS: `xcodebuild -project macos/LookoutMarine.xcodeproj -scheme LookoutMarine
--configuration Debug -derivedDataPath macos/build-mac`.
+macOS: `xcodebuild -project apple/LookoutMarine.xcodeproj -scheme LookoutMarine
+-configuration Debug -derivedDataPath apple/build-mac`.
 
 ## Traps that have cost real time
 

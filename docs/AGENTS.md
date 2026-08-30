@@ -12,4 +12,4 @@ Docusaurus. `docs/STYLE.md` carries the rules and they are enforced by review.
   reader.
 - **Never publish real AIS or position data.** Live AIS carries other people's
   vessel names, MMSIs and positions. Frames come from the replay fixture, which
-  `macos/screenshots.sh` serves itself.
+  `apple/screenshots.sh` serves itself.

@@ -16,7 +16,7 @@
 
 /* The search field appears above this many components and not below: a list
  * shorter than that is read, not searched. The Mac draws the line at the same
- * number (macos/LookoutMarine/Licenses.swift). */
+ * number (apple/LookoutMarine/Licenses.swift). */
 #define LK_LICENSES_SEARCHABLE 12
 
 /* The window at its own width. A license is hard-wrapped at 80 columns and is

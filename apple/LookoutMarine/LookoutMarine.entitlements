@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+      The App Sandbox is OFF so the app can read a chart from an arbitrary path:
+      the mariner's own ENC_ROOT on an external drive, and the demo default under
+      ~/.cache. To ship sandboxed, set app-sandbox = true and add
+      com.apple.security.files.user-selected.read-only, which the Open panel
+      grants; every chart the mariner picked then needs a security-scoped
+      bookmark, because the engine mmaps a cell for as long as it stays open.
+
+      There is no library-validation exception. The app loaded a Homebrew SDL3
+      dylib once and needed one; it links the Zig cores statically now and
+      renders through Metal, and the plugins it loads are wasm.
+    -->
+    <key>com.apple.security.app-sandbox</key>
+    <false/>
+</dict>
+</plist>

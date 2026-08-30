@@ -6,7 +6,7 @@ sidebar_position: 2
 
 # macOS, iPadOS and iOS
 
-One **SwiftUI** shell in `macos/` serves the three Apple platforms. The core
+One **SwiftUI** shell in `apple/` serves the three Apple platforms. The core
 renders with **Metal** straight into the chart view's own `CAMetalLayer`. The
 chrome is SwiftUI above it.
 
@@ -24,14 +24,14 @@ tile57 is not a prerequisite. It is a Zig package dependency of the core.
 ## Building and running
 
 ```sh
-cd macos && xcodegen generate   # writes LookoutMarine.xcodeproj from project.yml
-macos/build.sh mac              # or: ios, both. Debug unless you name Release
+cd apple && xcodegen generate   # writes LookoutMarine.xcodeproj from project.yml
+apple/build.sh mac              # or: ios, both. Debug unless you name Release
 open -n --env LOOKOUT_OPEN=<chart|folder> \
-        macos/build-mac/Build/Products/Debug/LookoutMarine.app
+        apple/build-mac/Build/Products/Debug/LookoutMarine.app
 ```
 
-`build.sh` passes `-derivedDataPath macos/build-mac`, so the products stay beside
-the source and `rm -rf macos/build-mac` is a full clean. Xcode works too: point
+`build.sh` passes `-derivedDataPath apple/build-mac`, so the products stay beside
+the source and `rm -rf apple/build-mac` is a full clean. Xcode works too: point
 **File ▸ Workspace Settings ▸ Derived Data** at the same folder to keep one build
 tree.
 
@@ -40,7 +40,7 @@ archives through `libtool`, because both `ld64` and `libtool` drop Zig archive
 members whose offsets are not aligned. The script extracts the members to loose
 objects and packs those.
 
-Without Xcode, `macos/build-dev.sh` builds the macOS app with the Command Line
+Without Xcode, `apple/build-dev.sh` builds the macOS app with the Command Line
 Tools alone: `swiftc` and a hand-made bundle. It writes that bundle to the path
 above. That is the one app path on disk, whichever script built it, so there is
 never a stale second copy to launch by mistake.

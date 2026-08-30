@@ -1,6 +1,6 @@
 /* Chrome palette — the app's own UI, above the chart.
    Source of truth: windows/ui/MainWindow.xaml, mirrored in
-   macos/LookoutMarine/Chrome.swift. Light values are the XAML literals; the
+   apple/LookoutMarine/Chrome.swift. Light values are the XAML literals; the
    dark twins are the Chrome.swift dyn() dark arms.
 
    The chrome is OPAQUE. It never uses a system material, because a material

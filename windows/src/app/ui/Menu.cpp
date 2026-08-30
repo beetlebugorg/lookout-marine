@@ -8,7 +8,7 @@
 // the iPad and the phone have no menu bar to put this in either.
 //
 // The items are the Mac's, in the Mac's order, saying the Mac's words
-// (macos/LookoutMarine/Commands.swift): Chart and Vessels keep their own
+// (apple/LookoutMarine/Commands.swift): Chart and Vessels keep their own
 // submenus so the two read the same, and what a mariner reaches for at the
 // helm — open a chart, go full screen, settings — sits at the top level.
 //
