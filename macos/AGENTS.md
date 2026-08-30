@@ -33,3 +33,47 @@ Build: `xcodebuild -project macos/LookoutMarine.xcodeproj -scheme LookoutMarine
   from observable state. The AIS Targets item was invisible for weeks this way.
 - **`xcodebuild` rewrites `xcshareddata/xcschemes/LookoutMarine-iOS.xcscheme`**
   on most runs, downgrading its format. Revert it rather than committing it.
+
+- **A stale app on the simulator survives `xcodebuild test`** and runs instead
+  of the one just built. It reads as a missing test resource: a fixture that is
+  plainly in the bundle comes back "no fixture named plugins.json in the test
+  bundle". `simctl uninstall` before believing an iOS test failure of that
+  shape.
+
+- **`build-dev.sh` needs Xcode's own swiftc**, not the Command Line Tools alone,
+  whatever its header says. SwiftUI's `@State` is a macro now and its plugin
+  ships inside Xcode: without `DEVELOPER_DIR` it fails with eighteen errors
+  about `SwiftUIMacros.StateMacro`.
+
+- **The shipped plugins go in `LookoutPlugins`, never `Plugins`.** On iOS an app
+  bundle is flat, so `$UNLOCALIZED_RESOURCES_FOLDER_PATH/Plugins` lands on the
+  system's own `PlugIns` directory for app extensions and the installer takes it
+  over. The app then runs with no own ship, no AIS and no laylines, and says so
+  in one log line nobody reads. `ChartController.bundledPluginCandidates` checks
+  both names.
+
+## Testing
+
+`macos/Tests/` is one source directory compiled into `LookoutMarineTests`
+(macOS) and `LookoutMarine-iOSTests` (iOS). Both app targets produce a module
+named `LookoutMarine`, so a test is written once and runs on either platform.
+
+```sh
+xcodebuild test -project macos/LookoutMarine.xcodeproj -scheme LookoutMarine \
+  -configuration Debug -destination 'platform=macOS' -derivedDataPath macos/build-mac
+xcodebuild test -project macos/LookoutMarine.xcodeproj -scheme LookoutMarine-iOS \
+  -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17' \
+  -derivedDataPath macos/build-mac CODE_SIGNING_ALLOWED=NO
+```
+
+A test that persists anything subclasses `ShellTestCase`, which puts a defaults
+suite of its own in `Store.shared`. Nothing in the shell reads
+`UserDefaults.standard` directly.
+
+The fixtures under `macos/Tests/Fixtures/` are the core's own output, captured
+with `LOOKOUT_DUMP_JSON=<dir>`; see the README beside them. Capture them again
+when the core changes what it sends.
+
+The UI tests open the baked cell this repository carries for the Android build,
+through `ChartFixture`. `$LOOKOUT_TEST_CHART` overrides it. They are slow and
+one at a time, so run a class with `-only-testing:` while working.
