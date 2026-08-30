@@ -9,18 +9,8 @@ import Foundation
 extension ChartController {
     // MARK: - Markers
 
-    /// One of the mariner's own marks, copied out of the core. The core owns
-    /// the list and the file it lives in; this is a snapshot for the UI.
-    struct Marker: Identifiable, Equatable {
-        let id: UInt64
-        let lon: Double
-        let lat: Double
-        let name: String
-        let droppedAt: Date
-    }
-
-    private func marker(from m: lookout_marker) -> Marker {
-        Marker(id: m.id,
+    private func marker(from m: lookout_marker) -> ChartMarker {
+        ChartMarker(id: m.id,
                lon: m.lon,
                lat: m.lat,
                name: m.name.map(String.init(cString:)) ?? "",
@@ -30,7 +20,7 @@ extension ChartController {
     /// Drop a marker at a geographic point. It is named in the same call, so
     /// nothing waits for typing. Nil when the core would not take it.
     @discardableResult
-    func dropMarker(lon: Double, lat: Double) -> Marker? {
+    func dropMarker(lon: Double, lat: Double) -> ChartMarker? {
         guard let h = handle else { return nil }
         let id = lookout_marker_add(h, lon, lat)
         guard id != 0 else { return nil }
@@ -41,7 +31,7 @@ extension ChartController {
     }
 
     /// Every marker, in drop order.
-    func markers() -> [Marker] {
+    func markers() -> [ChartMarker] {
         guard let h = handle else { return [] }
         let n = Int(lookout_marker_count(h))
         return (0..<n).compactMap { i in
@@ -52,14 +42,14 @@ extension ChartController {
     }
 
     /// The marker under a point, in logical points, or nil when none is near.
-    func marker(atPoint p: CGPoint) -> Marker? {
+    func marker(atPoint p: CGPoint) -> ChartMarker? {
         guard let h = handle else { return nil }
         var m = lookout_marker()
         guard lookout_marker_at(h, Float(p.x), Float(p.y), &m) != 0 else { return nil }
         return marker(from: m)
     }
 
-    func marker(id: UInt64) -> Marker? {
+    func marker(id: UInt64) -> ChartMarker? {
         guard let h = handle else { return nil }
         var m = lookout_marker()
         guard lookout_marker_by_id(h, id, &m) != 0 else { return nil }

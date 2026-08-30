@@ -22,14 +22,14 @@ struct RasterPill: Equatable {
 
     /// The sets covering this view. The pill appears only for these: a control
     /// that is useless here is noise.
-    let inView: [ChartController.RasterSet]
+    let inView: [RasterSet]
     /// The set the pill NAMES: the drawn one when it is in view, otherwise the
     /// first one that is. Naming one set and reporting the state of another is
     /// how the pill came to read "NAVIONICS | OFF" while Navionics was drawn.
     let name: String
     let state: State
 
-    init(inView: [ChartController.RasterSet], active: Int, chartHidden: Bool) {
+    init(inView: [RasterSet], active: Int, chartHidden: Bool) {
         self.inView = inView
         let named = inView.first { $0.id == active } ?? inView.first
         name = named?.name ?? ""

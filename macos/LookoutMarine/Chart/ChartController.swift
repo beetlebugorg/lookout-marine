@@ -688,11 +688,6 @@ final class ChartController: NSObject {
 
     // MARK: - Own ship's position
 
-    /// What the position readout may say. The core decides: `live` carries a
-    /// fix inside its freshness window, `lost` means a source published once
-    /// and has stopped, `none` means nothing ever has.
-    enum FixState: Int { case none = 0, lost = 1, live = 2 }
-
     /// Own ship's reported position, or nil for either of the other two
     /// states. Never the map centre and never the cursor: a coordinate with no
     /// boat behind it is the ambiguity this removes.

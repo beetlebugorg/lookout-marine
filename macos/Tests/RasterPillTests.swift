@@ -11,8 +11,8 @@ import XCTest
 final class RasterPillTests: XCTestCase {
 
     private func set(_ id: Int, _ name: String, inView: Bool = true,
-                     shown: Bool = false) -> ChartController.RasterSet {
-        ChartController.RasterSet(id: id, name: name, inView: inView, shown: shown)
+                     shown: Bool = false) -> RasterSet {
+        RasterSet(id: id, name: name, inView: inView, shown: shown)
     }
 
     /// No coverage, no pill. A control that is useless here is noise.

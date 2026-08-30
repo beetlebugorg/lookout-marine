@@ -59,7 +59,7 @@ final class OverlayModel {
         let lat: Double
         /// The mark under the press, when there is one. Over a marker the menu
         /// offers Rename and Remove in place of Drop.
-        let marker: ChartController.Marker?
+        let marker: ChartMarker?
     }
     var chartMenu: ChartMenu?
 
@@ -86,7 +86,7 @@ final class OverlayModel {
     var hover: OverlayHover?
     var hoverPoint: CGPoint?
 
-    weak var controller: ChartController?
+    weak var engine: (any OverlayEngine)?
 
     // MARK: The pick report
 
@@ -99,7 +99,7 @@ final class OverlayModel {
         pickResults = results
         pickPoint = results.isEmpty ? nil : point
         pickIndex = 0
-        pickGeo = results.isEmpty ? nil : controller?.geo(atPoint: point)
+        pickGeo = results.isEmpty ? nil : engine?.geo(atPoint: point)
         pickAnchor = pickPoint
         // A sheet covers part of the chart, so the object can fall under it.
         // Lift the chart until the mark clears the sheet, and move the mark
@@ -107,9 +107,9 @@ final class OverlayModel {
         // and does not hide it.
         pickLift = 0
         if let p = pickPoint, let lift = sheetLift(for: p), lift > 0 {
-            controller?.panRevealingPick(dxPt: 0, dyPt: -lift)
+            engine?.panRevealingPick(dxPt: 0, dyPt: -lift)
             pickPoint = CGPoint(x: p.x, y: p.y - lift)
-            pickGeo = controller?.geo(atPoint: pickPoint!)
+            pickGeo = engine?.geo(atPoint: pickPoint!)
             pickAnchor = pickPoint
             pickLift = lift
         }
@@ -125,7 +125,7 @@ final class OverlayModel {
         // Put the chart back where the mariner left it (§2.5). This undoes
         // only the lift the app made.
         if pickLift != 0 {
-            controller?.panRevealingPick(dxPt: 0, dyPt: pickLift)
+            engine?.panRevealingPick(dxPt: 0, dyPt: pickLift)
             pickLift = 0
         }
         pickResults = []
@@ -156,7 +156,7 @@ final class OverlayModel {
     /// Raise the menu at a point on the chart, in the chrome's coordinate
     /// space. A pinned bubble goes: one thing at a time over the chart.
     func openChartMenu(at p: CGPoint) {
-        guard let c = controller, let g = c.geo(atPoint: p) else { return }
+        guard let c = engine, let g = c.geo(atPoint: p) else { return }
         closePin()
         cancelRename()
         chartMenu = ChartMenu(at: p, lon: g.lon, lat: g.lat, marker: c.marker(atPoint: p))
@@ -169,7 +169,7 @@ final class OverlayModel {
     /// "Pick report": the report for the point the menu was raised at.
     /// The report itself is unchanged; only how it is raised has.
     func chartMenuPick() {
-        guard let m = chartMenu, let c = controller else { return }
+        guard let m = chartMenu, let c = engine else { return }
         chartMenu = nil
         showPick(c.pick(lon: m.lon, lat: m.lat), at: m.at)
     }
@@ -178,7 +178,7 @@ final class OverlayModel {
     /// The drop never waits for typing: a mariner drops a mark one-handed on a
     /// moving boat, often to record something they have just seen.
     func chartMenuDropMarker() {
-        guard let m = chartMenu, let c = controller else { return }
+        guard let m = chartMenu, let c = engine else { return }
         chartMenu = nil
         c.dropMarker(lon: m.lon, lat: m.lat)
     }
@@ -198,23 +198,23 @@ final class OverlayModel {
     }
 
     func chartMenuRemoveMarker() {
-        guard let mark = chartMenu?.marker, let c = controller else { return }
+        guard let mark = chartMenu?.marker, let c = engine else { return }
         chartMenu = nil
         _ = c.removeMarker(mark.id)
     }
 
     /// Open the rename field on a marker, with its current name in it.
-    func beginRename(_ mark: ChartController.Marker) {
+    func beginRename(_ mark: ChartMarker) {
         renaming = MarkerRename(id: mark.id, lon: mark.lon, lat: mark.lat)
         renamingText = mark.name
-        renamingPoint = controller?.screenPoint(forGeoLon: mark.lon, lat: mark.lat)
+        renamingPoint = engine?.screenPoint(forGeoLon: mark.lon, lat: mark.lat)
     }
 
     /// Return commits. An empty field keeps the old name, which the core
     /// decides, so every shell agrees on what an emptied field means.
     func commitRename() {
         guard let r = renaming else { return }
-        controller?.renameMarker(r.id, to: renamingText)
+        engine?.renameMarker(r.id, to: renamingText)
         cancelRename()
     }
 
@@ -233,7 +233,7 @@ final class OverlayModel {
         hover = nil
         hoverPoint = nil
         pinned = p
-        pinnedPoint = controller?.screenPoint(forGeoLon: p.lon, lat: p.lat)
+        pinnedPoint = engine?.screenPoint(forGeoLon: p.lon, lat: p.lat)
     }
 
     func closePin() {
@@ -245,7 +245,7 @@ final class OverlayModel {
     /// the bubble of whatever the plugin draws there. A row with no position
     /// never gets here.
     func revealOnChart(lon: Double, lat: Double) {
-        guard let c = controller else { return }
+        guard let c = engine else { return }
         if let hit = c.reveal(lon: lon, lat: lat) { pin(hit) } else { closePin() }
     }
 
@@ -262,16 +262,16 @@ final class OverlayModel {
 
     /// A pick at a fraction of the view.
     func pickAt(fx: Double, fy: Double) {
-        guard let controller, let p = viewPoint(fx: fx, fy: fy),
-              let g = controller.geo(atPoint: p) else { return }
-        showPick(controller.pick(lon: g.lon, lat: g.lat), at: p)
+        guard let engine, let p = viewPoint(fx: fx, fy: fy),
+              let g = engine.geo(atPoint: p) else { return }
+        showPick(engine.pick(lon: g.lon, lat: g.lat), at: p)
     }
 
     /// A pick at the view centre. A tap on the chart runs the same pick; the
     /// hook has no cursor to tap with.
     func pickAtCentre(lon: Double, lat: Double) {
-        guard let controller, let point = pickCentreHint else { return }
-        showPick(controller.pick(lon: lon, lat: lat), at: point)
+        guard let engine, let point = pickCentreHint else { return }
+        showPick(engine.pick(lon: lon, lat: lat), at: point)
     }
 
     /// The chart menu at a fraction of the view, as a right-click there would.
@@ -282,14 +282,14 @@ final class OverlayModel {
 
     /// Drop a marker at a fraction of the view.
     func showDropMarker(fx: Double, fy: Double) {
-        guard let c = controller, let p = viewPoint(fx: fx, fy: fy),
+        guard let c = engine, let p = viewPoint(fx: fx, fy: fy),
               let g = c.geo(atPoint: p) else { return }
         c.dropMarker(lon: g.lon, lat: g.lat)
     }
 
     /// Open the rename field on the newest mark.
     func showRenameNewestMarker() {
-        guard let mark = controller?.markers().last else { return }
+        guard let mark = engine?.markers().last else { return }
         beginRename(mark)
     }
 }

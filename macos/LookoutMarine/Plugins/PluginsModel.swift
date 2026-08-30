@@ -36,7 +36,7 @@ final class PluginsModel {
     /// deleted once the sheet is answered either way.
     var pendingInstallCopy: URL?
 
-    weak var controller: ChartController?
+    weak var engine: (any PluginEngine)?
 
     /// How often the core is asked for its alerts. The plugins raise them from
     /// their own threads with no gesture behind them, so nothing else would
@@ -53,7 +53,7 @@ final class PluginsModel {
     /// The tables the loaded plugins declare. The menu and the settings row are
     /// built from this, so setting it is all it takes to make them appear.
     func refreshTables() {
-        guard let c = controller else { return }
+        guard let c = engine else { return }
         tables = c.tableSpecs()
     }
 
@@ -80,7 +80,7 @@ final class PluginsModel {
     }
 
     private func refreshAlerts() {
-        guard let got = controller?.pluginAlerts() else {
+        guard let got = engine?.pluginAlerts() else {
             // Nothing readable from the core. The polling continues, because
             // stopping it would leave the boat deaf for the rest of the
             // session over one unanswered read.
@@ -101,7 +101,7 @@ final class PluginsModel {
     /// Silence one alert, and show the change without waiting for the next
     /// poll: the mariner pressed a control and must see it answer.
     func acknowledge(_ alert: PluginAlert) {
-        guard controller?.acknowledgeAlert(alert.id) == true else { return }
+        guard engine?.acknowledgeAlert(alert.id) == true else { return }
         alertSeq = -1
         refreshAlerts()
     }
@@ -112,7 +112,7 @@ final class PluginsModel {
     /// AppModel holds every entry point, because a package that arrives before
     /// the chart does has to wait for the plugin layer.
     func begin(_ path: String) {
-        guard let json = controller?.inspectPlugin(path) else {
+        guard let json = engine?.inspectPlugin(path) else {
             installError = "The plugin layer could not start."
             return
         }
@@ -129,7 +129,7 @@ final class PluginsModel {
     func confirmInstall() {
         guard let pkg = pendingInstall else { return }
         pendingInstall = nil
-        if let err = controller?.installPlugin(pkg.path) {
+        if let err = engine?.installPlugin(pkg.path) {
             installError = err
         }
         dropCopy()

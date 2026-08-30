@@ -15,7 +15,7 @@ final class RasterModel {
     /// for the full chart.
     var name = ""
     /// Every raster chart file the mariner has installed, in the order added.
-    /// The controller replays these into each newly opened chart, so a raster
+    /// The engine replays these into each newly opened chart, so a raster
     /// chart survives switching charts and relaunching.
     var paths: [String] = []
     /// True only while a picture is really beneath the view and the chart is
@@ -47,11 +47,11 @@ final class RasterModel {
     /// open; `chartHidden` is the live state.
     var chartHiddenSaved = false
     /// Every set, with whether it is in view. The pill's menu is built from it.
-    var sets: [ChartController.RasterSet] = []
+    var sets: [RasterSet] = []
     /// The drawn set's index, or -1.
     var active = -1
 
-    weak var controller: ChartController?
+    weak var engine: (any RasterEngine)?
 
     /// Persisted, because a chart set is a half-gigabyte download the mariner
     /// picked deliberately — asking again every launch would be its own bug.
@@ -73,7 +73,7 @@ final class RasterModel {
 
     /// Hide or show the vector chart, leaving the picture beneath it.
     func toggleChart() {
-        guard let c = controller else { return }
+        guard let c = engine else { return }
         c.toggleChart()
         chartHidden = c.chartHidden()
         chartHiddenSaved = chartHidden
@@ -87,7 +87,7 @@ final class RasterModel {
     /// twenty and being asked twenty times would be unusable.
     @discardableResult
     func add(_ picked: [String]) -> String? {
-        guard let c = controller else { return nil }
+        guard let c = engine else { return nil }
         var failed: [String] = []
         for p in picked where !paths.contains(p) {
             if c.addRaster(p) {
@@ -121,11 +121,11 @@ final class RasterModel {
             : "Couldn't open \(failed.count) of \(picked.count) files:\n" + failed.joined(separator: "\n")
     }
 
-    /// Pull every published field off the controller at once. Anything that
+    /// Pull every published field off the engine at once. Anything that
     /// changes the set list or the selection outside a frame must call this:
     /// the readouts only run while the chart renders.
     func refresh() {
-        guard let c = controller else { return }
+        guard let c = engine else { return }
         name = c.rasterName()
         active = c.rasterActiveIndex()
         sets = c.rasterSets()
@@ -146,7 +146,7 @@ final class RasterModel {
     /// Sets that are not installed this launch keep their entry: a mariner who
     /// unplugs the drive holding one has not changed their mind about it.
     private func saveShown() {
-        guard let live = controller?.rasterSets(), !live.isEmpty else { return }
+        guard let live = engine?.rasterSets(), !live.isEmpty else { return }
         var next = hidden
         for s in live {
             if s.shown { next.remove(s.name) } else { next.insert(s.name) }
@@ -158,7 +158,7 @@ final class RasterModel {
 
     /// Draw one set, or none for -1.
     func select(_ i: Int) {
-        guard let c = controller else { return }
+        guard let c = engine else { return }
         c.rasterSelect(i)
         refresh()
     }
@@ -177,7 +177,7 @@ final class RasterModel {
     func setEnabled(_ path: String, _ on: Bool) {
         if on { off.remove(path) } else { off.insert(path) }
         Store.shared.set(Array(off), Self.offKey)
-        controller?.setRasterEnabled(path, on)
+        engine?.setRasterEnabled(path, on)
         // Read the selection back: switching off the last file of the drawn set
         // moves the selection, and the pill must not keep naming a chart that
         // is off. Settings can be open while the chart is idle, so this cannot
@@ -214,7 +214,7 @@ final class RasterModel {
     /// the caller should offer the picker instead.
     @discardableResult
     func cycle() -> Bool {
-        guard let c = controller, !paths.isEmpty else { return false }
+        guard let c = engine, !paths.isEmpty else { return false }
         c.cycleRaster()
         // The whole state, not just the name: the cycle moves which set is
         // drawn, and that has to reach the pill's mark and the saved selection

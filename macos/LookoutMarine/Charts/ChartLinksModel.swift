@@ -39,7 +39,7 @@ final class ChartLinksModel {
     /// when the Lookout chart is up.
     var attribution: String? = nil
 
-    weak var controller: ChartController?
+    weak var engine: (any ChartLinkEngine)?
 
     private static let listKey = "lookout.chartlinks"
     private static let activeKey = "lookout.chartlinks.active"
@@ -57,7 +57,7 @@ final class ChartLinksModel {
         guard let out = try? JSONSerialization.data(withJSONObject: doc),
               let json = String(data: out, encoding: .utf8) else { return }
         lkLog("chart links: handing \(data.count) B of the old store to the core")
-        controller?.importChartLinks(json)
+        engine?.importChartLinks(json)
         Store.shared.remove(Self.listKey)
         Store.shared.remove(Self.activeKey)
     }
@@ -65,7 +65,7 @@ final class ChartLinksModel {
     /// Take the core's snapshot, if it changed. Called once per readout tick:
     /// the changed flag has one consumer.
     func poll() {
-        guard let json = controller?.chartLinksSnapshot(),
+        guard let json = engine?.chartLinksSnapshot(),
               let data = json.data(using: .utf8),
               let snap = try? JSONDecoder().decode(Snapshot.self, from: data) else { return }
         if list != snap.links { list = snap.links }
@@ -85,7 +85,7 @@ final class ChartLinksModel {
         guard !trimmed.isEmpty else { return }
         error = nil
         busy = true
-        controller?.addChartLink(trimmed)
+        engine?.addChartLink(trimmed)
     }
 
     /// A style file the mariner picked. The same call as a link: the core tells
@@ -100,11 +100,11 @@ final class ChartLinksModel {
     func refresh(_ url: String) {
         error = nil
         busy = true
-        controller?.refreshChartLink(url)
+        engine?.refreshChartLink(url)
     }
 
     func remove(_ url: String) {
-        controller?.removeChartLink(url)
+        engine?.removeChartLink(url)
     }
 
     func select(_ url: String?) {
@@ -115,6 +115,6 @@ final class ChartLinksModel {
         if url != nil, url == active, error == nil { return }
         error = nil
         if url != nil { busy = true }
-        controller?.selectChartLink(url)
+        engine?.selectChartLink(url)
     }
 }

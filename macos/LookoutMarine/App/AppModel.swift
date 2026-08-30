@@ -116,7 +116,7 @@ final class AppModel {
     /// the render tick beside the position itself, so the two can never
     /// disagree: a readout holding the last numbers through a lost fix would
     /// be presenting a stale one as live.
-    var fixState: ChartController.FixState = .none
+    var fixState: FixState = .none
     /// Own ship's reported position. Both nil unless `fixState` is `.live`;
     /// the readout NEVER falls back to the map centre or the cursor.
     var shipLat: Double?
@@ -159,10 +159,12 @@ final class AppModel {
     /// The single chart controller (owned by ChartView; referenced for commands).
     weak var controller: ChartController? {
         didSet {
-            chartLinks.controller = controller
-            raster.controller = controller
-            plugins.controller = controller
-            overlay.controller = controller
+            // Each model gets the one seam it uses, not the controller. See
+            // ChartEngine.swift.
+            chartLinks.engine = controller
+            raster.engine = controller
+            plugins.engine = controller
+            overlay.engine = controller
         }
     }
 
