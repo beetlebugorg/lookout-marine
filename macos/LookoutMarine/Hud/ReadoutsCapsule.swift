@@ -127,7 +127,7 @@ struct ReadoutsCapsule: View {
             // view. A click steps to the next one — the fast comparison, which
             // must not cost a menu. Click and hold, or right-click, to SEE what
             // is carried here and pick one directly.
-            if !visibleRasterSets.isEmpty {
+            if !pill.inView.isEmpty {
                 separator
                 #if os(macOS)
                 // A plain Button, not a Menu: a macOS Menu renders its own
@@ -135,10 +135,10 @@ struct ReadoutsCapsule: View {
                 // list rides on an AppKit menu instead.
                 Button { showRasterMenu() } label: { rasterPill }
                     .buttonStyle(.plain)
-                    .help(rasterHelp)
-                    .accessibilityLabel(rasterHelp)
+                    .help(pill.help)
+                    .accessibilityLabel(pill.help)
                     .accessibilityIdentifier("raster-pill")
-                    .accessibilityValue(rasterStateName)
+                    .accessibilityValue(pill.stateName)
                     .chromeHitRegion("raster-pill")
                 #else
                 // A SwiftUI Menu on iOS keeps the label exactly as given, so
@@ -147,9 +147,9 @@ struct ReadoutsCapsule: View {
                 Menu { rasterMenuItems } label: { rasterPill }
                     .menuStyle(.button)
                     .buttonStyle(.plain)
-                    .accessibilityLabel(rasterHelp)
+                    .accessibilityLabel(pill.help)
                     .accessibilityIdentifier("raster-pill")
-                    .accessibilityValue(rasterStateName)
+                    .accessibilityValue(pill.stateName)
                     .chromeHitRegion("raster-pill")
                 #endif
             }
@@ -167,10 +167,10 @@ struct ReadoutsCapsule: View {
     /// draw exactly this, so the two platforms cannot drift apart.
     private var rasterPill: some View {
         HStack(spacing: 5) {
-            Text(pillName.uppercased())
-            if rasterState != .on {
-                Text("|").foregroundStyle(rasterTint.opacity(0.5))
-                Text(rasterState == .off ? "OFF" : "ENC OFF")
+            Text(pill.name.uppercased())
+            if pill.state != .on {
+                Text("|").foregroundStyle(pill.tint.opacity(0.5))
+                Text(pill.state == .off ? "OFF" : "ENC OFF")
             }
             // The chevron is a promise: a press opens a list. It is therefore
             // always shown, because a press always does.
@@ -179,14 +179,14 @@ struct ReadoutsCapsule: View {
                 .opacity(0.7)
         }
         .font(.system(size: 12, weight: .bold))
-        .foregroundStyle(rasterTint)
+        .foregroundStyle(pill.tint)
         // The NAME is the whole point of the pill — it says which picture is
         // under the chart. A Menu label is offered a squeezed width and would
         // truncate it to "GO…", so the pill states its own width.
         .fixedSize(horizontal: true, vertical: false)
         .padding(.horizontal, 7)
         .padding(.vertical, 2)
-        .background(rasterTint.opacity(rasterState == .off ? 0.28 : 0.18),
+        .background(pill.tint.opacity(pill.state == .off ? 0.28 : 0.18),
                     in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
@@ -194,7 +194,7 @@ struct ReadoutsCapsule: View {
     #if os(iOS)
     /// The same choices the Mac's menu offers, as SwiftUI.
     @ViewBuilder private var rasterMenuItems: some View {
-        ForEach(visibleRasterSets) { set in
+        ForEach(pill.inView) { set in
             Button {
                 model.selectRasterSet(set.id)
             } label: {
@@ -230,7 +230,7 @@ struct ReadoutsCapsule: View {
         let menu = NSMenu()
         let target = RasterMenuTarget(model: model)
         menu.autoenablesItems = false
-        for set in visibleRasterSets {
+        for set in pill.inView {
             let item = NSMenuItem(title: set.name, action: #selector(RasterMenuTarget.pick(_:)), keyEquivalent: "")
             item.target = target
             item.tag = set.id
@@ -256,58 +256,10 @@ struct ReadoutsCapsule: View {
     }
     #endif
 
-    private enum RasterState { case on, off, chartOff }
-
-    /// The sets with enabled charts in view. The pill exists for these.
-    private var visibleRasterSets: [ChartController.RasterSet] {
-        model.rasterSets.filter(\.inView)
-    }
-
-    /// The set the pill NAMES: the drawn one when it is in view, otherwise the
-    /// first one that is. Naming one set and reporting the state of another is
-    /// how the pill came to read "NAVIONICS | OFF" while Navionics was drawn.
-    private var pillSet: ChartController.RasterSet? {
-        if let a = visibleRasterSets.first(where: { $0.id == model.rasterActive }) { return a }
-        return visibleRasterSets.first
-    }
-
-    private var pillName: String { pillSet?.name ?? "" }
-
-    /// Read from the set the pill names, so the two can never disagree.
-    private var rasterState: RasterState {
-        guard let s = pillSet, s.id == model.rasterActive else { return .off }
-        return model.chartHidden ? .chartOff : .on
-    }
-
-    /// The colour reports THE RASTER CHART, not the ENC: blue while the chart is
-    /// drawn, amber while one is here and off. Hiding the ENC above it does not
-    /// change the colour, because the raster chart is still drawn — the "ENC
-    /// OFF" text carries that, and a warning colour there would say the picture
-    /// was off when it is the only thing on screen.
-    private var rasterTint: Color {
-        rasterState == .off ? Chrome.amber : Chrome.accent
-    }
-
-    /// The state as one stable word, for assistive technology and for the UI
-    /// tests. The help text reads well and changes wording freely; this does
-    /// not, so a test can rely on it.
-    private var rasterStateName: String {
-        switch rasterState {
-        case .on: return "drawn"
-        case .off: return "off"
-        case .chartOff: return "drawn, ENC hidden"
-        }
-    }
-
-    private var rasterHelp: String {
-        let n = pillName
-        let more = visibleRasterSets.count > 1
-            ? " \(visibleRasterSets.count) raster charts cover this view; right-click to choose." : ""
-        switch rasterState {
-        case .off: return "\(n) is here but off. Click to choose it." + more
-        case .chartOff: return "\(n), with the ENC hidden above it. Click to choose another." + more
-        case .on: return "\(n) below the ENC. Click to choose another." + more
-        }
+    /// What the pill says, from the sets in view and which one is drawn.
+    private var pill: RasterPill {
+        RasterPill(inView: model.rasterSets.filter(\.inView),
+                   active: model.rasterActive, chartHidden: model.chartHidden)
     }
 
     private var separator: some View {

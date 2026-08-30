@@ -95,7 +95,12 @@ extension ChartController {
     ///
     /// `shown` is the set's own state, not "drawn over this view": that is what
     /// gets saved, and a coast off screen still has an answer.
-    struct RasterSet: Identifiable { let id: Int; let name: String; let inView: Bool; let shown: Bool }
+    struct RasterSet: Identifiable, Equatable {
+        let id: Int
+        let name: String
+        let inView: Bool
+        let shown: Bool
+    }
     func rasterSets() -> [RasterSet] {
         guard let h = handle else { return [] }
         let n = Int(lookout_raster_set_count(h))
