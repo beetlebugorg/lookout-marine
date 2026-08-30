@@ -1,5 +1,12 @@
 package org.beetlebug.lookout
 
+import org.beetlebug.lookout.chart.ChartController
+import org.beetlebug.lookout.chart.ChartScreen
+import org.beetlebug.lookout.charts.ChartsModel
+import org.beetlebug.lookout.engine.LookoutView
+import org.beetlebug.lookout.hud.LookoutTheme
+import org.beetlebug.lookout.settings.Scheme
+
 import android.content.Intent
 import android.media.AudioManager
 import android.net.Uri

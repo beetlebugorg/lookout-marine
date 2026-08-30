@@ -1,0 +1,16 @@
+{"tables":[
+{"plugin":"org.beetlebug.ais","key":"targets","title":"AIS Targets","menu":"Vessels","columns":[
+{"key":"name","label":"Vessel","type":"text"},
+{"key":"mmsi","label":"MMSI","type":"text"},
+{"key":"range","label":"Range","type":"distance"},
+{"key":"brg","label":"Bearing","type":"bearing"},
+{"key":"sog","label":"SOG","type":"speed"},
+{"key":"cpa","label":"CPA","type":"distance"},
+{"key":"tcpa","label":"TCPA","type":"duration"},
+{"key":"state","label":"","type":"flag"}],
+"sort":{"key":"cpa","ascending":true},"at":{"lat":"lat","lon":"lon"}},
+{"plugin":"org.example.routes","key":"legs","title":"Route Legs","menu":"advanced","columns":[
+{"key":"leg","label":"Leg","type":"text"},
+{"key":"dist","label":"Distance","type":"distance"}],
+"sort":{"key":"leg","ascending":true}}
+]}
