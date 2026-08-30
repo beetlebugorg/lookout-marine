@@ -160,18 +160,23 @@ jobs:
             -derivedDataPath macos/build-mac \
             CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=
 
-      # The unit tests and the UI tests in one run: the UI tests open the baked
-      # cell this repository carries, so a runner has a chart. They answer what
-      # only a real touch delivery can, that a press raises the chart menu and
-      # that a chrome button is not swallowed by the pass-through window. Some
-      # skip: a raster chart is a 3.7 GB download, and a synthesized pinch does
-      # not reach the chart on a simulator (see ChartInteractionTests).
+      # The unit tests only. The XCUITests boot a simulator and drive one app
+      # launch per test class, which was 18 of this job's 25 minutes, and they
+      # cover touch delivery rather than anything a change to the core can
+      # break. Run them by hand against a change to the chrome:
+      #
+      #   xcodebuild test -project macos/LookoutMarine.xcodeproj \
+      #     -scheme LookoutMarine-iOS -configuration Debug \
+      #     -destination 'platform=iOS Simulator,name=iPhone 17' \
+      #     -derivedDataPath macos/build-mac CODE_SIGNING_ALLOWED=NO \
+      #     -only-testing:LookoutMarine-iOS-UITests
       - name: Build and test iOS
         run: |
           xcodebuild test -project macos/LookoutMarine.xcodeproj -scheme LookoutMarine-iOS \
             -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17' \
             -derivedDataPath macos/build-mac \
-            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_ALLOWED=NO \
+            -skip-testing:LookoutMarine-iOS-UITests
 
       # Tar first: an artifact zip drops the executable bit, which leaves an
       # .app that will not launch.

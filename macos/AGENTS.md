@@ -75,5 +75,13 @@ with `LOOKOUT_DUMP_JSON=<dir>`; see the README beside them. Capture them again
 when the core changes what it sends.
 
 The UI tests open the baked cell this repository carries for the Android build,
-through `ChartFixture`. `$LOOKOUT_TEST_CHART` overrides it. They are slow and
-one at a time, so run a class with `-only-testing:` while working.
+through `ChartFixture`. `$LOOKOUT_TEST_CHART` overrides it. CI does not run
+them: they boot a simulator and take about eighteen minutes there. Run them by
+hand against a change to the chrome, a class at a time with `-only-testing:`.
+
+```sh
+xcodebuild test -project macos/LookoutMarine.xcodeproj -scheme LookoutMarine-iOS \
+  -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17' \
+  -derivedDataPath macos/build-mac CODE_SIGNING_ALLOWED=NO \
+  -only-testing:LookoutMarine-iOS-UITests
+```
