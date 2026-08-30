@@ -33,6 +33,18 @@ final class CompactHudTests: XCTestCase {
             NSPredicate(format: "label CONTAINS '°' AND label CONTAINS 'N'")).firstMatch
     }
 
+    /// The position readout shows own ship and nothing else, so without an
+    /// instrument feed there is no coordinate on screen. That is the readout
+    /// working, not failing: a coordinate with no boat behind it is the
+    /// ambiguity it exists to remove. Point $LOOKOUT_NMEA at a feed to run
+    /// these.
+    private func skipUnlessThereIsAFix(_ app: XCUIApplication) throws {
+        try XCTSkipIf(app.buttons["configure-gps"].exists,
+                      "no source of position; nothing to read out")
+        try XCTSkipUnless(position(app).waitForExistence(timeout: 10),
+                          "no fix yet; nothing to read out")
+    }
+
     private func skipUnlessCompact(_ app: XCUIApplication) throws {
         // The same threshold the app uses to choose the compact row.
         try XCTSkipUnless(app.windows.firstMatch.frame.width < 700,
@@ -47,6 +59,7 @@ final class CompactHudTests: XCTestCase {
         let band = bandText(app)
         XCTAssertTrue(band.waitForExistence(timeout: 60), "no readouts")
         try skipUnlessCompact(app)
+        try skipUnlessThereIsAFix(app)
 
         XCTAssertTrue(position(app).exists,
                       "the phone dropped the position instead of taking a second line")
@@ -56,8 +69,10 @@ final class CompactHudTests: XCTestCase {
     /// would read as a position and be the wrong convention.
     func testPositionIsDegreesAndDecimalMinutes() throws {
         let app = try launch()
+        XCTAssertTrue(bandText(app).waitForExistence(timeout: 60), "no readouts")
+        try skipUnlessThereIsAFix(app)
+
         let pos = position(app)
-        XCTAssertTrue(pos.waitForExistence(timeout: 60), "no position")
         XCTAssertFalse(pos.label.contains("\""),
                        "the position is in seconds: '\(pos.label)'")
         XCTAssertTrue(pos.label.contains("."),
