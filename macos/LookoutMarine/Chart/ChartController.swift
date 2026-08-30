@@ -490,7 +490,7 @@ final class ChartController: NSObject {
         if animating { lookout_tick_anim(h, dt) }
 
         let building = lookout_is_building(h) != 0
-        if model?.isBuilding != building { model?.isBuilding = building }
+        if model?.readouts.isBuilding != building { model?.readouts.isBuilding = building }
 
         gestureBench?.step(self)
 
@@ -784,11 +784,11 @@ final class ChartController: NSObject {
         // The core turns follow off itself on a pan; polling here is what makes
         // the lock button follow the core instead of its own last tap.
         let follow = followState
-        if model.followState != follow { model.followState = follow }
+        if model.readouts.followState != follow { model.readouts.followState = follow }
         let cup = courseUpState
-        if model.courseUpState != cup { model.courseUpState = cup }
+        if model.readouts.courseUpState != cup { model.readouts.courseUpState = cup }
         let plugged = pluginsActive
-        if model.plugins.active != plugged { model.plugins.active = plugged }
+        if model.readouts.pluginsActive != plugged { model.readouts.pluginsActive = plugged }
         // The chart-link list, the credit and the error, from the core. A
         // landing answer raises needs-redraw, so a resolve keeps this ticking
         // until it is done.
@@ -797,16 +797,16 @@ final class ChartController: NSObject {
         // together: a readout that kept the last position through a lost fix
         // would be presenting a stale one as live.
         if let ship = ownShip() {
-            if model.fixState != ship.state { model.fixState = ship.state }
+            if model.readouts.fixState != ship.state { model.readouts.fixState = ship.state }
             let lat: Double? = ship.state == .live ? ship.lat : nil
             let lon: Double? = ship.state == .live ? ship.lon : nil
-            if model.shipLat != lat { model.shipLat = lat }
-            if model.shipLon != lon { model.shipLon = lon }
+            if model.readouts.shipLat != lat { model.readouts.shipLat = lat }
+            if model.readouts.shipLon != lon { model.readouts.shipLon = lon }
         }
-        if model.rotationDeg != v.rotation_deg { model.rotationDeg = v.rotation_deg }
-        if model.zoomLevel != v.zoom { model.zoomLevel = v.zoom }
-        if model.centerLat != v.lat { model.centerLat = v.lat }
-        if model.centerLon != v.lon { model.centerLon = v.lon }
+        if model.readouts.rotationDeg != v.rotation_deg { model.readouts.rotationDeg = v.rotation_deg }
+        if model.readouts.zoomLevel != v.zoom { model.readouts.zoomLevel = v.zoom }
+        if model.readouts.centerLat != v.lat { model.readouts.centerLat = v.lat }
+        if model.readouts.centerLon != v.lon { model.readouts.centerLon = v.lon }
         // Persist periodically too: a crash or a force-quit never reaches
         // close(). Only when it has moved: frames keep coming while a plugin
         // moves own ship, so a boat at anchor wrote the same pose every three
@@ -818,13 +818,13 @@ final class ChartController: NSObject {
             ViewState.save(v)
         }
         let ov = lookout_overscale(h)
-        if model.overscale != ov { model.overscale = ov }
+        if model.readouts.overscale != ov { model.readouts.overscale = ov }
         let sd = lookout_scale_denominator(h)
-        if model.scaleDenominator != sd { model.scaleDenominator = sd }
+        if model.readouts.scaleDenominator != sd { model.readouts.scaleDenominator = sd }
         var m = tile57_mariner()
         lookout_get_mariner(h, &m)
         let sch = Int(m.scheme.rawValue)
-        if model.scheme != sch { model.scheme = sch }
+        if model.readouts.scheme != sch { model.readouts.scheme = sch }
     }
 
     // MARK: - Fixture capture

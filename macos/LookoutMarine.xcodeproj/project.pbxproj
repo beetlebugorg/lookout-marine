@@ -80,6 +80,7 @@
 		5EDBC7A846272B37C846C95C /* ReadoutsCapsule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02618015841FF6935C44305E /* ReadoutsCapsule.swift */; };
 		606C8CB59EE44B3D51EA08DE /* PluginPackageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 821B5ED7454E2C00FA897B56 /* PluginPackageTests.swift */; };
 		61E0DAE3345D167C0F437344 /* StoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EA86C2284DD80FD535E34EE /* StoreTests.swift */; };
+		667ACA81D8076DE1F5E0FCB6 /* ChromeModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D234494177794FA934BAB596 /* ChromeModel.swift */; };
 		689E24910C8ECF894D1FA847 /* Discovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9341B7F1F58D9B158ABC67EE /* Discovery.swift */; };
 		698A5FAED378AD7A354AD368 /* ChartController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C315E2FD12D936B349662AB2 /* ChartController.swift */; };
 		699DD0B45A659EC7A3C2951F /* About.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAEA99096E77BC63671F921D /* About.swift */; };
@@ -113,6 +114,7 @@
 		8D0769C29DF1033756668E4F /* PluginAlertTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28D24F09A3F5CB1D1A2E3E49 /* PluginAlertTests.swift */; };
 		8DA009DEDAE728D38DFE062E /* PluginTableTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C7090FA8708C087510A6B66 /* PluginTableTests.swift */; };
 		8EF72BD101D31073F394013C /* PluginConsentSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6152AE14014203A46906CD92 /* PluginConsentSheet.swift */; };
+		8F197CD206DDF556863202DC /* ReadoutsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0DD5929CA735D0DD9F3F142 /* ReadoutsModel.swift */; };
 		9310F043177B162A821FDF99 /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8FB061C18A2E1449AB1D30F1 /* Metal.framework */; };
 		933BF353B66B419638C90258 /* Fixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD2C1E199441E57327C292F6 /* Fixture.swift */; };
 		93410ED10B7262DA9DDCE3BA /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7391C6EA25BA24468EDAD1AD /* CoreGraphics.framework */; };
@@ -143,6 +145,7 @@
 		AC156DBF801B9FDB7048420A /* ChartWorkPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 362582E4EA060B062BAF11EB /* ChartWorkPanel.swift */; };
 		AE777CEB11DB23DC4042FCC1 /* ChartMenuPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB8AD6DFED21DF30B2636C6C /* ChartMenuPanel.swift */; };
 		AF4BB50C34E59C394C6AD379 /* PluginAlerts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4908F0A3B9D1ECDF91411BE7 /* PluginAlerts.swift */; };
+		B1419C547F1615D20EBEE3EA /* ChromeModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D234494177794FA934BAB596 /* ChromeModel.swift */; };
 		B1774F9EA0735A56300C1850 /* MarinerSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F7AFFDA812DB39C72788868 /* MarinerSettingsTests.swift */; };
 		B32B89A37A49BA618336DBD3 /* UITestCase.swift in Sources */ = {isa = PBXBuildFile; fileRef = A53C303F269185DBB7200970 /* UITestCase.swift */; };
 		B372E30B227615DF4350B502 /* PickReportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CFF9284FC01F1CF6E286197 /* PickReportTests.swift */; };
@@ -211,6 +214,7 @@
 		F0BE2056E172248A93FDFA7B /* ScaleParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BD93ECA0EF5B7BC7893551B /* ScaleParserTests.swift */; };
 		F0BEF83589EF79DCF51DC90F /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8FB061C18A2E1449AB1D30F1 /* Metal.framework */; };
 		F1C239D0493C5C54DAC73E6C /* tables.json in Resources */ = {isa = PBXBuildFile; fileRef = 460E0B79780678DFCEDBC572 /* tables.json */; };
+		F2D04DA787C9802949F999C0 /* ReadoutsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0DD5929CA735D0DD9F3F142 /* ReadoutsModel.swift */; };
 		F56FFB5B0B4315E5CAB193E8 /* ChartValues.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EBE7ED9891268BB429691A0 /* ChartValues.swift */; };
 		F5ACE48CDAAC757EA7F003E9 /* ChartWorkPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 362582E4EA060B062BAF11EB /* ChartWorkPanel.swift */; };
 		F5B4B871DD276DE2066E2E68 /* ChartValues.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EBE7ED9891268BB429691A0 /* ChartValues.swift */; };
@@ -350,6 +354,7 @@
 		AAEA99096E77BC63671F921D /* About.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = About.swift; sourceTree = "<group>"; };
 		AD2C1E199441E57327C292F6 /* Fixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Fixture.swift; sourceTree = "<group>"; };
 		ADA39FB96EFFB96A6985C0C9 /* OpenPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenPanel.swift; sourceTree = "<group>"; };
+		B0DD5929CA735D0DD9F3F142 /* ReadoutsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadoutsModel.swift; sourceTree = "<group>"; };
 		B1C44341E0A9C0B713D97E32 /* PlacementTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlacementTests.swift; sourceTree = "<group>"; };
 		B4548244FA1C95958287A425 /* SettingsWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsWindow.swift; sourceTree = "<group>"; };
 		B48090BE5EB194EC371E4A0D /* PositionReadout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PositionReadout.swift; sourceTree = "<group>"; };
@@ -362,6 +367,7 @@
 		C57FD68791CA2B301D43ADBC /* alerts-empty.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "alerts-empty.json"; sourceTree = "<group>"; };
 		CB8AD6DFED21DF30B2636C6C /* ChartMenuPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartMenuPanel.swift; sourceTree = "<group>"; };
 		CDC82FE85405E2169A271617 /* EmptyChartState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmptyChartState.swift; sourceTree = "<group>"; };
+		D234494177794FA934BAB596 /* ChromeModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromeModel.swift; sourceTree = "<group>"; };
 		D31BFC1DAC5265A5DAC8F20D /* ChartLinkFetch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartLinkFetch.swift; sourceTree = "<group>"; };
 		D6C25F5333751E53B1C677E5 /* alerts.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = alerts.json; sourceTree = "<group>"; };
 		DA903A3F5328FE7634B5B1C4 /* ScaleEntryPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScaleEntryPanel.swift; sourceTree = "<group>"; };
@@ -475,6 +481,7 @@
 				B48090BE5EB194EC371E4A0D /* PositionReadout.swift */,
 				4116F62995684CE961ACFBFE /* RasterPill.swift */,
 				02618015841FF6935C44305E /* ReadoutsCapsule.swift */,
+				B0DD5929CA735D0DD9F3F142 /* ReadoutsModel.swift */,
 				DA903A3F5328FE7634B5B1C4 /* ScaleEntryPanel.swift */,
 			);
 			path = Hud;
@@ -638,6 +645,7 @@
 				362582E4EA060B062BAF11EB /* ChartWorkPanel.swift */,
 				8ABF98AA4261380DCAF4621C /* Chrome.swift */,
 				48C28C1F70D85569D7DEA1F7 /* ChromeHitRegion.swift */,
+				D234494177794FA934BAB596 /* ChromeModel.swift */,
 				CDC82FE85405E2169A271617 /* EmptyChartState.swift */,
 				7C90666B68F88AA600900DFB /* SearchField.swift */,
 				43B1D53AEBA3A1562C76642D /* StartupLoader.swift */,
@@ -988,6 +996,7 @@
 				20661EFE0AE890B1C97DEBA8 /* ChartsSection.swift in Sources */,
 				02BEB8DB1EBC2B61CC1CEB36 /* Chrome.swift in Sources */,
 				340BAA0AB5066CB75B4DB2B8 /* ChromeHitRegion.swift in Sources */,
+				B1419C547F1615D20EBEE3EA /* ChromeModel.swift in Sources */,
 				FFDEBD8A71166206983735DB /* Commands.swift in Sources */,
 				CDEDF34B3202F6D9F0746A37 /* ContentView.swift in Sources */,
 				AB753B2BDEE44483CCDD903C /* CoordFormat.swift in Sources */,
@@ -1020,6 +1029,7 @@
 				4B1A054DCC9AEF7FE7680685 /* RasterModel.swift in Sources */,
 				9E390CFF6C492104AFEF0BD5 /* RasterPill.swift in Sources */,
 				D8B07B8A647C1B9C9EC398BA /* ReadoutsCapsule.swift in Sources */,
+				F2D04DA787C9802949F999C0 /* ReadoutsModel.swift in Sources */,
 				439A3F30EECCD482821F6221 /* S57.swift in Sources */,
 				CBB5EE49F377EA2C6E4B3F7F /* ScaleEntryPanel.swift in Sources */,
 				ABE7334DDB19342650DC03EF /* ScaleParser.swift in Sources */,
@@ -1095,6 +1105,7 @@
 				DE59CBC001F2C93EFEEFB316 /* ChartsSection.swift in Sources */,
 				B82495034138B87BEB0D8619 /* Chrome.swift in Sources */,
 				9B5D5B30A13DEA2CAA3AA35F /* ChromeHitRegion.swift in Sources */,
+				667ACA81D8076DE1F5E0FCB6 /* ChromeModel.swift in Sources */,
 				1624F24699FFA672BA87FF22 /* Commands.swift in Sources */,
 				DCCD94EA9FFFD7C0438FE580 /* ContentView.swift in Sources */,
 				CBD34D994087975A903346EA /* CoordFormat.swift in Sources */,
@@ -1127,6 +1138,7 @@
 				27BD8996C99ECDE5B5242A1A /* RasterModel.swift in Sources */,
 				BFF000C33F19CFFBD7E68E53 /* RasterPill.swift in Sources */,
 				5EDBC7A846272B37C846C95C /* ReadoutsCapsule.swift in Sources */,
+				8F197CD206DDF556863202DC /* ReadoutsModel.swift in Sources */,
 				534AC2342D895329C4CBAA3E /* S57.swift in Sources */,
 				1B5DA1469C3464A92586C7AC /* ScaleEntryPanel.swift in Sources */,
 				E114A387274E00A905B754AA /* ScaleParser.swift in Sources */,

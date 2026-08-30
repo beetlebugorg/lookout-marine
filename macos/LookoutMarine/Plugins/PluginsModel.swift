@@ -9,10 +9,6 @@ import Foundation
 @MainActor
 @Observable
 final class PluginsModel {
-    /// True while the plugin layer is up. Own ship comes from a plugin, so the
-    /// follow control is only shown when one can supply a position.
-    var active = false
-
     /// Every table the loaded plugins declare, in declaration order. The
     /// Vessels menu and the settings row are built from this, so what is
     /// offered follows the plugins that are up: a plugin that unloads takes

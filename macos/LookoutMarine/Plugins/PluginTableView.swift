@@ -112,7 +112,7 @@ struct PluginTableView: View {
             guard let lat = row.lat, let lon = row.lon else { return }
             model.overlay.revealOnChart(lon: lon, lat: lat)
             // The chart is behind the form, so shut the form to show it.
-            model.showSettings = false
+            model.chrome.showSettings = false
         } label: {
             HStack(spacing: 0) {
                 ForEach(Array(spec.columns.enumerated()), id: \.offset) { i, col in

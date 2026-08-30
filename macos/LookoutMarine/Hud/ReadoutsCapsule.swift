@@ -69,7 +69,7 @@ struct ReadoutsCapsule: View {
         HStack(spacing: 10) {
             PositionReadout(model: model, compact: compact)
             separator
-            Text(String(format: "z%.1f", model.zoomLevel))
+            Text(String(format: "z%.1f", model.readouts.zoomLevel))
                 .foregroundStyle(Chrome.muted)
         }
         .font(.system(size: compact ? 12 : 14).monospacedDigit())
@@ -84,13 +84,13 @@ struct ReadoutsCapsule: View {
                 .frame(width: 10, height: 10)
             // The band says how much the chart has generalised what it shows,
             // in six characters. It stays at every width.
-            Text(CoordFormat.band(model.scaleDenominator))
+            Text(CoordFormat.band(model.readouts.scaleDenominator))
                 .fontWeight(.semibold)
                 .foregroundStyle(Chrome.ink)
                 .accessibilityIdentifier("band")
             separator
             Button(action: onScaleTap) {
-                Text(CoordFormat.scale(model.scaleDenominator))
+                Text(CoordFormat.scale(model.readouts.scaleDenominator))
                     .fontWeight(.semibold)
                     .foregroundStyle(Chrome.accent)
                     .padding(.horizontal, 5)
@@ -98,18 +98,18 @@ struct ReadoutsCapsule: View {
             }
             .buttonStyle(ChromeFlatStyle(cornerRadius: 6))
             .help("Zoom to a scale…")
-            .accessibilityLabel("Scale \(CoordFormat.scale(model.scaleDenominator)). Zoom to a scale.")
+            .accessibilityLabel("Scale \(CoordFormat.scale(model.readouts.scaleDenominator)). Zoom to a scale.")
             .accessibilityIdentifier("scale-readout")
             .chromeHitRegion("scale-readout")
             if withPosition {
                 separator
-                Text(String(format: "z%.1f", model.zoomLevel))
+                Text(String(format: "z%.1f", model.readouts.zoomLevel))
                     .foregroundStyle(Chrome.muted)
                 separator
                 PositionReadout(model: model, compact: compact)
             }
-            if model.overscale > 1.05 {
-                Text(String(format: "×%.1f", model.overscale))
+            if model.readouts.overscale > 1.05 {
+                Text(String(format: "×%.1f", model.readouts.overscale))
                     .accessibilityIdentifier("overscale")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(Chrome.overscale)
@@ -216,7 +216,7 @@ struct ReadoutsCapsule: View {
         Button(model.raster.chartHidden ? "Show ENC Over Raster" : "Hide ENC Over Raster") {
             model.raster.toggleChart()
         }
-        Button("Add Raster Charts…") { model.showRasterImporter = true }
+        Button("Add Raster Charts…") { model.chrome.showRasterImporter = true }
     }
     #endif
 

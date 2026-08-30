@@ -41,7 +41,7 @@ struct SettingsSection: Identifiable {
 
 
 struct SettingsView: View {
-    @Bindable var model: AppModel
+    let model: AppModel
     @StateObject private var m = MarinerSettings()
     @StateObject private var p: PluginSettings
 
@@ -56,6 +56,9 @@ struct SettingsView: View {
     }
 
     var body: some View {
+        // A binding cannot be made through AppModel, which owns its models
+        // with a let, so the one this view writes is taken locally.
+        @Bindable var chrome = model.chrome
         content
             .onAppear {
                 m.bind(to: model.controller)
@@ -70,7 +73,7 @@ struct SettingsView: View {
             // chart's importers hang, so Add Charts had to dismiss the form
             // and time a re-present. These come up over the form and leave it
             // where it was.
-            .fileImporter(isPresented: $model.showSettingsImporter,
+            .fileImporter(isPresented: $chrome.showSettingsImporter,
                           allowedContentTypes: [.item, .folder]) { result in
                 if case .success(let url) = result { model.openImported(url) }
             }
@@ -78,7 +81,7 @@ struct SettingsView: View {
             // SwiftUI presents only the outer, so Add Charts silently did
             // nothing. A background node keeps the two importers apart.
             .background(
-                Color.clear.fileImporter(isPresented: $model.showSettingsRasterImporter,
+                Color.clear.fileImporter(isPresented: $chrome.showSettingsRasterImporter,
                               allowedContentTypes: [.item, .folder],
                               allowsMultipleSelection: true) { result in
                     if case .success(let urls) = result { model.importRasterCharts(urls) }
@@ -86,7 +89,7 @@ struct SettingsView: View {
             )
             // A third importer, so a third background node — see above.
             .background(
-                Color.clear.fileImporter(isPresented: $model.showSettingsStyleImporter,
+                Color.clear.fileImporter(isPresented: $chrome.showSettingsStyleImporter,
                               allowedContentTypes: [.item]) { result in
                     if case .success(let url) = result { model.chartLinks.importStyle(url) }
                 }
@@ -96,7 +99,7 @@ struct SettingsView: View {
             // does not know the type arrives as data, and greying it out would
             // leave the mariner unable to install a file they are holding.
             .background(
-                Color.clear.fileImporter(isPresented: $model.showSettingsPluginImporter,
+                Color.clear.fileImporter(isPresented: $chrome.showSettingsPluginImporter,
                               allowedContentTypes: [.item]) { result in
                     if case .success(let url) = result { model.importPluginPackage(url) }
                 }
@@ -124,13 +127,16 @@ struct SettingsView: View {
     /// The section on screen. A section can go away — a plugin that never came
     /// up takes its section with it — so a stale selection falls back.
     private var selected: String {
-        sections.contains { $0.id == model.settingsTab } ? model.settingsTab : "display"
+        sections.contains { $0.id == model.chrome.settingsTab } ? model.chrome.settingsTab : "display"
     }
 
     @ViewBuilder private var content: some View {
+        // A binding cannot be made through AppModel, which owns its models
+        // with a let, so the one this view writes is taken locally.
+        @Bindable var chrome = model.chrome
         #if os(macOS)
         NavigationSplitView {
-            List(sections, selection: $model.settingsTab) { s in
+            List(sections, selection: $chrome.settingsTab) { s in
                 Label(s.label, systemImage: s.icon)
             }
             .navigationSplitViewColumnWidth(min: 168, ideal: 178, max: 220)
@@ -250,8 +256,8 @@ struct SettingsView: View {
     /// The stack's path: the section on screen, or nothing while the list is.
     private var pushedSection: Binding<[String]> {
         Binding(
-            get: { sections.contains { $0.id == model.settingsTab } ? [model.settingsTab] : [] },
-            set: { model.settingsTab = $0.last ?? "" }
+            get: { sections.contains { $0.id == model.chrome.settingsTab } ? [model.chrome.settingsTab] : [] },
+            set: { model.chrome.settingsTab = $0.last ?? "" }
         )
     }
 
@@ -259,7 +265,7 @@ struct SettingsView: View {
     /// goes away with the plugin that filled it, and the pane follows the same
     /// value, so the two can never disagree.
     private var sidebarSelection: Binding<String?> {
-        Binding(get: { selected }, set: { model.settingsTab = $0 ?? selected })
+        Binding(get: { selected }, set: { model.chrome.settingsTab = $0 ?? selected })
     }
 
     /// A section's own name, for the title of its pane. Until now a pushed
@@ -272,7 +278,7 @@ struct SettingsView: View {
     /// while that view owned the container; the form owns it now.
     @ToolbarContentBuilder private var doneItem: some ToolbarContent {
         ToolbarItem(placement: .confirmationAction) {
-            Button("Done") { model.showSettings = false }
+            Button("Done") { model.chrome.showSettings = false }
         }
     }
     #endif

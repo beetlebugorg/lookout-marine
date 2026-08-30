@@ -14,7 +14,7 @@ import UIKit
 #if os(iOS)
 
 struct ChartView: View {
-    @Bindable var model: AppModel
+    let model: AppModel
     let controller: ChartController
     /// The OS appearance, which the form follows in the day scheme. Read
     /// here, outside OverlayLayer, so it is the real OS value and not the
@@ -22,6 +22,9 @@ struct ChartView: View {
     @Environment(\.colorScheme) private var osScheme
 
     var body: some View {
+        // A binding cannot be made through AppModel, which owns its models
+        // with a let, so the one this view writes is taken locally.
+        @Bindable var chrome = model.chrome
         // Chrome only: the chart renders in SDL's own window and the gesture
         // surface (ChartUIView) lives in the plain-UIKit input window between
         // them — SwiftUI never sees chart touches (see SceneDelegate).
@@ -29,7 +32,7 @@ struct ChartView: View {
         // The form brings its OWN navigation: a stack on a phone, a sidebar
         // and pane on an iPad. It cannot be given one from out here, because
         // only the form knows how wide it came up.
-        .sheet(isPresented: $model.showSettings) {
+        .sheet(isPresented: $chrome.showSettings) {
             SettingsView(model: model)
                 // The form follows the chart's scheme, like the rest of the
                 // chrome. The scheme is set here because OverlayLayer sets it
@@ -39,9 +42,9 @@ struct ChartView: View {
                 // Always pass a value. `nil` means "no preference", and that
                 // does not remove a preference already applied to an open
                 // sheet. The OS scheme makes a return to Day a change.
-                .preferredColorScheme(model.scheme == 0 ? osScheme : .dark)
+                .preferredColorScheme(model.readouts.scheme == 0 ? osScheme : .dark)
         }
-        .fileImporter(isPresented: $model.showImporter,
+        .fileImporter(isPresented: $chrome.showImporter,
                       allowedContentTypes: [.item, .folder]) { result in
             if case .success(let url) = result { model.openImported(url) }
         }
@@ -49,7 +52,7 @@ struct ChartView: View {
         // SwiftUI presents only the outer, so Add Charts silently did nothing.
         // A background node keeps the raster importer clear of the vector one.
         .background(
-            Color.clear.fileImporter(isPresented: $model.showRasterImporter,
+            Color.clear.fileImporter(isPresented: $chrome.showRasterImporter,
                           allowedContentTypes: [.item, .folder],
                           allowsMultipleSelection: true) { result in
                 if case .success(let urls) = result { model.importRasterCharts(urls) }

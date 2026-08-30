@@ -148,8 +148,8 @@ extension AppModel {
     /// sidebar is the Mac window's left edge. A caller that wants a particular
     /// section (the screenshot hook) sets `settingsTab` after this.
     func openSettings() {
-        settingsTab = ""
-        showSettings = true
+        chrome.settingsTab = ""
+        chrome.showSettings = true
     }
 
     /// Import a picked chart (or folder of cells) into the app container, then

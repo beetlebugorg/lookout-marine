@@ -54,11 +54,11 @@ enum DevHooks {
         // the form on its list of sections, and this is what pushes one.
         case "settings":
             model.openSettings()
-            model.settingsTab = part.count > 1 ? part[1] : "display"
+            model.chrome.settingsTab = part.count > 1 ? part[1] : "display"
         case "scale":
             model.beginScaleEntry()
         case "search":
-            model.searchOpen = true
+            model.chrome.searchOpen = true
         // scheme:1 dusk, scheme:2 night — the chrome must follow the chart's
         // hours, and a screenshot proves it.
         case "scheme":
@@ -76,7 +76,7 @@ enum DevHooks {
             if let f = fraction(part) {
                 model.overlay.pickAt(fx: f.x, fy: f.y)
             } else {
-                model.overlay.pickAtCentre(lon: model.centerLon, lat: model.centerLat)
+                model.overlay.pickAtCentre(lon: model.readouts.centerLon, lat: model.readouts.centerLat)
             }
         // The chart menu, a dropped mark, and the rename field on the newest
         // mark. Same fraction as pick, because the hook has no pointer to

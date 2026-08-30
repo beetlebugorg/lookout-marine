@@ -29,65 +29,6 @@ final class AppModel {
         plugins.begin(path)
     }
 
-    // MARK: Live HUD readouts (pushed by ChartController / the chart view)
-    var scaleDenominator: Double = 0
-    var zoomLevel: Double = 0      // fractional web-mercator zoom
-    var scheme: Int = 0            // 0 day, 1 dusk, 2 night
-    var rotationDeg: Double = 0
-    var overscale: Double = 1.0    // >1 = zoomed past the deepest data
-    var centerLat: Double = 0
-    var centerLon: Double = 0
-    /// Follow mode as the core reports it: 0 off, 1 following own ship, 2 on
-    /// and waiting for a fix. Polled on the render tick, never remembered from
-    /// a tap: the core turns follow off itself when the mariner pans.
-    var followState: Int = 0
-    /// Course up as the core reports it: 0 off, 1 turning with own ship, 2 on
-    /// and waiting for a heading. Polled like followState.
-    var courseUpState: Int = 0
-    /// What the position readout may say, as the core reports it. Polled on
-    /// the render tick beside the position itself, so the two can never
-    /// disagree: a readout holding the last numbers through a lost fix would
-    /// be presenting a stale one as live.
-    var fixState: FixState = .none
-    /// Own ship's reported position. Both nil unless `fixState` is `.live`;
-    /// the readout NEVER falls back to the map centre or the cursor.
-    var shipLat: Double?
-    var shipLon: Double?
-    var isBuilding = false         // a background tessellation is filling in
-
-    // MARK: iOS sheet/picker presentation (unused on macOS, where the file
-    // panel and Settings scene are AppKit-native)
-    var showImporter = false
-    /// The Add Raster Charts picker. Separate from `showImporter` because the
-    /// two import different things to different places: an ENC is copied into
-    /// the container and opened, a raster chart is added to the underlay.
-    var showRasterImporter = false
-    /// The same two pickers again, for the SETTINGS sheet. A presented sheet
-    /// cannot present another one from the view it came up over — the pair
-    /// above hang on the chart view — so the form attaches its own and these
-    /// are the flags that raise them. Add Charts used to dismiss the form and
-    /// re-present the picker 0.45s later to get around it; Add Raster Charts
-    /// never got that treatment and simply did nothing.
-    var showSettingsImporter = false
-    var showSettingsRasterImporter = false
-    var showSettingsStyleImporter = false
-    /// Install Plugin… on iOS. A plugin file arrives through the Files app.
-    var showSettingsPluginImporter = false
-    var showSettings = false
-    /// Which settings section shows, by its core name — "display", "depths",
-    /// "text", "charts", "vessels", "alarms", "connections", "advanced". A
-    /// name no section answers to falls back to Display. The screenshot hook
-    /// sets it.
-    var settingsTab = "display"
-
-    // MARK: Search
-    var searchOpen = false
-    var searchText = ""
-
-    // MARK: Scale entry (tapping the 1:N readout)
-    var showScaleEntry = false
-    var scaleEntryText = ""
-
     /// The single chart controller (owned by ChartView; referenced for commands).
     weak var controller: ChartController? {
         didSet {
@@ -110,6 +51,8 @@ final class AppModel {
     let raster = RasterModel()
     let plugins = PluginsModel()
     let overlay = OverlayModel()
+    let readouts = ReadoutsModel()
+    let chrome = ChromeModel()
     /// Adding a set installs the pictures it carries, so this one is built
     /// with the raster model rather than beside it.
     let charts: ChartsModel
@@ -147,7 +90,7 @@ final class AppModel {
     /// raises the form's own importer.
     func addChartStyleFile() {
         #if os(iOS)
-        showSettingsStyleImporter = true
+        chrome.showSettingsStyleImporter = true
         #else
         presentChartStylePanel()
         #endif
@@ -182,22 +125,13 @@ final class AppModel {
     func toggleSoundings() { controller?.toggleSoundings() }
     func toggleOtherCategory() { controller?.toggleOtherCategory() }
 
-    /// What the compass bubble shows. The core owns both parts: it drops
-    /// follow on a pan and course up on a hand rotation, so this is read, not
-    /// remembered.
-    var orientation: Orientation {
-        if followState == 0 { return .unlocked }
-        if followState == 2 { return .armed }   // on, no fix to follow yet
-        return courseUpState == 0 ? .northUp : .courseUp
-    }
-
     /// The compass bubble's tap. It always locks the chart to own ship, and
     /// once locked it cycles north up and course up.
     func cycleOrientation() {
         guard let c = controller else { return }
-        if followState == 0 {
+        if readouts.followState == 0 {
             c.setFollow(true)          // lock, leaving the chart as it lies
-        } else if courseUpState == 0 {
+        } else if readouts.courseUpState == 0 {
             c.setCourseUp(true)        // turn with own ship
         } else {
             c.resetRotation()          // back to north up, still locked
@@ -221,15 +155,11 @@ final class AppModel {
         MarinerSettings.save(m)
     }
 
-    var schemeName: String {
-        switch scheme { case 1: return "Dusk"; case 2: return "Night"; default: return "Day" }
-    }
-
     /// Parse the search text as a coordinate and recenter. True when it was a
     /// coordinate, so the field can clear itself.
     @discardableResult
     func submitSearch() -> Bool {
-        guard let controller, let coord = CoordinateParser.parse(searchText) else { return false }
+        guard let controller, let coord = CoordinateParser.parse(chrome.searchText) else { return false }
         let cur = controller.currentView
         // Keep the current zoom and rotation; a chart-less view uses a
         // harbor-ish zoom.
@@ -246,7 +176,7 @@ final class AppModel {
     /// that is a later pass.)
     func configurePosition() {
         openSettings()
-        settingsTab = "connections"
+        chrome.settingsTab = "connections"
     }
 
     /// Show the chart picker: the AppKit open panel on macOS, the document
@@ -256,7 +186,7 @@ final class AppModel {
         #if os(macOS)
         presentOpenPanel()
         #else
-        showImporter = true
+        chrome.showImporter = true
         #endif
     }
 
@@ -266,7 +196,7 @@ final class AppModel {
     /// because that one cannot appear while the sheet is over it.
     func addChartsFromSettings() {
         #if os(iOS)
-        showSettingsImporter = true
+        chrome.showSettingsImporter = true
         #else
         presentOpenPanel()
         #endif
@@ -274,18 +204,19 @@ final class AppModel {
 
     /// Open the scale entry. The field starts at the current scale.
     func beginScaleEntry() {
-        scaleEntryText = scaleDenominator > 0 ? String(Int(scaleDenominator.rounded())) : ""
-        showScaleEntry = true
+        chrome.scaleEntryText = readouts.scaleDenominator > 0
+            ? String(Int(readouts.scaleDenominator.rounded())) : ""
+        chrome.showScaleEntry = true
     }
 
-    var scaleEntryIsValid: Bool { ScaleParser.parse(scaleEntryText) != nil }
+    var scaleEntryIsValid: Bool { ScaleParser.parse(chrome.scaleEntryText) != nil }
 
     /// Apply the scale in the field. Returns false if the text is not a scale.
     @discardableResult
     func submitScaleEntry() -> Bool {
-        guard let denominator = ScaleParser.parse(scaleEntryText) else { return false }
+        guard let denominator = ScaleParser.parse(chrome.scaleEntryText) else { return false }
         zoomToScale(denominator)
-        showScaleEntry = false
+        chrome.showScaleEntry = false
         return true
     }
 
@@ -295,7 +226,7 @@ final class AppModel {
     /// therefore a zoom delta, and the engine zoom can do the work. The engine
     /// keeps its zoom limits and eases the movement.
     func zoomToScale(_ denominator: Double) {
-        guard let controller, denominator > 0, scaleDenominator > 0 else { return }
-        controller.zoomCentered(log2(scaleDenominator / denominator))
+        guard let controller, denominator > 0, readouts.scaleDenominator > 0 else { return }
+        controller.zoomCentered(log2(readouts.scaleDenominator / denominator))
     }
 }

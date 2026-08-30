@@ -48,12 +48,12 @@ struct OverlayLayer: View {
                 // Top left: the search bubble opens the search field.
                 .overlay(alignment: .topLeading) {
                     HStack(alignment: .top, spacing: Chrome.gap) {
-                        ChromeBubble(system: model.searchOpen ? "xmark" : "magnifyingglass",
+                        ChromeBubble(system: model.chrome.searchOpen ? "xmark" : "magnifyingglass",
                                      help: "Go to coordinate") {
-                            withAnimation(.easeInOut(duration: 0.18)) { model.searchOpen.toggle() }
+                            withAnimation(.easeInOut(duration: 0.18)) { model.chrome.searchOpen.toggle() }
                         }
                         .chromeHitRegion("search-bubble")
-                        if model.searchOpen {
+                        if model.chrome.searchOpen {
                             SearchField(model: model)
                                 .transition(.move(edge: .leading).combined(with: .opacity))
                                 .chromeHitRegion("search-field")
@@ -66,8 +66,8 @@ struct OverlayLayer: View {
                 // physical trailing edge, because in landscape the safe-area
                 // inset moves it toward the middle.
                 .overlay(alignment: .topTrailing) {
-                    NorthBubble(rotationDeg: model.rotationDeg,
-                                orientation: model.orientation) { model.cycleOrientation() }
+                    NorthBubble(rotationDeg: model.readouts.rotationDeg,
+                                orientation: model.readouts.orientation) { model.cycleOrientation() }
                         .chromeHitRegion("compass")
                         .padding(Chrome.margin)
                         .ignoresSafeArea(.container, edges: .trailing)
@@ -89,7 +89,7 @@ struct OverlayLayer: View {
                 // Bottom left: the scale bar.
                 .overlay(alignment: .bottomLeading) {
                     if model.charts.hasChart {
-                        ScaleBarView(scaleDenominator: model.scaleDenominator,
+                        ScaleBarView(scaleDenominator: model.readouts.scaleDenominator,
                                      credit: model.chartLinks.attribution)
                             .padding(.leading, Chrome.margin + sideInset)
                             .padding(.bottom, corner)
@@ -178,7 +178,7 @@ struct OverlayLayer: View {
                 // so the capsule stands down and the entry clears the sheet.
                 .overlay(alignment: .bottom) {
                     VStack(spacing: Chrome.gap) {
-                        if model.showScaleEntry {
+                        if model.chrome.showScaleEntry {
                             ScaleEntryPanel(model: model)
                                 .chromeHitRegion("scale-entry")
                                 .transition(.opacity.combined(with: .move(edge: .bottom)))
@@ -194,7 +194,7 @@ struct OverlayLayer: View {
                              : capsuleBottom)
                 }
                 .overlay(alignment: .top) {
-                    if model.isBuilding { BuildingPill().padding(.top, 10) }
+                    if model.readouts.isBuilding { BuildingPill().padding(.top, 10) }
                 }
                 // Top centre: what the plugins are alarming about. It is drawn
                 // after the building pill, so an alarm is never under it, and
@@ -315,9 +315,9 @@ struct OverlayLayer: View {
                 // change in the subtree, which slid each new report across the
                 // chart from the previous one's position. The report shows
                 // immediately, at its place.
-                .animation(.default, value: model.isBuilding)
-                .animation(.easeInOut(duration: 0.18), value: model.showScaleEntry)
-                .animation(.easeInOut(duration: 0.18), value: model.searchOpen)
+                .animation(.default, value: model.readouts.isBuilding)
+                .animation(.easeInOut(duration: 0.18), value: model.chrome.showScaleEntry)
+                .animation(.easeInOut(duration: 0.18), value: model.chrome.searchOpen)
                 .animation(.easeInOut(duration: 0.25), value: model.charts.showStartupLoader)
         }
         // chromeHitRegion writes the control frames in this space.
@@ -325,11 +325,11 @@ struct OverlayLayer: View {
         .coordinateSpace(name: Chrome.space)
         // The chrome keeps the chart's hours: dusk and night wear the dark
         // palette whatever the OS says, and the day scheme follows the OS.
-        .environment(\.colorScheme, model.scheme == 0 ? osScheme : .dark)
+        .environment(\.colorScheme, model.readouts.scheme == 0 ? osScheme : .dark)
     }
 
     private func toggleScaleEntry() {
-        if model.showScaleEntry { model.showScaleEntry = false }
+        if model.chrome.showScaleEntry { model.chrome.showScaleEntry = false }
         else { model.beginScaleEntry() }
     }
 }

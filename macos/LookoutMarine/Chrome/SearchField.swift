@@ -11,24 +11,27 @@
 import SwiftUI
 
 struct SearchField: View {
-    @Bindable var model: AppModel
+    let model: AppModel
     @FocusState private var focused: Bool
 
     private var parsedCoord: (lat: Double, lon: Double)? {
-        CoordinateParser.parse(model.searchText)
+        CoordinateParser.parse(model.chrome.searchText)
     }
 
     var body: some View {
+        // A binding cannot be made through AppModel, which owns its models
+        // with a let, so the one this view writes is taken locally.
+        @Bindable var chrome = model.chrome
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
-                TextField("Go to coordinate  (e.g. 38.978, -76.492)", text: $model.searchText)
+                TextField("Go to coordinate  (e.g. 38.978, -76.492)", text: $chrome.searchText)
                     .textFieldStyle(.plain)
                     .font(.system(size: 14))
                     .foregroundStyle(Chrome.ink)
                     .focused($focused)
                     .onSubmit { _ = model.submitSearch() }
-                if !model.searchText.isEmpty {
-                    Button { model.searchText = "" } label: {
+                if !model.chrome.searchText.isEmpty {
+                    Button { model.chrome.searchText = "" } label: {
                         Image(systemName: "xmark.circle.fill")
                     }
                     .buttonStyle(.plain)
@@ -42,7 +45,7 @@ struct SearchField: View {
             .overlay(Capsule().strokeBorder(Chrome.edge.opacity(0.25), lineWidth: 0.5))
             .shadow(color: .black.opacity(0.18), radius: 5, y: 2)
 
-            if focused && !model.searchText.isEmpty {
+            if focused && !model.chrome.searchText.isEmpty {
                 results
                     .frame(width: 320, alignment: .leading)
                     .panelSurface()

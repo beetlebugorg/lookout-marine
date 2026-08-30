@@ -34,7 +34,7 @@ struct PositionReadout: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            switch model.fixState {
+            switch model.readouts.fixState {
             case .live:
                 pill("GPS", system: "location.fill", tint: Chrome.accent, solid: true)
                 Text(coordString)
@@ -78,13 +78,13 @@ struct PositionReadout: View {
     }
 
     private var coordString: String {
-        CoordFormat.ownShip(lat: model.shipLat, lon: model.shipLon)
+        CoordFormat.ownShip(lat: model.readouts.shipLat, lon: model.readouts.shipLon)
     }
 
     /// The state as one stable word, for assistive technology and the UI
     /// tests. The help text reads well and changes freely; this does not.
     private var stateName: String {
-        switch model.fixState {
+        switch model.readouts.fixState {
         case .live: return "own ship"
         case .lost: return "no fix"
         case .none: return "no source"

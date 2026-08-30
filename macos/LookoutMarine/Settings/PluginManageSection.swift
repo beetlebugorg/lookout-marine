@@ -196,7 +196,7 @@ extension AppModel {
         #if os(macOS)
         presentInstallPluginOpenPanel()
         #else
-        showSettingsPluginImporter = true
+        chrome.showSettingsPluginImporter = true
         #endif
     }
 }

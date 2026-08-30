@@ -14,7 +14,7 @@ import UIKit
 
 /// The scale entry. Type a scale or select a band, and the view zooms to it.
 struct ScaleEntryPanel: View {
-    @Bindable var model: AppModel
+    let model: AppModel
     @FocusState private var focused: Bool
 
     /// One usual scale for each S-52 navigational purpose band.
@@ -33,19 +33,22 @@ struct ScaleEntryPanel: View {
     ]
 
     /// The typed scale, or nil while the text is not a scale.
-    private var typed: Double? { ScaleParser.parse(model.scaleEntryText) }
+    private var typed: Double? { ScaleParser.parse(model.chrome.scaleEntryText) }
 
     var body: some View {
+        // A binding cannot be made through AppModel, which owns its models
+        // with a let, so the one this view writes is taken locally.
+        @Bindable var chrome = model.chrome
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
                 Text("Zoom to scale")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(Chrome.ink)
                 Spacer(minLength: 8)
-                Text("now \(CoordFormat.scale(model.scaleDenominator))")
+                Text("now \(CoordFormat.scale(model.readouts.scaleDenominator))")
                     .font(.system(size: 12).monospacedDigit())
                     .foregroundStyle(Chrome.muted)
-                Button { model.showScaleEntry = false } label: {
+                Button { model.chrome.showScaleEntry = false } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 11, weight: .semibold))
                         .padding(5)
@@ -60,7 +63,7 @@ struct ScaleEntryPanel: View {
                     Text("1:")
                         .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(Chrome.muted)
-                    TextField("25,000", text: $model.scaleEntryText)
+                    TextField("25,000", text: $chrome.scaleEntryText)
                         .textFieldStyle(.plain)
                         .font(.system(size: 17, weight: .semibold).monospacedDigit())
                         .foregroundStyle(Chrome.ink)
@@ -101,7 +104,7 @@ struct ScaleEntryPanel: View {
         .panelSurface(cornerRadius: 12)
         .onAppear { focused = true }
         #if os(macOS)
-        .onExitCommand { model.showScaleEntry = false }
+        .onExitCommand { model.chrome.showScaleEntry = false }
         #endif
     }
 
@@ -116,7 +119,7 @@ struct ScaleEntryPanel: View {
             ForEach(presets) { p in
                 Button {
                     model.zoomToScale(p.denominator)
-                    model.showScaleEntry = false
+                    model.chrome.showScaleEntry = false
                 } label: {
                     VStack(spacing: 2) {
                         Text(p.band).font(.system(size: 12, weight: .semibold))
@@ -138,5 +141,5 @@ struct ScaleEntryPanel: View {
     }
 
     /// The band of the current view. Its preset is marked.
-    private var current: String { CoordFormat.band(model.scaleDenominator) }
+    private var current: String { CoordFormat.band(model.readouts.scaleDenominator) }
 }

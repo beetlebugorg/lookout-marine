@@ -112,7 +112,7 @@ struct EmptyChartState: View {
                     // it takes about three seconds the first time. The button
                     // says it is working for that whole wait: three seconds of
                     // an unchanged screen reads as a button that did nothing.
-                    if model.showImporter {
+                    if model.chrome.showImporter {
                         Label {
                             Text("Choose Charts…")
                         } icon: {
@@ -124,7 +124,7 @@ struct EmptyChartState: View {
                 }
                 .controlSize(.large)
                 .buttonStyle(.borderedProminent)
-                .disabled(model.showImporter)
+                .disabled(model.chrome.showImporter)
                 .keyboardShortcut("o", modifiers: .command)
                 .accessibilityIdentifier("choose-charts")
 

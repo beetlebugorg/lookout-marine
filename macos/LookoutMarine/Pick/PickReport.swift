@@ -626,18 +626,18 @@ struct PickSheet: View {
     private var footer: some View {
         HStack(spacing: 10) {
             Spacer(minLength: 0)
-            Text(CoordFormat.band(model.scaleDenominator))
+            Text(CoordFormat.band(model.readouts.scaleDenominator))
                 .foregroundStyle(Chrome.muted)
             Button(action: onScaleTap) {
-                Text(CoordFormat.scale(model.scaleDenominator))
+                Text(CoordFormat.scale(model.readouts.scaleDenominator))
                     .fontWeight(.semibold)
                     .foregroundStyle(Chrome.accent)
                     .padding(.horizontal, 4)
                     .padding(.vertical, 2)
             }
             .buttonStyle(ChromeFlatStyle(cornerRadius: 5))
-            .accessibilityLabel("Scale \(CoordFormat.scale(model.scaleDenominator)). Zoom to a scale.")
-            Text(String(format: "z%.1f", model.zoomLevel))
+            .accessibilityLabel("Scale \(CoordFormat.scale(model.readouts.scaleDenominator)). Zoom to a scale.")
+            Text(String(format: "z%.1f", model.readouts.zoomLevel))
                 .foregroundStyle(Chrome.muted)
             PositionReadout(model: model, compact: true)
             Spacer(minLength: 0)
