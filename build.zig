@@ -285,6 +285,16 @@ pub fn build(b: *std.Build) void {
         b.lazyDependency("charttable", charttable_args)) orelse
         return; // fetch scheduled; the runner downloads it and re-runs build()
     const charttable_mod = charttable_dep.module("charttable");
+    // The Vulkan headers charttable's backend imports. Its published package
+    // omits its own vendor/ directory, so a build that fetches charttable
+    // instead of using a sibling checkout has no vulkan/vulkan.h unless the
+    // machine has one installed. vendor/vulkan/include here holds the same
+    // headers, so a fresh clone builds with no other checkout and no Vulkan
+    // SDK. Linux alone needs them: Apple builds Metal, Windows builds D3D12,
+    // and Android finds the headers in the NDK sysroot.
+    const on_android = target.result.abi == .android or target.result.abi == .androideabi;
+    if (is_linux and !on_android)
+        charttable_mod.addIncludePath(b.path("vendor/vulkan/include"));
 
     // ---- the basemap bake ----
     // vendor/gshhg/coastline.geojson.gz -> vendor/gshhg/basemap.pmtiles, which
