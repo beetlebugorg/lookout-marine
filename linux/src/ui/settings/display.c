@@ -25,8 +25,11 @@ lk_apply_soundings (LkSettings *settings, int value)
   lk_mariner_raw (settings->mariner)->soundings = (uint8_t) value;
 }
 
-/* The three schemes' palettes, sRGB, six colours each: deep water, three
-   shallows, land, and text. The same legend the reference draws. */
+/* The three schemes' palettes, sRGB, six colours each: deep water, the three
+   shoaling shades, land, and the coastline. The presentation library's own
+   values (S-101 tokens DEPDW/DEPMD/DEPMS/DEPVS/LANDA/CSTLN), copied so a swatch
+   draws without opening a chart. A legend of the palette, not the palette
+   itself: the engine draws from the tables in the chart. */
 static const double LK_SCHEME_PALETTE[3][6][3] = {
   { { 0.788, 0.929, 1.000 }, { 0.655, 0.851, 0.984 }, { 0.510, 0.792, 1.000 },
     { 0.380, 0.718, 1.000 }, { 0.749, 0.745, 0.561 }, { 0.298, 0.357, 0.388 } },
@@ -36,19 +39,53 @@ static const double LK_SCHEME_PALETTE[3][6][3] = {
     { 0.027, 0.090, 0.153 }, { 0.090, 0.086, 0.055 }, { 0.145, 0.176, 0.192 } },
 };
 
+/* A shore in one scheme: the depth shades stacked out to deep water, then land
+   behind a curved coastline. A piece of chart, not a colour chip — the same
+   drawing the reference makes (SchemeSwatch, SettingsRows.swift), because a
+   mariner picking a scheme is picking how the WATER will read, and six equal
+   bars of colour do not answer that. */
 static void
 lk_swatch_draw (GtkDrawingArea *area, cairo_t *cr, int width, int height, gpointer data)
 {
   int scheme = GPOINTER_TO_INT (data);
-  double band = width / 6.0;
+  const double (*p)[3] = LK_SCHEME_PALETTE[scheme];
+  const double w = width, h = height;
+  /* Deep at the top, shoaling down: the fractions are the reference's. The last
+     band runs to the bottom, so rounding never leaves a seam. */
+  const double bands[3] = { h * 0.36, h * 0.18, h * 0.16 };
+  const double r = 8.0; /* the CSS corner; cairo does not inherit it */
+  double y = 0;
 
-  for (int i = 0; i < 6; i++)
+  /* Clip to the rounded corner the border draws, or the water paints over it. */
+  cairo_new_sub_path (cr);
+  cairo_arc (cr, w - r, r, r, -G_PI / 2, 0);
+  cairo_arc (cr, w - r, h - r, r, 0, G_PI / 2);
+  cairo_arc (cr, r, h - r, r, G_PI / 2, G_PI);
+  cairo_arc (cr, r, r, r, G_PI, 3 * G_PI / 2);
+  cairo_close_path (cr);
+  cairo_clip (cr);
+
+  for (int i = 0; i < 4; i++)
     {
-      const double *c = LK_SCHEME_PALETTE[scheme][i];
-      cairo_set_source_rgb (cr, c[0], c[1], c[2]);
-      cairo_rectangle (cr, i * band, 0, band + 1, height);
+      const double band = i < 3 ? bands[i] : h - y;
+      cairo_set_source_rgb (cr, p[i][0], p[i][1], p[i][2]);
+      cairo_rectangle (cr, 0, y, w, band + 1);
       cairo_fill (cr);
+      y += band;
     }
+
+  /* The shoreline: a bay open to the top left, land filling the corner. */
+  cairo_move_to (cr, 0, h);
+  cairo_line_to (cr, 0, h * 0.80);
+  cairo_curve_to (cr, w * 0.35, h * 0.74, w * 0.60, h * 0.44, w, h * 0.52);
+  cairo_line_to (cr, w, h);
+  cairo_close_path (cr);
+
+  cairo_set_source_rgb (cr, p[4][0], p[4][1], p[4][2]);
+  cairo_fill_preserve (cr);
+  cairo_set_source_rgb (cr, p[5][0], p[5][1], p[5][2]);
+  cairo_set_line_width (cr, 1.5);
+  cairo_stroke (cr);
 }
 
 /* Move the selection ring to the active scheme's swatch. */
@@ -86,18 +123,18 @@ static void
 lk_scheme_swatches (GtkWidget *section, LkSettings *settings)
 {
   static const char *labels[] = { "Day", "Dusk", "Night" };
-  GtkWidget *row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
+  GtkWidget *row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 12);
   int active = lk_mariner_raw (settings->mariner)->scheme;
 
   gtk_box_set_homogeneous (GTK_BOX (row), TRUE);
   for (int i = 0; i < 3; i++)
     {
-      GtkWidget *stack = gtk_box_new (GTK_ORIENTATION_VERTICAL, 4);
+      GtkWidget *stack = gtk_box_new (GTK_ORIENTATION_VERTICAL, 6);
       GtkWidget *swatch = gtk_drawing_area_new ();
       GtkWidget *name = gtk_label_new (labels[i]);
       GtkWidget *button = gtk_button_new ();
 
-      gtk_widget_set_size_request (swatch, -1, 34);
+      gtk_widget_set_size_request (swatch, -1, 78);
       gtk_drawing_area_set_draw_func (GTK_DRAWING_AREA (swatch), lk_swatch_draw,
                                       GINT_TO_POINTER (i), NULL);
       gtk_widget_add_css_class (swatch, "lk-swatch");

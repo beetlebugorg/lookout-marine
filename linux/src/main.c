@@ -210,8 +210,10 @@ static const char *LK_CSS =
     ".lk-menu-coord { padding: 2px 10px 6px 10px; font-size: 90%; }"
     /* The display settings' scheme swatches: a rounded palette, with a ring on
        the chosen one. */
-    ".lk-swatch { border-radius: 6px; border: 1px solid alpha(@borders, 0.5); }"
-    ".lk-swatch-current .lk-swatch { border: 2px solid @accent_color; }"
+    ".lk-swatch { border-radius: 8px; border: 1px solid alpha(@borders, 0.5); }"
+    ".lk-swatch-current .lk-swatch { border: 3px solid @accent_color; }"
+    /* The chosen scheme's name carries the choice with the ring. */
+    ".lk-swatch-current label { font-weight: bold; }"
     /* The floating search capsule beside the top-left bubble, and its result
        row below the field. */
     ".lk-search-capsule {"
