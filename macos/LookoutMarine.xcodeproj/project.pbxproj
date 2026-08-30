@@ -8,137 +8,137 @@
 
 /* Begin PBXBuildFile section */
 		01E9C851AE2AFBF1C12F09F9 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 7DE881BB41EFEF6FD7443244 /* Assets.xcassets */; };
-		041CE190E86B6C6013B5D705 /* SettingsRows.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51DC0223CD9CD017A1DFB40F /* SettingsRows.swift */; };
-		06B5BBB30960E8F05B6C8866 /* ZoomControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = C30C216F6C0285110D3B2A87 /* ZoomControls.swift */; };
-		09693BA46EA360C5604CC0DE /* ChartView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67B9484301248E7DF8AD6EE2 /* ChartView.swift */; };
-		0B3C1DDDBE36EC375F1CA997 /* SettingsRows.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51DC0223CD9CD017A1DFB40F /* SettingsRows.swift */; };
-		0B449CF57106605B212E94E1 /* ViewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CB6CD8647C157FF2DE0ABD7 /* ViewState.swift */; };
-		0BC91B15C4652260E6898412 /* Chrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = A79681EADC27E70A6BB144FE /* Chrome.swift */; };
-		0FC697E6E69C983F38573E8D /* Commands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0196916E70289224C21747BF /* Commands.swift */; };
+		02BEB8DB1EBC2B61CC1CEB36 /* Chrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8ABF98AA4261380DCAF4621C /* Chrome.swift */; };
+		08B0E879E6DAE396BF751F3E /* PickReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0BD7776E04E596B3F3FC90E /* PickReport.swift */; };
+		098A551B61520429588C9332 /* PluginAlerts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4908F0A3B9D1ECDF91411BE7 /* PluginAlerts.swift */; };
+		0BFBE84D0B1DE20C265E75D1 /* Discovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9341B7F1F58D9B158ABC67EE /* Discovery.swift */; };
 		1001392DF7ECEB52C30F7AD5 /* SmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 429A3DC2D37A94F800391B26 /* SmokeTests.swift */; };
-		15BC02BD89536FECE4FD9DA8 /* PluginInstall.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80EBC9B2F3AA3BE70089E8E3 /* PluginInstall.swift */; };
+		14273C54003A4AEBB439A5E3 /* Store.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B35807C0ABB9C564DABEC58 /* Store.swift */; };
+		1624F24699FFA672BA87FF22 /* Commands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BC336600CCD8C3660EBE446 /* Commands.swift */; };
+		1B66B5D3EC47042E2E462BBF /* ViewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D36819F503E24F82BD18F6B /* ViewState.swift */; };
 		1BF3259967105BE75AEBE75F /* LicensesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FAE0C61602607D05CF24596 /* LicensesTests.swift */; };
 		1CC2EEC8A6FA6384EAD7A66B /* PluginAlertTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28D24F09A3F5CB1D1A2E3E49 /* PluginAlertTests.swift */; };
-		22FBEBBD323D86CAF075720B /* PluginSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08AFF5DFF4C5B98F49516CBD /* PluginSettings.swift */; };
-		23A8A25B8A24DC794BECADC9 /* OpenPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 684AE423C6C360B8C64E8187 /* OpenPanel.swift */; };
-		299A310C79E6D3CED08E40D3 /* HUDOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73EEFBC1A0D58A1F638D2C4E /* HUDOverlay.swift */; };
+		1D784EA4414260DF4C62E8B4 /* LookoutMarineApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A03D3BC7A7816F10B65863B0 /* LookoutMarineApp.swift */; };
+		1F47658C4F59CFF5A1B54416 /* Platform.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43C05F8392EA5DB00E75425A /* Platform.swift */; };
+		1F6348B56169B23E77BEFAF1 /* SearchField.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C90666B68F88AA600900DFB /* SearchField.swift */; };
+		29D69EB0C3BEBC71F0CCBF36 /* Store.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B35807C0ABB9C564DABEC58 /* Store.swift */; };
 		2A8E04D7D4173D43E7ECCB7B /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = 0D454300CEC7DCF096F4F2D0 /* README.md */; };
 		2AE8D8F4D5040F901139BC0A /* alerts.json in Resources */ = {isa = PBXBuildFile; fileRef = D6C25F5333751E53B1C677E5 /* alerts.json */; };
 		2F80D13D42F2990D89CB26E5 /* ChartSetStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52541E0740AE0F9E3BBC236D /* ChartSetStoreTests.swift */; };
 		2FE63BAE429B166A470E7312 /* ChartBakeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B2641D4DD30D574228F9033 /* ChartBakeTests.swift */; };
 		304A739310B89E36ADDF3A21 /* ChartScanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A443DE42C30306D7110F731 /* ChartScanTests.swift */; };
 		315E261DE0454FB6293200D0 /* CoordFormatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80A6678722FC01CA46E10CE0 /* CoordFormatTests.swift */; };
-		3A67788E0E2ED9621CD190CB /* SettingsWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 231885FFFF86BB739D2D973D /* SettingsWindow.swift */; };
-		3AEC2EB57F7C98204385B3BC /* SearchField.swift in Sources */ = {isa = PBXBuildFile; fileRef = D26F78CDEC3CDA7C0807297F /* SearchField.swift */; };
+		32DB96754F03936CE042A5BF /* PluginSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D899CA81B7494096C3F930C /* PluginSettings.swift */; };
+		375666A105DF99B820839F79 /* HUDOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 616EEA83FF55549682120C2F /* HUDOverlay.swift */; };
+		377B308C3F481575E1DD5FEC /* CoordinateParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 850ACAEA7CC105683D93D3E3 /* CoordinateParser.swift */; };
+		39194C6A9F6BC276AD67A94B /* OpenPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADA39FB96EFFB96A6985C0C9 /* OpenPanel.swift */; };
 		3D050E1C7846F727E703C605 /* StoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EA86C2284DD80FD535E34EE /* StoreTests.swift */; };
-		3DEB3190D076008F23BD1503 /* Licenses.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF4CDAEE17FBF230AF39737A /* Licenses.swift */; };
-		40182513C6508A173A6B21FA /* ZoomControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = C30C216F6C0285110D3B2A87 /* ZoomControls.swift */; };
+		3F5DDFAFDE10145EC7640E15 /* PluginTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4810DC9CDB37A43A4A8E23B3 /* PluginTable.swift */; };
 		424454A97A24F08E54F8DB86 /* PluginConfigTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CAC9F938CDB51E28B5E98CE /* PluginConfigTests.swift */; };
-		4548BA266169EA2624ABCCCB /* SearchField.swift in Sources */ = {isa = PBXBuildFile; fileRef = D26F78CDEC3CDA7C0807297F /* SearchField.swift */; };
+		4271F2EF029019817F438D42 /* ChartBake.swift in Sources */ = {isa = PBXBuildFile; fileRef = C440A0CF1A4AE2740ACEFF2F /* ChartBake.swift */; };
+		4667BE995AFC9A1A2805C20A /* OpenPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADA39FB96EFFB96A6985C0C9 /* OpenPanel.swift */; };
 		4AFD459ADCF20D012C896B5C /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2C8CBCC22D9B7C1DD8FD68D3 /* QuartzCore.framework */; };
-		4D685E82CE2D30D5ADB210A2 /* PluginTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B39D8DB2792CC7520B0F19D /* PluginTable.swift */; };
+		4D8D188DC9CAAF8A4D739A90 /* SettingsWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4548244FA1C95958287A425 /* SettingsWindow.swift */; };
 		4DCC3DBF302CBC272D2917EB /* UniformTypeIdentifiers.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 063DCA330E7899B8CCE880A8 /* UniformTypeIdentifiers.framework */; };
 		50C214AAD062B26FCB84D7BE /* RasterChartTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3F841BB92E185C6D2C47A7A /* RasterChartTests.swift */; };
 		52AFAE4BCB8FA4AFBD4C103D /* PlacementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1C44341E0A9C0B713D97E32 /* PlacementTests.swift */; };
 		56953BE7D9D4CF249C438ABE /* ViewStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A1AE666034E0F470280B7AD /* ViewStateTests.swift */; };
-		5698DC1B6D3C29F86063204C /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08B62D296D34C231163DF7C2 /* SettingsView.swift */; };
-		58344883C8559763DE1E06FA /* LookoutMarineApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D05C37DB49A7E884DBA24E8A /* LookoutMarineApp.swift */; };
 		58BBDFC93B595FE3C7654043 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9D5D7B15F4286B70544A80B2 /* UIKit.framework */; };
 		5C6439B656E0C69AEFF5F5F2 /* PluginConfigTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CAC9F938CDB51E28B5E98CE /* PluginConfigTests.swift */; };
-		5D53462731CD73801CBEEFC0 /* PluginTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B39D8DB2792CC7520B0F19D /* PluginTable.swift */; };
-		6019BBBFC866BC7ADEBDCAAB /* ChartLinkFetch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B051E65415B8998D6F1BBC6 /* ChartLinkFetch.swift */; };
 		606C8CB59EE44B3D51EA08DE /* PluginPackageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 821B5ED7454E2C00FA897B56 /* PluginPackageTests.swift */; };
 		61E0DAE3345D167C0F437344 /* StoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EA86C2284DD80FD535E34EE /* StoreTests.swift */; };
-		660527C6F47863267C36E1A5 /* Store.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C6CBCCF32F80D4A672B1B6D /* Store.swift */; };
-		6A33AC542EDC82BA0650E79B /* ViewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CB6CD8647C157FF2DE0ABD7 /* ViewState.swift */; };
-		6A374B43E52E6493D2834C1F /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 867B3D3BE969AB708C6FD1A6 /* AppModel.swift */; };
-		72BB9A2C901DAD894A4C0736 /* Discovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 691669BA5266A092E22A3676 /* Discovery.swift */; };
-		741DBF417DFA2D9172883B89 /* ChartSets.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC58A9CE927EB0CDF26EA952 /* ChartSets.swift */; };
+		689E24910C8ECF894D1FA847 /* Discovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9341B7F1F58D9B158ABC67EE /* Discovery.swift */; };
+		698A5FAED378AD7A354AD368 /* ChartController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C315E2FD12D936B349662AB2 /* ChartController.swift */; };
+		699DD0B45A659EC7A3C2951F /* About.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAEA99096E77BC63671F921D /* About.swift */; };
+		6D9C4C78F830BF23D5E6189F /* ChartView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1DA5C09C3392CDE0D28D1AE /* ChartView.swift */; };
+		6E64808B949E7314A57B5F62 /* PluginTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4810DC9CDB37A43A4A8E23B3 /* PluginTable.swift */; };
+		70D6C5CA580CC7F7CC18DEC8 /* SettingsRows.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CED6DE8C50508326D0E097C /* SettingsRows.swift */; };
+		784566F54334706217860CD0 /* ZoomControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0FF81FD7BD06CE338EF4E09 /* ZoomControls.swift */; };
 		790CB732AF2B36EC710AF082 /* tables.json in Resources */ = {isa = PBXBuildFile; fileRef = 460E0B79780678DFCEDBC572 /* tables.json */; };
-		794F744CA1B16C3E964E3040 /* ChartController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F9C52C1DCB85A9CA7C2BD51 /* ChartController.swift */; };
-		7C9515EC6EEA02E2CF9113D6 /* Chrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = A79681EADC27E70A6BB144FE /* Chrome.swift */; };
+		799A673D0307B96939D71353 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16F8DF0D1C7780BEF76AEE22 /* AppModel.swift */; };
+		79ADA8573328C109282E8A80 /* SettingsRows.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CED6DE8C50508326D0E097C /* SettingsRows.swift */; };
 		7E88421B782228FB3E978EC7 /* ChartScanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A443DE42C30306D7110F731 /* ChartScanTests.swift */; };
 		802999D48E4D4AC4C8FE3C51 /* alerts.json in Resources */ = {isa = PBXBuildFile; fileRef = D6C25F5333751E53B1C677E5 /* alerts.json */; };
-		83F2832CAE9E26CC9A2B8062 /* ScaleParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33D3B879A0744951D7582295 /* ScaleParser.swift */; };
 		84349904142B421A21417AF1 /* PickReportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CFF9284FC01F1CF6E286197 /* PickReportTests.swift */; };
-		8489DF7E23353F645B89F26D /* CoordFormat.swift in Sources */ = {isa = PBXBuildFile; fileRef = F465829CA2C82E927BD23352 /* CoordFormat.swift */; };
 		869FF3B20BF6417C1F0FFF4A /* Fixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD2C1E199441E57327C292F6 /* Fixture.swift */; };
 		882229E32D58BFFB90A121A7 /* MarinerSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F7AFFDA812DB39C72788868 /* MarinerSettingsTests.swift */; };
 		882713B7399CE38386F445C4 /* alerts-empty.json in Resources */ = {isa = PBXBuildFile; fileRef = C57FD68791CA2B301D43ADBC /* alerts-empty.json */; };
-		8862EE1956820306F0BEF5E9 /* PluginAlerts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21E858D2FF612AEEA2CA8D76 /* PluginAlerts.swift */; };
 		88635B62B9D4592C3BBF79B3 /* alerts-empty.json in Resources */ = {isa = PBXBuildFile; fileRef = C57FD68791CA2B301D43ADBC /* alerts-empty.json */; };
 		89A4726EAB6D55604C60CD2E /* PluginPackageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 821B5ED7454E2C00FA897B56 /* PluginPackageTests.swift */; };
+		8A8814B7709EC3A575C8ECBC /* MarinerSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B88B8511C390ECCC17E905E /* MarinerSettings.swift */; };
+		8C30CD983746DE553836FA5C /* PluginInstall.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07F99BE68A0C404C1CBFB21A /* PluginInstall.swift */; };
 		8D0769C29DF1033756668E4F /* PluginAlertTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28D24F09A3F5CB1D1A2E3E49 /* PluginAlertTests.swift */; };
 		8DA009DEDAE728D38DFE062E /* PluginTableTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C7090FA8708C087510A6B66 /* PluginTableTests.swift */; };
-		91B57D70FFD84349D0B119A8 /* Commands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0196916E70289224C21747BF /* Commands.swift */; };
+		8F390FD52DDCAA9D9940E4AE /* PluginInstall.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07F99BE68A0C404C1CBFB21A /* PluginInstall.swift */; };
 		9310F043177B162A821FDF99 /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8FB061C18A2E1449AB1D30F1 /* Metal.framework */; };
 		933BF353B66B419638C90258 /* Fixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD2C1E199441E57327C292F6 /* Fixture.swift */; };
 		93410ED10B7262DA9DDCE3BA /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7391C6EA25BA24468EDAD1AD /* CoreGraphics.framework */; };
+		9415C65FA1CE55A4AEE8C458 /* SearchField.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C90666B68F88AA600900DFB /* SearchField.swift */; };
 		975D7A97AEDE359E19292148 /* ChartSetStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52541E0740AE0F9E3BBC236D /* ChartSetStoreTests.swift */; };
+		97DCF3B7900A5C58FF7A40BB /* ChartSets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0B8C7B273A6E8D538848ED /* ChartSets.swift */; };
 		99E0F6FB645D764E1D573BF8 /* CoordinateParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB4DB25833426EC809E14055 /* CoordinateParserTests.swift */; };
+		9A7402704824F7BDC3E43058 /* ViewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D36819F503E24F82BD18F6B /* ViewState.swift */; };
+		9B5E568A4400963C83A8E4FE /* ChartController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C315E2FD12D936B349662AB2 /* ChartController.swift */; };
+		9B7752E1FD183B4597CA5E3F /* HUDOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 616EEA83FF55549682120C2F /* HUDOverlay.swift */; };
 		9D812EF56B0E8575A83D77B9 /* ScaleParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BD93ECA0EF5B7BC7893551B /* ScaleParserTests.swift */; };
+		9EF506240F429BE5ECA1D33A /* Licenses.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DD8BF4E08B2BA15B22ADC35 /* Licenses.swift */; };
 		A0D3AA0B416A52278E62420C /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = 0D454300CEC7DCF096F4F2D0 /* README.md */; };
-		A15A33C5DB3AE5B4D6CA21AA /* PluginSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08AFF5DFF4C5B98F49516CBD /* PluginSettings.swift */; };
-		A2167318FA9028D99B57EAAF /* PickReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59E5805049B75D0B7A5BA9C5 /* PickReport.swift */; };
-		A2480AA1E94033ABBF9B678F /* PluginInstall.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80EBC9B2F3AA3BE70089E8E3 /* PluginInstall.swift */; };
+		A128EBBC67A9799E5F36CFDE /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4C35EFB09859DBE0A7FFC92 /* SettingsView.swift */; };
+		A6EEB61F653356864321AF83 /* ChartBake.swift in Sources */ = {isa = PBXBuildFile; fileRef = C440A0CF1A4AE2740ACEFF2F /* ChartBake.swift */; };
+		A81EC2A233089F5F6CB889CB /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4C35EFB09859DBE0A7FFC92 /* SettingsView.swift */; };
 		A9D1AA03743D4E13ED98E4E8 /* PluginTableTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C7090FA8708C087510A6B66 /* PluginTableTests.swift */; };
-		AAE45A4C957E4FA1DD669653 /* Licenses.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF4CDAEE17FBF230AF39737A /* Licenses.swift */; };
-		ACCC72997FE812CF6DE1467F /* PluginAlerts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21E858D2FF612AEEA2CA8D76 /* PluginAlerts.swift */; };
-		AF99BCFEF525D5291F010508 /* ChartBake.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44DE7634B8D1E8049164F21C /* ChartBake.swift */; };
-		B1243028D1D1B63F902164E1 /* ChartBake.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44DE7634B8D1E8049164F21C /* ChartBake.swift */; };
+		AB753B2BDEE44483CCDD903C /* CoordFormat.swift in Sources */ = {isa = PBXBuildFile; fileRef = 539774253A46E025DD1B5E20 /* CoordFormat.swift */; };
+		ABE7334DDB19342650DC03EF /* ScaleParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5771B481220434E34EA6F794 /* ScaleParser.swift */; };
+		AF4BB50C34E59C394C6AD379 /* PluginAlerts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4908F0A3B9D1ECDF91411BE7 /* PluginAlerts.swift */; };
 		B1774F9EA0735A56300C1850 /* MarinerSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F7AFFDA812DB39C72788868 /* MarinerSettingsTests.swift */; };
 		B372E30B227615DF4350B502 /* PickReportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CFF9284FC01F1CF6E286197 /* PickReportTests.swift */; };
-		B884496C571D0C49742E3299 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 867B3D3BE969AB708C6FD1A6 /* AppModel.swift */; };
+		B3ED2372659B6AA2D4F07172 /* MarinerSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B88B8511C390ECCC17E905E /* MarinerSettings.swift */; };
+		B65E3546E971AC80B295ECF0 /* Licenses.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DD8BF4E08B2BA15B22ADC35 /* Licenses.swift */; };
+		B82495034138B87BEB0D8619 /* Chrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8ABF98AA4261380DCAF4621C /* Chrome.swift */; };
 		B90762606839663FBE4F1600 /* CoordinateParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB4DB25833426EC809E14055 /* CoordinateParserTests.swift */; };
-		BC8049D5CB5745F8CF9944BA /* OpenPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 684AE423C6C360B8C64E8187 /* OpenPanel.swift */; };
-		BF2EC533ED649118B72500B0 /* ChartController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F9C52C1DCB85A9CA7C2BD51 /* ChartController.swift */; };
+		BAEA997B70F7E7FC18A24B45 /* About.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAEA99096E77BC63671F921D /* About.swift */; };
 		C05F4D5EB4E32576C253AD19 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 8AE67031882048136AC3C4B2 /* Assets.xcassets */; };
+		C08B9592864477E3068B6104 /* PickReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0BD7776E04E596B3F3FC90E /* PickReport.swift */; };
+		C2A7920E23D12CA2B606E75C /* LookoutMarineApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A03D3BC7A7816F10B65863B0 /* LookoutMarineApp.swift */; };
 		C3450AC507D00557B103B1FD /* ShellTestCase.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39FCF4CF9169327DF0FA8FBB /* ShellTestCase.swift */; };
+		C421AD4A79AEEB0C60360EC1 /* PluginSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D899CA81B7494096C3F930C /* PluginSettings.swift */; };
 		C82892E31FE36680817F7113 /* CompactHudTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E856FD037203427CE8B9E9C /* CompactHudTests.swift */; };
-		C8844DCDBFFB759DC10B3DBB /* About.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D7093D68AB566DD20CAA67D /* About.swift */; };
 		C961277099C21C53E827A59F /* table-rows.json in Resources */ = {isa = PBXBuildFile; fileRef = 6B57985A66EA3200DE8C06C7 /* table-rows.json */; };
 		CA995EEE58DEC4884B53AE75 /* PlacementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1C44341E0A9C0B713D97E32 /* PlacementTests.swift */; };
-		CADC1E15181EEA0D5D9CE684 /* ChartLinkFetch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B051E65415B8998D6F1BBC6 /* ChartLinkFetch.swift */; };
-		CB9505FE28D7F1F31FD08880 /* Platform.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64750619C04C6E8FC58ADF3C /* Platform.swift */; };
-		CE4266AD5C6B41B68FDB64D2 /* Store.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C6CBCCF32F80D4A672B1B6D /* Store.swift */; };
+		CBD34D994087975A903346EA /* CoordFormat.swift in Sources */ = {isa = PBXBuildFile; fileRef = 539774253A46E025DD1B5E20 /* CoordFormat.swift */; };
 		CEFBD3E91B5295073ECB3BDE /* PluginRegistryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48FA710C0489FE5DE3CDB3BE /* PluginRegistryTests.swift */; };
-		CF20FB0609D1194A9E4B8F16 /* PickReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59E5805049B75D0B7A5BA9C5 /* PickReport.swift */; };
-		D3A82191350619AF27200EF4 /* Platform.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64750619C04C6E8FC58ADF3C /* Platform.swift */; };
+		D1B707AE0BF481BB0E24C5F9 /* ChartSets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0B8C7B273A6E8D538848ED /* ChartSets.swift */; };
+		D27C7A5C6C930EFAA6ECF045 /* SettingsWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4548244FA1C95958287A425 /* SettingsWindow.swift */; };
 		D4053EFD7BBC6FD277438F1D /* CoordFormatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80A6678722FC01CA46E10CE0 /* CoordFormatTests.swift */; };
-		D68AF9FE4DC55817D2E1ADFE /* LookoutMarineApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D05C37DB49A7E884DBA24E8A /* LookoutMarineApp.swift */; };
 		D98D644F63B6A27A5BA219F7 /* LicenseManifestTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6473AB9A6EC7604E642EB8B9 /* LicenseManifestTests.swift */; };
-		D995E6DD546F85947B4BCCDE /* CoordFormat.swift in Sources */ = {isa = PBXBuildFile; fileRef = F465829CA2C82E927BD23352 /* CoordFormat.swift */; };
 		DAFCDF511109AE0461E947F2 /* ChartInteractionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F71C72C16BAED59FED342AD2 /* ChartInteractionTests.swift */; };
 		DDB11483FF3DEE919A04B9C8 /* ChartFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9B414D76B8FFB4298A58494 /* ChartFixture.swift */; };
-		DE7488B0D16B988AAA2DEAF3 /* ChartSets.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC58A9CE927EB0CDF26EA952 /* ChartSets.swift */; };
+		DE55FD74596BCB2F9B39B686 /* ZoomControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0FF81FD7BD06CE338EF4E09 /* ZoomControls.swift */; };
 		DEB74CABE7860B8AEF08E5F1 /* table-rows.json in Resources */ = {isa = PBXBuildFile; fileRef = 6B57985A66EA3200DE8C06C7 /* table-rows.json */; };
 		DF11E4F4E08BD1C05646534F /* plugins.json in Resources */ = {isa = PBXBuildFile; fileRef = BFEED0FFE8BC85A0C20BF804 /* plugins.json */; };
-		DFFCAFE9F795110098499186 /* CoordinateParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 541B672916C9F8B599F36689 /* CoordinateParser.swift */; };
-		E023AE7FD86AE255A81EC9B6 /* About.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D7093D68AB566DD20CAA67D /* About.swift */; };
-		E0715A2C0D9D8F46ACEB9D70 /* Discovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 691669BA5266A092E22A3676 /* Discovery.swift */; };
-		E4E4419E96042EE93725BE6A /* ScaleParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33D3B879A0744951D7582295 /* ScaleParser.swift */; };
-		E64003666647657D54AE2A68 /* ChartView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67B9484301248E7DF8AD6EE2 /* ChartView.swift */; };
+		E114A387274E00A905B754AA /* ScaleParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5771B481220434E34EA6F794 /* ScaleParser.swift */; };
+		E306BC1F2AB2905017E9107D /* ChartView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1DA5C09C3392CDE0D28D1AE /* ChartView.swift */; };
+		E554375935120FD341B56223 /* CoordinateParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 850ACAEA7CC105683D93D3E3 /* CoordinateParser.swift */; };
+		E685C622E833DA99FE6B6926 /* ChartLinkFetch.swift in Sources */ = {isa = PBXBuildFile; fileRef = D31BFC1DAC5265A5DAC8F20D /* ChartLinkFetch.swift */; };
 		E69B552EAF35778A30A8CD57 /* ChartBakeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B2641D4DD30D574228F9033 /* ChartBakeTests.swift */; };
+		E7A0D24043209CC1799AC90F /* ChartLinkFetch.swift in Sources */ = {isa = PBXBuildFile; fileRef = D31BFC1DAC5265A5DAC8F20D /* ChartLinkFetch.swift */; };
 		E867BC062877B5D8A4F7D531 /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2C8CBCC22D9B7C1DD8FD68D3 /* QuartzCore.framework */; };
 		E88374AC97201A82AABB83C2 /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7391C6EA25BA24468EDAD1AD /* CoreGraphics.framework */; };
-		ECECFDFE0FF0EF289D858D19 /* MarinerSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0ACD979758E1C7A0557028AA /* MarinerSettings.swift */; };
 		EE1D3DEE63D56BA4BC2BB685 /* ShellTestCase.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39FCF4CF9169327DF0FA8FBB /* ShellTestCase.swift */; };
 		F071684B0EB8137E697633E0 /* plugins.json in Resources */ = {isa = PBXBuildFile; fileRef = BFEED0FFE8BC85A0C20BF804 /* plugins.json */; };
 		F0BE2056E172248A93FDFA7B /* ScaleParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BD93ECA0EF5B7BC7893551B /* ScaleParserTests.swift */; };
 		F0BEF83589EF79DCF51DC90F /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8FB061C18A2E1449AB1D30F1 /* Metal.framework */; };
 		F1C239D0493C5C54DAC73E6C /* tables.json in Resources */ = {isa = PBXBuildFile; fileRef = 460E0B79780678DFCEDBC572 /* tables.json */; };
+		F640312E726227D995356C8E /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16F8DF0D1C7780BEF76AEE22 /* AppModel.swift */; };
 		F775E55515D034B10D9DF7D6 /* LicenseManifestTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6473AB9A6EC7604E642EB8B9 /* LicenseManifestTests.swift */; };
-		F84839EF2608C611368BF909 /* MarinerSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0ACD979758E1C7A0557028AA /* MarinerSettings.swift */; };
 		F8F3C1C2C1A1F48435FAA789 /* SmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 429A3DC2D37A94F800391B26 /* SmokeTests.swift */; };
 		F90571A0AA9530A60178D684 /* PluginStatusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CA144ED7593A8DDDC3229B5 /* PluginStatusTests.swift */; };
 		F984A32A1476162974FEF564 /* PluginStatusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CA144ED7593A8DDDC3229B5 /* PluginStatusTests.swift */; };
 		F9DAA35B47AAB4FBC066A103 /* PluginRegistryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48FA710C0489FE5DE3CDB3BE /* PluginRegistryTests.swift */; };
-		FA0A1A3D4513B2121791CD8E /* HUDOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73EEFBC1A0D58A1F638D2C4E /* HUDOverlay.swift */; };
-		FBBDD7C3F30516088D8124ED /* CoordinateParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 541B672916C9F8B599F36689 /* CoordinateParser.swift */; };
-		FD40DB47DE285C1ACBC3B83C /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08B62D296D34C231163DF7C2 /* SettingsView.swift */; };
 		FD9CA492CC32E134017339D9 /* UniformTypeIdentifiers.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 063DCA330E7899B8CCE880A8 /* UniformTypeIdentifiers.framework */; };
-		FF271F85614ACC3553CB502F /* SettingsWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 231885FFFF86BB739D2D973D /* SettingsWindow.swift */; };
 		FFAC48E3128E36649AF87719 /* ViewStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A1AE666034E0F470280B7AD /* ViewStateTests.swift */; };
+		FFD02708559BDF34407FA231 /* Platform.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43C05F8392EA5DB00E75425A /* Platform.swift */; };
+		FFDEBD8A71166206983735DB /* Commands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BC336600CCD8C3660EBE446 /* Commands.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -166,84 +166,84 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		0196916E70289224C21747BF /* Commands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Commands.swift; sourceTree = "<group>"; };
 		063DCA330E7899B8CCE880A8 /* UniformTypeIdentifiers.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UniformTypeIdentifiers.framework; path = System/Library/Frameworks/UniformTypeIdentifiers.framework; sourceTree = SDKROOT; };
-		08AFF5DFF4C5B98F49516CBD /* PluginSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginSettings.swift; sourceTree = "<group>"; };
-		08B62D296D34C231163DF7C2 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
-		0ACD979758E1C7A0557028AA /* MarinerSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarinerSettings.swift; sourceTree = "<group>"; };
+		07F99BE68A0C404C1CBFB21A /* PluginInstall.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginInstall.swift; sourceTree = "<group>"; };
 		0CAC9F938CDB51E28B5E98CE /* PluginConfigTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginConfigTests.swift; sourceTree = "<group>"; };
 		0CFF9284FC01F1CF6E286197 /* PickReportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PickReportTests.swift; sourceTree = "<group>"; };
+		0D36819F503E24F82BD18F6B /* ViewState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewState.swift; sourceTree = "<group>"; };
 		0D454300CEC7DCF096F4F2D0 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
-		0D7093D68AB566DD20CAA67D /* About.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = About.swift; sourceTree = "<group>"; };
 		10B668C8717144E00D603812 /* LookoutMarine-iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "LookoutMarine-iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		16F8DF0D1C7780BEF76AEE22 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
 		1A443DE42C30306D7110F731 /* ChartScanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartScanTests.swift; sourceTree = "<group>"; };
-		1B051E65415B8998D6F1BBC6 /* ChartLinkFetch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartLinkFetch.swift; sourceTree = "<group>"; };
 		1B2641D4DD30D574228F9033 /* ChartBakeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartBakeTests.swift; sourceTree = "<group>"; };
 		1BD93ECA0EF5B7BC7893551B /* ScaleParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScaleParserTests.swift; sourceTree = "<group>"; };
 		1CA144ED7593A8DDDC3229B5 /* PluginStatusTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginStatusTests.swift; sourceTree = "<group>"; };
-		21E858D2FF612AEEA2CA8D76 /* PluginAlerts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginAlerts.swift; sourceTree = "<group>"; };
-		231885FFFF86BB739D2D973D /* SettingsWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsWindow.swift; sourceTree = "<group>"; };
 		24BF84F8C0A7FF756F21F8FD /* LookoutMarine-iOSTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = "LookoutMarine-iOSTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		28D24F09A3F5CB1D1A2E3E49 /* PluginAlertTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginAlertTests.swift; sourceTree = "<group>"; };
 		2A1AE666034E0F470280B7AD /* ViewStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewStateTests.swift; sourceTree = "<group>"; };
+		2B88B8511C390ECCC17E905E /* MarinerSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarinerSettings.swift; sourceTree = "<group>"; };
 		2C8CBCC22D9B7C1DD8FD68D3 /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
-		2F9C52C1DCB85A9CA7C2BD51 /* ChartController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartController.swift; sourceTree = "<group>"; };
-		33D3B879A0744951D7582295 /* ScaleParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScaleParser.swift; sourceTree = "<group>"; };
+		2DD8BF4E08B2BA15B22ADC35 /* Licenses.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Licenses.swift; sourceTree = "<group>"; };
 		39FCF4CF9169327DF0FA8FBB /* ShellTestCase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShellTestCase.swift; sourceTree = "<group>"; };
-		3C6CBCCF32F80D4A672B1B6D /* Store.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Store.swift; sourceTree = "<group>"; };
 		429A3DC2D37A94F800391B26 /* SmokeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmokeTests.swift; sourceTree = "<group>"; };
-		44DE7634B8D1E8049164F21C /* ChartBake.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartBake.swift; sourceTree = "<group>"; };
+		43C05F8392EA5DB00E75425A /* Platform.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Platform.swift; sourceTree = "<group>"; };
 		460E0B79780678DFCEDBC572 /* tables.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = tables.json; sourceTree = "<group>"; };
+		4810DC9CDB37A43A4A8E23B3 /* PluginTable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginTable.swift; sourceTree = "<group>"; };
 		48FA710C0489FE5DE3CDB3BE /* PluginRegistryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginRegistryTests.swift; sourceTree = "<group>"; };
-		51DC0223CD9CD017A1DFB40F /* SettingsRows.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsRows.swift; sourceTree = "<group>"; };
+		4908F0A3B9D1ECDF91411BE7 /* PluginAlerts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginAlerts.swift; sourceTree = "<group>"; };
 		52541E0740AE0F9E3BBC236D /* ChartSetStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartSetStoreTests.swift; sourceTree = "<group>"; };
-		541B672916C9F8B599F36689 /* CoordinateParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoordinateParser.swift; sourceTree = "<group>"; };
+		539774253A46E025DD1B5E20 /* CoordFormat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoordFormat.swift; sourceTree = "<group>"; };
 		5624860C29AF07752A4CE208 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
-		59E5805049B75D0B7A5BA9C5 /* PickReport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PickReport.swift; sourceTree = "<group>"; };
-		5B39D8DB2792CC7520B0F19D /* PluginTable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginTable.swift; sourceTree = "<group>"; };
+		5771B481220434E34EA6F794 /* ScaleParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScaleParser.swift; sourceTree = "<group>"; };
+		5A0B8C7B273A6E8D538848ED /* ChartSets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartSets.swift; sourceTree = "<group>"; };
 		5E856FD037203427CE8B9E9C /* CompactHudTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompactHudTests.swift; sourceTree = "<group>"; };
+		616EEA83FF55549682120C2F /* HUDOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HUDOverlay.swift; sourceTree = "<group>"; };
 		6473AB9A6EC7604E642EB8B9 /* LicenseManifestTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LicenseManifestTests.swift; sourceTree = "<group>"; };
-		64750619C04C6E8FC58ADF3C /* Platform.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Platform.swift; sourceTree = "<group>"; };
-		67B9484301248E7DF8AD6EE2 /* ChartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartView.swift; sourceTree = "<group>"; };
-		684AE423C6C360B8C64E8187 /* OpenPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenPanel.swift; sourceTree = "<group>"; };
-		691669BA5266A092E22A3676 /* Discovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Discovery.swift; sourceTree = "<group>"; };
+		6B35807C0ABB9C564DABEC58 /* Store.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Store.swift; sourceTree = "<group>"; };
 		6B57985A66EA3200DE8C06C7 /* table-rows.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "table-rows.json"; sourceTree = "<group>"; };
+		6BC336600CCD8C3660EBE446 /* Commands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Commands.swift; sourceTree = "<group>"; };
 		6BF0A8EA8646D981F5F411D0 /* LookoutMarineTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LookoutMarineTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		6CED6DE8C50508326D0E097C /* SettingsRows.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsRows.swift; sourceTree = "<group>"; };
 		6EA86C2284DD80FD535E34EE /* StoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreTests.swift; sourceTree = "<group>"; };
 		7391C6EA25BA24468EDAD1AD /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
-		73EEFBC1A0D58A1F638D2C4E /* HUDOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HUDOverlay.swift; sourceTree = "<group>"; };
+		7C90666B68F88AA600900DFB /* SearchField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchField.swift; sourceTree = "<group>"; };
 		7DE881BB41EFEF6FD7443244 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		7F7AFFDA812DB39C72788868 /* MarinerSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarinerSettingsTests.swift; sourceTree = "<group>"; };
 		80A6678722FC01CA46E10CE0 /* CoordFormatTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoordFormatTests.swift; sourceTree = "<group>"; };
-		80EBC9B2F3AA3BE70089E8E3 /* PluginInstall.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginInstall.swift; sourceTree = "<group>"; };
 		821B5ED7454E2C00FA897B56 /* PluginPackageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginPackageTests.swift; sourceTree = "<group>"; };
 		83AF7086DBC878D127FE70BD /* LookoutMarine-iOS-UITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = "LookoutMarine-iOS-UITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
-		867B3D3BE969AB708C6FD1A6 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
+		850ACAEA7CC105683D93D3E3 /* CoordinateParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoordinateParser.swift; sourceTree = "<group>"; };
+		8ABF98AA4261380DCAF4621C /* Chrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Chrome.swift; sourceTree = "<group>"; };
 		8AE67031882048136AC3C4B2 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		8D899CA81B7494096C3F930C /* PluginSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginSettings.swift; sourceTree = "<group>"; };
 		8FB061C18A2E1449AB1D30F1 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
+		9341B7F1F58D9B158ABC67EE /* Discovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Discovery.swift; sourceTree = "<group>"; };
 		9C7090FA8708C087510A6B66 /* PluginTableTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginTableTests.swift; sourceTree = "<group>"; };
-		9CB6CD8647C157FF2DE0ABD7 /* ViewState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewState.swift; sourceTree = "<group>"; };
 		9D5D7B15F4286B70544A80B2 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
 		9FAE0C61602607D05CF24596 /* LicensesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LicensesTests.swift; sourceTree = "<group>"; };
-		A79681EADC27E70A6BB144FE /* Chrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Chrome.swift; sourceTree = "<group>"; };
+		A03D3BC7A7816F10B65863B0 /* LookoutMarineApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LookoutMarineApp.swift; sourceTree = "<group>"; };
 		A9B414D76B8FFB4298A58494 /* ChartFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartFixture.swift; sourceTree = "<group>"; };
+		AAEA99096E77BC63671F921D /* About.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = About.swift; sourceTree = "<group>"; };
 		AD2C1E199441E57327C292F6 /* Fixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Fixture.swift; sourceTree = "<group>"; };
+		ADA39FB96EFFB96A6985C0C9 /* OpenPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenPanel.swift; sourceTree = "<group>"; };
 		B1C44341E0A9C0B713D97E32 /* PlacementTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlacementTests.swift; sourceTree = "<group>"; };
+		B4548244FA1C95958287A425 /* SettingsWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsWindow.swift; sourceTree = "<group>"; };
 		BB4DB25833426EC809E14055 /* CoordinateParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoordinateParserTests.swift; sourceTree = "<group>"; };
 		BFEED0FFE8BC85A0C20BF804 /* plugins.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = plugins.json; sourceTree = "<group>"; };
-		C30C216F6C0285110D3B2A87 /* ZoomControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZoomControls.swift; sourceTree = "<group>"; };
+		C315E2FD12D936B349662AB2 /* ChartController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartController.swift; sourceTree = "<group>"; };
+		C440A0CF1A4AE2740ACEFF2F /* ChartBake.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartBake.swift; sourceTree = "<group>"; };
 		C57FD68791CA2B301D43ADBC /* alerts-empty.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "alerts-empty.json"; sourceTree = "<group>"; };
-		D05C37DB49A7E884DBA24E8A /* LookoutMarineApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LookoutMarineApp.swift; sourceTree = "<group>"; };
-		D26F78CDEC3CDA7C0807297F /* SearchField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchField.swift; sourceTree = "<group>"; };
+		D31BFC1DAC5265A5DAC8F20D /* ChartLinkFetch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartLinkFetch.swift; sourceTree = "<group>"; };
 		D6C25F5333751E53B1C677E5 /* alerts.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = alerts.json; sourceTree = "<group>"; };
-		EC58A9CE927EB0CDF26EA952 /* ChartSets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartSets.swift; sourceTree = "<group>"; };
 		ED13ED6F6331B15BF3108AC5 /* Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Bridging-Header.h"; sourceTree = "<group>"; };
 		F025332072E90FBEB0445CEB /* LookoutMarine.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LookoutMarine.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		F0BD7776E04E596B3F3FC90E /* PickReport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PickReport.swift; sourceTree = "<group>"; };
+		F0FF81FD7BD06CE338EF4E09 /* ZoomControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZoomControls.swift; sourceTree = "<group>"; };
+		F1DA5C09C3392CDE0D28D1AE /* ChartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartView.swift; sourceTree = "<group>"; };
 		F3F841BB92E185C6D2C47A7A /* RasterChartTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RasterChartTests.swift; sourceTree = "<group>"; };
-		F465829CA2C82E927BD23352 /* CoordFormat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoordFormat.swift; sourceTree = "<group>"; };
+		F4C35EFB09859DBE0A7FFC92 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		F71C72C16BAED59FED342AD2 /* ChartInteractionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartInteractionTests.swift; sourceTree = "<group>"; };
 		FA314B5CAB2F0E35B1DE67D8 /* LookoutMarine.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = LookoutMarine.entitlements; sourceTree = "<group>"; };
-		FF4CDAEE17FBF230AF39737A /* Licenses.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Licenses.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -299,43 +299,50 @@
 		07C95FD4CA4CE030EBFCDA6E /* LookoutMarine */ = {
 			isa = PBXGroup;
 			children = (
-				0D7093D68AB566DD20CAA67D /* About.swift */,
-				867B3D3BE969AB708C6FD1A6 /* AppModel.swift */,
 				8AE67031882048136AC3C4B2 /* Assets.xcassets */,
 				ED13ED6F6331B15BF3108AC5 /* Bridging-Header.h */,
-				44DE7634B8D1E8049164F21C /* ChartBake.swift */,
-				2F9C52C1DCB85A9CA7C2BD51 /* ChartController.swift */,
-				1B051E65415B8998D6F1BBC6 /* ChartLinkFetch.swift */,
-				EC58A9CE927EB0CDF26EA952 /* ChartSets.swift */,
-				67B9484301248E7DF8AD6EE2 /* ChartView.swift */,
-				A79681EADC27E70A6BB144FE /* Chrome.swift */,
-				0196916E70289224C21747BF /* Commands.swift */,
-				F465829CA2C82E927BD23352 /* CoordFormat.swift */,
-				541B672916C9F8B599F36689 /* CoordinateParser.swift */,
-				691669BA5266A092E22A3676 /* Discovery.swift */,
-				73EEFBC1A0D58A1F638D2C4E /* HUDOverlay.swift */,
 				5624860C29AF07752A4CE208 /* Info.plist */,
-				FF4CDAEE17FBF230AF39737A /* Licenses.swift */,
 				FA314B5CAB2F0E35B1DE67D8 /* LookoutMarine.entitlements */,
-				D05C37DB49A7E884DBA24E8A /* LookoutMarineApp.swift */,
-				0ACD979758E1C7A0557028AA /* MarinerSettings.swift */,
-				684AE423C6C360B8C64E8187 /* OpenPanel.swift */,
-				59E5805049B75D0B7A5BA9C5 /* PickReport.swift */,
-				64750619C04C6E8FC58ADF3C /* Platform.swift */,
-				21E858D2FF612AEEA2CA8D76 /* PluginAlerts.swift */,
-				80EBC9B2F3AA3BE70089E8E3 /* PluginInstall.swift */,
-				08AFF5DFF4C5B98F49516CBD /* PluginSettings.swift */,
-				5B39D8DB2792CC7520B0F19D /* PluginTable.swift */,
-				33D3B879A0744951D7582295 /* ScaleParser.swift */,
-				D26F78CDEC3CDA7C0807297F /* SearchField.swift */,
-				51DC0223CD9CD017A1DFB40F /* SettingsRows.swift */,
-				08B62D296D34C231163DF7C2 /* SettingsView.swift */,
-				231885FFFF86BB739D2D973D /* SettingsWindow.swift */,
-				3C6CBCCF32F80D4A672B1B6D /* Store.swift */,
-				9CB6CD8647C157FF2DE0ABD7 /* ViewState.swift */,
-				C30C216F6C0285110D3B2A87 /* ZoomControls.swift */,
+				4BB8CB7EB6DD38C63F212C08 /* App */,
+				8395FA8EB8DCACE8C8D37642 /* Chart */,
+				AC99FB1C17BB0023222E863E /* Charts */,
+				C18306A5FCA4A6EEC9E789A3 /* Chrome */,
+				837D2D7358E65A8987458673 /* Format */,
+				489890B07057B0040787DC32 /* Hud */,
+				14AF4E0052BD9929D159CD07 /* Licenses */,
+				B6F5480F2FC1596D2D12C3D1 /* Pick */,
+				861F3DA1A41082E5046A5EB0 /* Platform */,
+				8980673E298D98C347E849D6 /* Plugins */,
+				DB7106FE85CAD7BB674398F8 /* Settings */,
 			);
 			path = LookoutMarine;
+			sourceTree = "<group>";
+		};
+		14AF4E0052BD9929D159CD07 /* Licenses */ = {
+			isa = PBXGroup;
+			children = (
+				AAEA99096E77BC63671F921D /* About.swift */,
+				2DD8BF4E08B2BA15B22ADC35 /* Licenses.swift */,
+			);
+			path = Licenses;
+			sourceTree = "<group>";
+		};
+		489890B07057B0040787DC32 /* Hud */ = {
+			isa = PBXGroup;
+			children = (
+				616EEA83FF55549682120C2F /* HUDOverlay.swift */,
+			);
+			path = Hud;
+			sourceTree = "<group>";
+		};
+		4BB8CB7EB6DD38C63F212C08 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				16F8DF0D1C7780BEF76AEE22 /* AppModel.swift */,
+				6BC336600CCD8C3660EBE446 /* Commands.swift */,
+				A03D3BC7A7816F10B65863B0 /* LookoutMarineApp.swift */,
+			);
+			path = App;
 			sourceTree = "<group>";
 		};
 		5CB84667397B529DDABEB7B1 /* Fixtures */ = {
@@ -380,6 +387,36 @@
 			path = Tests;
 			sourceTree = "<group>";
 		};
+		837D2D7358E65A8987458673 /* Format */ = {
+			isa = PBXGroup;
+			children = (
+				539774253A46E025DD1B5E20 /* CoordFormat.swift */,
+				850ACAEA7CC105683D93D3E3 /* CoordinateParser.swift */,
+				5771B481220434E34EA6F794 /* ScaleParser.swift */,
+			);
+			path = Format;
+			sourceTree = "<group>";
+		};
+		8395FA8EB8DCACE8C8D37642 /* Chart */ = {
+			isa = PBXGroup;
+			children = (
+				C315E2FD12D936B349662AB2 /* ChartController.swift */,
+				F1DA5C09C3392CDE0D28D1AE /* ChartView.swift */,
+				0D36819F503E24F82BD18F6B /* ViewState.swift */,
+			);
+			path = Chart;
+			sourceTree = "<group>";
+		};
+		861F3DA1A41082E5046A5EB0 /* Platform */ = {
+			isa = PBXGroup;
+			children = (
+				ADA39FB96EFFB96A6985C0C9 /* OpenPanel.swift */,
+				43C05F8392EA5DB00E75425A /* Platform.swift */,
+				6B35807C0ABB9C564DABEC58 /* Store.swift */,
+			);
+			path = Platform;
+			sourceTree = "<group>";
+		};
 		87EF150269B4560D22106C89 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
@@ -392,6 +429,46 @@
 			name = Frameworks;
 			sourceTree = "<group>";
 		};
+		8980673E298D98C347E849D6 /* Plugins */ = {
+			isa = PBXGroup;
+			children = (
+				9341B7F1F58D9B158ABC67EE /* Discovery.swift */,
+				4908F0A3B9D1ECDF91411BE7 /* PluginAlerts.swift */,
+				07F99BE68A0C404C1CBFB21A /* PluginInstall.swift */,
+				8D899CA81B7494096C3F930C /* PluginSettings.swift */,
+				4810DC9CDB37A43A4A8E23B3 /* PluginTable.swift */,
+			);
+			path = Plugins;
+			sourceTree = "<group>";
+		};
+		AC99FB1C17BB0023222E863E /* Charts */ = {
+			isa = PBXGroup;
+			children = (
+				C440A0CF1A4AE2740ACEFF2F /* ChartBake.swift */,
+				D31BFC1DAC5265A5DAC8F20D /* ChartLinkFetch.swift */,
+				5A0B8C7B273A6E8D538848ED /* ChartSets.swift */,
+			);
+			path = Charts;
+			sourceTree = "<group>";
+		};
+		B6F5480F2FC1596D2D12C3D1 /* Pick */ = {
+			isa = PBXGroup;
+			children = (
+				F0BD7776E04E596B3F3FC90E /* PickReport.swift */,
+			);
+			path = Pick;
+			sourceTree = "<group>";
+		};
+		C18306A5FCA4A6EEC9E789A3 /* Chrome */ = {
+			isa = PBXGroup;
+			children = (
+				8ABF98AA4261380DCAF4621C /* Chrome.swift */,
+				7C90666B68F88AA600900DFB /* SearchField.swift */,
+				F0FF81FD7BD06CE338EF4E09 /* ZoomControls.swift */,
+			);
+			path = Chrome;
+			sourceTree = "<group>";
+		};
 		CCC54782152F8720212B3D54 /* Products */ = {
 			isa = PBXGroup;
 			children = (
@@ -402,6 +479,17 @@
 				6BF0A8EA8646D981F5F411D0 /* LookoutMarineTests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		DB7106FE85CAD7BB674398F8 /* Settings */ = {
+			isa = PBXGroup;
+			children = (
+				2B88B8511C390ECCC17E905E /* MarinerSettings.swift */,
+				6CED6DE8C50508326D0E097C /* SettingsRows.swift */,
+				F4C35EFB09859DBE0A7FFC92 /* SettingsView.swift */,
+				B4548244FA1C95958287A425 /* SettingsWindow.swift */,
+			);
+			path = Settings;
 			sourceTree = "<group>";
 		};
 		ED19BA04DDD9AB8A5952A5A0 /* LookoutMarine-iOS */ = {
@@ -693,37 +781,37 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				E023AE7FD86AE255A81EC9B6 /* About.swift in Sources */,
-				B884496C571D0C49742E3299 /* AppModel.swift in Sources */,
-				B1243028D1D1B63F902164E1 /* ChartBake.swift in Sources */,
-				794F744CA1B16C3E964E3040 /* ChartController.swift in Sources */,
-				6019BBBFC866BC7ADEBDCAAB /* ChartLinkFetch.swift in Sources */,
-				741DBF417DFA2D9172883B89 /* ChartSets.swift in Sources */,
-				E64003666647657D54AE2A68 /* ChartView.swift in Sources */,
-				7C9515EC6EEA02E2CF9113D6 /* Chrome.swift in Sources */,
-				0FC697E6E69C983F38573E8D /* Commands.swift in Sources */,
-				8489DF7E23353F645B89F26D /* CoordFormat.swift in Sources */,
-				DFFCAFE9F795110098499186 /* CoordinateParser.swift in Sources */,
-				72BB9A2C901DAD894A4C0736 /* Discovery.swift in Sources */,
-				FA0A1A3D4513B2121791CD8E /* HUDOverlay.swift in Sources */,
-				AAE45A4C957E4FA1DD669653 /* Licenses.swift in Sources */,
-				D68AF9FE4DC55817D2E1ADFE /* LookoutMarineApp.swift in Sources */,
-				ECECFDFE0FF0EF289D858D19 /* MarinerSettings.swift in Sources */,
-				BC8049D5CB5745F8CF9944BA /* OpenPanel.swift in Sources */,
-				A2167318FA9028D99B57EAAF /* PickReport.swift in Sources */,
-				CB9505FE28D7F1F31FD08880 /* Platform.swift in Sources */,
-				ACCC72997FE812CF6DE1467F /* PluginAlerts.swift in Sources */,
-				A2480AA1E94033ABBF9B678F /* PluginInstall.swift in Sources */,
-				A15A33C5DB3AE5B4D6CA21AA /* PluginSettings.swift in Sources */,
-				5D53462731CD73801CBEEFC0 /* PluginTable.swift in Sources */,
-				E4E4419E96042EE93725BE6A /* ScaleParser.swift in Sources */,
-				3AEC2EB57F7C98204385B3BC /* SearchField.swift in Sources */,
-				0B3C1DDDBE36EC375F1CA997 /* SettingsRows.swift in Sources */,
-				5698DC1B6D3C29F86063204C /* SettingsView.swift in Sources */,
-				FF271F85614ACC3553CB502F /* SettingsWindow.swift in Sources */,
-				CE4266AD5C6B41B68FDB64D2 /* Store.swift in Sources */,
-				6A33AC542EDC82BA0650E79B /* ViewState.swift in Sources */,
-				40182513C6508A173A6B21FA /* ZoomControls.swift in Sources */,
+				BAEA997B70F7E7FC18A24B45 /* About.swift in Sources */,
+				799A673D0307B96939D71353 /* AppModel.swift in Sources */,
+				A6EEB61F653356864321AF83 /* ChartBake.swift in Sources */,
+				698A5FAED378AD7A354AD368 /* ChartController.swift in Sources */,
+				E7A0D24043209CC1799AC90F /* ChartLinkFetch.swift in Sources */,
+				97DCF3B7900A5C58FF7A40BB /* ChartSets.swift in Sources */,
+				6D9C4C78F830BF23D5E6189F /* ChartView.swift in Sources */,
+				02BEB8DB1EBC2B61CC1CEB36 /* Chrome.swift in Sources */,
+				FFDEBD8A71166206983735DB /* Commands.swift in Sources */,
+				AB753B2BDEE44483CCDD903C /* CoordFormat.swift in Sources */,
+				E554375935120FD341B56223 /* CoordinateParser.swift in Sources */,
+				689E24910C8ECF894D1FA847 /* Discovery.swift in Sources */,
+				375666A105DF99B820839F79 /* HUDOverlay.swift in Sources */,
+				9EF506240F429BE5ECA1D33A /* Licenses.swift in Sources */,
+				C2A7920E23D12CA2B606E75C /* LookoutMarineApp.swift in Sources */,
+				B3ED2372659B6AA2D4F07172 /* MarinerSettings.swift in Sources */,
+				4667BE995AFC9A1A2805C20A /* OpenPanel.swift in Sources */,
+				C08B9592864477E3068B6104 /* PickReport.swift in Sources */,
+				1F47658C4F59CFF5A1B54416 /* Platform.swift in Sources */,
+				AF4BB50C34E59C394C6AD379 /* PluginAlerts.swift in Sources */,
+				8F390FD52DDCAA9D9940E4AE /* PluginInstall.swift in Sources */,
+				C421AD4A79AEEB0C60360EC1 /* PluginSettings.swift in Sources */,
+				6E64808B949E7314A57B5F62 /* PluginTable.swift in Sources */,
+				ABE7334DDB19342650DC03EF /* ScaleParser.swift in Sources */,
+				9415C65FA1CE55A4AEE8C458 /* SearchField.swift in Sources */,
+				70D6C5CA580CC7F7CC18DEC8 /* SettingsRows.swift in Sources */,
+				A128EBBC67A9799E5F36CFDE /* SettingsView.swift in Sources */,
+				4D8D188DC9CAAF8A4D739A90 /* SettingsWindow.swift in Sources */,
+				29D69EB0C3BEBC71F0CCBF36 /* Store.swift in Sources */,
+				9A7402704824F7BDC3E43058 /* ViewState.swift in Sources */,
+				DE55FD74596BCB2F9B39B686 /* ZoomControls.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -759,37 +847,37 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				C8844DCDBFFB759DC10B3DBB /* About.swift in Sources */,
-				6A374B43E52E6493D2834C1F /* AppModel.swift in Sources */,
-				AF99BCFEF525D5291F010508 /* ChartBake.swift in Sources */,
-				BF2EC533ED649118B72500B0 /* ChartController.swift in Sources */,
-				CADC1E15181EEA0D5D9CE684 /* ChartLinkFetch.swift in Sources */,
-				DE7488B0D16B988AAA2DEAF3 /* ChartSets.swift in Sources */,
-				09693BA46EA360C5604CC0DE /* ChartView.swift in Sources */,
-				0BC91B15C4652260E6898412 /* Chrome.swift in Sources */,
-				91B57D70FFD84349D0B119A8 /* Commands.swift in Sources */,
-				D995E6DD546F85947B4BCCDE /* CoordFormat.swift in Sources */,
-				FBBDD7C3F30516088D8124ED /* CoordinateParser.swift in Sources */,
-				E0715A2C0D9D8F46ACEB9D70 /* Discovery.swift in Sources */,
-				299A310C79E6D3CED08E40D3 /* HUDOverlay.swift in Sources */,
-				3DEB3190D076008F23BD1503 /* Licenses.swift in Sources */,
-				58344883C8559763DE1E06FA /* LookoutMarineApp.swift in Sources */,
-				F84839EF2608C611368BF909 /* MarinerSettings.swift in Sources */,
-				23A8A25B8A24DC794BECADC9 /* OpenPanel.swift in Sources */,
-				CF20FB0609D1194A9E4B8F16 /* PickReport.swift in Sources */,
-				D3A82191350619AF27200EF4 /* Platform.swift in Sources */,
-				8862EE1956820306F0BEF5E9 /* PluginAlerts.swift in Sources */,
-				15BC02BD89536FECE4FD9DA8 /* PluginInstall.swift in Sources */,
-				22FBEBBD323D86CAF075720B /* PluginSettings.swift in Sources */,
-				4D685E82CE2D30D5ADB210A2 /* PluginTable.swift in Sources */,
-				83F2832CAE9E26CC9A2B8062 /* ScaleParser.swift in Sources */,
-				4548BA266169EA2624ABCCCB /* SearchField.swift in Sources */,
-				041CE190E86B6C6013B5D705 /* SettingsRows.swift in Sources */,
-				FD40DB47DE285C1ACBC3B83C /* SettingsView.swift in Sources */,
-				3A67788E0E2ED9621CD190CB /* SettingsWindow.swift in Sources */,
-				660527C6F47863267C36E1A5 /* Store.swift in Sources */,
-				0B449CF57106605B212E94E1 /* ViewState.swift in Sources */,
-				06B5BBB30960E8F05B6C8866 /* ZoomControls.swift in Sources */,
+				699DD0B45A659EC7A3C2951F /* About.swift in Sources */,
+				F640312E726227D995356C8E /* AppModel.swift in Sources */,
+				4271F2EF029019817F438D42 /* ChartBake.swift in Sources */,
+				9B5E568A4400963C83A8E4FE /* ChartController.swift in Sources */,
+				E685C622E833DA99FE6B6926 /* ChartLinkFetch.swift in Sources */,
+				D1B707AE0BF481BB0E24C5F9 /* ChartSets.swift in Sources */,
+				E306BC1F2AB2905017E9107D /* ChartView.swift in Sources */,
+				B82495034138B87BEB0D8619 /* Chrome.swift in Sources */,
+				1624F24699FFA672BA87FF22 /* Commands.swift in Sources */,
+				CBD34D994087975A903346EA /* CoordFormat.swift in Sources */,
+				377B308C3F481575E1DD5FEC /* CoordinateParser.swift in Sources */,
+				0BFBE84D0B1DE20C265E75D1 /* Discovery.swift in Sources */,
+				9B7752E1FD183B4597CA5E3F /* HUDOverlay.swift in Sources */,
+				B65E3546E971AC80B295ECF0 /* Licenses.swift in Sources */,
+				1D784EA4414260DF4C62E8B4 /* LookoutMarineApp.swift in Sources */,
+				8A8814B7709EC3A575C8ECBC /* MarinerSettings.swift in Sources */,
+				39194C6A9F6BC276AD67A94B /* OpenPanel.swift in Sources */,
+				08B0E879E6DAE396BF751F3E /* PickReport.swift in Sources */,
+				FFD02708559BDF34407FA231 /* Platform.swift in Sources */,
+				098A551B61520429588C9332 /* PluginAlerts.swift in Sources */,
+				8C30CD983746DE553836FA5C /* PluginInstall.swift in Sources */,
+				32DB96754F03936CE042A5BF /* PluginSettings.swift in Sources */,
+				3F5DDFAFDE10145EC7640E15 /* PluginTable.swift in Sources */,
+				E114A387274E00A905B754AA /* ScaleParser.swift in Sources */,
+				1F6348B56169B23E77BEFAF1 /* SearchField.swift in Sources */,
+				79ADA8573328C109282E8A80 /* SettingsRows.swift in Sources */,
+				A81EC2A233089F5F6CB889CB /* SettingsView.swift in Sources */,
+				D27C7A5C6C930EFAA6ECF045 /* SettingsWindow.swift in Sources */,
+				14273C54003A4AEBB439A5E3 /* Store.swift in Sources */,
+				1B66B5D3EC47042E2E462BBF /* ViewState.swift in Sources */,
+				784566F54334706217860CD0 /* ZoomControls.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

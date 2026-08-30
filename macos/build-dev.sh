@@ -16,6 +16,10 @@
 # launched by mistake months later. Whichever script ran last owns that path,
 # and xcodebuild rebuilds the product when it finds one it did not write.
 # Overridable: OUT (the directory that holds the bundle).
+#
+# The sources are in folders, so the glob below is zsh's `**/`, which matches
+# zero or more directory levels and therefore the top level too. A flat
+# `*.swift` compiles a fraction of the shell and fails at the link.
 set -e
 REPO="${0:A:h:h}"
 OUT="${OUT:-$REPO/macos/build-mac/Build/Products/Debug}"
@@ -70,7 +74,7 @@ xcrun swiftc -swift-version 5 -sdk "$SDK" -target arm64-apple-macosx26.0 \
   -lz \
   -framework Metal -framework QuartzCore \
   -framework CoreGraphics -framework UniformTypeIdentifiers \
-  -o "$WORK/LookoutMarine" macos/LookoutMarine/*.swift 2>"$WORK/swiftc.log" \
+  -o "$WORK/LookoutMarine" macos/LookoutMarine/**/*.swift 2>"$WORK/swiftc.log" \
   || { grep -v "was built for newer\|not an allowed client of it" "$WORK/swiftc.log" >&2 || true
        echo "==> swiftc FAILED" >&2; exit 1; }
 # The filter swallows only the known benign linker noise; a failed compile

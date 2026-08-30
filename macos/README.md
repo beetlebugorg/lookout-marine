@@ -62,21 +62,29 @@ framing for screenshots; `simctl launch` forwards both as `SIMCTL_CHILD_*`).
 
 ## What's in here
 
-| File | Role |
+The shell is in folders. Swift has no per-directory namespace, so this is
+organisation and nothing else: a reader can tell from the path whether a file
+is chart state, chrome or a plugin surface.
+
+| Folder | What is in it |
 |------|------|
-| `LookoutMarineApp.swift` | `@main` App: window `ZStack`, Settings scene, commands; iOS AppDelegate/SceneDelegate + the two-window stack |
-| `ChartView.swift` | macOS: `NSViewRepresentable` + backing `NSView` (input, on-demand loop). iOS: the chrome `OverlayLayer` + `ChartUIView`, the plain-UIKit gesture surface |
-| `ChartController.swift` | `@MainActor` owner of the `lookout*` handle; the one funnel for every `lookout_*` call, the display-link render loop, and the `LOOKOUT_VIEW` dev hook |
-| `AppModel.swift` | Shared observable state; open paths (`LOOKOUT_OPEN`, Documents, recents); coordinate parser |
-| `MarinerSettings.swift` | Swift mirror of `tile57_mariner` (round-trips engine-only fields; persists as a versioned dictionary) |
-| `SettingsView.swift` | The S-52 mariner form (⌘, / the gear) |
-| `HUDOverlay.swift` | Own ship's position, 1:N scale, the band, the raster pill, the chart menu, the scale entry |
-| `ZoomControls.swift` | Floating +/−/north bubbles |
-| `SearchField.swift` | Coordinate go-to (feature search stubbed) |
-| `OpenPanel.swift` | The Open Chart… pickers (NSOpenPanel / fileImporter hand-off) |
-| `Commands.swift` | Native menu bar (macOS) |
-| `Platform.swift` | The macOS/iOS seam: typealiases, display-link/scale helpers, the chrome hit map, PassThroughWindow |
-| `project.yml` | XcodeGen target definition (all build settings + the zig pre-build) |
+| `App/` | `@main` App, the two app delegates, the iOS scene and keyboard, `ContentView`, the dev hooks, `AppModel`, the macOS menu bar |
+| `Chart/` | `ChartController` (the `lookout*` handle, the render loop), the two input views, the camera pose |
+| `Charts/` | The sets aboard, the scan, the bake, and the chart-link fetcher |
+| `Chrome/` | The tokens and sizes, the button styles, the bubbles, the scale bar, the search field |
+| `Hud/` | The readouts capsule, the position, the raster pill, the scale entry, the chart menu, the marker rename field |
+| `Pick/` | The pick report in both bodies, the decode, the S-57 rows, aux files |
+| `Plugins/` | The settings model, install and consent, the declared tables, alerts and the siren, mDNS discovery |
+| `Settings/` | The mariner form and its sections, the shared rows, the window, `MarinerSettings` |
+| `Licenses/` | The licences screen and About |
+| `Format/` | `CoordFormat`, `CoordinateParser`, `ScaleParser`: the strings every shell shares |
+| `Platform/` | The macOS/iOS seam, the open panels, the defaults store |
+
+`Bridging-Header.h`, `Info.plist`, `LookoutMarine.entitlements` and
+`Assets.xcassets` stay at the top: `macos/project.yml` names all four by that
+path, and the iOS target excludes the last three.
+
+`macos/Tests/` is one source directory compiled into both unit test targets.
 
 ## iOS
 
