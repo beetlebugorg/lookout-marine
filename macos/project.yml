@@ -307,19 +307,28 @@ targets:
             rm -f "$TARGET_BUILD_DIR/$EXECUTABLE_PATH"
           fi
     postBuildScripts:
-      # The same shipped set as the macOS target, into this bundle's Resources.
-      # The modules are wasm, so one build serves every platform and this needs
-      # no -Dtarget and no per-platform prefix.
-      - name: Bundle the core plugins into Resources/Plugins
+      # The same shipped set as the macOS target, into this bundle. The modules
+      # are wasm, so one build serves every platform and this needs no -Dtarget
+      # and no per-platform prefix.
+      #
+      # LookoutPlugins, NOT Plugins. An iOS app bundle is flat, so
+      # $UNLOCALIZED_RESOURCES_FOLDER_PATH is the bundle root and "Plugins"
+      # lands on the system's own PlugIns directory, which is for app
+      # extensions. The installer takes that directory over, and the app came up
+      # with no own ship, no AIS, no NMEA 0183, no Signal K and no laylines,
+      # saying only "Resources/Plugins is absent" in a log nobody reads.
+      # ChartController.bundledPluginCandidates checks both names.
+      - name: Bundle the core plugins into LookoutPlugins
         basedOnDependencyAnalysis: false
         script: |
           set -e
           export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
           cd "$SRCROOT/.."
           zig build plugins
-          DEST="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/Plugins"
+          DEST="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/LookoutPlugins"
           mkdir -p "$DEST"
           rsync -a --delete zig-out/plugins-bundled/ "$DEST/"
+          echo "bundled plugins: $(ls "$DEST" | grep -c '\.wasm$') module(s) in $DEST"
 
   # ---- Unit tests ------------------------------------------------------------
   # One source directory, two targets. The two app targets both produce a module

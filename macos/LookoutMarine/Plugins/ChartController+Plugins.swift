@@ -62,14 +62,34 @@ extension ChartController {
     /// set still loads.
     @discardableResult
     func loadBundledPlugins() -> Bool {
-        guard let h = handle,
-              let dir = Bundle.main.resourceURL?.appendingPathComponent("Plugins", isDirectory: true),
-              FileManager.default.fileExists(atPath: dir.path)
-        else {
-            lkLog("no bundled plugins in this build (Resources/Plugins is absent)")
+        guard let h = handle, let dir = Self.bundledPluginDirectory else {
+            lkLog("no bundled plugins in this build; looked in "
+                  + Self.bundledPluginCandidates.map(\.path).joined(separator: ", "))
             return false
         }
+        lkLog("bundled plugins: \(dir.path)")
         return lookout_plugins_load(h, dir.path) == 0
+    }
+
+    /// Where the shipped set lives inside the app.
+    ///
+    /// On macOS the build phase writes Contents/Resources/Plugins. On iOS an
+    /// app bundle is flat and `PlugIns` is the system's own directory for app
+    /// extensions, so the phase writes `LookoutPlugins` beside the executable
+    /// instead. Both are checked, so one build phase change cannot silently
+    /// leave an app with no own ship and no traffic.
+    static var bundledPluginCandidates: [URL] {
+        guard let resources = Bundle.main.resourceURL else { return [] }
+        return [resources.appendingPathComponent("LookoutPlugins", isDirectory: true),
+                resources.appendingPathComponent("Plugins", isDirectory: true)]
+    }
+
+    static var bundledPluginDirectory: URL? {
+        bundledPluginCandidates.first { url in
+            var isDir: ObjCBool = false
+            let there = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
+            return there && isDir.boolValue
+        }
     }
 
     /// Load the installed plugin set — what Install put under Application
