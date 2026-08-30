@@ -202,6 +202,12 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate {
         twoFingerTap.numberOfTouchesRequired = 2
         let tap = UITapGestureRecognizer(target: self, action: #selector(onTap(_:)))
         tap.require(toFail: doubleTap)
+        // A press raises the chart menu at that point, which is the Mac's
+        // right-click. Without it a touch device has no way to reach the pick
+        // report, drop or rename a mark, or copy a position: the menu is the
+        // only route to all five.
+        let press = UILongPressGestureRecognizer(target: self, action: #selector(onPress(_:)))
+        press.minimumPressDuration = 0.45
         // No hover recognizer: it fed the cursor lat/lon readout, and the
         // readout carries own ship now. It comes back with this shell's own
         // press menu, which is what will need a pointer position again.
@@ -213,7 +219,7 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate {
         // pair whether they may run together, and a recognizer with no
         // delegate answers no.
         [pan, pinch, rotate].forEach { $0.delegate = self } // these compose (see below)
-        [pan, pinch, rotate, doubleTap, twoFingerTap, tap].forEach(addGestureRecognizer)
+        [pan, pinch, rotate, doubleTap, twoFingerTap, tap, press].forEach(addGestureRecognizer)
         panRecognizer = pan
     }
 
@@ -311,11 +317,31 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate {
 
     /// A plain tap on the chart. It does NOT pick: a stray tap while panning
     /// used to throw a pick report nobody asked for. What is at a point is
-    /// asked for by name, from the menu a press raises there, which this shell
-    /// does not carry yet.
+    /// asked for by name, from the menu a press raises.
+    ///
+    /// A tap also puts an open menu away, as a press does on the Mac, and then
+    /// behaves as an ordinary tap.
     @objc private func onTap(_ g: UITapGestureRecognizer) {
         notePointerInput("tap")
+        model?.closeChartMenu()
         model?.closePin()
+    }
+
+    /// A press raises the chart menu at that point. Every item acts on THIS
+    /// point, so the coordinates are taken once, here, when the menu opens.
+    ///
+    /// The finger has been down for the press duration, so the pan has already
+    /// started. Cancel it the way a pinch does, or the chart slides out from
+    /// under the menu that names a place on it.
+    @objc private func onPress(_ g: UILongPressGestureRecognizer) {
+        guard g.state == .began else { return }
+        notePointerInput("press")
+        if let pan = panRecognizer, pan.state == .began || pan.state == .changed {
+            pan.isEnabled = false
+            pan.isEnabled = true
+        }
+        controller?.flingStart(vx: 0, vy: 0)
+        model?.openChartMenu(at: inChromeSpace(g.location(in: self)))
     }
 
     /// A point in this view, moved into the chrome's coordinate space. The

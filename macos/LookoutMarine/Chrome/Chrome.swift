@@ -285,6 +285,12 @@ struct PickMarker: View {
         }
         .frame(width: Self.size, height: Self.size)
         .allowsHitTesting(false)
+        // Named so a UI test can read where it stands: the chart lifts to bring
+        // a mark out from under the pick sheet, and the mark's own frame is the
+        // only thing on screen that says whether it did.
+        .accessibilityElement()
+        .accessibilityIdentifier("pick-mark")
+        .accessibilityLabel("The picked object")
     }
 }
 

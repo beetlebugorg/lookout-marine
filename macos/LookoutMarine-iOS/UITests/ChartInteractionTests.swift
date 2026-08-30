@@ -9,35 +9,95 @@
 import XCTest
 
 final class ChartInteractionTests: XCTestCase {
+    /// A press raises the chart menu at that point. It is the only way in to
+    /// the pick report, a dropped mark and a copied position on a touch device.
+    func testAPressRaisesTheChartMenu() throws {
+        let app = try chartApp()
+        press(app, at: CGVector(dx: 0.5, dy: 0.5))
+        XCTAssertTrue(app.buttons["Pick report"].waitForExistence(timeout: 10),
+                      "a press raised no chart menu")
+        XCTAssertTrue(app.buttons["Drop marker"].exists)
+        XCTAssertTrue(app.buttons["Copy position"].exists)
+        // Over bare water there is no mark, so it offers Drop and not Rename.
+        XCTAssertFalse(app.buttons["Rename marker"].exists)
+    }
+
+    /// A tap elsewhere puts it away, as a press does on the Mac.
+    func testATapClosesTheChartMenu() throws {
+        let app = try chartApp()
+        press(app, at: CGVector(dx: 0.5, dy: 0.5))
+        XCTAssertTrue(app.buttons["Pick report"].waitForExistence(timeout: 10))
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.25)).tap()
+        XCTAssertFalse(app.buttons["Pick report"].waitForExistence(timeout: 3),
+                       "the menu stayed up after a tap on the chart")
+    }
+
+    /// Drop marker places a mark and closes the menu. The drop never waits for
+    /// typing: a mariner drops one one-handed on a moving boat.
+    func testDropMarkerPlacesAMark() throws {
+        let app = try chartApp()
+        press(app, at: CGVector(dx: 0.5, dy: 0.5))
+        XCTAssertTrue(app.buttons["Drop marker"].waitForExistence(timeout: 10))
+        app.buttons["Drop marker"].tap()
+        XCTAssertFalse(app.buttons["Drop marker"].exists, "the menu stayed up")
+        // Pressing on the mark offers Rename and Remove in place of Drop.
+        press(app, at: CGVector(dx: 0.5, dy: 0.5))
+        XCTAssertTrue(app.buttons["Rename marker"].waitForExistence(timeout: 10),
+                      "the press found no mark where one was dropped")
+        XCTAssertTrue(app.buttons["Remove marker"].exists)
+        XCTAssertFalse(app.buttons["Drop marker"].exists)
+    }
+
     /// A pick low on a phone falls under the bottom sheet. The chart lifts
-    /// until the mark clears the sheet (§2.2).
+    /// until the mark clears the sheet.
     ///
-    /// The oracle is the position readout, which names the centre of the
-    /// view. The app moves the chart, so that position must change. A wide
-    /// view uses a callout and does not move.
+    /// The oracle is the mark itself: it is drawn at the picked point, the app
+    /// moves the chart under it, and the mark moves with it. The footer used to
+    /// be the oracle, back when it printed the map centre.
     func testChartLiftsToRevealAPickUnderTheSheet() throws {
-        let app = XCUIApplication()
-        app.launchEnvironment["LOOKOUT_OPEN"] = try ChartFixture.chart()
-        app.launchEnvironment["LOOKOUT_VIEW"] = "-76.4767,38.9763,15"
-        app.launch()
+        let app = try chartApp()
+        try XCTSkipUnless(app.windows.firstMatch.frame.width < 700,
+                          "a wide view uses a callout and does not move")
 
-        // The position readout, which names the centre of the view.
-        let position = app.staticTexts.matching(
-            NSPredicate(format: "label CONTAINS '°' AND label CONTAINS 'N'")).firstMatch
-        XCTAssertTrue(position.waitForExistence(timeout: 60), "position readout never appeared")
-        let before = position.label
-
-        // A tap low on the chart — where the sheet will stand.
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.82)).tap()
-        Thread.sleep(forTimeInterval: 3)
+        // A press low on the chart, where the sheet will stand.
+        press(app, at: CGVector(dx: 0.5, dy: 0.82))
+        XCTAssertTrue(app.buttons["Pick report"].waitForExistence(timeout: 10),
+                      "a press raised no chart menu")
+        app.buttons["Pick report"].tap()
 
         let objects = app.staticTexts.matching(
             NSPredicate(format: "label ENDSWITH 'OBJECTS'")).firstMatch
-        let sheet = objects.exists || app.buttons["Close the pick report"].exists
-        try XCTSkipUnless(sheet, "the tap found no object to report; nothing to reveal")
+        let sheet = objects.waitForExistence(timeout: 5)
+            || app.buttons["Close the pick report"].exists
+        try XCTSkipUnless(sheet, "the press found no object to report; nothing to reveal")
 
-        XCTAssertNotEqual(position.label, before,
-                          "the chart did not move to bring the object out from under the sheet")
+        let mark = app.otherElements["pick-mark"]
+        XCTAssertTrue(mark.waitForExistence(timeout: 5), "no mark on the picked object")
+        let sheetTop = app.windows.firstMatch.frame.height
+            - min(340, (app.windows.firstMatch.frame.height * 0.48).rounded(.down))
+        XCTAssertLessThan(mark.frame.maxY, sheetTop,
+                          "the chart did not lift the object out from under the sheet")
+    }
+
+    // MARK: Driving the chart
+
+    private func chartApp(view: String = "-76.4767,38.9763,15") throws -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchEnvironment["LOOKOUT_OPEN"] = try ChartFixture.chart()
+        app.launchEnvironment["LOOKOUT_VIEW"] = view
+        app.launch()
+        // The chart is up once the scale bar is, which needs no fix and no
+        // plugin.
+        _ = app.staticTexts.matching(
+            NSPredicate(format: "label ENDSWITH 'km' OR label ENDSWITH ' m'"))
+            .firstMatch.waitForExistence(timeout: 60)
+        return app
+    }
+
+    /// The press the chart menu answers to. Longer than the recognizer's own
+    /// duration, so a slow simulator does not drop it.
+    private func press(_ app: XCUIApplication, at offset: CGVector) {
+        app.coordinate(withNormalizedOffset: offset).press(forDuration: 1.0)
     }
 
     func testPinchZoomsAndDragPans() throws {
