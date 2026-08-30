@@ -90,7 +90,7 @@ struct OverlayLayer: View {
                 .overlay(alignment: .bottomLeading) {
                     if model.hasChart {
                         ScaleBarView(scaleDenominator: model.scaleDenominator,
-                                     credit: model.chartLinkAttribution)
+                                     credit: model.chartLinks.attribution)
                             .padding(.leading, Chrome.margin + sideInset)
                             .padding(.bottom, corner)
                     }

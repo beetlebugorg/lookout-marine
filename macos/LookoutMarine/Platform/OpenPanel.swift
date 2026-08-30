@@ -84,7 +84,7 @@ extension AppModel {
         panel.title = "Add Chart Style"
         panel.message = "Choose a MapLibre style file (style.json). The chart is then drawn the way that style says."
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        importChartStyle(url)
+        chartLinks.importStyle(url)
     }
 }
 #endif

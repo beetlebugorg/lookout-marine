@@ -287,7 +287,16 @@ final class AppModel {
     var scaleEntryText = ""
 
     /// The single chart controller (owned by ChartView; referenced for commands).
-    weak var controller: ChartController?
+    weak var controller: ChartController? {
+        didSet { chartLinks.controller = controller }
+    }
+
+    // MARK: The models for each area
+    //
+    // One per subject, each holding its own state and the calls that act on
+    // it. The chrome reads them through this one: model.chartLinks.list.
+
+    let chartLinks = ChartLinksModel()
 
     /// The raster charts the mariner installed. Persisted, because a chart set is a
     /// half-gigabyte download they picked deliberately — asking again every
@@ -337,18 +346,6 @@ final class AppModel {
     /// question.
     var pendingRemoval: ChartSet?
 
-    // AppModel+ChartLinks.swift
-
-    var chartLinks: [ChartLink] = []
-    /// The picked link's url; nil draws the built-in chart.
-    var activeChartLink: String? = nil
-    var chartLinkBusy = false
-    var chartLinkError: String? = nil
-    /// The active chart link's source credits, drawn by the scale bar while
-    /// the link draws (tile usage policies make the credit a condition of
-    /// service). Nil when the Lookout chart is up.
-    var chartLinkAttribution: String? = nil
-
     // AppModel+Alerts.swift
 
     /// Every alert the plugins have raised, most urgent first. The banner over
@@ -384,14 +381,14 @@ final class AppModel {
     /// its fetcher, so nothing has to be replayed here — only the mariner's old
     /// UserDefaults list handed over, once.
     func chartDidOpen() {
-        migrateChartLinks()
+        chartLinks.migrate()
         // Dev hook, mirroring $LOOKOUT_OPEN: a style url or a path to a style
         // file draws as the chart at launch. Adding one otherwise needs a
         // form, a paste and a click, which no screenshot run can do.
         if let spec = ProcessInfo.processInfo.environment["LOOKOUT_CHART_LINK"],
            !spec.isEmpty {
             lkLog("chart link: $LOOKOUT_CHART_LINK=\(spec)")
-            addChartLink(spec)
+            chartLinks.add(spec)
         }
     }
 
@@ -406,6 +403,16 @@ final class AppModel {
     func refreshPluginTables() {
         guard let c = controller else { return }
         pluginTables = c.tableSpecs()
+    }
+
+    /// Add a chart style the mariner has on disk. macOS opens a panel; iOS
+    /// raises the form's own importer.
+    func addChartStyleFile() {
+        #if os(iOS)
+        showSettingsStyleImporter = true
+        #else
+        presentChartStylePanel()
+        #endif
     }
 
     /// Open the scale entry. The field starts at the current scale.

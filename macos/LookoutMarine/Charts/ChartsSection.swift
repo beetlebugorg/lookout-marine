@@ -27,26 +27,26 @@ struct ChartsSections: View {
         // charts cannot share the water.
         Section {
             chartPickRow(name: "Lookout chart", detail: "Built from your chart sets below",
-                         picked: model.activeChartLink == nil) { model.selectChartLink(nil) }
-            ForEach(model.chartLinks) { link in
+                         picked: model.chartLinks.active == nil) { model.chartLinks.select(nil) }
+            ForEach(model.chartLinks.list) { link in
                 HStack(spacing: 8) {
                     chartPickRow(name: link.name, detail: link.url,
-                                 picked: model.activeChartLink == link.url) { model.selectChartLink(link.url) }
+                                 picked: model.chartLinks.active == link.url) { model.chartLinks.select(link.url) }
                     Spacer(minLength: 4)
                     // Every chart can be re-read: a link goes back to the
                     // publisher, and a style file the mariner has aboard goes
                     // back to the path it came from. What a refresh brings is
                     // the publisher's edits — moved tiles, a wider zoom band, a
                     // changed credit.
-                    Button { model.refreshChartLink(link.url) } label: {
+                    Button { model.chartLinks.refresh(link.url) } label: {
                         Image(systemName: "arrow.clockwise")
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
-                    .disabled(model.chartLinkBusy)
+                    .disabled(model.chartLinks.busy)
                     .help("Read this chart again — its tile urls, zooms and credit")
                     .accessibilityLabel("Refresh \(link.name)")
-                    Button { model.removeChartLink(link.url) } label: {
+                    Button { model.chartLinks.remove(link.url) } label: {
                         Image(systemName: "minus.circle")
                     }
                     .buttonStyle(.plain)
@@ -59,7 +59,7 @@ struct ChartsSections: View {
                     .textFieldStyle(.roundedBorder)
                     .autocorrectionDisabled()
                     .onSubmit { submitChartLink() }
-                if model.chartLinkBusy {
+                if model.chartLinks.busy {
                     ProgressView().controlSize(.small)
                 } else {
                     Button("Add") { submitChartLink() }
@@ -77,7 +77,7 @@ struct ChartsSections: View {
                     .accessibilityLabel("Add a chart style file")
                 }
             }
-            if let e = model.chartLinkError {
+            if let e = model.chartLinks.error {
                 Label(e, systemImage: "exclamationmark.triangle")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -90,7 +90,7 @@ struct ChartsSections: View {
                 // reason. Every other pane — colours, depths, symbols, text —
                 // shapes Lookout's own chart; a linked chart is drawn the way
                 // its publisher styled it and nothing here reaches inside it.
-                if model.activeChartLink != nil {
+                if model.chartLinks.active != nil {
                     Text("While a linked chart is picked, the display, depth and symbol settings do not shape it — you are seeing its publisher's own portrayal.")
                 }
             }
@@ -176,7 +176,7 @@ struct ChartsSections: View {
     private func submitChartLink() {
         let raw = newChartLink
         newChartLink = ""
-        model.addChartLink(raw)
+        model.chartLinks.add(raw)
     }
 
     @ViewBuilder

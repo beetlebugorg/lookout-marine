@@ -1,4 +1,4 @@
-//  AppModel+ChartLinks.swift — an online map AS the chart.
+//  ChartLinksModel.swift — an online map AS the chart.
 //
 //  THE CORE OWNS ALL OF THIS. It probes the link, inlines TileJSON sources,
 //  generates a wrapper style for bare tiles, fetches the sprite packs, builds
@@ -8,18 +8,11 @@
 import Foundation
 
 @MainActor
-extension AppModel {
-    // MARK: - Chart links (an online map AS the chart)
-
+@Observable
+final class ChartLinksModel {
     /// One chart the mariner added by link, as the core reports it. Picking it
     /// renders that publisher's style INSTEAD of the built-in chart — Lookout's
     /// own chart is just the default entry in the same list.
-    ///
-    /// THE CORE OWNS ALL OF THIS. It probes the link, inlines TileJSON
-    /// sources, generates a wrapper style for bare tiles, fetches the sprite
-    /// packs, builds the credit line, templates the tile urls and persists the
-    /// list. This shell renders the snapshot and fetches urls
-    /// (ChartLinkFetch.swift).
     struct ChartLink: Decodable, Identifiable, Hashable {
         var url: String
         var name: String
@@ -28,7 +21,7 @@ extension AppModel {
 
     /// The snapshot, as one document. One document because a resolve finishing
     /// on a fetch thread could free a borrowed field under this shell.
-    private struct ChartLinksSnapshot: Decodable {
+    private struct Snapshot: Decodable {
         var links: [ChartLink]
         var active: String?
         var attribution: String
@@ -36,90 +29,92 @@ extension AppModel {
         var busy: Bool
     }
 
-    private static let chartLinksKey = "lookout.chartlinks"
-    private static let chartLinkActiveKey = "lookout.chartlinks.active"
+    var list: [ChartLink] = []
+    /// The picked link's url; nil draws the built-in chart.
+    var active: String? = nil
+    var busy = false
+    var error: String? = nil
+    /// The active link's source credits, drawn by the scale bar while the link
+    /// draws (tile usage policies make the credit a condition of service). Nil
+    /// when the Lookout chart is up.
+    var attribution: String? = nil
+
+    weak var controller: ChartController?
+
+    private static let listKey = "lookout.chartlinks"
+    private static let activeKey = "lookout.chartlinks.active"
 
     /// Hand the old UserDefaults list to the core, once, and then drop it.
     ///
     /// The core ignores the import when it already has a list of its own, so
     /// the window between handing it over and deleting the defaults replays
     /// harmlessly if the app dies in it.
-    func migrateChartLinks() {
-        guard let data = Store.shared.data(Self.chartLinksKey) else { return }
+    func migrate() {
+        guard let data = Store.shared.data(Self.listKey) else { return }
         var doc: [String: Any] = [:]
         if let old = try? JSONSerialization.jsonObject(with: data) { doc["links"] = old }
-        doc["active"] = Store.shared.string(Self.chartLinkActiveKey) ?? NSNull()
+        doc["active"] = Store.shared.string(Self.activeKey) ?? NSNull()
         guard let out = try? JSONSerialization.data(withJSONObject: doc),
               let json = String(data: out, encoding: .utf8) else { return }
         lkLog("chart links: handing \(data.count) B of the old store to the core")
         controller?.importChartLinks(json)
-        Store.shared.remove(Self.chartLinksKey)
-        Store.shared.remove(Self.chartLinkActiveKey)
+        Store.shared.remove(Self.listKey)
+        Store.shared.remove(Self.activeKey)
     }
 
     /// Take the core's snapshot, if it changed. Called once per readout tick:
     /// the changed flag has one consumer.
-    func pollChartLinks() {
+    func poll() {
         guard let json = controller?.chartLinksSnapshot(),
               let data = json.data(using: .utf8),
-              let snap = try? JSONDecoder().decode(ChartLinksSnapshot.self, from: data) else { return }
-        if chartLinks != snap.links { chartLinks = snap.links }
-        if activeChartLink != snap.active { activeChartLink = snap.active }
-        if chartLinkBusy != snap.busy { chartLinkBusy = snap.busy }
+              let snap = try? JSONDecoder().decode(Snapshot.self, from: data) else { return }
+        if list != snap.links { list = snap.links }
+        if active != snap.active { active = snap.active }
+        if busy != snap.busy { busy = snap.busy }
         let err = snap.error.isEmpty ? nil : snap.error
-        if chartLinkError != err { chartLinkError = err }
+        if error != err { error = err }
         let credit = snap.attribution.isEmpty ? nil : snap.attribution
-        if chartLinkAttribution != credit { chartLinkAttribution = credit }
+        if attribution != credit { attribution = credit }
     }
 
     /// Add a chart by its style link. The core reads it once and refuses a dead
-    /// or non-style link, which surfaces as `chartLinkError`. The new chart is
-    /// picked immediately: adding it is the request to sail on it.
-    func addChartLink(_ raw: String) {
+    /// or non-style link, which surfaces as `error`. The new chart is picked
+    /// immediately: adding it is the request to sail on it.
+    func add(_ raw: String) {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        chartLinkError = nil
-        chartLinkBusy = true
+        error = nil
+        busy = true
         controller?.addChartLink(trimmed)
-    }
-
-    /// Add a chart style the mariner has on disk. macOS opens a panel; iOS
-    /// raises the form's own importer.
-    func addChartStyleFile() {
-        #if os(iOS)
-        showSettingsStyleImporter = true
-        #else
-        presentChartStylePanel()
-        #endif
     }
 
     /// A style file the mariner picked. The same call as a link: the core tells
     /// a path from a url, and a path is the one thing it may read off disk.
-    func importChartStyle(_ url: URL) {
-        addChartLink(url.isFileURL ? url.path : url.absoluteString)
+    func importStyle(_ url: URL) {
+        add(url.isFileURL ? url.path : url.absoluteString)
     }
 
     /// Read a linked chart again — its tile urls, zooms, sprites and credit. A
     /// link that does not answer leaves the chart as it was: a lost connection
     /// must not cost the mariner the chart they are sailing on.
-    func refreshChartLink(_ url: String) {
-        chartLinkError = nil
-        chartLinkBusy = true
+    func refresh(_ url: String) {
+        error = nil
+        busy = true
         controller?.refreshChartLink(url)
     }
 
-    func removeChartLink(_ url: String) {
+    func remove(_ url: String) {
         controller?.removeChartLink(url)
     }
 
-    func selectChartLink(_ url: String?) {
+    func select(_ url: String?) {
         // Selecting the link that is already drawn is a no-op: the settings
         // row fires on every click, and re-selecting would re-resolve the style
         // and every sprite pack for nothing. A selection whose last resolve
         // failed does retry.
-        if url != nil, url == activeChartLink, chartLinkError == nil { return }
-        chartLinkError = nil
-        if url != nil { chartLinkBusy = true }
+        if url != nil, url == active, error == nil { return }
+        error = nil
+        if url != nil { busy = true }
         controller?.selectChartLink(url)
     }
 }

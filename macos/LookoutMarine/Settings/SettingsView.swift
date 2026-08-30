@@ -88,7 +88,7 @@ struct SettingsView: View {
             .background(
                 Color.clear.fileImporter(isPresented: $model.showSettingsStyleImporter,
                               allowedContentTypes: [.item]) { result in
-                    if case .success(let url) = result { model.importChartStyle(url) }
+                    if case .success(let url) = result { model.chartLinks.importStyle(url) }
                 }
             )
             // And a fourth, for a plugin package. Not filtered to the exported

@@ -797,7 +797,7 @@ final class ChartController: NSObject {
         // The chart-link list, the credit and the error, from the core. A
         // landing answer raises needs-redraw, so a resolve keeps this ticking
         // until it is done.
-        model.pollChartLinks()
+        model.chartLinks.poll()
         // Own ship, for the position readout. The state and the numbers move
         // together: a readout that kept the last position through a lost fix
         // would be presenting a stale one as live.
