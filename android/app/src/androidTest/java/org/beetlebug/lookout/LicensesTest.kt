@@ -64,7 +64,7 @@ class LicensesTest {
             "edcac13", "build.zig.zon", "https://github.com/beetlebugorg/tile57",
             "Permission is hereby granted, free of charge"),
         Expected("charttable", "Renders the chart.", "MIT", "MIT",
-            "0d137fa", "build.zig.zon", "https://github.com/beetlebugorg/charttable",
+            "788d36a", "build.zig.zon", "https://github.com/beetlebugorg/charttable",
             "Permission is hereby granted, free of charge"),
         Expected("IHO S-101 Portrayal Catalogue",
             "The portrayal rules: which symbol, which color, which text, at which scale.",

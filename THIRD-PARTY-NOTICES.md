@@ -26,7 +26,7 @@ The S-57, S-101 and raster chart engine.
 Renders the chart.
 
 - License: MIT
-- Commit: `0d137fa893e3215d02d0237c7d3112136734d4bd`
+- Commit: `788d36a621eb29ef5891aa18fd9dc7042f6d0f2c`
 - Copyright: © 2026 Jeremy Collins
 - Pinned in: `build.zig.zon`
 - Upstream: <https://github.com/beetlebugorg/charttable>
