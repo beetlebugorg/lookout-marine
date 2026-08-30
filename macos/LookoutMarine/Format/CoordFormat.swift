@@ -41,6 +41,18 @@ enum CoordFormat {
         "\(dm(lat, isLat: true)) \(dm(lon, isLat: false))"
     }
 
+    /// OWN SHIP's position, or nothing at all.
+    ///
+    /// Never the map centre and never the cursor. A coordinate with no boat
+    /// behind it is the ambiguity the readout exists to remove, and the caller
+    /// hands nil for every state but a live fix. The coordinates of a PLACE
+    /// come from the chart menu, on demand, at the point the mariner asked
+    /// about.
+    static func ownShip(lat: Double?, lon: Double?) -> String {
+        guard let lat, let lon else { return "" }
+        return position(lat: lat, lon: lon)
+    }
+
     /// The full scale with group separators, as in the WinUI 3 shell: `1:13,267`.
     static func scale(_ denominator: Double) -> String {
         guard denominator > 0 else { return "1:—" }

@@ -77,10 +77,8 @@ struct PositionReadout: View {
         .fixedSize(horizontal: true, vertical: false)
     }
 
-    /// Own ship's position, or nothing at all. Never the map centre.
     private var coordString: String {
-        guard let lat = model.shipLat, let lon = model.shipLon else { return "" }
-        return CoordFormat.position(lat: lat, lon: lon)
+        CoordFormat.ownShip(lat: model.shipLat, lon: model.shipLon)
     }
 
     /// The state as one stable word, for assistive technology and the UI

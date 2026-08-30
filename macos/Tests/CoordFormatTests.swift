@@ -64,6 +64,22 @@ final class CoordFormatTests: XCTestCase {
                        "38°58.578'N 076°28.920'W")
     }
 
+    // MARK: Own ship
+
+    /// The readout shows own ship or nothing. It never falls back to the map
+    /// centre or the cursor, on any body: the capsule, and the pick sheet's
+    /// footer on a phone.
+    func testNoFixShowsNoCoordinate() {
+        XCTAssertEqual(CoordFormat.ownShip(lat: nil, lon: nil), "")
+        XCTAssertEqual(CoordFormat.ownShip(lat: 38.9763, lon: nil), "")
+        XCTAssertEqual(CoordFormat.ownShip(lat: nil, lon: -76.482), "")
+    }
+
+    func testALiveFixShowsThePosition() {
+        XCTAssertEqual(CoordFormat.ownShip(lat: 38.9763, lon: -76.482),
+                       "38°58.578'N 076°28.920'W")
+    }
+
     // MARK: Scale
 
     /// A denominator that is not a scale reads as no scale, never as 1:0.

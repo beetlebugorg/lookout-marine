@@ -613,7 +613,13 @@ struct PickSheet: View {
     }
 
     /// The readouts the capsule shows when no sheet covers its ground: band,
-    /// scale, zoom and position. The scale still opens the scale entry.
+    /// scale, zoom and OWN SHIP's position.
+    ///
+    /// PositionReadout, not a coordinate. This footer printed the map centre in
+    /// the slot the capsule gives own ship, in the same font, with no pill
+    /// saying what it was. A mariner reading it off a phone during a pick had
+    /// no way to tell it from a fix, which is the ambiguity PositionReadout
+    /// exists to remove.
     private var footer: some View {
         HStack(spacing: 10) {
             Spacer(minLength: 0)
@@ -630,8 +636,7 @@ struct PickSheet: View {
             .accessibilityLabel("Scale \(CoordFormat.scale(model.scaleDenominator)). Zoom to a scale.")
             Text(String(format: "z%.1f", model.zoomLevel))
                 .foregroundStyle(Chrome.muted)
-            Text(CoordFormat.position(lat: model.centerLat, lon: model.centerLon))
-                .foregroundStyle(Chrome.ink)
+            PositionReadout(model: model, compact: true)
             Spacer(minLength: 0)
         }
         .font(.system(size: 11).monospacedDigit())
