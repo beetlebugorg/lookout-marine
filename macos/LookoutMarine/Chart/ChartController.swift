@@ -351,6 +351,12 @@ final class ChartController: NSObject {
         }
     }
 
+    /// How many vector charts are open. Zero is a library of pictures alone.
+    func chartCount() -> Int {
+        guard let h = handle else { return 0 }
+        return Int(lookout_charts_count(h))
+    }
+
     // MARK: - Render loop (on-demand)
 
     private func startDisplayLink() {

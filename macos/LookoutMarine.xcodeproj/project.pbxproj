@@ -147,10 +147,12 @@
 		AA57905B74D7272259E6FC71 /* RasterModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD12651F04161741811A5386 /* RasterModelTests.swift */; };
 		AAEAA11652744E72897F0250 /* FakeEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = C92108B96F87BAE129BE6656 /* FakeEngine.swift */; };
 		AB753B2BDEE44483CCDD903C /* CoordFormat.swift in Sources */ = {isa = PBXBuildFile; fileRef = 539774253A46E025DD1B5E20 /* CoordFormat.swift */; };
+		ABD0F0D9B178C911169CA6B4 /* ChartController+ChartLinks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80820CEC30CD0EB74AE12CAB /* ChartController+ChartLinks.swift */; };
 		ABE7334DDB19342650DC03EF /* ScaleParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5771B481220434E34EA6F794 /* ScaleParser.swift */; };
 		AC156DBF801B9FDB7048420A /* ChartWorkPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 362582E4EA060B062BAF11EB /* ChartWorkPanel.swift */; };
 		AE777CEB11DB23DC4042FCC1 /* ChartMenuPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB8AD6DFED21DF30B2636C6C /* ChartMenuPanel.swift */; };
 		AF4BB50C34E59C394C6AD379 /* PluginAlerts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4908F0A3B9D1ECDF91411BE7 /* PluginAlerts.swift */; };
+		B08078D4BC34B60AEA3FABE6 /* ChartController+ChartLinks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80820CEC30CD0EB74AE12CAB /* ChartController+ChartLinks.swift */; };
 		B1419C547F1615D20EBEE3EA /* ChromeModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D234494177794FA934BAB596 /* ChromeModel.swift */; };
 		B1774F9EA0735A56300C1850 /* MarinerSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F7AFFDA812DB39C72788868 /* MarinerSettingsTests.swift */; };
 		B32B89A37A49BA618336DBD3 /* UITestCase.swift in Sources */ = {isa = PBXBuildFile; fileRef = A53C303F269185DBB7200970 /* UITestCase.swift */; };
@@ -169,6 +171,7 @@
 		C05F4D5EB4E32576C253AD19 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 8AE67031882048136AC3C4B2 /* Assets.xcassets */; };
 		C08B9592864477E3068B6104 /* PickReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0BD7776E04E596B3F3FC90E /* PickReport.swift */; };
 		C0F12C9177AB56898D1EDFBD /* ChartUIView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB61B848C1E900A1F3615B91 /* ChartUIView.swift */; };
+		C1DBF078241EB0244413102D /* ChartController+Display.swift in Sources */ = {isa = PBXBuildFile; fileRef = 195564232B25BB7EBBBB93CB /* ChartController+Display.swift */; };
 		C2A7920E23D12CA2B606E75C /* LookoutMarineApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A03D3BC7A7816F10B65863B0 /* LookoutMarineApp.swift */; };
 		C3450AC507D00557B103B1FD /* ShellTestCase.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39FCF4CF9169327DF0FA8FBB /* ShellTestCase.swift */; };
 		C38965268BE7F1EAE9AB48A6 /* ChartsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59206D279B28F48EC767ADEA /* ChartsModel.swift */; };
@@ -182,6 +185,7 @@
 		CBB5EE49F377EA2C6E4B3F7F /* ScaleEntryPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA903A3F5328FE7634B5B1C4 /* ScaleEntryPanel.swift */; };
 		CBD34D994087975A903346EA /* CoordFormat.swift in Sources */ = {isa = PBXBuildFile; fileRef = 539774253A46E025DD1B5E20 /* CoordFormat.swift */; };
 		CD8608AD6B1FD02089DE519F /* ChartController+Raster.swift in Sources */ = {isa = PBXBuildFile; fileRef = AACCF77D4F5568A745094D65 /* ChartController+Raster.swift */; };
+		CD971592D6F2BD5D7E2A5CF4 /* ChartController+Display.swift in Sources */ = {isa = PBXBuildFile; fileRef = 195564232B25BB7EBBBB93CB /* ChartController+Display.swift */; };
 		CDEDF34B3202F6D9F0746A37 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10E8D550447A14C284967EEB /* ContentView.swift */; };
 		CEFBD3E91B5295073ECB3BDE /* PluginRegistryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48FA710C0489FE5DE3CDB3BE /* PluginRegistryTests.swift */; };
 		CF84C665702C808DABCE6CB8 /* PluginsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5103742FA53C331F5306B3ED /* PluginsModel.swift */; };
@@ -279,6 +283,7 @@
 		10B668C8717144E00D603812 /* LookoutMarine-iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "LookoutMarine-iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		10E8D550447A14C284967EEB /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		16F8DF0D1C7780BEF76AEE22 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
+		195564232B25BB7EBBBB93CB /* ChartController+Display.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChartController+Display.swift"; sourceTree = "<group>"; };
 		1A443DE42C30306D7110F731 /* ChartScanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartScanTests.swift; sourceTree = "<group>"; };
 		1B2641D4DD30D574228F9033 /* ChartBakeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartBakeTests.swift; sourceTree = "<group>"; };
 		1BD93ECA0EF5B7BC7893551B /* ScaleParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScaleParserTests.swift; sourceTree = "<group>"; };
@@ -342,6 +347,7 @@
 		7C90666B68F88AA600900DFB /* SearchField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchField.swift; sourceTree = "<group>"; };
 		7DE881BB41EFEF6FD7443244 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		7F7AFFDA812DB39C72788868 /* MarinerSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarinerSettingsTests.swift; sourceTree = "<group>"; };
+		80820CEC30CD0EB74AE12CAB /* ChartController+ChartLinks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChartController+ChartLinks.swift"; sourceTree = "<group>"; };
 		80A6678722FC01CA46E10CE0 /* CoordFormatTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoordFormatTests.swift; sourceTree = "<group>"; };
 		81985287C200A1BA384DA9D8 /* DevHooks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevHooks.swift; sourceTree = "<group>"; };
 		821B5ED7454E2C00FA897B56 /* PluginPackageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginPackageTests.swift; sourceTree = "<group>"; };
@@ -578,6 +584,7 @@
 			isa = PBXGroup;
 			children = (
 				C315E2FD12D936B349662AB2 /* ChartController.swift */,
+				195564232B25BB7EBBBB93CB /* ChartController+Display.swift */,
 				3679C3C6EF257BD3E89496F0 /* ChartController+Markers.swift */,
 				25170EA011726656A1803B82 /* ChartEngine.swift */,
 				22D02F5C9167697B1044050F /* ChartNSView.swift */,
@@ -635,6 +642,7 @@
 			isa = PBXGroup;
 			children = (
 				C440A0CF1A4AE2740ACEFF2F /* ChartBake.swift */,
+				80820CEC30CD0EB74AE12CAB /* ChartController+ChartLinks.swift */,
 				AACCF77D4F5568A745094D65 /* ChartController+Raster.swift */,
 				D31BFC1DAC5265A5DAC8F20D /* ChartLinkFetch.swift */,
 				68828190C8B7D95B175B2ED1 /* ChartLinksModel.swift */,
@@ -997,6 +1005,8 @@
 				7D0993B29FF0B336545055B6 /* AuxFileView.swift in Sources */,
 				836E43B2A7A2E7EE94E21D2D /* CalloutPlacement.swift in Sources */,
 				A6EEB61F653356864321AF83 /* ChartBake.swift in Sources */,
+				ABD0F0D9B178C911169CA6B4 /* ChartController+ChartLinks.swift in Sources */,
+				C1DBF078241EB0244413102D /* ChartController+Display.swift in Sources */,
 				72D9550C5378015409B5C674 /* ChartController+Markers.swift in Sources */,
 				07961A5660076B4E5D1A0734 /* ChartController+Pick.swift in Sources */,
 				49CC49C3B92B59E4BE8D381E /* ChartController+Plugins.swift in Sources */,
@@ -1111,6 +1121,8 @@
 				954D5A326F5AC370A4DE558E /* AuxFileView.swift in Sources */,
 				11BC973584FA218201793360 /* CalloutPlacement.swift in Sources */,
 				4271F2EF029019817F438D42 /* ChartBake.swift in Sources */,
+				B08078D4BC34B60AEA3FABE6 /* ChartController+ChartLinks.swift in Sources */,
+				CD971592D6F2BD5D7E2A5CF4 /* ChartController+Display.swift in Sources */,
 				2CAAB96A58BB675F015568F5 /* ChartController+Markers.swift in Sources */,
 				4148E59BA5FAB3A4D649B10E /* ChartController+Pick.swift in Sources */,
 				841C835197E484DA0A66E250 /* ChartController+Plugins.swift in Sources */,
