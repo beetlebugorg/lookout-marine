@@ -15,33 +15,34 @@ struct OpenRequest: Equatable {
 }
 
 @MainActor
-final class AppModel: ObservableObject {
+@Observable
+final class AppModel {
     // MARK: Chart state
-    @Published var hasChart = false
+    var hasChart = false
     /// The active raster chart set's name, or "" for no picture. Shown at all times
     /// while a picture is on: the chart drops its opaque water and land fills to
     /// let the picture through, and the mariner must never mistake that display
     /// for the full chart.
-    @Published var rasterName = ""
+    var rasterName = ""
     /// Every raster chart file the mariner has installed, in the order added. The
     /// controller replays these into each newly opened chart, so a raster chart
     /// survives switching charts and relaunching.
-    @Published var rasterPaths: [String] = []
+    var rasterPaths: [String] = []
     /// True only while a picture is really beneath the view and the chart is
     /// therefore drawing without its opaque fills. The HUD badge keys off this,
     /// not off the selected set — a badge that appeared whenever a raster chart was
     /// merely installed would claim the chart was reduced when it was not.
-    @Published var rasterInView = false
+    var rasterInView = false
     /// True while the vector chart is hidden and only the picture shows.
-    @Published var chartHidden = false
+    var chartHidden = false
     /// The set that covers this view, DRAWN OR NOT. Empty when none does. The
     /// pill appears only when this is set: a control that is useless here is
     /// noise, and one that says nothing about what is available teaches nothing.
-    @Published var rasterAvailable = ""
+    var rasterAvailable = ""
     /// The installed charts the mariner has switched OFF. They stay installed:
     /// these are half-gigabyte downloads, and carrying four providers for one
     /// coast means wanting three of them quiet, not deleted.
-    @Published var rasterOff: Set<String> = []
+    var rasterOff: Set<String> = []
     /// The sets the mariner has turned off at the pill, by set name. Read at
     /// launch and applied before the first frame; written whenever the drawn set
     /// changes. Without it the engine's own rule wins every launch — adding a
@@ -51,29 +52,29 @@ final class AppModel: ObservableObject {
     /// open; `chartHidden` is the live state.
     var chartHiddenSaved = false
     /// Every set, with whether it is in view. The pill's menu is built from it.
-    @Published var rasterSets: [ChartController.RasterSet] = []
+    var rasterSets: [ChartController.RasterSet] = []
     /// The drawn set's index, or -1.
-    @Published var rasterActive = -1
-    @Published var chartPath: String?
+    var rasterActive = -1
+    var chartPath: String?
     /// The folders of charts aboard, in the order added. A set on this list has
     /// been looked through and holds charts, so it always opens.
-    @Published var chartSets: [ChartSet] = []
+    var chartSets: [ChartSet] = []
     /// True while a folder is being looked through. The full NOAA library takes
     /// about 3 seconds.
-    @Published var scanning = false
+    var scanning = false
     /// The last folder that held no charts, for the panel to say so.
-    @Published var emptyPick: String?
-    @Published var openRequest: OpenRequest?
-    @Published var openError: String?
+    var emptyPick: String?
+    var openRequest: OpenRequest?
+    var openError: String?
     var openSeq = 0
 
     // MARK: Plugin install
     /// The package on the consent sheet: set by beginPluginInstall, cleared by
     /// Install or Cancel. The sheet presents while this is non-nil.
-    @Published var pendingInstall: PluginPackage?
+    var pendingInstall: PluginPackage?
     /// The sentence of the last refused install, for its own alert — an
     /// install refusal is not a chart error.
-    @Published var installError: String?
+    var installError: String?
     /// A .lkplug opened before any chart was: kept until the chart (and with
     /// it the plugin layer) is up, then inspected.
     var pendingInstallPath: String?
@@ -130,18 +131,18 @@ final class AppModel: ObservableObject {
     // MARK: Startup loader state
     /// True from the moment an open is scheduled until lookout_open returns —
     /// covers the synchronous open (a 7k-cell library takes seconds).
-    @Published var isOpening = false
+    var isOpening = false
     /// True while the FIRST-run one-time symbol/font atlas bake runs (the app
     /// cache is empty). Drives a distinct "Preparing chart symbols" message.
-    @Published var preparingSymbols = false
+    var preparingSymbols = false
     /// False until the first scene after an open has actually rendered; with
     /// isOpening it drives the big startup loader (later rebuilds only show
     /// the small BuildingPill).
-    @Published var firstBuildDone = false
+    var firstBuildDone = false
     var showStartupLoader: Bool { isOpening || (hasChart && !firstBuildDone) }
 
     /// The number of cells the open is mapping. The loader states it.
-    @Published var openingCells = 0
+    var openingCells = 0
 
     /// The phase the startup loader shows. Each phase is a different wait: the
     /// first-run atlas bake, the library open, and the first tessellation.
@@ -175,55 +176,55 @@ final class AppModel: ObservableObject {
     }
 
     // MARK: Live HUD readouts (pushed by ChartController / the chart view)
-    @Published var scaleDenominator: Double = 0
-    @Published var zoomLevel: Double = 0      // fractional web-mercator zoom
-    @Published var scheme: Int = 0            // 0 day, 1 dusk, 2 night
-    @Published var rotationDeg: Double = 0
-    @Published var overscale: Double = 1.0    // >1 = zoomed past the deepest data
-    @Published var centerLat: Double = 0
-    @Published var centerLon: Double = 0
+    var scaleDenominator: Double = 0
+    var zoomLevel: Double = 0      // fractional web-mercator zoom
+    var scheme: Int = 0            // 0 day, 1 dusk, 2 night
+    var rotationDeg: Double = 0
+    var overscale: Double = 1.0    // >1 = zoomed past the deepest data
+    var centerLat: Double = 0
+    var centerLon: Double = 0
     /// Follow mode as the core reports it: 0 off, 1 following own ship, 2 on
     /// and waiting for a fix. Polled on the render tick, never remembered from
     /// a tap: the core turns follow off itself when the mariner pans.
-    @Published var followState: Int = 0
+    var followState: Int = 0
     /// Course up as the core reports it: 0 off, 1 turning with own ship, 2 on
     /// and waiting for a heading. Polled like followState.
-    @Published var courseUpState: Int = 0
+    var courseUpState: Int = 0
     /// True while the plugin layer is up. Own ship comes from a plugin, so the
     /// follow control is only shown when one can supply a position.
-    @Published var pluginsActive = false
+    var pluginsActive = false
     /// What the position readout may say, as the core reports it. Polled on
     /// the render tick beside the position itself, so the two can never
     /// disagree: a readout holding the last numbers through a lost fix would
     /// be presenting a stale one as live.
-    @Published var fixState: ChartController.FixState = .none
+    var fixState: ChartController.FixState = .none
     /// Own ship's reported position. Both nil unless `fixState` is `.live`;
     /// the readout NEVER falls back to the map centre or the cursor.
-    @Published var shipLat: Double?
-    @Published var shipLon: Double?
+    var shipLat: Double?
+    var shipLon: Double?
     /// The chart menu, while it is up, and the marker rename field, while the
     /// mariner is typing in it. See the actions further down.
-    @Published var chartMenu: ChartMenu?
-    @Published var renaming: MarkerRename?
-    @Published var renamingText = ""
+    var chartMenu: ChartMenu?
+    var renaming: MarkerRename?
+    var renamingText = ""
     /// Where the rename field stands, re-projected every frame: it is anchored
     /// to its marker, not to the screen.
-    @Published var renamingPoint: CGPoint?
+    var renamingPoint: CGPoint?
     /// The overlay object the mariner pinned, and where it draws in the
     /// chrome's coordinate space. One at a time.
-    @Published var pinned: OverlayPin?
-    @Published var pinnedPoint: CGPoint?
+    var pinned: OverlayPin?
+    var pinnedPoint: CGPoint?
     /// What the plugin overlay says about the symbol under the pointer, and
     /// where the pointer is in the chrome's coordinate space. Both nil when the
     /// pointer is over nothing. Set by the chart view after a hover settles.
-    @Published var hover: OverlayHover?
-    @Published var hoverPoint: CGPoint?
+    var hover: OverlayHover?
+    var hoverPoint: CGPoint?
 
     /// The cursor pick: the features under the last tap, where it happened (in
     /// the chrome's coordinate space), and which one the report is showing.
-    @Published var pickResults: [PickFeature] = []
-    @Published var pickPoint: CGPoint?
-    @Published var pickIndex = 0
+    var pickResults: [PickFeature] = []
+    var pickPoint: CGPoint?
+    var pickIndex = 0
     /// Where on the CHART the pick was taken. The mark belongs to the object,
     /// not to the screen: follow moves the chart with no gesture behind it, so
     /// the mark is re-projected from this every frame.
@@ -232,7 +233,7 @@ final class AppModel: ObservableObject {
     /// taken, and fixed for as long as the report is open. The panel's frame
     /// must not depend on anything the camera touches, or a chart sliding
     /// under follow re-lays it out every frame.
-    @Published var pickAnchor: CGPoint?
+    var pickAnchor: CGPoint?
     /// Where a hook-driven pick should anchor its report. The chart view sets it
     /// to the centre of its bounds.
     var pickCentreHint: CGPoint?
@@ -243,47 +244,47 @@ final class AppModel: ObservableObject {
     /// How far `showPick` lifted the chart to clear the sheet. `closePick`
     /// puts the chart back by the same amount. Points, in the chrome's space.
     var pickLift: CGFloat = 0
-    @Published var isBuilding = false         // a background tessellation is filling in
+    var isBuilding = false         // a background tessellation is filling in
 
     // MARK: iOS sheet/picker presentation (unused on macOS, where the file
     // panel and Settings scene are AppKit-native)
-    @Published var showImporter = false
+    var showImporter = false
     /// The Add Raster Charts picker. Separate from `showImporter` because the
     /// two import different things to different places: an ENC is copied into
     /// the container and opened, a raster chart is added to the underlay.
-    @Published var showRasterImporter = false
+    var showRasterImporter = false
     /// The same two pickers again, for the SETTINGS sheet. A presented sheet
     /// cannot present another one from the view it came up over — the pair
     /// above hang on the chart view — so the form attaches its own and these
     /// are the flags that raise them. Add Charts used to dismiss the form and
     /// re-present the picker 0.45s later to get around it; Add Raster Charts
     /// never got that treatment and simply did nothing.
-    @Published var showSettingsImporter = false
-    @Published var showSettingsRasterImporter = false
-    @Published var showSettingsStyleImporter = false
+    var showSettingsImporter = false
+    var showSettingsRasterImporter = false
+    var showSettingsStyleImporter = false
     /// Install Plugin… on iOS. A plugin file arrives through the Files app.
-    @Published var showSettingsPluginImporter = false
-    @Published var showSettings = false
+    var showSettingsPluginImporter = false
+    var showSettings = false
     /// Which settings section shows, by its core name — "display", "depths",
     /// "text", "charts", "vessels", "alarms", "connections", "advanced". A
     /// name no section answers to falls back to Display. The screenshot hook
     /// sets it.
-    @Published var settingsTab = "display"
+    var settingsTab = "display"
 
     // MARK: Search
-    @Published var searchOpen = false
-    @Published var searchText = ""
+    var searchOpen = false
+    var searchText = ""
 
     /// A picture from the pick report, shown over the chart at full size.
     struct Picture: Equatable {
         let name: String
         let data: Data
     }
-    @Published var picture: Picture?
+    var picture: Picture?
 
     // MARK: Scale entry (tapping the 1:N readout)
-    @Published var showScaleEntry = false
-    @Published var scaleEntryText = ""
+    var showScaleEntry = false
+    var scaleEntryText = ""
 
     /// The single chart controller (owned by ChartView; referenced for commands).
     weak var controller: ChartController?
@@ -316,15 +317,15 @@ final class AppModel: ObservableObject {
     // AppModel+ChartSets.swift
 
     /// The bake running now, if any. The HUD pill watches this.
-    @Published var bake: BakeProgress?
+    var bake: BakeProgress?
     var bakeJob: ChartBakeJob?
     /// True while the scan running was asked for by the mariner.
-    @Published var scanRequested = false
+    var scanRequested = false
 
     /// The charts of a removed set being deleted, while that is happening.
-    @Published var removing: BakeProgress?
+    var removing: BakeProgress?
     /// The folder being looked through, for the first-run text.
-    @Published var scanningName = ""
+    var scanningName = ""
 
     /// The folder or archive the running bake is preparing, so that removing
     /// that set can stop it and disown what it produces.
@@ -334,25 +335,25 @@ final class AppModel: ObservableObject {
     /// they meant it. Only a set Lookout prepared charts for: taking a folder
     /// of the mariner's own files off the list deletes nothing, so it needs no
     /// question.
-    @Published var pendingRemoval: ChartSet?
+    var pendingRemoval: ChartSet?
 
     // AppModel+ChartLinks.swift
 
-    @Published var chartLinks: [ChartLink] = []
+    var chartLinks: [ChartLink] = []
     /// The picked link's url; nil draws the built-in chart.
-    @Published var activeChartLink: String? = nil
-    @Published var chartLinkBusy = false
-    @Published var chartLinkError: String? = nil
+    var activeChartLink: String? = nil
+    var chartLinkBusy = false
+    var chartLinkError: String? = nil
     /// The active chart link's source credits, drawn by the scale bar while
     /// the link draws (tile usage policies make the credit a condition of
     /// service). Nil when the Lookout chart is up.
-    @Published var chartLinkAttribution: String? = nil
+    var chartLinkAttribution: String? = nil
 
     // AppModel+Alerts.swift
 
     /// Every alert the plugins have raised, most urgent first. The banner over
     /// the chart is built from this.
-    @Published var alerts: [PluginAlert] = []
+    var alerts: [PluginAlert] = []
 
     var alertTimer: Timer?
     let siren = AlarmSiren()
@@ -398,7 +399,7 @@ final class AppModel: ObservableObject {
     /// Vessels menu and the settings row are built from this, so what is
     /// offered follows the plugins that are up: a plugin that unloads takes its
     /// item with it.
-    @Published var pluginTables: [PluginTableSpec] = []
+    var pluginTables: [PluginTableSpec] = []
 
     /// The tables the loaded plugins declare. The menu and the settings row are
     /// built from this, so setting it is all it takes to make them appear.

@@ -49,7 +49,7 @@ private struct EmptyStateNote<Content: View>: View {
 /// door that does not open is worse than no door, so where charts come from is
 /// stated as a fact instead.
 struct EmptyChartState: View {
-    @ObservedObject var model: AppModel
+    var model: AppModel
 
     /// NOAA's ENC download page: the whole country, a state, or one cell.
     static let noaaDownloads = URL(string: "https://www.charts.noaa.gov/ENCs/ENCs.shtml")!

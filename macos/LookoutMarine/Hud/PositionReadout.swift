@@ -29,7 +29,7 @@ import UIKit
 /// is the one place the app tells a mariner they have no position, so it
 /// carries the fix.
 struct PositionReadout: View {
-    @ObservedObject var model: AppModel
+    var model: AppModel
     let compact: Bool
 
     var body: some View {

@@ -14,7 +14,7 @@ import SwiftUI
 /// the form's OWN file importers (SettingsView attaches them, so they present
 /// over the sheet); macOS uses the shared NSOpenPanel.
 struct ChartsSections: View {
-    @ObservedObject var model: AppModel
+    var model: AppModel
     /// Held here so the Cancel button reads "Stopping…" while tile57 finishes
     /// the charts already in flight.
     @State private var cancellingBake = false
@@ -208,7 +208,7 @@ struct ChartsSections: View {
 /// Coastal will not draw the harbor a passage ends in, and the count per band
 /// says so without opening anything.
 private struct ChartSetRow: View {
-    @ObservedObject var model: AppModel
+    var model: AppModel
     let set: ChartSet
 
     var body: some View {

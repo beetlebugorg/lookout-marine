@@ -41,7 +41,7 @@ struct SettingsSection: Identifiable {
 
 
 struct SettingsView: View {
-    @ObservedObject var model: AppModel
+    @Bindable var model: AppModel
     @StateObject private var m = MarinerSettings()
     @StateObject private var p: PluginSettings
 

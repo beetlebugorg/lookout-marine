@@ -18,7 +18,7 @@ import UIKit
 #endif
 
 struct OverlayLayer: View {
-    @ObservedObject var model: AppModel
+    var model: AppModel
     /// The OS appearance, which the chrome follows in the day scheme.
     @Environment(\.colorScheme) private var osScheme
 

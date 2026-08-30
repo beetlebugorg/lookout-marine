@@ -14,7 +14,7 @@ import UIKit
 #if os(iOS)
 
 struct ChartView: View {
-    @ObservedObject var model: AppModel
+    @Bindable var model: AppModel
     let controller: ChartController
     /// The OS appearance, which the form follows in the day scheme. Read
     /// here, outside OverlayLayer, so it is the real OS value and not the

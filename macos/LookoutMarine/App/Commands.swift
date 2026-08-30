@@ -9,7 +9,7 @@ import SwiftUI
 import AppKit
 
 struct AppCommands: Commands {
-    @ObservedObject var model: AppModel
+    var model: AppModel
 
     var body: some Commands {
         // The app's own About panel, which the AppKit standard one replaces.

@@ -52,7 +52,7 @@ struct PluginPackage: Identifiable {
 /// The consent sheet: who this is, what it will be able to do, Install or
 /// Cancel. On a reinstall the delta is called out, downgrades included.
 struct PluginConsentSheet: View {
-    @ObservedObject var model: AppModel
+    var model: AppModel
     let pkg: PluginPackage
 
     var body: some View {

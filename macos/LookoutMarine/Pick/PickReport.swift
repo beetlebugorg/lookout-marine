@@ -71,7 +71,7 @@ struct PickDecoded {
 /// business — the pick set is always in sight, as a column or as chips, so
 /// there is no blind pager.
 private struct PickControls: View {
-    @ObservedObject var model: AppModel
+    var model: AppModel
 
     var body: some View {
         HStack(spacing: 6) {
@@ -109,7 +109,7 @@ private struct PickControls: View {
 /// while a pick is open — §5.2, the rule this panel exists to keep — so
 /// nothing that appears or grows later may sit inside the measured subtree.
 private struct PickContent: View {
-    @ObservedObject var model: AppModel
+    var model: AppModel
     let decoded: PickDecoded
     var onMeasure: ((CGFloat) -> Void)? = nil
 
@@ -220,7 +220,7 @@ private struct RawRows: View {
 /// One row of the engine's report: the label on the left, the value beside
 /// it. The engine decoded both; this only lays them out.
 private struct DecodedRow: View {
-    @ObservedObject var model: AppModel
+    var model: AppModel
     let row: PickDecoded.ReportRow
     let cell: String
 
@@ -278,7 +278,7 @@ private struct NoteCallout: View {
 /// The report's header: the operative fact large, what the object is under
 /// it, and the controls.
 private struct PickHeader: View {
-    @ObservedObject var model: AppModel
+    var model: AppModel
     let decoded: PickDecoded
     /// The sheet sets a smaller title.
     var compact = false
@@ -323,7 +323,7 @@ private struct PickHeader: View {
 /// pager, the copy and the close live in the header, so the controls stay
 /// under the cursor (§5.3) while the card's floor follows the content.
 struct PickCallout: View {
-    @ObservedObject var model: AppModel
+    var model: AppModel
     /// The width the callout takes, and the room from its top to the free
     /// area's floor — its content scrolls past that.
     let width: CGFloat
@@ -537,7 +537,7 @@ enum SheetSide {
 /// must not fight for the bottom of a phone. The sheet's size is fixed by the
 /// view, not measured, so the pager rule holds by construction.
 struct PickSheet: View {
-    @ObservedObject var model: AppModel
+    var model: AppModel
     let side: SheetSide
     let sheetSize: CGSize
     let anchor: CGPoint

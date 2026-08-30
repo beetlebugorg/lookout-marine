@@ -25,7 +25,7 @@ import UniformTypeIdentifiers
 /// it takes no consent surface and never appears here.
 struct PluginsManageSections: View {
     @ObservedObject var p: PluginSettings
-    @ObservedObject var model: AppModel
+    var model: AppModel
     /// The id waiting on the uninstall confirmation, if any.
     @State private var confirmUninstall: String?
 

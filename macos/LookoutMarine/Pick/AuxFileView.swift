@@ -17,7 +17,7 @@ import UIKit
 /// of a caution note, or the picture itself. The bake stores those files beside
 /// the chart; a chart baked before that carries the name alone.
 struct AuxFileView: View {
-    @ObservedObject var model: AppModel
+    var model: AppModel
     let cell: String
     let name: String
     let isPicture: Bool
@@ -107,7 +107,7 @@ struct AuxFileView: View {
 /// A picture from a pick report, over the chart at full size. A click anywhere,
 /// or Escape, puts it away.
 struct PictureViewer: View {
-    @ObservedObject var model: AppModel
+    var model: AppModel
     let picture: AppModel.Picture
 
     var body: some View {

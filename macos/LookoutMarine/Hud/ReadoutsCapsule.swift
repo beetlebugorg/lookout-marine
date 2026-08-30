@@ -19,7 +19,7 @@ import UIKit
 /// Scale band, 1:N, zoom and OWN SHIP's position. The scale, the position pill
 /// and the raster chart pill are the controls.
 struct ReadoutsCapsule: View {
-    @ObservedObject var model: AppModel
+    var model: AppModel
     /// A narrow window (a phone) uses a smaller type size. Whether the row
     /// takes one line or two is measured, not assumed — see `body`.
     let compact: Bool

@@ -15,7 +15,7 @@ import UIKit
 
 
 struct ContentView: View {
-    @ObservedObject var model: AppModel
+    var model: AppModel
     let controller: ChartController
 
     /// Run `body` once the chart is drawing, or once it is clear none is

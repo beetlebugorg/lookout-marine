@@ -18,7 +18,7 @@
 import SwiftUI
 
 struct PluginTableView: View {
-    @ObservedObject var model: AppModel
+    var model: AppModel
     let spec: PluginTableSpec
 
     /// The rows as the core last handed them over.
@@ -188,7 +188,7 @@ struct PluginTableView: View {
 /// so the same declaration lands here. A plugin that declares no table
 /// contributes nothing and the section shows none.
 struct PluginTableRows: View {
-    @ObservedObject var model: AppModel
+    var model: AppModel
     let tab: String
 
     private var specs: [PluginTableSpec] {

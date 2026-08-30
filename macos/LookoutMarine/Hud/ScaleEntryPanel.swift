@@ -14,7 +14,7 @@ import UIKit
 
 /// The scale entry. Type a scale or select a band, and the view zooms to it.
 struct ScaleEntryPanel: View {
-    @ObservedObject var model: AppModel
+    @Bindable var model: AppModel
     @FocusState private var focused: Bool
 
     /// One usual scale for each S-52 navigational purpose band.

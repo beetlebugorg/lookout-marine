@@ -6,7 +6,7 @@
 import SwiftUI
 
 struct ZoomControls: View {
-    @ObservedObject var model: AppModel
+    var model: AppModel
 
     var body: some View {
         VStack(spacing: Chrome.gap) {

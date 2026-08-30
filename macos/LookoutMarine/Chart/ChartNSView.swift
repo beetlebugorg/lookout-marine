@@ -15,7 +15,7 @@ import QuartzCore
 
 
 struct ChartView: NSViewRepresentable {
-    @ObservedObject var model: AppModel
+    var model: AppModel
     let controller: ChartController
 
     func makeNSView(context: Context) -> ChartNSView {

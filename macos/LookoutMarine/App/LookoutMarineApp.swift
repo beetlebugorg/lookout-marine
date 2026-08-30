@@ -66,7 +66,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
 @main
 struct LookoutMarineApp: App {
     @NSApplicationDelegateAdaptor(MacAppDelegate.self) private var delegate
-    @StateObject private var model = AppModel()
+    @State private var model = AppModel()
     // Held as @State so the controller (and its lookout* handle / display link)
     // survives view-tree rebuilds.
     @State private var controller = ChartController()

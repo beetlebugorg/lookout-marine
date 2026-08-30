@@ -11,7 +11,7 @@
 import SwiftUI
 
 struct SearchField: View {
-    @ObservedObject var model: AppModel
+    @Bindable var model: AppModel
     @FocusState private var focused: Bool
 
     private var parsedCoord: (lat: Double, lon: Double)? {

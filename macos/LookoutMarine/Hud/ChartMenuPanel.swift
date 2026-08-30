@@ -27,7 +27,7 @@ import UIKit
 /// bright panel on a night passage. It is also anchored to a place on the
 /// chart, and it closes when the camera moves, the way the pick report does.
 struct ChartMenuPanel: View {
-    @ObservedObject var model: AppModel
+    var model: AppModel
     let menu: AppModel.ChartMenu
 
     static let width: CGFloat = 236
@@ -115,7 +115,7 @@ struct ChartMenuPanel: View {
 /// abandons, an empty field keeps the old name, and the field takes 32
 /// characters, which is a name and not a note.
 struct MarkerRenameField: View {
-    @ObservedObject var model: AppModel
+    @Bindable var model: AppModel
     @FocusState private var focused: Bool
 
     static let width: CGFloat = 200
