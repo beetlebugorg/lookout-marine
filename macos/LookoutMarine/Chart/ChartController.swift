@@ -271,10 +271,9 @@ final class ChartController: NSObject {
         // with none stays on its manifest defaults.
         PluginSettings.applySaved(to: self)
 
-        #if os(macOS)
-        // And their declared tables can take their place in the menu bar.
+        // And their declared tables can take their place: the menu bar on the
+        // Mac, a row in the settings form on a phone.
         model?.refreshPluginTables()
-        #endif
         // Anything they raise from here on reaches the mariner — on both
         // platforms; the banner and siren are cross-platform.
         model?.startAlertWatch()
@@ -859,9 +858,7 @@ final class ChartController: NSObject {
             lkLog("dump: \(name) \(text.utf8.count) B")
         }
         write("plugins.json", pluginsJSON())
-        #if os(macOS)
         write("tables.json", jsonString(lookout_plugin_tables_json))
-        #endif
         write("alerts.json", jsonString(lookout_plugin_alerts_json))
         var len = 0
         if let p = lookout_licenses_json(&len), len > 0 {

@@ -380,20 +380,18 @@ final class AppModel: ObservableObject {
         }
     }
 
-    #if os(macOS)
     /// Every table the loaded plugins declare, in declaration order. The
-    /// Vessels menu is built from this, so the items follow the plugins that
-    /// are up: a plugin that unloads takes its item with it.
+    /// Vessels menu and the settings row are built from this, so what is
+    /// offered follows the plugins that are up: a plugin that unloads takes its
+    /// item with it.
     @Published var pluginTables: [PluginTableSpec] = []
 
-    /// The tables the loaded plugins declare. The menu is built from this, so
-    /// setting it is all it takes to make the items appear.
+    /// The tables the loaded plugins declare. The menu and the settings row are
+    /// built from this, so setting it is all it takes to make them appear.
     func refreshPluginTables() {
         guard let c = controller else { return }
         pluginTables = c.tableSpecs()
     }
-
-    #endif
 
     /// Open the scale entry. The field starts at the current scale.
     func beginScaleEntry() {

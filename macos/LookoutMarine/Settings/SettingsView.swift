@@ -99,7 +99,13 @@ struct SettingsView: View {
     private static let promise = "Applies at once · kept for next launch"
 
     private var sections: [SettingsSection] {
-        let filled = p.populatedTabs
+        var filled = p.populatedTabs
+        #if os(iOS)
+        // A plugin that declares a table and no settings still fills the
+        // section its table is opened from, since on a touch device that row is
+        // the only way to reach it.
+        filled.formUnion(model.pluginTables.map { $0.menu.lowercased() })
+        #endif
         return SettingsSection.all.filter { s in
             #if os(iOS)
             // NOTHING ON IOS INSTALLS A PLUGIN: the app claims no .lkplug
@@ -288,6 +294,11 @@ struct SettingsView: View {
             }
             PluginSections(p: p, tab: id)
             PluginListSections(p: p, tab: id)
+            #if os(iOS)
+            // The Mac opens a declared table from the menu bar. A touch device
+            // has none, so the declaration becomes a row here.
+            PluginTableRows(model: model, tab: id)
+            #endif
         }
         .formStyle(.grouped)
     }

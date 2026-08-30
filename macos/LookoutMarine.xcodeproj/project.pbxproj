@@ -12,6 +12,7 @@
 		048482DA2781F36826865895 /* DisplaySection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3257A1088AC4BCC3FBBFB97E /* DisplaySection.swift */; };
 		05B3C13F16FF445356BDE836 /* AppModel+Pick.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC2B81875DB89ACFDD3F044A /* AppModel+Pick.swift */; };
 		07961A5660076B4E5D1A0734 /* ChartController+Pick.swift in Sources */ = {isa = PBXBuildFile; fileRef = 860AB3C55FFA32BF43DE7194 /* ChartController+Pick.swift */; };
+		0887642BE3CED26D4800EAFB /* PluginTableWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31BAF7C2A01938C845440AE8 /* PluginTableWindow.swift */; };
 		08B0E879E6DAE396BF751F3E /* PickReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0BD7776E04E596B3F3FC90E /* PickReport.swift */; };
 		098A551B61520429588C9332 /* PluginAlerts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4908F0A3B9D1ECDF91411BE7 /* PluginAlerts.swift */; };
 		0BFBE84D0B1DE20C265E75D1 /* Discovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9341B7F1F58D9B158ABC67EE /* Discovery.swift */; };
@@ -50,7 +51,6 @@
 		39194C6A9F6BC276AD67A94B /* OpenPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADA39FB96EFFB96A6985C0C9 /* OpenPanel.swift */; };
 		3BB8351FA18F78ADAB5F6203 /* OverlayLayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7AE039534D7B01FBAAD147A /* OverlayLayer.swift */; };
 		3D050E1C7846F727E703C605 /* StoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EA86C2284DD80FD535E34EE /* StoreTests.swift */; };
-		3F5DDFAFDE10145EC7640E15 /* PluginTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4810DC9CDB37A43A4A8E23B3 /* PluginTable.swift */; };
 		4148E59BA5FAB3A4D649B10E /* ChartController+Pick.swift in Sources */ = {isa = PBXBuildFile; fileRef = 860AB3C55FFA32BF43DE7194 /* ChartController+Pick.swift */; };
 		424454A97A24F08E54F8DB86 /* PluginConfigTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CAC9F938CDB51E28B5E98CE /* PluginConfigTests.swift */; };
 		4271F2EF029019817F438D42 /* ChartBake.swift in Sources */ = {isa = PBXBuildFile; fileRef = C440A0CF1A4AE2740ACEFF2F /* ChartBake.swift */; };
@@ -64,6 +64,7 @@
 		4FB34ADDEFE1265496EB451B /* AppModel+ChartMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8512E0FF24D864AFF0D59233 /* AppModel+ChartMenu.swift */; };
 		50C214AAD062B26FCB84D7BE /* RasterChartTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3F841BB92E185C6D2C47A7A /* RasterChartTests.swift */; };
 		52AFAE4BCB8FA4AFBD4C103D /* PlacementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1C44341E0A9C0B713D97E32 /* PlacementTests.swift */; };
+		52E4163448CFFE05D94E59F4 /* PluginTableTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2FC4787E7CFF2D99B0290ED1 /* PluginTableTests.swift */; };
 		534AC2342D895329C4CBAA3E /* S57.swift in Sources */ = {isa = PBXBuildFile; fileRef = 206815E0AADF6C389FC1E6E7 /* S57.swift */; };
 		56953BE7D9D4CF249C438ABE /* ViewStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A1AE666034E0F470280B7AD /* ViewStateTests.swift */; };
 		5887219DC88D9B0FD92FC715 /* AppModel+ChartLinks.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0A7FFB2A20247AA5AA16CDF /* AppModel+ChartLinks.swift */; };
@@ -79,7 +80,6 @@
 		689E24910C8ECF894D1FA847 /* Discovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9341B7F1F58D9B158ABC67EE /* Discovery.swift */; };
 		698A5FAED378AD7A354AD368 /* ChartController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C315E2FD12D936B349662AB2 /* ChartController.swift */; };
 		699DD0B45A659EC7A3C2951F /* About.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAEA99096E77BC63671F921D /* About.swift */; };
-		6E64808B949E7314A57B5F62 /* PluginTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4810DC9CDB37A43A4A8E23B3 /* PluginTable.swift */; };
 		6ED7BE063B81A9B08558B5CA /* AppModel+ChartSets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5423CF9725B1CBAD89DA0ED1 /* AppModel+ChartSets.swift */; };
 		70D6C5CA580CC7F7CC18DEC8 /* SettingsRows.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CED6DE8C50508326D0E097C /* SettingsRows.swift */; };
 		725A7DD75DF595EFC0A07C8B /* AppModel+ChartSets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5423CF9725B1CBAD89DA0ED1 /* AppModel+ChartSets.swift */; };
@@ -148,6 +148,7 @@
 		B82495034138B87BEB0D8619 /* Chrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8ABF98AA4261380DCAF4621C /* Chrome.swift */; };
 		B90762606839663FBE4F1600 /* CoordinateParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB4DB25833426EC809E14055 /* CoordinateParserTests.swift */; };
 		B99F6D4997B065CC138CA7BC /* ChartNSView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22D02F5C9167697B1044050F /* ChartNSView.swift */; };
+		B9B4B24710C6E37D0A8C75CD /* PluginTableWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31BAF7C2A01938C845440AE8 /* PluginTableWindow.swift */; };
 		BAEA997B70F7E7FC18A24B45 /* About.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAEA99096E77BC63671F921D /* About.swift */; };
 		C05F4D5EB4E32576C253AD19 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 8AE67031882048136AC3C4B2 /* Assets.xcassets */; };
 		C08B9592864477E3068B6104 /* PickReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0BD7776E04E596B3F3FC90E /* PickReport.swift */; };
@@ -156,6 +157,7 @@
 		C3450AC507D00557B103B1FD /* ShellTestCase.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39FCF4CF9169327DF0FA8FBB /* ShellTestCase.swift */; };
 		C3CC241D2C1E79D2FE63D3BF /* AppModel+Raster.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43F206BB5FD63A357B5F01A0 /* AppModel+Raster.swift */; };
 		C421AD4A79AEEB0C60360EC1 /* PluginSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D899CA81B7494096C3F930C /* PluginSettings.swift */; };
+		C6F97FFA28713DC7A7A41AB4 /* PluginTableModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E04C1A7E97E0DA615380347A /* PluginTableModel.swift */; };
 		C82892E31FE36680817F7113 /* CompactHudTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E856FD037203427CE8B9E9C /* CompactHudTests.swift */; };
 		C8DB6AB03B480179545E3BC9 /* DepthsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 062B6FAD3068E7DB70544982 /* DepthsSection.swift */; };
 		C961277099C21C53E827A59F /* table-rows.json in Resources */ = {isa = PBXBuildFile; fileRef = 6B57985A66EA3200DE8C06C7 /* table-rows.json */; };
@@ -172,6 +174,7 @@
 		D27C7A5C6C930EFAA6ECF045 /* SettingsWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4548244FA1C95958287A425 /* SettingsWindow.swift */; };
 		D291F68292B43ED593C67FC8 /* PluginManageSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9678B3409AC6184055D285AD /* PluginManageSection.swift */; };
 		D4053EFD7BBC6FD277438F1D /* CoordFormatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80A6678722FC01CA46E10CE0 /* CoordFormatTests.swift */; };
+		D592C74889CB79128A0A81C5 /* PluginTableView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B7482797128261B463A8277 /* PluginTableView.swift */; };
 		D8B07B8A647C1B9C9EC398BA /* ReadoutsCapsule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02618015841FF6935C44305E /* ReadoutsCapsule.swift */; };
 		D8DE92A54522E48CF85722DE /* Instruments.swift in Sources */ = {isa = PBXBuildFile; fileRef = E99E812450B1710B0945A9EE /* Instruments.swift */; };
 		D98D644F63B6A27A5BA219F7 /* LicenseManifestTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6473AB9A6EC7604E642EB8B9 /* LicenseManifestTests.swift */; };
@@ -198,6 +201,7 @@
 		F0BEF83589EF79DCF51DC90F /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8FB061C18A2E1449AB1D30F1 /* Metal.framework */; };
 		F1C239D0493C5C54DAC73E6C /* tables.json in Resources */ = {isa = PBXBuildFile; fileRef = 460E0B79780678DFCEDBC572 /* tables.json */; };
 		F5ACE48CDAAC757EA7F003E9 /* ChartWorkPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 362582E4EA060B062BAF11EB /* ChartWorkPanel.swift */; };
+		F5C70C9002FD669202166D89 /* PluginTableView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B7482797128261B463A8277 /* PluginTableView.swift */; };
 		F62DCFD6B34E0700EA1DB7FE /* PositionReadout.swift in Sources */ = {isa = PBXBuildFile; fileRef = B48090BE5EB194EC371E4A0D /* PositionReadout.swift */; };
 		F640312E726227D995356C8E /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16F8DF0D1C7780BEF76AEE22 /* AppModel.swift */; };
 		F775E55515D034B10D9DF7D6 /* LicenseManifestTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6473AB9A6EC7604E642EB8B9 /* LicenseManifestTests.swift */; };
@@ -205,6 +209,7 @@
 		F90571A0AA9530A60178D684 /* PluginStatusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CA144ED7593A8DDDC3229B5 /* PluginStatusTests.swift */; };
 		F984A32A1476162974FEF564 /* PluginStatusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CA144ED7593A8DDDC3229B5 /* PluginStatusTests.swift */; };
 		F9DAA35B47AAB4FBC066A103 /* PluginRegistryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48FA710C0489FE5DE3CDB3BE /* PluginRegistryTests.swift */; };
+		F9E51989E85CBFE6C04A929D /* PluginTableModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E04C1A7E97E0DA615380347A /* PluginTableModel.swift */; };
 		FD9CA492CC32E134017339D9 /* UniformTypeIdentifiers.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 063DCA330E7899B8CCE880A8 /* UniformTypeIdentifiers.framework */; };
 		FFAC48E3128E36649AF87719 /* ViewStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A1AE666034E0F470280B7AD /* ViewStateTests.swift */; };
 		FFD02708559BDF34407FA231 /* Platform.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43C05F8392EA5DB00E75425A /* Platform.swift */; };
@@ -239,6 +244,7 @@
 		02618015841FF6935C44305E /* ReadoutsCapsule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadoutsCapsule.swift; sourceTree = "<group>"; };
 		062B6FAD3068E7DB70544982 /* DepthsSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DepthsSection.swift; sourceTree = "<group>"; };
 		063DCA330E7899B8CCE880A8 /* UniformTypeIdentifiers.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UniformTypeIdentifiers.framework; path = System/Library/Frameworks/UniformTypeIdentifiers.framework; sourceTree = SDKROOT; };
+		0B7482797128261B463A8277 /* PluginTableView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginTableView.swift; sourceTree = "<group>"; };
 		0CAC9F938CDB51E28B5E98CE /* PluginConfigTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginConfigTests.swift; sourceTree = "<group>"; };
 		0CFF9284FC01F1CF6E286197 /* PickReportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PickReportTests.swift; sourceTree = "<group>"; };
 		0D36819F503E24F82BD18F6B /* ViewState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewState.swift; sourceTree = "<group>"; };
@@ -260,6 +266,8 @@
 		2BA1B3F8DF89EE3D756BCD9A /* TextSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextSection.swift; sourceTree = "<group>"; };
 		2C8CBCC22D9B7C1DD8FD68D3 /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
 		2DD8BF4E08B2BA15B22ADC35 /* Licenses.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Licenses.swift; sourceTree = "<group>"; };
+		2FC4787E7CFF2D99B0290ED1 /* PluginTableTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginTableTests.swift; sourceTree = "<group>"; };
+		31BAF7C2A01938C845440AE8 /* PluginTableWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginTableWindow.swift; sourceTree = "<group>"; };
 		3257A1088AC4BCC3FBBFB97E /* DisplaySection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplaySection.swift; sourceTree = "<group>"; };
 		362582E4EA060B062BAF11EB /* ChartWorkPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartWorkPanel.swift; sourceTree = "<group>"; };
 		3679C3C6EF257BD3E89496F0 /* ChartController+Markers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChartController+Markers.swift"; sourceTree = "<group>"; };
@@ -269,7 +277,6 @@
 		43C05F8392EA5DB00E75425A /* Platform.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Platform.swift; sourceTree = "<group>"; };
 		43F206BB5FD63A357B5F01A0 /* AppModel+Raster.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppModel+Raster.swift"; sourceTree = "<group>"; };
 		460E0B79780678DFCEDBC572 /* tables.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = tables.json; sourceTree = "<group>"; };
-		4810DC9CDB37A43A4A8E23B3 /* PluginTable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginTable.swift; sourceTree = "<group>"; };
 		48C28C1F70D85569D7DEA1F7 /* ChromeHitRegion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromeHitRegion.swift; sourceTree = "<group>"; };
 		48FA710C0489FE5DE3CDB3BE /* PluginRegistryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginRegistryTests.swift; sourceTree = "<group>"; };
 		4908F0A3B9D1ECDF91411BE7 /* PluginAlerts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginAlerts.swift; sourceTree = "<group>"; };
@@ -337,6 +344,7 @@
 		D6C25F5333751E53B1C677E5 /* alerts.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = alerts.json; sourceTree = "<group>"; };
 		DA903A3F5328FE7634B5B1C4 /* ScaleEntryPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScaleEntryPanel.swift; sourceTree = "<group>"; };
 		DB61B848C1E900A1F3615B91 /* ChartUIView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartUIView.swift; sourceTree = "<group>"; };
+		E04C1A7E97E0DA615380347A /* PluginTableModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginTableModel.swift; sourceTree = "<group>"; };
 		E261A2F97520F9A46F0F43E5 /* AdvancedSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdvancedSection.swift; sourceTree = "<group>"; };
 		E7AE039534D7B01FBAAD147A /* OverlayLayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverlayLayer.swift; sourceTree = "<group>"; };
 		E99E812450B1710B0945A9EE /* Instruments.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Instruments.swift; sourceTree = "<group>"; };
@@ -385,6 +393,7 @@
 				F71C72C16BAED59FED342AD2 /* ChartInteractionTests.swift */,
 				5E856FD037203427CE8B9E9C /* CompactHudTests.swift */,
 				9FAE0C61602607D05CF24596 /* LicensesTests.swift */,
+				2FC4787E7CFF2D99B0290ED1 /* PluginTableTests.swift */,
 				F3F841BB92E185C6D2C47A7A /* RasterChartTests.swift */,
 			);
 			path = UITests;
@@ -557,7 +566,9 @@
 				4908F0A3B9D1ECDF91411BE7 /* PluginAlerts.swift */,
 				6152AE14014203A46906CD92 /* PluginConsentSheet.swift */,
 				8D899CA81B7494096C3F930C /* PluginSettings.swift */,
-				4810DC9CDB37A43A4A8E23B3 /* PluginTable.swift */,
+				E04C1A7E97E0DA615380347A /* PluginTableModel.swift */,
+				0B7482797128261B463A8277 /* PluginTableView.swift */,
+				31BAF7C2A01938C845440AE8 /* PluginTableWindow.swift */,
 			);
 			path = Plugins;
 			sourceTree = "<group>";
@@ -729,7 +740,7 @@
 				95BC3126A20103FF3F84572E /* Sources */,
 				399642D64F4512B029E5E115 /* Resources */,
 				DE9DB18C055E956FBC2E37C4 /* Frameworks */,
-				A8E767BAB8808948D8A85425 /* Bundle the core plugins into Resources/Plugins */,
+				6E6B5D65E92F8404CBA77806 /* Bundle the core plugins into LookoutPlugins */,
 			);
 			buildRules = (
 			);
@@ -876,7 +887,7 @@
 			shellPath = /bin/sh;
 			shellScript = "set -e\nexport PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\"\n# Provenance: the build log states exactly which sources these cores\n# came from — never infer it again. tile57 is a zig package\n# dependency: a sibling checkout when present, else the zon pin.\nT57=\"$SRCROOT/../../tile57\"\necho \"zig cores: lookout=$(git -C \"$SRCROOT/..\" rev-parse --short HEAD 2>/dev/null || echo '?') | tile57=$([ -f \"$T57/build.zig\" ] && git -C \"$T57\" rev-parse --short HEAD 2>/dev/null || echo 'fetched: build.zig.zon pin')\"\n# Version the target at the DEPLOYMENT minimum: an unversioned native\n# build stamps objects with the build machine's OS and ld warns\n# \"built for newer macOS version than being linked\" on every object.\nZIG_MAC_TARGET=\"$(uname -m | sed s/arm64/aarch64/)-macos.${MACOSX_DEPLOYMENT_TARGET:-26.0}\"\n# An explicit -Dtarget makes zig a CROSS build: no automatic SDK\n# discovery, so hand it the sysroot like the iOS script does.\nMAC_SYSROOT=\"${SDKROOT:-$(xcrun --sdk macosx --show-sdk-path)}\"\ncd \"$SRCROOT/..\"\n# The wasm plugin host, before the core that embeds it. Own ship,\n# AIS, NMEA 0183, Signal K and laylines are all plugins, so a core\n# built without the host is a chartplotter with no own ship and no\n# traffic. build-wamr.sh is idempotent: it compares the WAMR_VERSION\n# stamp in the dist against the release, commit and feature set it\n# would build now, and returns in a fraction of a second once they\n# match. The first run clones and builds the pinned WAMR and takes a\n# few minutes. -Dplugins is passed explicitly below because its\n# default is off when the archive is absent, which builds a working\n# app with no plugin host inside it. Explicit turns that into a build\n# error naming this script.\nscripts/build-wamr.sh macos\n# One build: the tile57 engine (zig package dependency) + the lookout\n# core, installing liblookout_marine.a, libtile57.a, and both headers\n# into zig-out/. ReleaseFast is the build.zig default; explicit here\n# so the app build states its intent.\nzig build -Doptimize=ReleaseFast -Dplugins=true -Dtarget=\"$ZIG_MAC_TARGET\" --sysroot \"$MAC_SYSROOT\"\n# Zig's outputs are deterministic, so an unchanged core hashes\n# identically — used twice below: to skip the repack, and to force\n# Xcode to relink when the core DID change.\nCORE_HASH=$(cat \"zig-out/lib/liblookout_marine.a\" \"zig-out/lib/libtile57.a\" | /usr/bin/shasum | cut -d' ' -f1)\n\n# ld64 AND libtool both drop/reject zig-emitted archive members\n# (\"64-bit mach-o not 8-byte aligned\"), so the raw archives are never\n# linked directly: extract to loose objects (no offset-alignment\n# problem; zig also records mode-0 permissions, hence the chmod) and\n# repack, exactly like the iOS target. Skipped when unchanged.\nREPACK_STAMP=\"zig-out/lib/.liblookoutall.stamp\"\nif [ \"$(cat \"$REPACK_STAMP\" 2>/dev/null)\" != \"$CORE_HASH\" ] \\\n   || [ ! -f \"zig-out/lib/liblookoutall.a\" ]; then\n  REPACK=\"zig-out/repack\"\n  rm -rf \"$REPACK\"; mkdir -p \"$REPACK/lookout\" \"$REPACK/tile57\"\n  (cd \"$REPACK/lookout\" && ar x ../../lib/liblookout_marine.a)\n  (cd \"$REPACK/tile57\"  && ar x ../../lib/libtile57.a)\n  chmod 644 \"$REPACK\"/lookout/*.o \"$REPACK\"/tile57/*.o\n  xcrun -sdk macosx libtool -static \\\n    -o \"zig-out/lib/liblookoutall.a\" \\\n    \"$REPACK\"/lookout/*.o \"$REPACK\"/tile57/*.o 2>/dev/null\n  echo \"$CORE_HASH\" > \"$REPACK_STAMP\"\nfi\n\n# Xcode doesn't track libraries fed in via OTHER_LDFLAGS -l flags, so\n# a rebuilt Zig core would never RELINK the app (stale core in the\n# bundle). Force the link when the core changed by removing the\n# previous executable (link-only cost). The stamp lives in\n# TARGET_BUILD_DIR: per configuration, like the executable it guards.\nLINK_STAMP=\"$TARGET_BUILD_DIR/.zigcore.stamp\"\nif [ \"$(cat \"$LINK_STAMP\" 2>/dev/null)\" != \"$CORE_HASH\" ]; then\n  mkdir -p \"$TARGET_BUILD_DIR\"\n  echo \"$CORE_HASH\" > \"$LINK_STAMP\"\n  rm -f \"$TARGET_BUILD_DIR/$EXECUTABLE_PATH\"\nfi\n";
 		};
-		A8E767BAB8808948D8A85425 /* Bundle the core plugins into Resources/Plugins */ = {
+		6E6B5D65E92F8404CBA77806 /* Bundle the core plugins into LookoutPlugins */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
 			buildActionMask = 2147483647;
@@ -886,14 +897,14 @@
 			);
 			inputPaths = (
 			);
-			name = "Bundle the core plugins into Resources/Plugins";
+			name = "Bundle the core plugins into LookoutPlugins";
 			outputFileListPaths = (
 			);
 			outputPaths = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -e\nexport PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\"\ncd \"$SRCROOT/..\"\nzig build plugins\nDEST=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/Plugins\"\nmkdir -p \"$DEST\"\nrsync -a --delete zig-out/plugins-bundled/ \"$DEST/\"\n";
+			shellScript = "set -e\nexport PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\"\ncd \"$SRCROOT/..\"\nzig build plugins\nDEST=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/LookoutPlugins\"\nmkdir -p \"$DEST\"\nrsync -a --delete zig-out/plugins-bundled/ \"$DEST/\"\necho \"bundled plugins: $(ls \"$DEST\" | grep -c '\\.wasm$') module(s) in $DEST\"\n";
 		};
 		F3C4878024157D990E02A19B /* Build Zig cores for iOS (lookout + tile57 dependency) */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -970,7 +981,9 @@
 				8EF72BD101D31073F394013C /* PluginConsentSheet.swift in Sources */,
 				D291F68292B43ED593C67FC8 /* PluginManageSection.swift in Sources */,
 				C421AD4A79AEEB0C60360EC1 /* PluginSettings.swift in Sources */,
-				6E64808B949E7314A57B5F62 /* PluginTable.swift in Sources */,
+				C6F97FFA28713DC7A7A41AB4 /* PluginTableModel.swift in Sources */,
+				D592C74889CB79128A0A81C5 /* PluginTableView.swift in Sources */,
+				B9B4B24710C6E37D0A8C75CD /* PluginTableWindow.swift in Sources */,
 				A5B8F5CA1C6A308EFB760327 /* PositionReadout.swift in Sources */,
 				D8B07B8A647C1B9C9EC398BA /* ReadoutsCapsule.swift in Sources */,
 				439A3F30EECCD482821F6221 /* S57.swift in Sources */,
@@ -1071,7 +1084,9 @@
 				16FDEF9CE9964A32FE750469 /* PluginConsentSheet.swift in Sources */,
 				95C13C0BBEEDEB126C85C3E5 /* PluginManageSection.swift in Sources */,
 				32DB96754F03936CE042A5BF /* PluginSettings.swift in Sources */,
-				3F5DDFAFDE10145EC7640E15 /* PluginTable.swift in Sources */,
+				F9E51989E85CBFE6C04A929D /* PluginTableModel.swift in Sources */,
+				F5C70C9002FD669202166D89 /* PluginTableView.swift in Sources */,
+				0887642BE3CED26D4800EAFB /* PluginTableWindow.swift in Sources */,
 				F62DCFD6B34E0700EA1DB7FE /* PositionReadout.swift in Sources */,
 				5EDBC7A846272B37C846C95C /* ReadoutsCapsule.swift in Sources */,
 				534AC2342D895329C4CBAA3E /* S57.swift in Sources */,
@@ -1098,6 +1113,7 @@
 				DAFCDF511109AE0461E947F2 /* ChartInteractionTests.swift in Sources */,
 				C82892E31FE36680817F7113 /* CompactHudTests.swift in Sources */,
 				1BF3259967105BE75AEBE75F /* LicensesTests.swift in Sources */,
+				52E4163448CFFE05D94E59F4 /* PluginTableTests.swift in Sources */,
 				50C214AAD062B26FCB84D7BE /* RasterChartTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

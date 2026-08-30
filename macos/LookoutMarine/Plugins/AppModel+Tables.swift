@@ -1,13 +1,14 @@
 //  AppModel+Tables.swift — the tables the plugins declare.
 //
-//  macOS only: each declaration becomes a menu item and an NSWindow. The
-//  reveal-on-chart path is shell-side; the plugin is not told.
+//  A declaration becomes a menu item and a window on the Mac, and a row in the
+//  settings form and a sheet on a phone. The reveal-on-chart path is
+//  shell-side; the plugin is not told.
 
 import Foundation
 
 @MainActor
 extension AppModel {
-    #if os(macOS)
+#if os(macOS)
     /// Open one declared table's window, or bring it forward.
     func showPluginTable(_ spec: PluginTableSpec) {
         _ = PluginTableWindowController.show(spec, model: self)
@@ -36,6 +37,7 @@ extension AppModel {
             self.revealOnChart(lon: lon, lat: lat)
         }
     }
+#endif
 
     /// Show a place a plugin table row named: centre the chart on it and pin
     /// the bubble of whatever the plugin draws there. A row with no position
@@ -45,6 +47,7 @@ extension AppModel {
         if let hit = c.reveal(lon: lon, lat: lat) { pin(hit) } else { closePin() }
     }
 
+#if os(macOS)
     /// Open one declared table, for the screenshot protocol's
     /// LOOKOUT_SHOW=table[:key[:sort[:asc|desc[:activate]]]]. The first
     /// declaration when no key is named, and the declared sort unless one is
@@ -66,5 +69,5 @@ extension AppModel {
         // told the dialog is open.
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { window.activateTopRow() }
     }
-    #endif
+#endif
 }

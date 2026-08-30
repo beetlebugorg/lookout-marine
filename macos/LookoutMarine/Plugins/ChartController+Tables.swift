@@ -1,7 +1,7 @@
 //  ChartController+Tables.swift — the tables and alerts the plugins declare.
 //
-//  The declared-table queries are macOS only: they feed NSWindow dialogs. The
-//  alert bridge is not, because an iPad mariner hears the plugins too.
+//  Both are cross-platform. An iPad mariner hears the plugins, so they must
+//  also be able to see what raised the alarm.
 
 import Foundation
 
@@ -9,7 +9,6 @@ import Foundation
 extension ChartController {
     // MARK: - Plugin tables
 
-    #if os(macOS)
     /// Every table the loaded plugins declare. The shell builds a menu item
     /// and a window per declaration and knows nothing about the plugins.
     func tableSpecs() -> [PluginTableSpec] {
@@ -47,7 +46,6 @@ extension ChartController {
         return (top["seq"] as? Int ?? 0, rows)
     }
 
-    #endif
 
     // The alert bridge is cross-platform: an iPad mariner hears the plugins
     // too. The declared-table queries above are macOS-only (they feed NSWindow
@@ -75,7 +73,6 @@ extension ChartController {
         return lookout_plugin_alert_ack(h, id) == 0
     }
 
-    #if os(macOS)
     /// Tell the plugin its table is on screen, or is not.
     func setTableOpen(plugin: String, key: String, _ open: Bool) {
         guard let h = handle else { return }
@@ -101,5 +98,4 @@ extension ChartController {
         // view: the object under that point is the row's symbol.
         return overlayHit(atPoint: screenPoint(forGeoLon: lon, lat: lat))
     }
-    #endif
 }
