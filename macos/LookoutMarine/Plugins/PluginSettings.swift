@@ -101,10 +101,8 @@ struct PluginInfo: Identifiable {
     /// Uninstall; a developer copy says so beside its status.
     let origin: String
     let live: Bool
-    /// The plugin's own status line, `{"state":"running","detail":"...",
-    /// "items":[…]}`. The Plugins section shows the line; the ITEMS go to the
-    /// list rows elsewhere in settings.
-    var status: String
+    /// What the plugin says about itself, parsed once. See PluginStatus.
+    var status: PluginStatus
     /// The manifest's capabilities in consent wording, with the grant state.
     var capabilities: [PluginCapability]
     var fields: [PluginField]
@@ -121,23 +119,16 @@ struct PluginInfo: Identifiable {
     /// last words were.
     var statusLine: String {
         guard live else { return "Stopped" }
-        guard let d = status.data(using: .utf8),
-              let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any]
-        else { return "Running" }
-        let state = o["state"] as? String ?? ""
-        let detail = o["detail"] as? String ?? ""
-        let word = Self.stateWords[state] ?? (state.isEmpty ? "Running" : state)
-        return detail.isEmpty ? word : "\(word) · \(detail)"
+        let word = Self.stateWords[status.state]
+            ?? (status.state.isEmpty ? "Running" : status.state)
+        return status.detail.isEmpty ? word : "\(word) · \(status.detail)"
     }
 
     /// Green while it works, amber while degraded, red when it broke, grey
     /// when it stopped. The same palette the connection rows use.
     var statusTint: Color {
         guard live else { return .secondary }
-        guard let d = status.data(using: .utf8),
-              let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any]
-        else { return .green }
-        switch o["state"] as? String ?? "" {
+        switch status.state {
         case "running", "": return .green
         case "starting": return .secondary
         case "degraded": return .orange
@@ -155,22 +146,45 @@ struct PluginInfo: Identifiable {
     ]
 
     /// What the plugin says about each row of its lists, by row id.
-    var statusItems: [String: PluginStatusItem] {
-        guard let d = status.data(using: .utf8),
-              let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
-              let items = o["items"] as? [[String: Any]]
-        else { return [:] }
-        var out: [String: PluginStatusItem] = [:]
-        for it in items {
-            guard let id = it["id"] as? String else { continue }
-            out[id] = PluginStatusItem(
-                id: id,
-                state: it["state"] as? String ?? "",
-                detail: it["detail"] as? String ?? ""
-            )
+    var statusItems: [String: PluginStatusItem] { status.items }
+}
+
+/// A plugin's status document, parsed ONCE.
+///
+/// `{"state":"running","detail":"…","items":[…]}`. Every row on screen asks for
+/// its own line, so parsing this where it is read meant one JSONSerialization
+/// per row per recomposition: a boat with six connections reparsed six
+/// documents on every frame of the settings window.
+struct PluginStatus: Equatable {
+    /// The document as the plugin wrote it. The poll compares this to decide
+    /// whether anything moved.
+    let raw: String
+    let state: String
+    let detail: String
+    let items: [String: PluginStatusItem]
+
+    init(_ raw: String) {
+        self.raw = raw
+        guard let d = raw.data(using: .utf8),
+              let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any]
+        else {
+            // A plugin that writes a plain sentence is running and says so.
+            state = ""; detail = ""; items = [:]
+            return
         }
-        return out
+        state = o["state"] as? String ?? ""
+        detail = o["detail"] as? String ?? ""
+        var found: [String: PluginStatusItem] = [:]
+        for it in o["items"] as? [[String: Any]] ?? [] {
+            guard let id = it["id"] as? String else { continue }
+            found[id] = PluginStatusItem(id: id,
+                                         state: it["state"] as? String ?? "",
+                                         detail: it["detail"] as? String ?? "")
+        }
+        items = found
     }
+
+    static func == (a: PluginStatus, b: PluginStatus) -> Bool { a.raw == b.raw }
 }
 
 /// What one row of a list is doing, in the plugin's own words.
@@ -363,17 +377,25 @@ final class PluginSettings: ObservableObject {
     /// outside like a trapping plugin taking the settings schema with it.
     private func readRegistry() -> [PluginInfo]? {
         guard let fresh = Self.registry(controller?.pluginsJSON()) else {
-            if !registryUnread {
-                registryUnread = true
-                lkLog("plugins: the core did not answer with a registry; keeping the last one, \(plugins.count) plugin(s)")
-            }
+            noteUnreadable()
             return nil
         }
-        if registryUnread {
-            registryUnread = false
-            lkLog("plugins: the registry is readable again, \(fresh.count) plugin(s)")
-        }
+        noteReadable(fresh.count)
         return fresh
+    }
+
+    /// Said once on the way into trouble and once on the way out. The status
+    /// poll asks every second, and a line a second is a line nobody reads.
+    private func noteUnreadable() {
+        guard !registryUnread else { return }
+        registryUnread = true
+        lkLog("plugins: the core did not answer; keeping the last registry, \(plugins.count) plugin(s)")
+    }
+
+    private func noteReadable(_ count: Int) {
+        guard registryUnread else { return }
+        registryUnread = false
+        lkLog("plugins: the core is answering again, \(count) plugin(s)")
     }
 
     /// An edit happened. Debounced so a stepper drag does not push per tick.
@@ -413,11 +435,19 @@ final class PluginSettings: ObservableObject {
         discovery.stop()
     }
 
+    /// The poll wants one string per plugin. Building the whole registry for
+    /// that allocated every settings field, list schema and declared row once a
+    /// second and threw them all away; this reads the status out of the
+    /// document and nothing else.
     private func refreshStatus() {
-        guard let fresh = readRegistry() else { return }
+        guard let fresh = Self.statuses(controller?.pluginsJSON()) else {
+            noteUnreadable()
+            return
+        }
+        noteReadable(fresh.count)
         for (i, p) in plugins.enumerated() {
-            guard let f = fresh.first(where: { $0.id == p.id }), f.status != p.status else { continue }
-            plugins[i].status = f.status
+            guard let raw = fresh[p.id], raw != p.status.raw else { continue }
+            plugins[i].status = PluginStatus(raw)
         }
     }
 
@@ -788,6 +818,21 @@ final class PluginSettings: ObservableObject {
         registry(json) ?? []
     }
 
+    /// Every plugin's status document, by id, WITHOUT building the registry.
+    /// Nil for the same reasons `registry` answers nil.
+    nonisolated static func statuses(_ json: String?) -> [String: String]? {
+        guard let json, let data = json.data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let list = root["plugins"] as? [[String: Any]]
+        else { return nil }
+        var out: [String: String] = [:]
+        for o in list {
+            guard let id = o["id"] as? String else { continue }
+            out[id] = o["status"] as? String ?? ""
+        }
+        return out
+    }
+
     /// The registry, or NIL when there was no registry to read: no chart open,
     /// no plugin layer, or JSON that is not one. A core with no plugins loaded
     /// answers `{"plugins":[]}`, which parses to an empty list and is a
@@ -806,7 +851,7 @@ final class PluginSettings: ObservableObject {
                 version: o["version"] as? String ?? "",
                 origin: o["origin"] as? String ?? "bundled",
                 live: o["live"] as? Bool ?? false,
-                status: o["status"] as? String ?? "",
+                status: PluginStatus(o["status"] as? String ?? ""),
                 capabilities: (o["capabilities"] as? [[String: Any]] ?? []).compactMap { c in
                     guard let cap = c["cap"] as? String else { return nil }
                     return PluginCapability(
