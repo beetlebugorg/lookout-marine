@@ -34,18 +34,18 @@ struct AppCommands: Commands {
             Button("Open Chart…") { model.presentOpenPanel() }
                 .keyboardShortcut("o", modifiers: .command)
             Menu("Charts") {
-                if model.chartSets.isEmpty {
+                if model.charts.sets.isEmpty {
                     Text("No charts").foregroundStyle(.secondary)
                 } else {
-                    ForEach(model.chartSets) { set in
+                    ForEach(model.charts.sets) { set in
                         Toggle(set.title, isOn: Binding(
                             get: { set.on },
-                            set: { model.setChartSetOn(set.path, $0) }
+                            set: { model.charts.setChartSetOn(set.path, $0) }
                         ))
                     }
                 }
             }
-            .disabled(model.chartSets.isEmpty)
+            .disabled(model.charts.sets.isEmpty)
         }
 
         // Vessels: the shell's menu, holding the tables the plugins declare.

@@ -52,6 +52,13 @@ protocol PluginEngine: AnyObject {
     func installPlugin(_ path: String) -> String?
 }
 
+/// What ChartsModel asks the chart for: open a library, and put it away.
+@MainActor
+protocol ChartOpenEngine: AnyObject {
+    @discardableResult func reopen(charts: [String]) -> Bool
+    func close()
+}
+
 /// What OverlayModel asks the chart for: where a screen point is on the earth
 /// and back, what is under it, and the mariner's own marks.
 @MainActor
@@ -68,4 +75,5 @@ protocol OverlayEngine: AnyObject {
     @discardableResult func removeMarker(_ id: UInt64) -> Bool
 }
 
-extension ChartController: RasterEngine, ChartLinkEngine, PluginEngine, OverlayEngine {}
+extension ChartController: RasterEngine, ChartLinkEngine, PluginEngine,
+                          ChartOpenEngine, OverlayEngine {}

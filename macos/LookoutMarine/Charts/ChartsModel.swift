@@ -1,14 +1,115 @@
-//  AppModel+ChartSets.swift — the charts aboard.
+//  ChartsModel.swift — the charts aboard, and the one being drawn.
 //
-//  Which paths open at launch, the sets the mariner added, and the bake that
-//  turns raw cells into charts this app can draw. A folder joins the list only
-//  after the core has looked through it and found charts, so a set on the list
-//  always opens.
+//  Which paths open at launch, the sets the mariner added, the bake that turns
+//  raw cells into charts this app can draw, and the state of the open itself. A
+//  folder joins the list only after the core has looked through it and found
+//  charts, so a set on the list always opens.
 
 import Foundation
 
+/// A request to (re)open one or more chart paths, carried to the chart view.
+struct OpenRequest: Equatable {
+    let id: Int
+    let paths: [String]
+}
+
 @MainActor
-extension AppModel {
+@Observable
+final class ChartsModel {
+    // MARK: The chart that is open, or opening
+
+    var hasChart = false
+    var chartPath: String?
+    var openRequest: OpenRequest?
+    var openError: String?
+    private var openSeq = 0
+
+    /// True from the moment an open is scheduled until lookout_open returns —
+    /// covers the synchronous open (a 7k-cell library takes seconds).
+    var isOpening = false
+    /// True while the FIRST-run one-time symbol/font atlas bake runs (the app
+    /// cache is empty). Drives a distinct "Preparing chart symbols" message.
+    var preparingSymbols = false
+    /// False until the first scene after an open has actually rendered; with
+    /// isOpening it drives the big startup loader (later rebuilds only show
+    /// the small BuildingPill).
+    var firstBuildDone = false
+    /// The number of cells the open is mapping. The loader states it.
+    var openingCells = 0
+
+    var showStartupLoader: Bool { isOpening || (hasChart && !firstBuildDone) }
+
+    /// The phase the startup loader shows. Each phase is a different wait: the
+    /// first-run atlas bake, the library open, and the first tessellation.
+    enum LoadPhase: Equatable {
+        case bakingAtlas
+        case mapping(cells: Int)
+        case tessellating
+
+        var title: String {
+            switch self {
+            case .bakingAtlas:
+                return "Baking the symbol atlas"
+            case .mapping(let cells):
+                return cells > 1 ? "Mapping \(cells.formatted(.number)) cells" : "Mapping the chart"
+            case .tessellating:
+                return "Tessellating the first scene"
+            }
+        }
+
+        var note: String? {
+            switch self {
+            case .bakingAtlas: return "First launch only. The atlas is cached."
+            default: return nil
+            }
+        }
+    }
+
+    var loadingPhase: LoadPhase {
+        if preparingSymbols { return .bakingAtlas }
+        return isOpening ? .mapping(cells: openingCells) : .tessellating
+    }
+
+    // MARK: The sets aboard
+
+    /// The folders of charts aboard, in the order added. A set on this list has
+    /// been looked through and holds charts, so it always opens.
+    var sets: [ChartSet] = []
+    /// True while a folder is being looked through. The full NOAA library takes
+    /// about 3 seconds.
+    var scanning = false
+    /// True while the scan running was asked for by the mariner.
+    var scanRequested = false
+    /// The folder being looked through, for the first-run text.
+    var scanningName = ""
+    /// The last folder that held no charts, for the panel to say so.
+    var emptyPick: String?
+
+    /// The bake running now, if any. The HUD pill watches this.
+    var bake: BakeProgress?
+    private var bakeJob: ChartBakeJob?
+    /// The folder or archive the running bake is preparing, so that removing
+    /// that set can stop it and disown what it produces.
+    private var bakeSource: String?
+    /// The charts of a removed set being deleted, while that is happening.
+    var removing: BakeProgress?
+    /// The set the mariner asked to remove, held while they are asked whether
+    /// they meant it. Only a set Lookout prepared charts for: taking a folder
+    /// of the mariner's own files off the list deletes nothing, so it needs no
+    /// question.
+    var pendingRemoval: ChartSet?
+
+    weak var engine: (any ChartOpenEngine)?
+
+    /// The pictures a set carries are installed as raster charts, so adding
+    /// and removing a set writes there too. One direction only: the raster
+    /// model knows nothing about sets.
+    private let raster: RasterModel
+
+    init(raster: RasterModel) {
+        self.raster = raster
+    }
+
     // MARK: - Opening charts
 
     /// Paths to open on first appearance: $LOOKOUT_OPEN (a chart or a folder of
@@ -112,7 +213,7 @@ extension AppModel {
             // view stops receiving updates, so a published request would sit
             // unserviced. The update path remains only as the fallback for a
             // request racing the first layout.
-            if let c = self.controller, c.reopen(charts: paths) {
+            if let e = self.engine, e.reopen(charts: paths) {
                 self.openRequest = nil
             }
             self.isOpening = false
@@ -122,7 +223,7 @@ extension AppModel {
     /// Close the chart and go back to the panel that offers to add some.
     /// The files are untouched; only the display and the engine handle go.
     func closeChart() {
-        controller?.close()
+        engine?.close()
         openRequest = nil
         chartPath = nil
         hasChart = false
@@ -138,7 +239,7 @@ extension AppModel {
     var openPaths: [String] {
         var seen = Set<String>()
         var out: [String] = []
-        for set in chartSets where set.on {
+        for set in sets where set.on {
             for p in set.openablePaths where !seen.contains(p) {
                 seen.insert(p)
                 out.append(p)
@@ -164,7 +265,7 @@ extension AppModel {
             }
             DispatchQueue.main.async {
                 guard let self else { return }
-                self.chartSets = found
+                self.sets = found
                 self.scanning = false
                 self.syncRasterFromSets()
                 // The launch walk cannot see a library of pictures: it looks
@@ -241,8 +342,8 @@ extension AppModel {
     /// nothing left to open: reopening would tear down a chart that is
     /// already correct and show the startup loader over it for a moment.
     private func adopt(_ set: ChartSet, reopen: Bool = true) {
-        chartSets.removeAll { $0.path == set.path }
-        chartSets.append(set)
+        sets.removeAll { $0.path == set.path }
+        sets.append(set)
         ChartSetStore.add(set.path)
         syncRasterFromSets()
         if reopen { requestOpen(openPaths) }
@@ -256,7 +357,7 @@ extension AppModel {
     private func syncRasterFromSets() {
         var seen = Set<String>()
         var wanted: [String] = []
-        for set in chartSets where set.on {
+        for set in sets where set.on {
             for p in set.rasterPaths where !seen.contains(p) {
                 seen.insert(p)
                 wanted.append(p)
@@ -264,7 +365,7 @@ extension AppModel {
         }
         // Anything the mariner added before sets existed stays aboard.
         for p in raster.paths where !seen.contains(p) && !ChartBake.isDerived(p) {
-            let inAnySet = chartSets.contains { $0.rasterPaths.contains(p) }
+            let inAnySet = sets.contains { $0.rasterPaths.contains(p) }
             if !inAnySet {
                 seen.insert(p)
                 wanted.append(p)
@@ -378,8 +479,8 @@ extension AppModel {
     /// Switch a set on or off. It stays aboard either way. The library is
     /// composed at open, so this reopens with the new set of charts.
     func setChartSetOn(_ path: String, _ on: Bool) {
-        guard let i = chartSets.firstIndex(where: { $0.path == path }) else { return }
-        chartSets[i].on = on
+        guard let i = sets.firstIndex(where: { $0.path == path }) else { return }
+        sets[i].on = on
         ChartSetStore.setOff(path, !on)
         syncRasterFromSets()
         requestOpen(openPaths)
@@ -405,7 +506,7 @@ extension AppModel {
     /// by a set the mariner removed is the app hoarding on their disk. A
     /// folder of the mariner's OWN charts is only taken off the list.
     func removeChartSet(_ path: String) {
-        let gone = chartSets.first { $0.path == path }
+        let gone = sets.first { $0.path == path }
         // A set removed while it was still baking never reached the list, so
         // there is no scanned preparedPath to read — and the charts already
         // written would be left on the disk for good. Where its charts would
@@ -428,7 +529,7 @@ extension AppModel {
             bake = nil
             bakeSource = nil
         }
-        chartSets.removeAll { $0.path == path }
+        sets.removeAll { $0.path == path }
         ChartSetStore.remove(path)
         if !carried.isEmpty {
             let kept = raster.paths.filter { !carried.contains($0) }
@@ -451,26 +552,4 @@ extension AppModel {
         requestOpen(openPaths)
     }
 
-    /// Show the chart picker: the AppKit open panel on macOS, the document
-    /// importer on iOS. The charts bubble, the empty state and the File menu all
-    /// use it.
-    func requestOpenPicker() {
-        #if os(macOS)
-        presentOpenPanel()
-        #else
-        showImporter = true
-        #endif
-    }
-
-    /// "Add charts" from the SETTINGS sheet (iOS): the form's own importer,
-    /// which comes up over the sheet and leaves it where it was. It used to
-    /// dismiss the sheet and re-present the chart view's importer 0.45s later,
-    /// because that one cannot appear while the sheet is over it.
-    func addChartsFromSettings() {
-        #if os(iOS)
-        showSettingsImporter = true
-        #else
-        presentOpenPanel()
-        #endif
-    }
 }

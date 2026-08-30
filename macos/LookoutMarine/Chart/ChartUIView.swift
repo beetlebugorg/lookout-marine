@@ -155,18 +155,18 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate {
               bounds.width > 1, bounds.height > 1 else { return }
         // A pending open request beats the startup default (it can only exist
         // this early if something opened a chart before first layout).
-        let paths = model?.openRequest?.paths ?? model?.initialChartPaths() ?? []
+        let paths = model?.charts.openRequest?.paths ?? model?.charts.initialChartPaths() ?? []
         guard !paths.isEmpty else { return }
         didAutoOpen = true
         lastSizePt = bounds.size
-        model?.openingCells = paths.count
-        model?.isOpening = true // loader up before the (synchronous) open runs
-        model?.preparingSymbols = (lookout_atlas_cache_ready() == 0) // first run?
+        model?.charts.openingCells = paths.count
+        model?.charts.isOpening = true // loader up before the (synchronous) open runs
+        model?.charts.preparingSymbols = (lookout_atlas_cache_ready() == 0) // first run?
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            defer { self.model?.isOpening = false; self.model?.preparingSymbols = false }
+            defer { self.model?.charts.isOpening = false; self.model?.charts.preparingSymbols = false }
             guard self.controller?.handle == nil else { return }
-            self.lastOpenId = self.model?.openRequest?.id ?? 0
+            self.lastOpenId = self.model?.charts.openRequest?.id ?? 0
             _ = self.controller?.open(charts: paths, in: self)
             self.hostWindowAboveChart()
         }

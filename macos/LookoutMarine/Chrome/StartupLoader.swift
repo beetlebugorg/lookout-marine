@@ -18,7 +18,7 @@ import SwiftUI
 /// It is a page, not a card over a scrim, for the same reason the first run is:
 /// there is nothing behind it worth showing yet.
 struct StartupLoader: View {
-    let phase: AppModel.LoadPhase
+    let phase: ChartsModel.LoadPhase
     /// How many charts are being opened, when that is known.
     var cells: Int = 0
 

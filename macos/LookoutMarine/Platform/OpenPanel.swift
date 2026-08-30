@@ -35,7 +35,7 @@ extension AppModel {
         guard panel.runModal() == .OK, let url = panel.url else { return }
         var isDir: ObjCBool = false
         FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
-        if isDir.boolValue { openChartDirectory(url.path) } else { openFileOrChart(url.path) }
+        if isDir.boolValue { charts.openChartDirectory(url.path) } else { openFileOrChart(url.path) }
     }
 
     /// Present the Add Raster Charts panel. Multiple selection and folders both, because
@@ -111,11 +111,11 @@ extension AppModel {
         // folder does, and the mariner adds it the same way. This is the shape
         // a chart agency publishes in — NOAA's whole US library is one .zip.
         if ChartScan.isArchive(path) {
-            addChartSet(path)
+            charts.addChartSet(path)
             return
         }
         if controller?.openFileForPlugins(path) == true { return }
-        openChart(path)
+        charts.openChart(path)
     }
 
     /// Every file extension the loaded plugins read, for the open panel's
@@ -168,12 +168,12 @@ extension AppModel {
             if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }
             try fm.copyItem(at: url, to: dest)
         } catch {
-            openError = "Couldn't import the chart:\n\(error.localizedDescription)"
+            charts.openError = "Couldn't import the chart:\n\(error.localizedDescription)"
             return
         }
         var isDir: ObjCBool = false
         fm.fileExists(atPath: dest.path, isDirectory: &isDir)
-        if isDir.boolValue { openChartDirectory(dest.path) } else { openFileOrChart(dest.path) }
+        if isDir.boolValue { charts.openChartDirectory(dest.path) } else { openFileOrChart(dest.path) }
     }
 
     /// A plugin package the mariner picked in the Files app.
@@ -244,7 +244,7 @@ extension AppModel {
         }
 
         if !failed.isEmpty {
-            openError = failed.count == 1
+            charts.openError = failed.count == 1
                 ? "Couldn't copy \(failed[0]) into the app."
                 : "Couldn't copy \(failed.count) raster charts into the app."
         }

@@ -88,7 +88,7 @@ struct OverlayLayer: View {
                 }
                 // Bottom left: the scale bar.
                 .overlay(alignment: .bottomLeading) {
-                    if model.hasChart {
+                    if model.charts.hasChart {
                         ScaleBarView(scaleDenominator: model.scaleDenominator,
                                      credit: model.chartLinks.attribution)
                             .padding(.leading, Chrome.margin + sideInset)
@@ -183,7 +183,7 @@ struct OverlayLayer: View {
                                 .chromeHitRegion("scale-entry")
                                 .transition(.opacity.combined(with: .move(edge: .bottom)))
                         }
-                        if model.hasChart, form == nil || form == .callout {
+                        if model.charts.hasChart, form == nil || form == .callout {
                             ReadoutsCapsule(model: model, compact: compact,
                                             onScaleTap: toggleScaleEntry)
                                 .measureSize { capsuleHeight = $0.height }
@@ -214,10 +214,10 @@ struct OverlayLayer: View {
                     }
                 }
                 .overlay {
-                    if model.showStartupLoader {
-                        StartupLoader(phase: model.loadingPhase, cells: model.openingCells)
+                    if model.charts.showStartupLoader {
+                        StartupLoader(phase: model.charts.loadingPhase, cells: model.charts.openingCells)
                             .transition(.opacity)
-                    } else if !model.hasChart {
+                    } else if !model.charts.hasChart {
                         // The Metal layer keeps the last frame it presented, so
                         // a closed chart stays on screen with nothing drawing
                         // it. Cover it here rather than hiding the layer: the
@@ -230,7 +230,7 @@ struct OverlayLayer: View {
                     // The picker asked a question the mariner has answered.
                     // While the answer is being acted on, the work stands in
                     // its place.
-                    if !model.showStartupLoader, !model.hasChart, model.chartWork == nil {
+                    if !model.charts.showStartupLoader, !model.charts.hasChart, model.charts.chartWork == nil {
                         EmptyChartState(model: model).chromeHitRegion("empty-state")
                             .transition(.opacity)
                     }
@@ -240,17 +240,17 @@ struct OverlayLayer: View {
                 // while there is nothing to look at, then it travels to the top
                 // and closes once charts are drawing. Same view, so the move is
                 // something the eye can follow.
-                .overlay(alignment: model.hasChart ? .top : .center) {
-                    if let b = model.chartWork {
-                        ChartWorkPanel(progress: b, compact: model.hasChart,
-                                       onCancel: { model.cancelBake() })
-                            .padding(.top, model.hasChart ? 10 : 0)
+                .overlay(alignment: model.charts.hasChart ? .top : .center) {
+                    if let b = model.charts.chartWork {
+                        ChartWorkPanel(progress: b, compact: model.charts.hasChart,
+                                       onCancel: { model.charts.cancelBake() })
+                            .padding(.top, model.charts.hasChart ? 10 : 0)
                             .chromeHitRegion("chart-work")
                             .transition(.opacity)
                     }
                 }
-                .animation(.easeInOut(duration: 0.5), value: model.hasChart)
-                .animation(.easeInOut(duration: 0.25), value: model.chartWork == nil)
+                .animation(.easeInOut(duration: 0.5), value: model.charts.hasChart)
+                .animation(.easeInOut(duration: 0.25), value: model.charts.chartWork == nil)
                 // The overlay hover tooltip, clear of the pointer. Padding,
                 // not an offset, for the reason above. No chrome hit region:
                 // a click over the tip must still pick the chart under it.
@@ -318,7 +318,7 @@ struct OverlayLayer: View {
                 .animation(.default, value: model.isBuilding)
                 .animation(.easeInOut(duration: 0.18), value: model.showScaleEntry)
                 .animation(.easeInOut(duration: 0.18), value: model.searchOpen)
-                .animation(.easeInOut(duration: 0.25), value: model.showStartupLoader)
+                .animation(.easeInOut(duration: 0.25), value: model.charts.showStartupLoader)
         }
         // chromeHitRegion writes the control frames in this space.
         // The pass-through hosts hit-test against it.

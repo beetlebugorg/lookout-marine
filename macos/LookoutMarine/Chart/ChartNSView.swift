@@ -34,7 +34,7 @@ struct ChartView: NSViewRepresentable {
         // A pending open request the model couldn't service (no view attached
         // yet when it was made) — normally requestOpen drives the controller
         // directly; see AppModel.requestOpen.
-        if let req = model.openRequest, req.id != v.lastOpenId {
+        if let req = model.charts.openRequest, req.id != v.lastOpenId {
             v.lastOpenId = req.id
             _ = controller.open(charts: req.paths, in: v)
             v.raiseOverlay()
@@ -226,21 +226,21 @@ final class ChartNSView: NSView {
     func maybeAutoOpen() {
         guard !didAutoOpen, window != nil, controller?.handle == nil,
               bounds.width > 1, bounds.height > 1,
-              let paths = model?.initialChartPaths(), !paths.isEmpty else { return }
+              let paths = model?.charts.initialChartPaths(), !paths.isEmpty else { return }
         didAutoOpen = true
         // No frame restoration for this window: the chart reopens from our own
         // recents, and the fromServer frame restore is exactly the mid-load
         // resize the deferral above is dodging.
         window?.isRestorable = false
         model?.overlay.pickCentreHint = CGPoint(x: bounds.midX, y: bounds.midY)
-        model?.openingCells = paths.count
-        model?.isOpening = true // loader up before the (synchronous) open runs
-        model?.preparingSymbols = (lookout_atlas_cache_ready() == 0) // first run?
+        model?.charts.openingCells = paths.count
+        model?.charts.isOpening = true // loader up before the (synchronous) open runs
+        model?.charts.preparingSymbols = (lookout_atlas_cache_ready() == 0) // first run?
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            defer { self.model?.isOpening = false; self.model?.preparingSymbols = false }
+            defer { self.model?.charts.isOpening = false; self.model?.charts.preparingSymbols = false }
             guard self.controller?.handle == nil else { return }
-            self.lastOpenId = self.model?.openRequest?.id ?? 0
+            self.lastOpenId = self.model?.charts.openRequest?.id ?? 0
             _ = self.controller?.open(charts: paths, in: self)
             self.raiseOverlay()
             self.syncMetalLayerScale()

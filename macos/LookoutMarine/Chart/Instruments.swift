@@ -199,7 +199,7 @@ final class GestureBench {
             // Wait for the chart to be OPEN and settled, not just for a frame
             // count: a chart library takes tens of seconds to compose, and a
             // bench that starts on frame 120 measures the loading screen.
-            if c.model?.firstBuildDone != true || c.stillBuilding { frames = 0; return }
+            if c.model?.charts.firstBuildDone != true || c.stillBuilding { frames = 0; return }
             if frames >= settleFrames {
                 if doTour { beginLeg(.zoomIn); phase = .tour; return }
                 phase = doPan ? .pan : (doZoom ? .zoom : (doCursor ? .cursor : .done))

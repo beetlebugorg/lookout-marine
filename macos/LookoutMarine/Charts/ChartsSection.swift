@@ -103,34 +103,34 @@ struct ChartsSections: View {
         // has been looked through and holds charts, so none of them is a dead
         // entry the mariner has to discover by clicking it.
         Section {
-            if model.chartSets.isEmpty {
-                Text(model.scanning ? "Finding charts…" : "No charts")
+            if model.charts.sets.isEmpty {
+                Text(model.charts.scanning ? "Finding charts…" : "No charts")
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(model.chartSets) { set in
+                ForEach(model.charts.sets) { set in
                     ChartSetRow(model: model, set: set)
                 }
             }
-            if let msg = model.emptyPick {
+            if let msg = model.charts.emptyPick {
                 Label(msg, systemImage: "exclamationmark.triangle")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
         } header: { Text("Charts") }
         .confirmationDialog(
-            "Remove \(model.pendingRemoval?.name ?? "")?",
-            isPresented: Binding(get: { model.pendingRemoval != nil },
-                                 set: { if !$0 { model.pendingRemoval = nil } }),
+            "Remove \(model.charts.pendingRemoval?.name ?? "")?",
+            isPresented: Binding(get: { model.charts.pendingRemoval != nil },
+                                 set: { if !$0 { model.charts.pendingRemoval = nil } }),
             titleVisibility: .visible
         ) {
             Button("Remove and delete prepared charts", role: .destructive) {
-                if let s = model.pendingRemoval { model.removeChartSet(s.path) }
-                model.pendingRemoval = nil
+                if let s = model.charts.pendingRemoval { model.charts.removeChartSet(s.path) }
+                model.charts.pendingRemoval = nil
             }
-            Button("Cancel", role: .cancel) { model.pendingRemoval = nil }
+            Button("Cancel", role: .cancel) { model.charts.pendingRemoval = nil }
         } message: {
-            if let s = model.pendingRemoval {
-                Text("Lookout deletes the \(s.cells.count + s.rasters.count) charts it prepared from this folder. Your original files are not touched, and you can add the folder again, which takes \(model.rebuildEstimate(s)).")
+            if let s = model.charts.pendingRemoval {
+                Text("Lookout deletes the \(s.cells.count + s.rasters.count) charts it prepared from this folder. Your original files are not touched, and you can add the folder again, which takes \(model.charts.rebuildEstimate(s)).")
             }
         }
 
@@ -138,9 +138,9 @@ struct ChartsSections: View {
         // so a bake begun here otherwise runs behind it: the mariner presses
         // Add Charts, nothing in front of them changes, and they press it
         // again.
-        if let b = model.chartWork {
+        if let b = model.charts.chartWork {
             Section {
-                BakeDetail(progress: b, onCancel: { model.cancelBake() }, cancelling: $cancellingBake)
+                BakeDetail(progress: b, onCancel: { model.charts.cancelBake() }, cancelling: $cancellingBake)
                     .padding(.vertical, 4)
             } header: {
                 Text(b.title)
@@ -153,7 +153,7 @@ struct ChartsSections: View {
             } label: {
                 Label("Add Charts…", systemImage: "plus")
             }
-            .disabled(model.chartWork != nil)
+            .disabled(model.charts.chartWork != nil)
         } footer: {
             VStack(alignment: .leading, spacing: 3) {
                 Text("A folder joins the chart as one library. Both kinds of chart go in here.").captionFooter()
@@ -216,7 +216,7 @@ private struct ChartSetRow: View {
             HStack(spacing: 8) {
                 Toggle("", isOn: Binding(
                     get: { set.on },
-                    set: { model.setChartSetOn(set.path, $0) }
+                    set: { model.charts.setChartSetOn(set.path, $0) }
                 ))
                 .labelsHidden()
                 .toggleStyle(.switch)
@@ -240,8 +240,8 @@ private struct ChartSetRow: View {
                     // A set Lookout prepared is work that has to be done
                     // again. Ask. A folder of the mariner's own files is only
                     // a list entry, so it goes without a question.
-                    if set.isDerived { model.pendingRemoval = set }
-                    else { model.removeChartSet(set.path) }
+                    if set.isDerived { model.charts.pendingRemoval = set }
+                    else { model.charts.removeChartSet(set.path) }
                 } label: {
                     Image(systemName: "minus.circle")
                 }

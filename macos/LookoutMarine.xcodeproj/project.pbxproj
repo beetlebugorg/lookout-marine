@@ -84,9 +84,7 @@
 		698A5FAED378AD7A354AD368 /* ChartController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C315E2FD12D936B349662AB2 /* ChartController.swift */; };
 		699DD0B45A659EC7A3C2951F /* About.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAEA99096E77BC63671F921D /* About.swift */; };
 		6CEE82FFDB84835783A1BD02 /* PluginTableWindow+Open.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DE9B6AC4AEED69AB4302BC9 /* PluginTableWindow+Open.swift */; };
-		6ED7BE063B81A9B08558B5CA /* AppModel+ChartSets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5423CF9725B1CBAD89DA0ED1 /* AppModel+ChartSets.swift */; };
 		70D6C5CA580CC7F7CC18DEC8 /* SettingsRows.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CED6DE8C50508326D0E097C /* SettingsRows.swift */; };
-		725A7DD75DF595EFC0A07C8B /* AppModel+ChartSets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5423CF9725B1CBAD89DA0ED1 /* AppModel+ChartSets.swift */; };
 		72D9550C5378015409B5C674 /* ChartController+Markers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3679C3C6EF257BD3E89496F0 /* ChartController+Markers.swift */; };
 		784566F54334706217860CD0 /* ZoomControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0FF81FD7BD06CE338EF4E09 /* ZoomControls.swift */; };
 		790CB732AF2B36EC710AF082 /* tables.json in Resources */ = {isa = PBXBuildFile; fileRef = 460E0B79780678DFCEDBC572 /* tables.json */; };
@@ -164,6 +162,7 @@
 		C0F12C9177AB56898D1EDFBD /* ChartUIView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB61B848C1E900A1F3615B91 /* ChartUIView.swift */; };
 		C2A7920E23D12CA2B606E75C /* LookoutMarineApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A03D3BC7A7816F10B65863B0 /* LookoutMarineApp.swift */; };
 		C3450AC507D00557B103B1FD /* ShellTestCase.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39FCF4CF9169327DF0FA8FBB /* ShellTestCase.swift */; };
+		C38965268BE7F1EAE9AB48A6 /* ChartsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59206D279B28F48EC767ADEA /* ChartsModel.swift */; };
 		C421AD4A79AEEB0C60360EC1 /* PluginSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D899CA81B7494096C3F930C /* PluginSettings.swift */; };
 		C6F97FFA28713DC7A7A41AB4 /* PluginTableModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E04C1A7E97E0DA615380347A /* PluginTableModel.swift */; };
 		C82892E31FE36680817F7113 /* CompactHudTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E856FD037203427CE8B9E9C /* CompactHudTests.swift */; };
@@ -184,6 +183,7 @@
 		D291F68292B43ED593C67FC8 /* PluginManageSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9678B3409AC6184055D285AD /* PluginManageSection.swift */; };
 		D4053EFD7BBC6FD277438F1D /* CoordFormatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80A6678722FC01CA46E10CE0 /* CoordFormatTests.swift */; };
 		D592C74889CB79128A0A81C5 /* PluginTableView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B7482797128261B463A8277 /* PluginTableView.swift */; };
+		D77E6462A28F0B1C63856A12 /* ChartsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59206D279B28F48EC767ADEA /* ChartsModel.swift */; };
 		D8B07B8A647C1B9C9EC398BA /* ReadoutsCapsule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02618015841FF6935C44305E /* ReadoutsCapsule.swift */; };
 		D8DE92A54522E48CF85722DE /* Instruments.swift in Sources */ = {isa = PBXBuildFile; fileRef = E99E812450B1710B0945A9EE /* Instruments.swift */; };
 		D98D644F63B6A27A5BA219F7 /* LicenseManifestTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6473AB9A6EC7604E642EB8B9 /* LicenseManifestTests.swift */; };
@@ -302,11 +302,11 @@
 		51ECDDE552CF03F985815D94 /* ChartController+Plugins.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChartController+Plugins.swift"; sourceTree = "<group>"; };
 		52541E0740AE0F9E3BBC236D /* ChartSetStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartSetStoreTests.swift; sourceTree = "<group>"; };
 		539774253A46E025DD1B5E20 /* CoordFormat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoordFormat.swift; sourceTree = "<group>"; };
-		5423CF9725B1CBAD89DA0ED1 /* AppModel+ChartSets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppModel+ChartSets.swift"; sourceTree = "<group>"; };
 		5624860C29AF07752A4CE208 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		5771B481220434E34EA6F794 /* ScaleParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScaleParser.swift; sourceTree = "<group>"; };
 		58C86FCD4EE381351EDD9D9E /* PluginInstallTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginInstallTests.swift; sourceTree = "<group>"; };
 		58CA6572430DD9F43DEA85E3 /* OverlayModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverlayModel.swift; sourceTree = "<group>"; };
+		59206D279B28F48EC767ADEA /* ChartsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartsModel.swift; sourceTree = "<group>"; };
 		5A0B8C7B273A6E8D538848ED /* ChartSets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartSets.swift; sourceTree = "<group>"; };
 		5E856FD037203427CE8B9E9C /* CompactHudTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompactHudTests.swift; sourceTree = "<group>"; };
 		5EBE7ED9891268BB429691A0 /* ChartValues.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartValues.swift; sourceTree = "<group>"; };
@@ -607,12 +607,12 @@
 		AC99FB1C17BB0023222E863E /* Charts */ = {
 			isa = PBXGroup;
 			children = (
-				5423CF9725B1CBAD89DA0ED1 /* AppModel+ChartSets.swift */,
 				C440A0CF1A4AE2740ACEFF2F /* ChartBake.swift */,
 				AACCF77D4F5568A745094D65 /* ChartController+Raster.swift */,
 				D31BFC1DAC5265A5DAC8F20D /* ChartLinkFetch.swift */,
 				68828190C8B7D95B175B2ED1 /* ChartLinksModel.swift */,
 				5A0B8C7B273A6E8D538848ED /* ChartSets.swift */,
+				59206D279B28F48EC767ADEA /* ChartsModel.swift */,
 				21D746F565B07FFB055106D0 /* ChartsSection.swift */,
 				3BB6523A66DFCC61B512AB19 /* RasterModel.swift */,
 			);
@@ -965,7 +965,6 @@
 			files = (
 				BAEA997B70F7E7FC18A24B45 /* About.swift in Sources */,
 				38CEB48FC05231A67E5EDBF0 /* AdvancedSection.swift in Sources */,
-				6ED7BE063B81A9B08558B5CA /* AppModel+ChartSets.swift in Sources */,
 				799A673D0307B96939D71353 /* AppModel.swift in Sources */,
 				7D0993B29FF0B336545055B6 /* AuxFileView.swift in Sources */,
 				836E43B2A7A2E7EE94E21D2D /* CalloutPlacement.swift in Sources */,
@@ -985,6 +984,7 @@
 				C0F12C9177AB56898D1EDFBD /* ChartUIView.swift in Sources */,
 				F56FFB5B0B4315E5CAB193E8 /* ChartValues.swift in Sources */,
 				AC156DBF801B9FDB7048420A /* ChartWorkPanel.swift in Sources */,
+				D77E6462A28F0B1C63856A12 /* ChartsModel.swift in Sources */,
 				20661EFE0AE890B1C97DEBA8 /* ChartsSection.swift in Sources */,
 				02BEB8DB1EBC2B61CC1CEB36 /* Chrome.swift in Sources */,
 				340BAA0AB5066CB75B4DB2B8 /* ChromeHitRegion.swift in Sources */,
@@ -1072,7 +1072,6 @@
 			files = (
 				699DD0B45A659EC7A3C2951F /* About.swift in Sources */,
 				1B22314AFE7D6AAAC8DF2B03 /* AdvancedSection.swift in Sources */,
-				725A7DD75DF595EFC0A07C8B /* AppModel+ChartSets.swift in Sources */,
 				F640312E726227D995356C8E /* AppModel.swift in Sources */,
 				954D5A326F5AC370A4DE558E /* AuxFileView.swift in Sources */,
 				11BC973584FA218201793360 /* CalloutPlacement.swift in Sources */,
@@ -1092,6 +1091,7 @@
 				D140C3EBA8F42641232C0369 /* ChartUIView.swift in Sources */,
 				F5B4B871DD276DE2066E2E68 /* ChartValues.swift in Sources */,
 				F5ACE48CDAAC757EA7F003E9 /* ChartWorkPanel.swift in Sources */,
+				C38965268BE7F1EAE9AB48A6 /* ChartsModel.swift in Sources */,
 				DE59CBC001F2C93EFEEFB316 /* ChartsSection.swift in Sources */,
 				B82495034138B87BEB0D8619 /* Chrome.swift in Sources */,
 				9B5D5B30A13DEA2CAA3AA35F /* ChromeHitRegion.swift in Sources */,

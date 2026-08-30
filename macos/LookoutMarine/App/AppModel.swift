@@ -8,35 +8,14 @@
 import Foundation
 import Combine
 
-/// A request to (re)open one or more chart paths, carried to the chart view.
-struct OpenRequest: Equatable {
-    let id: Int
-    let paths: [String]
-}
-
 @MainActor
 @Observable
 final class AppModel {
-    // MARK: Chart state
-    var hasChart = false
-    var chartPath: String?
-    /// The folders of charts aboard, in the order added. A set on this list has
-    /// been looked through and holds charts, so it always opens.
-    var chartSets: [ChartSet] = []
-    /// True while a folder is being looked through. The full NOAA library takes
-    /// about 3 seconds.
-    var scanning = false
-    /// The last folder that held no charts, for the panel to say so.
-    var emptyPick: String?
-    var openRequest: OpenRequest?
-    var openError: String?
-    var openSeq = 0
-
     /// Start the install flow: read the package, and put what it asks for in
     /// front of the mariner. Every entry point lands here — Finder, a drop on
     /// the window, and Settings > Plugins > Install Plugin….
     func beginPluginInstall(_ path: String) {
-        guard hasChart else {
+        guard charts.hasChart else {
             plugins.pendingInstallPath = path
             return
         }
@@ -45,56 +24,9 @@ final class AppModel {
 
     /// A .lkplug that arrived before the chart did, now that the chart is up.
     func drainPendingInstall() {
-        guard hasChart, let path = plugins.pendingInstallPath else { return }
+        guard charts.hasChart, let path = plugins.pendingInstallPath else { return }
         plugins.pendingInstallPath = nil
         plugins.begin(path)
-    }
-
-    // MARK: Startup loader state
-    /// True from the moment an open is scheduled until lookout_open returns —
-    /// covers the synchronous open (a 7k-cell library takes seconds).
-    var isOpening = false
-    /// True while the FIRST-run one-time symbol/font atlas bake runs (the app
-    /// cache is empty). Drives a distinct "Preparing chart symbols" message.
-    var preparingSymbols = false
-    /// False until the first scene after an open has actually rendered; with
-    /// isOpening it drives the big startup loader (later rebuilds only show
-    /// the small BuildingPill).
-    var firstBuildDone = false
-    var showStartupLoader: Bool { isOpening || (hasChart && !firstBuildDone) }
-
-    /// The number of cells the open is mapping. The loader states it.
-    var openingCells = 0
-
-    /// The phase the startup loader shows. Each phase is a different wait: the
-    /// first-run atlas bake, the library open, and the first tessellation.
-    enum LoadPhase: Equatable {
-        case bakingAtlas
-        case mapping(cells: Int)
-        case tessellating
-
-        var title: String {
-            switch self {
-            case .bakingAtlas:
-                return "Baking the symbol atlas"
-            case .mapping(let cells):
-                return cells > 1 ? "Mapping \(cells.formatted(.number)) cells" : "Mapping the chart"
-            case .tessellating:
-                return "Tessellating the first scene"
-            }
-        }
-
-        var note: String? {
-            switch self {
-            case .bakingAtlas: return "First launch only. The atlas is cached."
-            default: return nil
-            }
-        }
-    }
-
-    var loadingPhase: LoadPhase {
-        if preparingSymbols { return .bakingAtlas }
-        return isOpening ? .mapping(cells: openingCells) : .tessellating
     }
 
     // MARK: Live HUD readouts (pushed by ChartController / the chart view)
@@ -161,6 +93,7 @@ final class AppModel {
         didSet {
             // Each model gets the one seam it uses, not the controller. See
             // ChartEngine.swift.
+            charts.engine = controller
             chartLinks.engine = controller
             raster.engine = controller
             plugins.engine = controller
@@ -177,45 +110,18 @@ final class AppModel {
     let raster = RasterModel()
     let plugins = PluginsModel()
     let overlay = OverlayModel()
+    /// Adding a set installs the pictures it carries, so this one is built
+    /// with the raster model rather than beside it.
+    let charts: ChartsModel
 
-
-    // MARK: State the extensions own
-    //
-    // Swift keeps stored properties in the class body, so these sit here while
-    // the code that reads them is in AppModel+<subject>.swift beside this file.
-    // Each block says which one. They are internal rather than private for the
-    // same reason: Swift has no access level meaning "this file and the
-    // extensions that go with it".
-
-    // AppModel+ChartSets.swift
-
-    /// The bake running now, if any. The HUD pill watches this.
-    var bake: BakeProgress?
-    var bakeJob: ChartBakeJob?
-    /// True while the scan running was asked for by the mariner.
-    var scanRequested = false
-
-    /// The charts of a removed set being deleted, while that is happening.
-    var removing: BakeProgress?
-    /// The folder being looked through, for the first-run text.
-    var scanningName = ""
-
-    /// The folder or archive the running bake is preparing, so that removing
-    /// that set can stop it and disown what it produces.
-    var bakeSource: String?
-
-    /// The set the mariner asked to remove, held while they are asked whether
-    /// they meant it. Only a set Lookout prepared charts for: taking a folder
-    /// of the mariner's own files off the list deletes nothing, so it needs no
-    /// question.
-    var pendingRemoval: ChartSet?
 
     init() {
+        charts = ChartsModel(raster: raster)
         // Anything a previous run renamed on its way to being deleted.
         ChartBake.sweepTrash()
         // The panel's list. The open itself does not wait on this: it takes
         // the cheap walk in initialChartPaths and starts drawing.
-        loadChartSets()
+        charts.loadChartSets()
         // Chart links live in the core (chartlinks.json beside the marks), so
         // nothing to read here. The old UserDefaults store is handed over in
         // chartDidOpen, which has a handle.
@@ -250,7 +156,7 @@ final class AppModel {
     /// Install the raster charts the mariner chose. What would not open is
     /// reported as a chart error, which is the alert the shell already has.
     func addRasterCharts(_ picked: [String]) {
-        if let err = raster.add(picked) { openError = err }
+        if let err = raster.add(picked) { charts.openError = err }
     }
 
     /// Step to the next picture. Nothing installed: the cycle has nowhere to
@@ -341,6 +247,29 @@ final class AppModel {
     func configurePosition() {
         openSettings()
         settingsTab = "connections"
+    }
+
+    /// Show the chart picker: the AppKit open panel on macOS, the document
+    /// importer on iOS. The charts bubble, the empty state and the File menu
+    /// all use it.
+    func requestOpenPicker() {
+        #if os(macOS)
+        presentOpenPanel()
+        #else
+        showImporter = true
+        #endif
+    }
+
+    /// "Add charts" from the SETTINGS sheet (iOS): the form's own importer,
+    /// which comes up over the sheet and leaves it where it was. It used to
+    /// dismiss the sheet and re-present the chart view's importer 0.45s later,
+    /// because that one cannot appear while the sheet is over it.
+    func addChartsFromSettings() {
+        #if os(iOS)
+        showSettingsImporter = true
+        #else
+        presentOpenPanel()
+        #endif
     }
 
     /// Open the scale entry. The field starts at the current scale.

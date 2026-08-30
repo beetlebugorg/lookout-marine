@@ -91,7 +91,7 @@ struct EmptyChartState: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.bottom, 16)
 
-            if let msg = model.emptyPick {
+            if let msg = model.charts.emptyPick {
                 // A folder that held nothing has to say so HERE. This page is
                 // where the mariner pressed the button, and a message that
                 // only appears in the settings window is a message they never
@@ -185,15 +185,15 @@ struct EmptyChartState: View {
                 .strokeBorder(Chrome.amber.opacity(0.55), lineWidth: 1))
             .padding(.top, 10)
 
-            if !model.chartSets.isEmpty {
+            if !model.charts.sets.isEmpty {
                 Divider().padding(.vertical, 12)
                 Text("Switched off")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(Chrome.muted)
-                ForEach(model.chartSets) { set in
+                ForEach(model.charts.sets) { set in
                     Toggle(set.name, isOn: Binding(
                         get: { set.on },
-                        set: { model.setChartSetOn(set.path, $0) }
+                        set: { model.charts.setChartSetOn(set.path, $0) }
                     ))
                     .toggleStyle(.switch)
                     .controlSize(.mini)

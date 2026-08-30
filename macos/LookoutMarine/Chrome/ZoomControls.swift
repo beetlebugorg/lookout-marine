@@ -10,11 +10,11 @@ struct ZoomControls: View {
 
     var body: some View {
         VStack(spacing: Chrome.gap) {
-            ChromeBubble(system: "plus", help: "Zoom in", enabled: model.hasChart) {
+            ChromeBubble(system: "plus", help: "Zoom in", enabled: model.charts.hasChart) {
                 model.zoomIn()
             }
             .chromeHitRegion("zoom-in")
-            ChromeBubble(system: "minus", help: "Zoom out", enabled: model.hasChart) {
+            ChromeBubble(system: "minus", help: "Zoom out", enabled: model.charts.hasChart) {
                 model.zoomOut()
             }
             .chromeHitRegion("zoom-out")

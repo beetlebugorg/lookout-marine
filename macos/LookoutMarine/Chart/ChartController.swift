@@ -138,7 +138,7 @@ final class ChartController: NSObject {
     func open(charts paths: [String], in view: PlatformView) -> Bool {
         close()
         self.view = view
-        model?.firstBuildDone = false
+        model?.charts.firstBuildDone = false
 
         let (wPt, hPt) = Self.pointSize(of: view)
         // Both platforms: lookout renders via Metal straight into the view's
@@ -146,7 +146,7 @@ final class ChartController: NSObject {
         // its device and presents drawables.
         guard let layer = Platform.metalLayer(of: view) else {
             lkLog("open FAILED — the chart view has no CAMetalLayer backing")
-            model?.openError = "The chart view has no Metal layer."
+            model?.charts.openError = "The chart view has no Metal layer."
             return false
         }
         let kind = LOOKOUT_NATIVE_METAL_LAYER
@@ -164,11 +164,11 @@ final class ChartController: NSObject {
         }
         guard let h = opened else {
             lkLog("open FAILED (lookout_open_in_window returned null — GPU device or chart file?)")
-            model?.openError = "Couldn't open the chart.\nThe file may be unreadable, or the Metal device couldn't be created."
+            model?.charts.openError = "Couldn't open the chart.\nThe file may be unreadable, or the Metal device couldn't be created."
             return false
         }
         lkLog("open OK")
-        model?.openError = nil
+        model?.charts.openError = nil
         handle = h
         // The fetch door, before anything can ask through it. Installing it
         // also resolves whatever chart link the mariner left selected: the core
@@ -280,8 +280,8 @@ final class ChartController: NSObject {
 
         startDisplayLink()
         pushReadouts()
-        model?.hasChart = true
-        model?.chartPath = chartPath
+        model?.charts.hasChart = true
+        model?.charts.chartPath = chartPath
         // A .lkplug opened before the chart was up waited for the plugin
         // layer; it can go to its consent sheet now.
         model?.drainPendingInstall()
@@ -520,7 +520,7 @@ final class ChartController: NSObject {
             // The first scene is up once a frame has gone out with no build
             // outstanding. Own ship moves between fixes, so with plugins
             // running the loop may never reach the idle branch below.
-            if !building, model?.firstBuildDone == false { model?.firstBuildDone = true }
+            if !building, model?.charts.firstBuildDone == false { model?.charts.firstBuildDone = true }
         } else if building {
             // A background tessellation is filling in — keep ticking so it appears.
             idleTicks = 0
@@ -528,7 +528,7 @@ final class ChartController: NSObject {
             // Static: pause after a couple of quiet ticks so idle is ~0% CPU.
             // Reaching idle also means the first scene after an open has
             // rendered — retire the startup loader.
-            if model?.firstBuildDone == false { model?.firstBuildDone = true }
+            if model?.charts.firstBuildDone == false { model?.charts.firstBuildDone = true }
             idleTicks += 1
             // A gesture bench drives from this tick, so pausing would strand it
             // in whatever phase it had reached.

@@ -22,7 +22,7 @@ enum DevHooks {
         let env = ProcessInfo.processInfo.environment
         if let add = env["LOOKOUT_ADD"] {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                model.addChartSet(add)
+                model.charts.addChartSet(add)
             }
         }
         guard let remove = env["LOOKOUT_REMOVE"] else { return }
@@ -30,7 +30,7 @@ enum DevHooks {
         let path = String(parts[0])
         let after = parts.count > 1 ? (Double(parts[1]) ?? 0) : 0
         DispatchQueue.main.asyncAfter(deadline: .now() + 2 + after) {
-            model.removeChartSet(path)
+            model.charts.removeChartSet(path)
         }
     }
 
