@@ -12,7 +12,7 @@ core, same C ABI, same behaviour.
 
 ## Prerequisites
 
-- **GTK 4.10+**, **Vulkan** headers and a loader, X11 and/or Wayland client libs.
+- **GTK 4.14+**, **Vulkan** headers and a loader, X11 and/or Wayland client libs.
 - **Zig 0.16** on `PATH`; **meson** + **ninja**.
 
 ```sh
@@ -89,7 +89,7 @@ chart pick report does not open for that click.
 
 You need a baked `.pmtiles` chart to see anything. **Ctrl+O**, or **Charts** in the
 mariner settings, picks a folder of cells; on first launch the app probes
-`$LOOKOUT_OPEN`, then the last recent, then
+`$LOOKOUT_OPEN`, then the saved chart library, then
 `~/.cache/chartplotter/NOAA/tiles/d5/US5MD1MC.pmtiles`.
 `$LOOKOUT_VIEW="lon,lat,zoom[,rot]"` pins the opening camera.
 
@@ -116,30 +116,74 @@ the first frame, because the engine draws a set as it opens it.
 
 ## What's in here
 
-| File | Role |
+```
+src/
+  main.c              GtkApplication entry, the CSS, the accelerators
+
+  engine/
+    controller.c      The one lookout* handle, every lookout_* call, the render loop
+    surface.c         The X11 child window / Wayland subsurface the chart presents into
+
+  model/
+    app-model.c       The shared state every widget reads and the commands act on
+    coord.c           The coordinate and scale parsers
+    store.c           Camera pose, recents and settings in one XDG keyfile
+    mariner.c         The live tile57_mariner behind the settings form
+
+  library/
+    sets.c            The sets aboard, which are on, and their background scans
+    scan.c            Looking through a folder or an archive for charts
+    bake.c            Preparing cells and sheets the engine cannot draw yet
+    links.c           Charts by link: a publisher's live map drawn as the chart
+    raster.c          The installed raster charts, and the engine's set election
+
+  plugins/
+    registry.c        The wasm plugins' schemas, values, list rows, apply and save
+    install.c         The .lkplug consent sheet, and the install
+    discovery.c       Browsing the boat's network for what a plugin can talk to
+
+  ui/
+    window.c          The window: titlebar, chart, floating chrome, actions, drops
+    window-private.h  The LkWindow struct the ui/ units share
+    open-dialogs.c    Every file picker, and the one route in
+    startup-view.c    The opening loader and the first-run page
+    dev-hooks.c       The LOOKOUT_* hooks the screenshot script drives
+    chart/
+      view.c          The chart widget: the surface, the transparent hole, all input
+      pick-report.c   The cursor pick: the decode, the card, the callout placement
+      overlay.c       The bubble pinned to a symbol a plugin drew
+    hud/
+      hud.c           The readouts capsule, the raster pill, the bubbles, the formats
+      pills.c         The build indicator and the bake pill
+      scale-bar.c     The distance bar at the bottom left
+      scale-entry.c   Type a scale, or pick a navigational purpose band
+    settings/
+      window.c        The lifecycle, the sidebar, and the Text and Advanced pages
+      private.h       The LkSettings struct the pages share
+      widgets.c       The page, the sections, the rows, the field bindings
+      display.c       The colour scheme, the display category, the soundings rule
+      depths.c        The four contours, the unit, the shading
+      charts.c        The chart by link, the library of sets, the raster charts
+      plugins.c       The controls a plugin declared, and the rows of its lists
+      plugins-page.c  What is loaded, what it may reach, and adding or removing one
+    chrome/
+      alerts.c        The plugin alert strip, and the siren behind an alarm
+      search.c        Coordinate go-to (feature search stubbed)
+      table-window.c  A plugin's declared table, as a window
+      about.c         The About screen
+      licenses.c      The Licenses screen
+
+  util/
+    json.c            A small JSON reader for the engine's pick payload
+    tether.h          Ties a model signal handler to a widget's life
+```
+
+| Elsewhere | Role |
 |------|------|
-| `src/main.c` | `GtkApplication` entry, CSS, accelerators |
-| `src/lk-window.c` | The window: titlebar, chart, the floating chrome, actions, the commands menu, open dialog, file drops |
-| `src/lk-alerts.c` | The plugin alert strip, and the siren behind an alarm |
-| `src/lk-table-window.c` | A plugin's declared table, as a window |
-| `src/lk-plugin-install.c` | The `.lkplug` consent sheet, and the install |
-| `src/lk-overlay-pick.c` | The bubble pinned to a symbol a plugin drew |
-| `src/lk-chart-view.c` | The chart widget: owns the surface, the transparent hole, all input |
-| `src/lk-chart-controller.c` | The one `lookout*` handle; every `lookout_*` call; the render loop |
-| `src/lk-native-surface.c` | The X11 child window / Wayland subsurface the chart presents into |
-| `src/lk-app-model.c` | Shared state, recents, open paths, coordinate and scale parsers |
-| `src/lk-hud.c` | The readouts capsule, scale bar, north bubble, scale entry, formatting |
-| `src/lk-pick-report.c` | The cursor pick report: the decode, the card, the callout placement |
-| `src/lk-raster.c` | The installed raster charts, their on/off, and the set names |
-| `src/lk-json.c` | A small JSON reader for the engine's pick payload |
-| `src/lk-plugins.c` | The wasm plugin registry: schemas, values, list rows, apply and save |
-| `src/lk-search.c` | Coordinate go-to (feature search stubbed) |
-| `src/lk-mariner.c` | The live `tile57_mariner` behind the settings form |
-| `src/lk-settings-window.c` | The mariner panel (Display / Depths / Text / Charts / Advanced), and the plugin-declared sections |
-| `src/lk-store.c` | Camera pose, recents and settings in one XDG keyfile |
 | `build-core.sh` | Builds the Zig core where meson expects its outputs |
 | `screenshots.sh` | The documentation screenshots, headless |
 | `data/` | The desktop entry and the hicolor icons `meson install` ships |
+| `tests/` | The unit and widget suites, run with `meson test -C build` |
 
 ## The app icon
 

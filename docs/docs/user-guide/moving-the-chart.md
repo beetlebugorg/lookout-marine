@@ -78,8 +78,9 @@ Mac uses Command. Windows and Linux use Control.
 | **Shift + drag** | Turn the chart about the centre. It follows the drag. |
 | Wheel, or two-finger scroll | Zoom at the pointer. |
 | Pinch on a trackpad | Zoom at the pointer. |
-| Click | Pick report for what is under the cursor. |
-| Double-click (Windows) | Zoom in at the pointer. |
+| Click a vessel | Pin its bubble. A click elsewhere closes it. |
+| Right-click | The chart menu: the pick report, a mark, the position. |
+| Double-click (Windows and Linux) | Zoom in at the pointer. |
 
 ## Touch gestures
 
@@ -88,6 +89,7 @@ Mac uses Command. Windows and Linux use Control.
 | Drag one finger | Pan. Throw it and the chart coasts to a stop. |
 | Pinch | Zoom between the fingers. |
 | Twist two fingers | Turn the chart. |
-| Tap | Pick report for what is under your finger. |
+| Tap a vessel | Pin its bubble. A tap elsewhere closes it. |
+| Press and hold (Linux) | The chart menu at the finger. |
 | Double tap | Zoom in. |
 | Two finger tap (iPad and iPhone) | Zoom out. |

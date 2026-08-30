@@ -76,6 +76,14 @@ jobs:
           ninja -C build
           DESTDIR="$PWD/dist" meson install -C build
 
+      # The widget suite needs a display; it skips itself (exit 77) where none
+      # can be opened, so the step is safe on any runner. Xvfb gives it one.
+      - name: Test
+        working-directory: linux
+        run: |
+          sudo apt-get install -y xvfb
+          meson test -C build --print-errorlogs
+
       - uses: actions/upload-artifact@v5
         with:
           name: lookout-marine-linux-x64
