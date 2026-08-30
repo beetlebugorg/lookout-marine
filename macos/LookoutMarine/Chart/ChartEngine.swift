@@ -28,6 +28,8 @@ protocol RasterEngine: AnyObject {
     func cycleRaster()
     func toggleChart()
     func chartHidden() -> Bool
+    /// Is a picture beneath THIS view?
+    func rasterOverChart() -> Bool
 }
 
 /// What ChartLinksModel asks the chart for. The core owns the list, resolves
@@ -50,6 +52,21 @@ protocol PluginEngine: AnyObject {
     func acknowledgeAlert(_ id: UInt64) -> Bool
     func inspectPlugin(_ path: String) -> String?
     func installPlugin(_ path: String) -> String?
+}
+
+/// What ReadoutsModel reads every frame. All getters: the render tick reads,
+/// it never asks for anything.
+@MainActor
+protocol ReadoutEngine: AnyObject {
+    var currentView: lookout_view { get }
+    var followState: Int { get }
+    var courseUpState: Int { get }
+    var pluginsActive: Bool { get }
+    var scaleDenominator: Double { get }
+    var overscale: Double { get }
+    var schemeIndex: Int { get }
+    var stillBuilding: Bool { get }
+    func ownShip() -> (state: FixState, lat: Double, lon: Double)?
 }
 
 /// What ChartsModel asks the chart for: open a library, and put it away.
@@ -76,4 +93,4 @@ protocol OverlayEngine: AnyObject {
 }
 
 extension ChartController: RasterEngine, ChartLinkEngine, PluginEngine,
-                          ChartOpenEngine, OverlayEngine {}
+                          ChartOpenEngine, ReadoutEngine, OverlayEngine {}

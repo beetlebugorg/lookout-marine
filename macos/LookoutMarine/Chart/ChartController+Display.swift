@@ -19,4 +19,19 @@ extension ChartController {
         guard let h = handle else { return 0 }
         return lookout_scale_denominator(h)
     }
+
+    /// How far past the deepest data the view is. 1 is within it.
+    var overscale: Double {
+        guard let h = handle else { return 1 }
+        return lookout_overscale(h)
+    }
+
+    /// The scheme in force: 0 day, 1 dusk, 2 night. Read from the core rather
+    /// than remembered, because the settings form changes it too.
+    var schemeIndex: Int {
+        guard let h = handle else { return 0 }
+        var m = tile57_mariner()
+        lookout_get_mariner(h, &m)
+        return Int(m.scheme.rawValue)
+    }
 }

@@ -38,6 +38,7 @@
 		2519D0331ED9B6BE7956E9D2 /* ChartController+Tables.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94035290B713FCF01DC12E77 /* ChartController+Tables.swift */; };
 		26E8F47E6DC2301DB9B687A6 /* HoverTip.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CE71623E18E6C2ED36FEF9D /* HoverTip.swift */; };
 		27BD8996C99ECDE5B5242A1A /* RasterModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BB6523A66DFCC61B512AB19 /* RasterModel.swift */; };
+		290D9208A65A5AA6D68642AF /* ReadoutsModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06BD91FFFE38B9BD5B086791 /* ReadoutsModelTests.swift */; };
 		29D69EB0C3BEBC71F0CCBF36 /* Store.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B35807C0ABB9C564DABEC58 /* Store.swift */; };
 		2A8E04D7D4173D43E7ECCB7B /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = 0D454300CEC7DCF096F4F2D0 /* README.md */; };
 		2AE8D8F4D5040F901139BC0A /* alerts.json in Resources */ = {isa = PBXBuildFile; fileRef = D6C25F5333751E53B1C677E5 /* alerts.json */; };
@@ -167,6 +168,7 @@
 		B99F6D4997B065CC138CA7BC /* ChartNSView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22D02F5C9167697B1044050F /* ChartNSView.swift */; };
 		B9B4B24710C6E37D0A8C75CD /* PluginTableWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31BAF7C2A01938C845440AE8 /* PluginTableWindow.swift */; };
 		BAEA997B70F7E7FC18A24B45 /* About.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAEA99096E77BC63671F921D /* About.swift */; };
+		BF15D9955A4DF8A1DB862090 /* ReadoutsModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06BD91FFFE38B9BD5B086791 /* ReadoutsModelTests.swift */; };
 		BFF000C33F19CFFBD7E68E53 /* RasterPill.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4116F62995684CE961ACFBFE /* RasterPill.swift */; };
 		C05F4D5EB4E32576C253AD19 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 8AE67031882048136AC3C4B2 /* Assets.xcassets */; };
 		C08B9592864477E3068B6104 /* PickReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0BD7776E04E596B3F3FC90E /* PickReport.swift */; };
@@ -275,6 +277,7 @@
 		02618015841FF6935C44305E /* ReadoutsCapsule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadoutsCapsule.swift; sourceTree = "<group>"; };
 		062B6FAD3068E7DB70544982 /* DepthsSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DepthsSection.swift; sourceTree = "<group>"; };
 		063DCA330E7899B8CCE880A8 /* UniformTypeIdentifiers.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UniformTypeIdentifiers.framework; path = System/Library/Frameworks/UniformTypeIdentifiers.framework; sourceTree = SDKROOT; };
+		06BD91FFFE38B9BD5B086791 /* ReadoutsModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadoutsModelTests.swift; sourceTree = "<group>"; };
 		0B7482797128261B463A8277 /* PluginTableView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginTableView.swift; sourceTree = "<group>"; };
 		0CAC9F938CDB51E28B5E98CE /* PluginConfigTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginConfigTests.swift; sourceTree = "<group>"; };
 		0CFF9284FC01F1CF6E286197 /* PickReportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PickReportTests.swift; sourceTree = "<group>"; };
@@ -560,6 +563,7 @@
 				9C7090FA8708C087510A6B66 /* PluginTableTests.swift */,
 				FD12651F04161741811A5386 /* RasterModelTests.swift */,
 				B9CB7F2EE01F7A2521E623AD /* RasterPillTests.swift */,
+				06BD91FFFE38B9BD5B086791 /* ReadoutsModelTests.swift */,
 				1BD93ECA0EF5B7BC7893551B /* ScaleParserTests.swift */,
 				39FCF4CF9169327DF0FA8FBB /* ShellTestCase.swift */,
 				429A3DC2D37A94F800391B26 /* SmokeTests.swift */,
@@ -1103,6 +1107,7 @@
 				F66040BFE624A252A3C9DA34 /* PluginsModelTests.swift in Sources */,
 				D30AB6E85C67FF3FD87B7E3A /* RasterModelTests.swift in Sources */,
 				A26BE99590C76FD74BF2E521 /* RasterPillTests.swift in Sources */,
+				BF15D9955A4DF8A1DB862090 /* ReadoutsModelTests.swift in Sources */,
 				F0BE2056E172248A93FDFA7B /* ScaleParserTests.swift in Sources */,
 				C3450AC507D00557B103B1FD /* ShellTestCase.swift in Sources */,
 				1001392DF7ECEB52C30F7AD5 /* SmokeTests.swift in Sources */,
@@ -1237,6 +1242,7 @@
 				5CE2A0D966DE83049C387273 /* PluginsModelTests.swift in Sources */,
 				AA57905B74D7272259E6FC71 /* RasterModelTests.swift in Sources */,
 				5396D82AF2680CB6CA36DC9F /* RasterPillTests.swift in Sources */,
+				290D9208A65A5AA6D68642AF /* ReadoutsModelTests.swift in Sources */,
 				9D812EF56B0E8575A83D77B9 /* ScaleParserTests.swift in Sources */,
 				EE1D3DEE63D56BA4BC2BB685 /* ShellTestCase.swift in Sources */,
 				F8F3C1C2C1A1F48435FAA789 /* SmokeTests.swift in Sources */,

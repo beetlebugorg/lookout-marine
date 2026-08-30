@@ -121,16 +121,29 @@ final class RasterModel {
             : "Couldn't open \(failed.count) of \(picked.count) files:\n" + failed.joined(separator: "\n")
     }
 
-    /// Pull every published field off the engine at once. Anything that
-    /// changes the set list or the selection outside a frame must call this:
-    /// the readouts only run while the chart renders.
+    /// Read the frame's values off the chart. Only what changed is assigned:
+    /// see ReadoutsModel.pull.
+    func pull() {
+        guard let e = engine else { return }
+        let over = e.rasterOverChart()
+        if inView != over { inView = over }
+        let hidden = e.chartHidden()
+        if chartHidden != hidden { chartHidden = hidden }
+        let avail = e.rasterAvailableName()
+        if available != avail { available = avail }
+        let live = e.rasterSets()
+        if sets != live { sets = live }
+        let i = e.rasterActiveIndex()
+        if active != i { active = i }
+        let drawn = e.rasterName()
+        if name != drawn { name = drawn }
+    }
+
+    /// Read every field back and write down which sets are drawn. Anything
+    /// that changes the set list or the selection outside a frame must call
+    /// this: the frame readouts only run while the chart renders.
     func refresh() {
-        guard let c = engine else { return }
-        name = c.rasterName()
-        active = c.rasterActiveIndex()
-        sets = c.rasterSets()
-        available = c.rasterAvailableName()
-        chartHidden = c.chartHidden()
+        pull()
         saveShown()
     }
 

@@ -758,79 +758,42 @@ final class ChartController: NSObject {
     private var lastViewSavedAt: TimeInterval = 0
     /// The pose last written down, so an unmoved camera is not written again.
     private var lastSavedView: lookout_view?
-    /// Internal, not private: the raster and chart-link calls in
-    /// ChartController+Raster.swift push a readout after a change the
-    /// frame loop would not otherwise see.
+    /// Internal, not private: the raster and chart-link calls push a readout
+    /// after a change the frame loop would not otherwise see.
+    ///
+    /// Each model reads its own values off this controller through its seam.
+    /// What is left here is the throttle and the camera pose, which are the
+    /// render loop's business and no model's.
     func pushReadouts() {
-        guard let model, let h = handle else { return }
-        // @Published fires objectWillChange on ASSIGNMENT, changed or not — an
-        // unconditional push per rendered frame re-evaluated the SwiftUI HUD at
-        // frame rate and showed up as per-frame AttributeGraph work in a
-        // gesture profile. Throttle to 10Hz (readouts are human-readable text)
-        // and only assign what actually changed.
+        guard let model, handle != nil else { return }
+        // The readouts are human-readable text, so 10Hz is as fast as they can
+        // be read. Every frame re-evaluated the whole HUD, which showed up as
+        // per-frame AttributeGraph work in a gesture profile.
         let now = ProcessInfo.processInfo.systemUptime
         if now - lastReadoutsAt < 0.1 { return }
         lastReadoutsAt = now
-        var v = lookout_view()
-        lookout_get_view(h, &v)
-        let over = rasterOverChart()
-        if model.raster.inView != over { model.raster.inView = over }
-        let hidden = chartHidden()
-        if model.raster.chartHidden != hidden { model.raster.chartHidden = hidden }
-        let avail = rasterAvailableName()
-        if model.raster.available != avail { model.raster.available = avail }
-        let sets = rasterSets()
-        if model.raster.sets.map(\.id) != sets.map(\.id)
-            || model.raster.sets.map(\.inView) != sets.map(\.inView)
-            || model.raster.sets.map(\.shown) != sets.map(\.shown) { model.raster.sets = sets }
-        let ai = rasterActiveIndex()
-        if model.raster.active != ai { model.raster.active = ai }
-        let active = rasterName()
-        if model.raster.name != active { model.raster.name = active }
-        // The core turns follow off itself on a pan; polling here is what makes
-        // the lock button follow the core instead of its own last tap.
-        let follow = followState
-        if model.readouts.followState != follow { model.readouts.followState = follow }
-        let cup = courseUpState
-        if model.readouts.courseUpState != cup { model.readouts.courseUpState = cup }
-        let plugged = pluginsActive
-        if model.readouts.pluginsActive != plugged { model.readouts.pluginsActive = plugged }
+
+        model.readouts.pull()
+        model.raster.pull()
         // The chart-link list, the credit and the error, from the core. A
         // landing answer raises needs-redraw, so a resolve keeps this ticking
         // until it is done.
         model.chartLinks.poll()
-        // Own ship, for the position readout. The state and the numbers move
-        // together: a readout that kept the last position through a lost fix
-        // would be presenting a stale one as live.
-        if let ship = ownShip() {
-            if model.readouts.fixState != ship.state { model.readouts.fixState = ship.state }
-            let lat: Double? = ship.state == .live ? ship.lat : nil
-            let lon: Double? = ship.state == .live ? ship.lon : nil
-            if model.readouts.shipLat != lat { model.readouts.shipLat = lat }
-            if model.readouts.shipLon != lon { model.readouts.shipLon = lon }
-        }
-        if model.readouts.rotationDeg != v.rotation_deg { model.readouts.rotationDeg = v.rotation_deg }
-        if model.readouts.zoomLevel != v.zoom { model.readouts.zoomLevel = v.zoom }
-        if model.readouts.centerLat != v.lat { model.readouts.centerLat = v.lat }
-        if model.readouts.centerLon != v.lon { model.readouts.centerLon = v.lon }
-        // Persist periodically too: a crash or a force-quit never reaches
-        // close(). Only when it has moved: frames keep coming while a plugin
-        // moves own ship, so a boat at anchor wrote the same pose every three
-        // seconds for as long as it lay there.
-        if now - lastViewSavedAt >= 3,
-           lastSavedView.map({ ViewState.differs(v, from: $0) }) ?? true {
-            lastViewSavedAt = now
-            lastSavedView = v
-            ViewState.save(v)
-        }
-        let ov = lookout_overscale(h)
-        if model.readouts.overscale != ov { model.readouts.overscale = ov }
-        let sd = lookout_scale_denominator(h)
-        if model.readouts.scaleDenominator != sd { model.readouts.scaleDenominator = sd }
-        var m = tile57_mariner()
-        lookout_get_mariner(h, &m)
-        let sch = Int(m.scheme.rawValue)
-        if model.readouts.scheme != sch { model.readouts.scheme = sch }
+
+        saveViewIfMoved(now)
+    }
+
+    /// Write the camera pose down periodically: a crash or a force-quit never
+    /// reaches close(). Only when it has moved — frames keep coming while a
+    /// plugin moves own ship, so a boat at anchor wrote the same pose every
+    /// three seconds for as long as it lay there.
+    private func saveViewIfMoved(_ now: TimeInterval) {
+        guard now - lastViewSavedAt >= 3 else { return }
+        let v = currentView
+        guard lastSavedView.map({ ViewState.differs(v, from: $0) }) ?? true else { return }
+        lastViewSavedAt = now
+        lastSavedView = v
+        ViewState.save(v)
     }
 
     // MARK: - Fixture capture

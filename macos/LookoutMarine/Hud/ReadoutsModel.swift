@@ -37,6 +37,45 @@ final class ReadoutsModel {
     /// follow control is only shown when one can supply a position.
     var pluginsActive = false
 
+    weak var engine: (any ReadoutEngine)?
+
+    /// Read the frame's values off the chart.
+    ///
+    /// Only what changed is assigned. Observation tracks a view against the
+    /// properties it read, and an assignment counts as a change whether the
+    /// value moved or not, so an unconditional push per frame re-evaluated the
+    /// whole HUD at frame rate — it showed up as per-frame AttributeGraph work
+    /// in a gesture profile. The caller throttles the rest of the way.
+    func pull() {
+        guard let e = engine else { return }
+        let v = e.currentView
+        if rotationDeg != v.rotation_deg { rotationDeg = v.rotation_deg }
+        if zoomLevel != v.zoom { zoomLevel = v.zoom }
+        if centerLat != v.lat { centerLat = v.lat }
+        if centerLon != v.lon { centerLon = v.lon }
+        if overscale != e.overscale { overscale = e.overscale }
+        if scaleDenominator != e.scaleDenominator { scaleDenominator = e.scaleDenominator }
+        if scheme != e.schemeIndex { scheme = e.schemeIndex }
+        // The core turns follow off itself on a pan, so polling here is what
+        // makes the lock button follow the core instead of its own last tap.
+        if followState != e.followState { followState = e.followState }
+        if courseUpState != e.courseUpState { courseUpState = e.courseUpState }
+        if pluginsActive != e.pluginsActive { pluginsActive = e.pluginsActive }
+        pullOwnShip(e)
+    }
+
+    /// Own ship, for the position readout. The state and the numbers move
+    /// together: a readout that kept the last position through a lost fix
+    /// would be presenting a stale one as live.
+    private func pullOwnShip(_ e: any ReadoutEngine) {
+        guard let ship = e.ownShip() else { return }
+        if fixState != ship.state { fixState = ship.state }
+        let lat: Double? = ship.state == .live ? ship.lat : nil
+        let lon: Double? = ship.state == .live ? ship.lon : nil
+        if shipLat != lat { shipLat = lat }
+        if shipLon != lon { shipLon = lon }
+    }
+
     var schemeName: String {
         switch scheme { case 1: return "Dusk"; case 2: return "Night"; default: return "Day" }
     }

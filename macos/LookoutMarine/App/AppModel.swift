@@ -21,6 +21,7 @@ final class AppModel {
             charts.engine = controller
             chartLinks.engine = controller
             raster.engine = controller
+            readouts.engine = controller
             plugins.engine = controller
             overlay.engine = controller
         }

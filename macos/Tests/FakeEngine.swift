@@ -13,7 +13,7 @@ import Foundation
 
 @MainActor
 final class FakeEngine: RasterEngine, ChartLinkEngine, PluginEngine,
-                        ChartOpenEngine, OverlayEngine {
+                        ChartOpenEngine, ReadoutEngine, OverlayEngine {
 
     // MARK: What it was asked
     var calls: [String] = []
@@ -44,6 +44,30 @@ final class FakeEngine: RasterEngine, ChartLinkEngine, PluginEngine,
     func cycleRaster() { note("cycleRaster") }
     func toggleChart() { note("toggleChart"); chartIsHidden.toggle() }
     func chartHidden() -> Bool { chartIsHidden }
+    var rasterIsOverChart = false
+    func rasterOverChart() -> Bool { rasterIsOverChart }
+
+    // MARK: The readouts
+    var view = lookout_view(lon: -76, lat: 39, zoom: 12, rotation_deg: 0)
+    var follow = 0
+    var courseUp = 0
+    var pluginsAreActive = false
+    var scale: Double = 25_000
+    var overscaleValue: Double = 1
+    var scheme = 0
+    var building = false
+    /// What ownShip answers. Nil is "the core did not say".
+    var ship: (state: FixState, lat: Double, lon: Double)?
+
+    var currentView: lookout_view { view }
+    var followState: Int { follow }
+    var courseUpState: Int { courseUp }
+    var pluginsActive: Bool { pluginsAreActive }
+    var scaleDenominator: Double { scale }
+    var overscale: Double { overscaleValue }
+    var schemeIndex: Int { scheme }
+    var stillBuilding: Bool { building }
+    func ownShip() -> (state: FixState, lat: Double, lon: Double)? { ship }
 
     // MARK: Chart links
     /// What chartLinksSnapshot answers. Nil means the core had nothing.
