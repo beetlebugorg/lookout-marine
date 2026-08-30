@@ -110,7 +110,7 @@ struct PluginTableView: View {
         let locatable = spec.locatable && row.lat != nil && row.lon != nil
         return Button {
             guard let lat = row.lat, let lon = row.lon else { return }
-            model.revealOnChart(lon: lon, lat: lat)
+            model.overlay.revealOnChart(lon: lon, lat: lat)
             // The chart is behind the form, so shut the form to show it.
             model.showSettings = false
         } label: {

@@ -34,7 +34,7 @@ struct OverlayLayer: View {
     var body: some View {
         GeometryReader { geo in
             let compact = geo.size.width < Self.compactWidth
-            let form: PickForm? = model.pickAnchor == nil ? nil : Self.pickForm(for: geo.size)
+            let form: PickForm? = model.overlay.pickAnchor == nil ? nil : Self.pickForm(for: geo.size)
             // A side sheet owns the leading edge; the chrome there slides
             // inboard of it.
             let sideInset: CGFloat = form == .sideSheet ? Self.sideSheetWidth + Chrome.gap : 0
@@ -97,7 +97,7 @@ struct OverlayLayer: View {
                 }
                 // The mark on what was picked, then the report beside it.
                 .overlay(alignment: .topLeading) {
-                    if let point = model.pickPoint {
+                    if let point = model.overlay.pickPoint {
                         PickMarker()
                             .offset(x: point.x - PickMarker.size / 2,
                                     y: point.y - PickMarker.size / 2)
@@ -112,10 +112,10 @@ struct OverlayLayer: View {
                 // The report docks where the pick was taken and stays there.
                 // Only the mark above tracks the chart.
                 .overlay(alignment: .topLeading) {
-                    if let point = model.pickAnchor, let form {
+                    if let point = model.overlay.pickAnchor, let form {
                         switch form {
                         case .callout:
-                            let width = PickCallout.width(for: model.pickResults.count,
+                            let width = PickCallout.width(for: model.overlay.pickResults.count,
                                                           in: geo.size.width)
                             let place = Self.calloutLayout(point: point, width: width,
                                                            in: geo.size)
@@ -208,7 +208,7 @@ struct OverlayLayer: View {
                     }
                 }
                 .overlay {
-                    if let picture = model.picture {
+                    if let picture = model.overlay.picture {
                         PictureViewer(model: model, picture: picture)
                             .chromeHitRegion("picture-viewer")
                     }
@@ -255,7 +255,7 @@ struct OverlayLayer: View {
                 // not an offset, for the reason above. No chrome hit region:
                 // a click over the tip must still pick the chart under it.
                 .overlay(alignment: .topLeading) {
-                    if let info = model.hover, let p = model.hoverPoint, model.pinned == nil {
+                    if let info = model.overlay.hover, let p = model.overlay.hoverPoint, model.overlay.pinned == nil {
                         let place = Self.hoverLayout(point: p, in: geo.size)
                         HoverTip(info: info)
                             .frame(maxWidth: .infinity, maxHeight: .infinity,
@@ -272,8 +272,8 @@ struct OverlayLayer: View {
                 // chrome hit region with it, behind. It sits above and right
                 // of the mark, clear of the mark's own name.
                 .overlay(alignment: .topLeading) {
-                    if model.renaming != nil, let p = model.renamingPoint {
-                        MarkerRenameField(model: model)
+                    if model.overlay.renaming != nil, let p = model.overlay.renamingPoint {
+                        MarkerRenameField(model: model, overlay: model.overlay)
                             .chromeHitRegion("marker-rename")
                             .padding(.leading, min(max(0, p.x + 10),
                                                    max(0, geo.size.width - MarkerRenameField.width)))
@@ -282,7 +282,7 @@ struct OverlayLayer: View {
                 }
                 // The chart menu, at the point it was raised at.
                 .overlay(alignment: .topLeading) {
-                    if let menu = model.chartMenu {
+                    if let menu = model.overlay.chartMenu {
                         let place = Self.menuLayout(point: menu.at, in: geo.size,
                                                     hasMarker: menu.marker != nil)
                         ChartMenuPanel(model: model, menu: menu)
@@ -299,9 +299,9 @@ struct OverlayLayer: View {
                 // control, and it takes the pointer: the mariner has to be
                 // able to press that control.
                 .overlay(alignment: .topLeading) {
-                    if let pin = model.pinned, let p = model.pinnedPoint {
+                    if let pin = model.overlay.pinned, let p = model.overlay.pinnedPoint {
                         let place = Self.hoverLayout(point: p, in: geo.size)
-                        HoverTip(info: pin.info) { model.closePin() }
+                        HoverTip(info: pin.info) { model.overlay.closePin() }
                             .chromeHitRegion("pinned-bubble")
                             .frame(maxWidth: .infinity, maxHeight: .infinity,
                                    alignment: place.alignment)

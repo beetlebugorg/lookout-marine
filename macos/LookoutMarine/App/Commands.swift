@@ -58,7 +58,7 @@ struct AppCommands: Commands {
                 Text("No Vessel Tables").foregroundStyle(.secondary)
             } else {
                 ForEach(model.plugins.tables) { spec in
-                    Button("\(spec.title)…") { model.showPluginTable(spec) }
+                    Button("\(spec.title)…") { PluginTableWindowController.show(spec, model: model) }
                 }
             }
         }

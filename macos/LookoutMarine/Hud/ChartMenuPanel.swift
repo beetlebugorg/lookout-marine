@@ -28,7 +28,7 @@ import UIKit
 /// chart, and it closes when the camera moves, the way the pick report does.
 struct ChartMenuPanel: View {
     var model: AppModel
-    let menu: AppModel.ChartMenu
+    let menu: OverlayModel.ChartMenu
 
     static let width: CGFloat = 236
     /// Only used to decide which way the menu flips at an edge, never as a
@@ -42,14 +42,14 @@ struct ChartMenuPanel: View {
             header
             Divider().overlay(Chrome.rule)
             VStack(alignment: .leading, spacing: 1) {
-                item("Pick report", system: "info.circle", action: model.chartMenuPick)
+                item("Pick report", system: "info.circle", action: model.overlay.chartMenuPick)
                 if menu.marker == nil {
-                    item("Drop marker", system: "mappin", action: model.chartMenuDropMarker)
+                    item("Drop marker", system: "mappin", action: model.overlay.chartMenuDropMarker)
                 } else {
-                    item("Rename marker", system: "pencil", action: model.chartMenuRenameMarker)
-                    item("Remove marker", system: "trash", action: model.chartMenuRemoveMarker)
+                    item("Rename marker", system: "pencil", action: model.overlay.chartMenuRenameMarker)
+                    item("Remove marker", system: "trash", action: model.overlay.chartMenuRemoveMarker)
                 }
-                item("Copy position", system: "doc.on.doc", action: model.chartMenuCopyPosition)
+                item("Copy position", system: "doc.on.doc", action: model.overlay.chartMenuCopyPosition)
             }
             .padding(.vertical, 4)
         }
@@ -115,7 +115,10 @@ struct ChartMenuPanel: View {
 /// abandons, an empty field keeps the old name, and the field takes 32
 /// characters, which is a name and not a note.
 struct MarkerRenameField: View {
-    @Bindable var model: AppModel
+    let model: AppModel
+    /// The field writes the name being typed, so it holds the model that owns
+    /// it rather than reaching through AppModel for it.
+    @Bindable var overlay: OverlayModel
     @FocusState private var focused: Bool
 
     static let width: CGFloat = 200
@@ -125,13 +128,13 @@ struct MarkerRenameField: View {
             Image(systemName: "mappin.circle.fill")
                 .font(.system(size: 13))
                 .foregroundStyle(Chrome.magenta)
-            TextField("Name", text: $model.renamingText)
+            TextField("Name", text: $overlay.renamingText)
                 .textFieldStyle(.plain)
                 .font(.system(size: 13))
                 .foregroundStyle(Chrome.ink)
                 .focused($focused)
-                .onSubmit { model.commitRename() }
-                .onChange(of: model.renamingText) { clip() }
+                .onSubmit { model.overlay.commitRename() }
+                .onChange(of: model.overlay.renamingText) { clip() }
                 .accessibilityIdentifier("marker-name-field")
         }
         .padding(.horizontal, 10)
@@ -139,15 +142,15 @@ struct MarkerRenameField: View {
         .panelSurface(cornerRadius: 8, opaque: true)
         .onAppear { focused = true }
         #if os(macOS)
-        .onExitCommand { model.cancelRename() }
+        .onExitCommand { model.overlay.cancelRename() }
         #endif
     }
 
     /// Cut here as well as in the core, so the field never shows more than
     /// will be kept.
     private func clip() {
-        if model.renamingText.count > 32 {
-            model.renamingText = String(model.renamingText.prefix(32))
+        if model.overlay.renamingText.count > 32 {
+            model.overlay.renamingText = String(model.overlay.renamingText.prefix(32))
         }
     }
 }

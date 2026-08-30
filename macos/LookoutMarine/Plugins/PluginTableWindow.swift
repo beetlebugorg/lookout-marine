@@ -253,7 +253,7 @@ final class PluginTableWindowController: NSObject, NSWindowDelegate,
         // one that did may still hold a row nobody has heard a position from.
         guard spec.locatable, row >= 0, row < rows.count else { return }
         guard let lat = rows[row].lat, let lon = rows[row].lon else { return }
-        model?.revealOnChart(lon: lon, lat: lat)
+        model?.overlay.revealOnChart(lon: lon, lat: lat)
     }
 
     /// Shut the dialog. Used where it was opened only to make the plugin build

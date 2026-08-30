@@ -192,7 +192,7 @@ final class ChartNSView: NSView {
 
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
-        model?.pickCentreHint = CGPoint(x: newSize.width / 2, y: newSize.height / 2)
+        model?.overlay.pickCentreHint = CGPoint(x: newSize.width / 2, y: newSize.height / 2)
         // First real size → open the initial chart (at a stable size, not the
         // transient zero/pre-layout bounds). Later sizes just resize.
         if !didAutoOpen { maybeAutoOpen() }
@@ -232,7 +232,7 @@ final class ChartNSView: NSView {
         // recents, and the fromServer frame restore is exactly the mid-load
         // resize the deferral above is dodging.
         window?.isRestorable = false
-        model?.pickCentreHint = CGPoint(x: bounds.midX, y: bounds.midY)
+        model?.overlay.pickCentreHint = CGPoint(x: bounds.midX, y: bounds.midY)
         model?.openingCells = paths.count
         model?.isOpening = true // loader up before the (synchronous) open runs
         model?.preparingSymbols = (lookout_atlas_cache_ready() == 0) // first run?
@@ -262,31 +262,31 @@ final class ChartNSView: NSView {
     /// own exit and move commands never fire.
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 53 {   // 53 = Escape
-            if model?.chartMenu != nil {
-                model?.closeChartMenu()
+            if model?.overlay.chartMenu != nil {
+                model?.overlay.closeChartMenu()
                 return
             }
-            if model?.renaming != nil {
-                model?.cancelRename()
+            if model?.overlay.renaming != nil {
+                model?.overlay.cancelRename()
                 return
             }
-            if model?.picture != nil {
-                model?.picture = nil
+            if model?.overlay.picture != nil {
+                model?.overlay.picture = nil
                 return
             }
-            if model?.pickPoint != nil {
-                model?.closePick()
+            if model?.overlay.pickPoint != nil {
+                model?.overlay.closePick()
                 return
             }
         }
         // 126 up, 125 down: the selection in the pick's list.
-        if let model, model.pickResults.count > 1 {
+        if let model, model.overlay.pickResults.count > 1 {
             if event.keyCode == 126 {
-                model.pickIndex = max(0, model.pickIndex - 1)
+                model.overlay.pickIndex = max(0, model.overlay.pickIndex - 1)
                 return
             }
             if event.keyCode == 125 {
-                model.pickIndex = min(model.pickResults.count - 1, model.pickIndex + 1)
+                model.overlay.pickIndex = min(model.overlay.pickResults.count - 1, model.overlay.pickIndex + 1)
                 return
             }
         }
@@ -326,15 +326,15 @@ final class ChartNSView: NSView {
     /// is dropped as soon as the pointer leaves its symbol, without waiting.
     private func scheduleHover(at p: CGPoint) {
         hoverTimer?.invalidate()
-        if model?.pinned != nil { return } // one bubble at a time
-        if model?.hover != nil, controller?.overlayInfo(atPoint: p) == nil { clearHover() }
+        if model?.overlay.pinned != nil { return } // one bubble at a time
+        if model?.overlay.hover != nil, controller?.overlayInfo(atPoint: p) == nil { clearHover() }
         hoverTimer = Timer.scheduledTimer(withTimeInterval: Self.hoverDelay,
                                           repeats: false) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self, let m = self.model else { return }
                 let info = self.controller?.overlayInfo(atPoint: p)
-                if m.hover != info { m.hover = info }
-                m.hoverPoint = info == nil ? nil : p
+                if m.overlay.hover != info { m.overlay.hover = info }
+                m.overlay.hoverPoint = info == nil ? nil : p
             }
         }
     }
@@ -343,8 +343,8 @@ final class ChartNSView: NSView {
         hoverTimer?.invalidate()
         hoverTimer = nil
         guard let m = model else { return }
-        if m.hover != nil { m.hover = nil }
-        if m.hoverPoint != nil { m.hoverPoint = nil }
+        if m.overlay.hover != nil { m.overlay.hover = nil }
+        if m.overlay.hoverPoint != nil { m.overlay.hoverPoint = nil }
     }
 
     // MARK: Drag = pan (with fling) / shift-drag = rotate
@@ -362,7 +362,7 @@ final class ChartNSView: NSView {
         // A press on the chart puts an open menu away, and then behaves as an
         // ordinary press: a click that only dismissed would cost the mariner
         // a second one to start the pan they were already making.
-        model?.closeChartMenu()
+        model?.overlay.closeChartMenu()
         downPoint = p; lastDrag = p
         vx = 0; vy = 0; lastSampleTime = 0
         controller?.flingStart(vx: 0, vy: 0) // grabbing stops any coast
@@ -436,10 +436,10 @@ final class ChartNSView: NSView {
         // target pins its bubble, because a mariner tapping a vessel is asking
         // about the vessel rather than the water under it.
         if let hit = controller?.overlayHit(atPoint: p) {
-            model?.pin(hit)
+            model?.overlay.pin(hit)
             return
         }
-        model?.closePin() // a click elsewhere on the chart closes the bubble
+        model?.overlay.closePin() // a click elsewhere on the chart closes the bubble
     }
 
     // MARK: The chart menu
@@ -453,7 +453,7 @@ final class ChartNSView: NSView {
             super.rightMouseDown(with: event)
             return
         }
-        model?.openChartMenu(at: p)
+        model?.overlay.openChartMenu(at: p)
     }
 
     // MARK: Wheel / pinch zoom (cursor-anchored)

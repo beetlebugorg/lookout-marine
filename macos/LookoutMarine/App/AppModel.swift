@@ -121,48 +121,6 @@ final class AppModel {
     /// the readout NEVER falls back to the map centre or the cursor.
     var shipLat: Double?
     var shipLon: Double?
-    /// The chart menu, while it is up, and the marker rename field, while the
-    /// mariner is typing in it. See the actions further down.
-    var chartMenu: ChartMenu?
-    var renaming: MarkerRename?
-    var renamingText = ""
-    /// Where the rename field stands, re-projected every frame: it is anchored
-    /// to its marker, not to the screen.
-    var renamingPoint: CGPoint?
-    /// The overlay object the mariner pinned, and where it draws in the
-    /// chrome's coordinate space. One at a time.
-    var pinned: OverlayPin?
-    var pinnedPoint: CGPoint?
-    /// What the plugin overlay says about the symbol under the pointer, and
-    /// where the pointer is in the chrome's coordinate space. Both nil when the
-    /// pointer is over nothing. Set by the chart view after a hover settles.
-    var hover: OverlayHover?
-    var hoverPoint: CGPoint?
-
-    /// The cursor pick: the features under the last tap, where it happened (in
-    /// the chrome's coordinate space), and which one the report is showing.
-    var pickResults: [PickFeature] = []
-    var pickPoint: CGPoint?
-    var pickIndex = 0
-    /// Where on the CHART the pick was taken. The mark belongs to the object,
-    /// not to the screen: follow moves the chart with no gesture behind it, so
-    /// the mark is re-projected from this every frame.
-    var pickGeo: (lon: Double, lat: Double)?
-    /// Where the REPORT is docked: the mark's position when the pick was
-    /// taken, and fixed for as long as the report is open. The panel's frame
-    /// must not depend on anything the camera touches, or a chart sliding
-    /// under follow re-lays it out every frame.
-    var pickAnchor: CGPoint?
-    /// Where a hook-driven pick should anchor its report. The chart view sets it
-    /// to the centre of its bounds.
-    var pickCentreHint: CGPoint?
-    /// The chrome's size: the view inset by the safe area. This is the space
-    /// the report is laid out in. The chart view sets it with the hint.
-    /// `showPick` reads it to find the report's body and the sheet's edge.
-    var chromeSize: CGSize = .zero
-    /// How far `showPick` lifted the chart to clear the sheet. `closePick`
-    /// puts the chart back by the same amount. Points, in the chrome's space.
-    var pickLift: CGFloat = 0
     var isBuilding = false         // a background tessellation is filling in
 
     // MARK: iOS sheet/picker presentation (unused on macOS, where the file
@@ -194,13 +152,6 @@ final class AppModel {
     var searchOpen = false
     var searchText = ""
 
-    /// A picture from the pick report, shown over the chart at full size.
-    struct Picture: Equatable {
-        let name: String
-        let data: Data
-    }
-    var picture: Picture?
-
     // MARK: Scale entry (tapping the 1:N readout)
     var showScaleEntry = false
     var scaleEntryText = ""
@@ -211,6 +162,7 @@ final class AppModel {
             chartLinks.controller = controller
             raster.controller = controller
             plugins.controller = controller
+            overlay.controller = controller
         }
     }
 
@@ -222,6 +174,7 @@ final class AppModel {
     let chartLinks = ChartLinksModel()
     let raster = RasterModel()
     let plugins = PluginsModel()
+    let overlay = OverlayModel()
 
 
     // MARK: State the extensions own
@@ -305,6 +258,87 @@ final class AppModel {
         #if os(macOS)
         presentRasterPanel()
         #endif
+    }
+
+    // MARK: The chart commands
+    //
+    // One line each: the menu bar, the keyboard and the chrome bubbles all
+    // reach the controller through here, so none of them has to hold it or
+    // check whether a chart is up.
+
+    func zoomIn()   { controller?.zoomCentered(+1.0) }
+    func zoomOut()  { controller?.zoomCentered(-1.0) }
+    func zoomToFit(){ controller?.fitChart() }
+    func northUp()  { controller?.resetRotation() }
+    func toggleText() { controller?.toggleText() }
+    func toggleSoundings() { controller?.toggleSoundings() }
+    func toggleOtherCategory() { controller?.toggleOtherCategory() }
+
+    /// What the compass bubble shows. The core owns both parts: it drops
+    /// follow on a pan and course up on a hand rotation, so this is read, not
+    /// remembered.
+    var orientation: Orientation {
+        if followState == 0 { return .unlocked }
+        if followState == 2 { return .armed }   // on, no fix to follow yet
+        return courseUpState == 0 ? .northUp : .courseUp
+    }
+
+    /// The compass bubble's tap. It always locks the chart to own ship, and
+    /// once locked it cycles north up and course up.
+    func cycleOrientation() {
+        guard let c = controller else { return }
+        if followState == 0 {
+            c.setFollow(true)          // lock, leaving the chart as it lies
+        } else if courseUpState == 0 {
+            c.setCourseUp(true)        // turn with own ship
+        } else {
+            c.resetRotation()          // back to north up, still locked
+        }
+    }
+
+    /// Scheme changes from the MENU must persist like ones from the settings
+    /// form (the form saves in its own apply path).
+    func cycleScheme() {
+        guard let c = controller else { return }
+        c.cycleScheme()
+        MarinerSettings.save(c.getMariner())
+    }
+
+    /// Set the color scheme directly (0 day / 1 dusk / 2 night).
+    func setScheme(_ s: Int) {
+        guard let c = controller else { return }
+        var m = c.getMariner()
+        m.scheme = tile57_scheme(UInt32(s))
+        c.setMariner(m)
+        MarinerSettings.save(m)
+    }
+
+    var schemeName: String {
+        switch scheme { case 1: return "Dusk"; case 2: return "Night"; default: return "Day" }
+    }
+
+    /// Parse the search text as a coordinate and recenter. True when it was a
+    /// coordinate, so the field can clear itself.
+    @discardableResult
+    func submitSearch() -> Bool {
+        guard let controller, let coord = CoordinateParser.parse(searchText) else { return false }
+        let cur = controller.currentView
+        // Keep the current zoom and rotation; a chart-less view uses a
+        // harbor-ish zoom.
+        let zoom = cur.zoom > 0 ? cur.zoom : 12
+        controller.setView(lookout_view(lon: coord.lon, lat: coord.lat,
+                                        zoom: zoom, rotation_deg: cur.rotation_deg))
+        return true
+    }
+
+    /// The Configure GPS button. This is the one place in the app where a
+    /// mariner is told they have no position, so it carries the fix: Settings,
+    /// Connections, where a gateway or a Signal K server is added. (A phone
+    /// has a receiver of its own and will ask for permission here instead;
+    /// that is a later pass.)
+    func configurePosition() {
+        openSettings()
+        settingsTab = "connections"
     }
 
     /// Open the scale entry. The field starts at the current scale.

@@ -71,8 +71,8 @@ final class ChromeHostingController: UIHostingController<ContentView> {
 
     @objc private func keyEscape() {
         let model = SceneDelegate.model
-        if model.picture != nil { model.picture = nil; return }
-        if model.pickPoint != nil { model.closePick() }
+        if model.overlay.picture != nil { model.overlay.picture = nil; return }
+        if model.overlay.pickPoint != nil { model.overlay.closePick() }
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -116,18 +116,18 @@ final class ChromeHostingController: UIHostingController<ContentView> {
         // Escape by key code or by character. A simulated press can carry
         // the character and no key code.
         if key.keyCode == .keyboardEscape || key.charactersIgnoringModifiers == "\u{1b}" {
-            if model.picture != nil { model.picture = nil; return true }
-            if model.pickPoint != nil { model.closePick(); return true }
+            if model.overlay.picture != nil { model.overlay.picture = nil; return true }
+            if model.overlay.pickPoint != nil { model.overlay.closePick(); return true }
             return false
         }
 
         switch key.keyCode {
         // The selection in the pick's list, as 126/125 do on the Mac.
-        case .keyboardUpArrow where model.pickResults.count > 1:
-            model.pickIndex = max(0, model.pickIndex - 1)
+        case .keyboardUpArrow where model.overlay.pickResults.count > 1:
+            model.overlay.pickIndex = max(0, model.overlay.pickIndex - 1)
             return true
-        case .keyboardDownArrow where model.pickResults.count > 1:
-            model.pickIndex = min(model.pickResults.count - 1, model.pickIndex + 1)
+        case .keyboardDownArrow where model.overlay.pickResults.count > 1:
+            model.overlay.pickIndex = min(model.overlay.pickResults.count - 1, model.overlay.pickIndex + 1)
             return true
         default:
             return false

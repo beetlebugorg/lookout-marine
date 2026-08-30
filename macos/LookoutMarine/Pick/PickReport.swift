@@ -84,7 +84,7 @@ private struct PickControls: View {
             .accessibilityLabel("Copy this report")
             .accessibilityIdentifier("copy-report")
 
-            Button { model.closePick() } label: {
+            Button { model.overlay.closePick() } label: {
                 Image(systemName: "xmark").font(.system(size: 13, weight: .medium)).padding(5)
             }
             .buttonStyle(ChromeFlatStyle(cornerRadius: 6))
@@ -95,8 +95,8 @@ private struct PickControls: View {
     }
 
     private func copyReport() {
-        guard model.pickResults.indices.contains(model.pickIndex) else { return }
-        Pasteboard.copy(S57.plainText(model.pickResults[model.pickIndex]))
+        guard model.overlay.pickResults.indices.contains(model.overlay.pickIndex) else { return }
+        Pasteboard.copy(S57.plainText(model.overlay.pickResults[model.overlay.pickIndex]))
     }
 }
 
@@ -358,14 +358,14 @@ struct PickCallout: View {
     }
 
     private var feature: PickFeature? {
-        guard model.pickResults.indices.contains(model.pickIndex) else { return nil }
-        return model.pickResults[model.pickIndex]
+        guard model.overlay.pickResults.indices.contains(model.overlay.pickIndex) else { return nil }
+        return model.overlay.pickResults[model.overlay.pickIndex]
     }
 
     var body: some View {
         if let feature {
             HStack(alignment: .top, spacing: 0) {
-                if model.pickResults.count > 1 {
+                if model.overlay.pickResults.count > 1 {
                     // The detail column is measured; the list column follows
                     // its height. One direction only — a column that also
                     // pushed back gave layout two answers, and the card
@@ -381,9 +381,9 @@ struct PickCallout: View {
                             }
                             // The arrows walk the list; the list keeps the
                             // selection in sight.
-                            .onChange(of: model.pickIndex) {
+                            .onChange(of: model.overlay.pickIndex) {
                                 withAnimation(.easeOut(duration: 0.12)) {
-                                    proxy.scrollTo(model.pickIndex)
+                                    proxy.scrollTo(model.overlay.pickIndex)
                                 }
                             }
                         }
@@ -418,7 +418,7 @@ struct PickCallout: View {
             .panelSurface(cornerRadius: 12, opaque: true)
             .id(anchor)
             #if os(macOS)
-            .onExitCommand { model.closePick() }
+            .onExitCommand { model.overlay.closePick() }
             #endif
         }
     }
@@ -428,14 +428,14 @@ struct PickCallout: View {
     /// no pager to walk blind and nothing to go "back" from.
     private var listColumn: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("\(model.pickResults.count) OBJECTS")
+            Text("\(model.overlay.pickResults.count) OBJECTS")
                 .font(.system(size: 11, weight: .semibold))
                 .kerning(0.8)
                 .foregroundStyle(Chrome.muted)
                 .padding(.horizontal, 20)
                 .padding(.top, 18)
                 .padding(.bottom, 8)
-            ForEach(Array(model.pickResults.enumerated()), id: \.element.id) { i, f in
+            ForEach(Array(model.overlay.pickResults.enumerated()), id: \.element.id) { i, f in
                 if !f.cls.hasPrefix("M_") { listRow(i, f) }
             }
             Spacer(minLength: 8)
@@ -445,12 +445,12 @@ struct PickCallout: View {
     /// The chart's notes, pinned at the column's floor: every pick carries
     /// them, so they keep one place and never scroll away with a long list.
     @ViewBuilder private var notesShelf: some View {
-        if model.pickResults.contains(where: { $0.cls.hasPrefix("M_") }) {
+        if model.overlay.pickResults.contains(where: { $0.cls.hasPrefix("M_") }) {
             VStack(alignment: .leading, spacing: 0) {
                 Divider().overlay(Chrome.rule)
                     .padding(.horizontal, 9)
                     .padding(.bottom, 5)
-                ForEach(Array(model.pickResults.enumerated()), id: \.element.id) { i, f in
+                ForEach(Array(model.overlay.pickResults.enumerated()), id: \.element.id) { i, f in
                     if f.cls.hasPrefix("M_") { listRow(i, f) }
                 }
             }
@@ -460,9 +460,9 @@ struct PickCallout: View {
 
     private func listRow(_ i: Int, _ f: PickFeature) -> some View {
         let d = PickDecoded(f)
-        let selected = i == model.pickIndex
+        let selected = i == model.overlay.pickIndex
         let isNote = f.cls.hasPrefix("M_")
-        return Button { model.pickIndex = i } label: {
+        return Button { model.overlay.pickIndex = i } label: {
             HStack(spacing: 7) {
                 if isNote {
                     Image(systemName: "book.closed")
@@ -546,8 +546,8 @@ struct PickSheet: View {
     @State private var foldOpen = false
 
     private var feature: PickFeature? {
-        guard model.pickResults.indices.contains(model.pickIndex) else { return nil }
-        return model.pickResults[model.pickIndex]
+        guard model.overlay.pickResults.indices.contains(model.overlay.pickIndex) else { return nil }
+        return model.overlay.pickResults[model.overlay.pickIndex]
     }
 
     var body: some View {
@@ -555,7 +555,7 @@ struct PickSheet: View {
             let decoded = PickDecoded(feature)
             VStack(alignment: .leading, spacing: 0) {
                 PickHeader(model: model, decoded: decoded, compact: true)
-                if model.pickResults.count > 1 { chips }
+                if model.overlay.pickResults.count > 1 { chips }
                 Divider().overlay(Chrome.rule)
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
@@ -574,7 +574,7 @@ struct PickSheet: View {
             .overlay(corners.strokeBorder(Chrome.edge, lineWidth: 1))
             .shadow(color: .black.opacity(0.18), radius: 12, y: side == .bottom ? -2 : 0)
             #if os(macOS)
-            .onExitCommand { model.closePick() }
+            .onExitCommand { model.overlay.closePick() }
             #endif
         }
     }
@@ -591,10 +591,10 @@ struct PickSheet: View {
     private var chips: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                ForEach(Array(model.pickResults.enumerated()), id: \.element.id) { i, f in
-                    let selected = i == model.pickIndex
+                ForEach(Array(model.overlay.pickResults.enumerated()), id: \.element.id) { i, f in
+                    let selected = i == model.overlay.pickIndex
                     let chip = PickDecoded(f).chip
-                    Button { model.pickIndex = i } label: {
+                    Button { model.overlay.pickIndex = i } label: {
                         Text(chip)
                             .font(.system(size: 12, weight: .semibold))
                             .foregroundStyle(selected ? Chrome.accent : Chrome.muted)

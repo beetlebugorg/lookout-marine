@@ -378,8 +378,8 @@ final class ChartController: NSObject {
     /// re-projected every frame, and a mariner typing a name while the boat
     /// drifts under follow must not lose what they typed.
     private func retireChartChrome() {
-        if model?.pickPoint != nil { model?.closePick() }
-        if model?.chartMenu != nil { model?.closeChartMenu() }
+        if model?.overlay.pickPoint != nil { model?.overlay.closePick() }
+        if model?.overlay.chartMenu != nil { model?.overlay.closeChartMenu() }
     }
 
     /// Resume ticking after any state change (mutating calls funnel through here).
@@ -432,24 +432,24 @@ final class ChartController: NSObject {
     /// on assignment, and this runs at frame rate.
     private func syncGeoChrome() {
         guard let model else { return }
-        if let g = model.pickGeo, model.pickPoint != nil {
+        if let g = model.overlay.pickGeo, model.overlay.pickPoint != nil {
             let p = screenPoint(forGeoLon: g.lon, lat: g.lat)
-            if moved(model.pickPoint, p) { model.pickPoint = p }
+            if moved(model.overlay.pickPoint, p) { model.overlay.pickPoint = p }
         }
         // The rename field rides its marker, for the same reason.
-        if let r = model.renaming {
+        if let r = model.overlay.renaming {
             let p = screenPoint(forGeoLon: r.lon, lat: r.lat)
-            if moved(model.renamingPoint, p) { model.renamingPoint = p }
+            if moved(model.overlay.renamingPoint, p) { model.overlay.renamingPoint = p }
         }
         // A pinned bubble is re-read, not remembered: the target moves, its
         // values change, and it goes away when the plugin drops it.
-        if let pinned = model.pinned {
+        if let pinned = model.overlay.pinned {
             if let now = overlayInfo(id: pinned.id) {
-                if model.pinned != now { model.pinned = now }
+                if model.overlay.pinned != now { model.overlay.pinned = now }
                 let p = screenPoint(forGeoLon: now.lon, lat: now.lat)
-                if moved(model.pinnedPoint, p) { model.pinnedPoint = p }
+                if moved(model.overlay.pinnedPoint, p) { model.overlay.pinnedPoint = p }
             } else {
-                model.closePin()
+                model.overlay.closePin()
             }
         }
     }

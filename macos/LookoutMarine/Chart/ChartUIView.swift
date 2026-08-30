@@ -130,14 +130,14 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate {
         // the chrome window is not wired yet and its safe-area inset reads
         // zero, which put the hook-driven pick's mark off its object by that
         // inset once the window settled.
-        model?.pickCentreHint = inChromeSpace(CGPoint(x: bounds.midX, y: bounds.midY))
+        model?.overlay.pickCentreHint = inChromeSpace(CGPoint(x: bounds.midX, y: bounds.midY))
         // The space the report is laid out in. The chrome is inset by the
         // safe area and this view is not.
         if let inset = chromeWindow?.safeAreaInsets {
-            model?.chromeSize = CGSize(width: bounds.width - inset.left - inset.right,
+            model?.overlay.chromeSize = CGSize(width: bounds.width - inset.left - inset.right,
                                        height: bounds.height - inset.top - inset.bottom)
         } else {
-            model?.chromeSize = bounds.size
+            model?.overlay.chromeSize = bounds.size
         }
         // First real size → open the initial chart (at a stable size, not the
         // transient zero/pre-layout bounds). Later sizes (rotation, split view)
@@ -323,8 +323,8 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate {
     /// behaves as an ordinary tap.
     @objc private func onTap(_ g: UITapGestureRecognizer) {
         notePointerInput("tap")
-        model?.closeChartMenu()
-        model?.closePin()
+        model?.overlay.closeChartMenu()
+        model?.overlay.closePin()
     }
 
     /// A press raises the chart menu at that point. Every item acts on THIS
@@ -341,7 +341,7 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate {
             pan.isEnabled = true
         }
         controller?.flingStart(vx: 0, vy: 0)
-        model?.openChartMenu(at: inChromeSpace(g.location(in: self)))
+        model?.overlay.openChartMenu(at: inChromeSpace(g.location(in: self)))
     }
 
     /// A point in this view, moved into the chrome's coordinate space. The

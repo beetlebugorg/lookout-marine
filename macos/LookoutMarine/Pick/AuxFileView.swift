@@ -46,7 +46,7 @@ struct AuxFileView: View {
         if let loaded {
             if let image = Self.image(from: loaded) {
                 Button {
-                    model.picture = .init(name: name, data: loaded.data)
+                    model.overlay.picture = .init(name: name, data: loaded.data)
                 } label: {
                     image
                         .resizable()
@@ -108,7 +108,7 @@ struct AuxFileView: View {
 /// or Escape, puts it away.
 struct PictureViewer: View {
     var model: AppModel
-    let picture: AppModel.Picture
+    let picture: OverlayModel.Picture
 
     var body: some View {
         ZStack {
@@ -128,9 +128,9 @@ struct PictureViewer: View {
             .padding(40)
         }
         .contentShape(Rectangle())
-        .onTapGesture { model.picture = nil }
+        .onTapGesture { model.overlay.picture = nil }
         #if os(macOS)
-        .onExitCommand { model.picture = nil }
+        .onExitCommand { model.overlay.picture = nil }
         #endif
     }
 }
