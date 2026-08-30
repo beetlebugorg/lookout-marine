@@ -1,13 +1,13 @@
 #!/bin/zsh
-# Build the app with Xcode into macos/build-mac/, not into the shared
-# DerivedData directory. `rm -rf macos/build-mac` is a full clean.
+# Build the app with Xcode into apple/build-mac/, not into the shared
+# DerivedData directory. `rm -rf apple/build-mac` is a full clean.
 #
-#   macos/build.sh [mac|ios|both] [Debug|Release]
+#   apple/build.sh [mac|ios|both] [Debug|Release]
 #
 # This builds everything the app needs, from nothing: the target's WAMR runtime
 # (scripts/build-wamr.sh), the Zig cores with the wasm plugin host linked in,
 # and the shipped plugin set into Resources/Plugins. That work lives in the
-# target's script phases, in macos/project.yml, so a build from Xcode.app is
+# target's script phases, in apple/project.yml, so a build from Xcode.app is
 # the same build as this one. Only zig, cmake and Xcode are needed; the first
 # run clones and builds the pinned WAMR and takes a few minutes.
 #
@@ -37,10 +37,10 @@ fi
 REPO="${0:A:h:h}"
 TARGET="${1:-mac}"
 CONFIG="${2:-Debug}"
-DERIVED="$REPO/macos/build-mac"
-PROJECT="$REPO/macos/LookoutMarine.xcodeproj"
+DERIVED="$REPO/apple/build-mac"
+PROJECT="$REPO/apple/LookoutMarine.xcodeproj"
 
-[[ -d "$PROJECT" ]] || { echo "no project: run 'cd macos && xcodegen generate'" >&2; exit 1 }
+[[ -d "$PROJECT" ]] || { echo "no project: run 'cd apple && xcodegen generate'" >&2; exit 1 }
 
 build() {
   echo "==> $1 ($CONFIG)"

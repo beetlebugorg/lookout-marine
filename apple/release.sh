@@ -2,7 +2,7 @@
 # Build the macOS app for distribution: Release configuration, Developer ID
 # signature, hardened runtime, notarization, and a stapled DMG.
 #
-#   macos/release.sh <version> <build-number>
+#   apple/release.sh <version> <build-number>
 #
 # Needs a "Developer ID Application" identity in an unlocked keychain, and for
 # the notary submissions an App Store Connect API key (team-scoped, Developer
@@ -13,7 +13,7 @@
 #   NOTARY_KEY_ID     the key id
 #   NOTARY_ISSUER_ID  the issuer id shown on the keys page
 #
-# The DMG lands at macos/build-mac/LookoutMarine-<version>-macos-arm64.dmg.
+# The DMG lands at apple/build-mac/LookoutMarine-<version>-macos-arm64.dmg.
 # The app is notarized and stapled before the DMG is built, and the DMG is
 # notarized and stapled itself, so both the download and the copy dragged to
 # /Applications open with no network — a boat may well have none.
@@ -24,7 +24,7 @@ VERSION="${1:?usage: release.sh <version> <build-number>}"
 BUILD="${2:?usage: release.sh <version> <build-number>}"
 : "${APPLE_TEAM_ID:?}" "${NOTARY_KEY_FILE:?}" "${NOTARY_KEY_ID:?}" "${NOTARY_ISSUER_ID:?}"
 
-DERIVED="$REPO/macos/build-mac"
+DERIVED="$REPO/apple/build-mac"
 APP="$DERIVED/Build/Products/Release/LookoutMarine.app"
 DMG="$DERIVED/LookoutMarine-$VERSION-macos-arm64.dmg"
 NOTARY=(--key "$NOTARY_KEY_FILE" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID")
@@ -49,7 +49,7 @@ notarize() {
 # instead of asking Xcode to manage one; the name resolves by prefix from the
 # keychain search list.
 echo "==> xcodebuild Release ($VERSION, build $BUILD)"
-xcodebuild -project "$REPO/macos/LookoutMarine.xcodeproj" -scheme LookoutMarine \
+xcodebuild -project "$REPO/apple/LookoutMarine.xcodeproj" -scheme LookoutMarine \
   -configuration Release -destination 'platform=macOS' \
   -derivedDataPath "$DERIVED" \
   CODE_SIGN_STYLE=Manual \

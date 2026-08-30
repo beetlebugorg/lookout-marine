@@ -16,7 +16,7 @@ it is the most complete. The Linux host and the Android host match its behavior 
 their own idiom.
 
 ```
-             macos/                 linux/                android/
+             apple/                 linux/                android/
         SwiftUI (Mac/iPad)      GTK4 in C            Java + SurfaceView
                 │                    │                     │
                 └────────────┬───────┴─────────────────────┘
@@ -150,7 +150,7 @@ src/gpu_d3d12.zig          the Direct3D 12 transport (with src/d3d12_shim.{h,c})
 src/gpu_sdl.zig            the SDL_GPU transport
 src/capi.zig               the C ABI wrapper
 src/main.zig               the headless render and parity demo
-macos/                     the SwiftUI app (macOS and iOS/iPadOS), XcodeGen spec
+apple/                     the SwiftUI app (macOS and iOS/iPadOS), XcodeGen spec
 linux/                     the GTK4 app, meson
 android/                   the Java shell, gradle
 windows/                   the WinUI 3 app, msbuild

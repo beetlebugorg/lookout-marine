@@ -6,7 +6,7 @@
 # with:
 #
 #     brew install xcodegen         # once
-#     cd macos && xcodegen generate # writes LookoutMarine.xcodeproj
+#     cd apple && xcodegen generate # writes LookoutMarine.xcodeproj
 #     open LookoutMarine.xcodeproj
 #
 # The only other tool needed is Zig: the pre-build script runs `zig build`,

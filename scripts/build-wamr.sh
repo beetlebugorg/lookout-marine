@@ -73,7 +73,7 @@ WAMR_URL="https://github.com/bytecodealliance/wasm-micro-runtime"
 WAMR_FEATURES="interp+aot+wasi"
 
 # Deployment minimums. 13.0 matches Zig's default macOS minimum, so ld64 raises
-# no version warning. 15.0 is the app's stated iOS floor (macos/README.md); the
+# no version warning. 15.0 is the app's stated iOS floor (apple/README.md); the
 # Xcode project builds at a higher one, and an object built for an OLDER
 # minimum links into it silently — the reverse is what warns. 24 is the API
 # level android/app/build.gradle declares as minSdk and build.zig defaults to.
@@ -257,7 +257,7 @@ ncpu() { sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4; }
 
 # The iOS SDKs live inside Xcode. The Command Line Tools have none, so an
 # xcode-select pointed at them gives an empty sysroot and cmake fails on the
-# compiler check. Find an Xcode the way macos/build.sh does; an exported
+# compiler check. Find an Xcode the way apple/build.sh does; an exported
 # DEVELOPER_DIR wins.
 need_xcode() {
     [ -n "${DEVELOPER_DIR:-}" ] && return 0

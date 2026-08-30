@@ -804,7 +804,7 @@ final class ChartController: NSObject {
     ///
     ///     LOOKOUT_MULTI=1 LOOKOUT_CLEAN=1 \
     ///     LOOKOUT_OPEN=<chart.pmtiles> LOOKOUT_DUMP_JSON=<dir> \
-    ///       open -n macos/build-mac/Build/Products/Debug/LookoutMarine.app
+    ///       open -n apple/build-mac/Build/Products/Debug/LookoutMarine.app
     ///
     /// LOOKOUT_CLEAN matters for the reason it matters to a screenshot: a saved
     /// connection list points at the developer's own instruments, and a captured

@@ -414,7 +414,7 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(lib);
     // The engine archive lands next to liblookout_marine.a: the app links the
     // pair from one <prefix>/lib (after the ld64 loose-object repack — see
-    // macos/project.yml).
+    // apple/project.yml).
     b.getInstallStep().dependOn(&b.addInstallLibFile(tile57_lib, "libtile57.a").step);
     // Archive + headers, no demo exe: what a native shell links, and all that's
     // buildable when the target's Vulkan loader isn't on this machine.

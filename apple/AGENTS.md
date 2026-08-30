@@ -1,22 +1,22 @@
 # The macOS and iOS shell
 
 SwiftUI, and THE REFERENCE SHELL: when the platforms disagree about what the
-chrome should do, this one is right. `macos/project.yml` generates the Xcode
-project; `macos/screenshots.sh` captures the documentation frames.
+chrome should do, this one is right. `apple/project.yml` generates the Xcode
+project; `apple/screenshots.sh` captures the documentation frames.
 
-Build: `xcodebuild -project macos/LookoutMarine.xcodeproj -scheme LookoutMarine
--configuration Debug -derivedDataPath macos/build-mac`.
+Build: `xcodebuild -project apple/LookoutMarine.xcodeproj -scheme LookoutMarine
+-configuration Debug -derivedDataPath apple/build-mac`.
 
 ## What must stay true
 
 - **A screenshot must capture an app window by id**, never the screen. The
-  Dock and file dialogs carry personal data. See `macos/screenshots.sh`.
+  Dock and file dialogs carry personal data. See `apple/screenshots.sh`.
 - **macOS preferences ignore a redirected HOME.** CFPreferences resolves the
   domain from the login session; use the NSUserDefaults argument domain.
 - **A screenshot instance loads this machine's saved plugin settings**, so it
   dials the developer's own instruments and publishes other people's vessel
   names and positions. `LOOKOUT_CLEAN=1` leaves every plugin on its manifest
-  defaults; `macos/screenshots.sh` sets it and serves the recorded fixture on
+  defaults; `apple/screenshots.sh` sets it and serves the recorded fixture on
   a port of its own. Never point a capture at whatever is on 10110.
 - **Only one copy of the app runs per machine.** A second hands over to the
   first and exits, because two copies share one preferences domain and one
@@ -54,23 +54,23 @@ Build: `xcodebuild -project macos/LookoutMarine.xcodeproj -scheme LookoutMarine
 
 ## Testing
 
-`macos/Tests/` is one source directory compiled into `LookoutMarineTests`
+`apple/Tests/` is one source directory compiled into `LookoutMarineTests`
 (macOS) and `LookoutMarine-iOSTests` (iOS). Both app targets produce a module
 named `LookoutMarine`, so a test is written once and runs on either platform.
 
 ```sh
-xcodebuild test -project macos/LookoutMarine.xcodeproj -scheme LookoutMarine \
-  -configuration Debug -destination 'platform=macOS' -derivedDataPath macos/build-mac
-xcodebuild test -project macos/LookoutMarine.xcodeproj -scheme LookoutMarine-iOS \
+xcodebuild test -project apple/LookoutMarine.xcodeproj -scheme LookoutMarine \
+  -configuration Debug -destination 'platform=macOS' -derivedDataPath apple/build-mac
+xcodebuild test -project apple/LookoutMarine.xcodeproj -scheme LookoutMarine-iOS \
   -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17' \
-  -derivedDataPath macos/build-mac CODE_SIGNING_ALLOWED=NO
+  -derivedDataPath apple/build-mac CODE_SIGNING_ALLOWED=NO
 ```
 
 A test that persists anything subclasses `ShellTestCase`, which puts a defaults
 suite of its own in `Store.shared`. Nothing in the shell reads
 `UserDefaults.standard` directly.
 
-The fixtures under `macos/Tests/Fixtures/` are the core's own output, captured
+The fixtures under `apple/Tests/Fixtures/` are the core's own output, captured
 with `LOOKOUT_DUMP_JSON=<dir>`; see the README beside them. Capture them again
 when the core changes what it sends.
 
@@ -80,8 +80,8 @@ them: they boot a simulator and take about eighteen minutes there. Run them by
 hand against a change to the chrome, a class at a time with `-only-testing:`.
 
 ```sh
-xcodebuild test -project macos/LookoutMarine.xcodeproj -scheme LookoutMarine-iOS \
+xcodebuild test -project apple/LookoutMarine.xcodeproj -scheme LookoutMarine-iOS \
   -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17' \
-  -derivedDataPath macos/build-mac CODE_SIGNING_ALLOWED=NO \
+  -derivedDataPath apple/build-mac CODE_SIGNING_ALLOWED=NO \
   -only-testing:LookoutMarine-iOS-UITests
 ```

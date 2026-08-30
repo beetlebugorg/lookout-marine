@@ -31,7 +31,7 @@ cp              png/beacon-macos-1024.png     LookoutMarine.iconset/icon_512x512
 iconutil -c icns LookoutMarine.iconset
 ```
 
-Drop the `.icns` in `macos/LookoutMarine/Assets.xcassets/AppIcon.appiconset/` (or drag the 1024 into
+Drop the `.icns` in `apple/LookoutMarine/Assets.xcassets/AppIcon.appiconset/` (or drag the 1024 into
 the AppIcon slot in Xcode and let it generate the rest).
 
 **iOS / iPadOS** — one 1024 square, no rounding, no alpha: `png/beacon-1024.png` into the
@@ -86,7 +86,7 @@ from. The quiet mark is kept here as a master but no platform icon is built from
 
 This directory holds the masters and the two scripts that turn them into platform artifacts.
 Nothing per-size is kept here: every generated size lands in the platform's own directory —
-`macos/…/Assets.xcassets`, `windows/`, `linux/data/`, `android/…/res`.
+`apple/…/Assets.xcassets`, `windows/`, `linux/data/`, `android/…/res`.
 
 | file | what it feeds |
 | --- | --- |

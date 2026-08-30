@@ -33,8 +33,8 @@
 #   defaults export org.beetlebug.lookout-marine ~/lookout-prefs.plist
 #
 # This script BUILDS NOTHING. Build the app yourself first:
-#   xcodebuild -project macos/LookoutMarine.xcodeproj -scheme LookoutMarine \
-#              -configuration Debug -derivedDataPath macos/build-mac
+#   xcodebuild -project apple/LookoutMarine.xcodeproj -scheme LookoutMarine \
+#              -configuration Debug -derivedDataPath apple/build-mac
 #
 # Requires: swiftc, screencapture (both ship with macOS), python3 with Pillow.
 set -eu

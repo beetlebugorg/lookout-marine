@@ -1358,7 +1358,7 @@ lk_settings_licenses_clicked (GtkButton *button, gpointer user_data)
 
 /* What this build is: its version, the chart engine it is pinned to, and the
  * way to the terms it and its components carry. It stands at the foot of the
- * last page, as it does on the Mac (macos/LookoutMarine/SettingsView.swift). */
+ * last page, as it does on the Mac (apple/LookoutMarine/SettingsView.swift). */
 static void
 lk_settings_about_section (GtkWidget *page)
 {

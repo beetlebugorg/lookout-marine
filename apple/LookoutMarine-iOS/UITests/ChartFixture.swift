@@ -25,7 +25,7 @@ enum ChartFixture {
 
     /// The repository, from this source file's own path.
     static var repository: URL {
-        URL(fileURLWithPath: #filePath)      // macos/LookoutMarine-iOS/UITests/ChartFixture.swift
+        URL(fileURLWithPath: #filePath)      // apple/LookoutMarine-iOS/UITests/ChartFixture.swift
             .deletingLastPathComponent()     // UITests
             .deletingLastPathComponent()     // LookoutMarine-iOS
             .deletingLastPathComponent()     // macos

@@ -12,8 +12,8 @@ final class ChartScanTests: XCTestCase {
 
     /// The repository, from this source file's own path.
     private var repo: URL {
-        URL(fileURLWithPath: #filePath)          // macos/Tests/ChartScanTests.swift
-            .deletingLastPathComponent()         // macos/Tests
+        URL(fileURLWithPath: #filePath)          // apple/Tests/ChartScanTests.swift
+            .deletingLastPathComponent()         // apple/Tests
             .deletingLastPathComponent()         // macos
             .deletingLastPathComponent()         // the repository
     }

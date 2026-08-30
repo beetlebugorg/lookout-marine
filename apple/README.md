@@ -9,7 +9,7 @@ lives at the `sdl-gpu` git tag.)
 
 ## Prerequisites
 
-- **Xcode** — the deployment target is macOS 26 / iOS 26 (`macos/project.yml`).
+- **Xcode** — the deployment target is macOS 26 / iOS 26 (`apple/project.yml`).
 - **Zig 0.16.0** on `PATH` (`brew install zig`).
 - **XcodeGen** to generate the project (`brew install xcodegen`).
 - **CMake** to build the WAMR runtime (`brew install cmake`).
@@ -22,7 +22,7 @@ fetched automatically on first build.
 ## Build & run
 
 ```sh
-cd macos
+cd apple
 xcodegen generate            # writes LookoutMarine.xcodeproj from project.yml
 open LookoutMarine.xcodeproj
 ```
@@ -47,9 +47,9 @@ laylines. Ahead-of-time plugin compilation is not part of this build:
 `scripts/build-plugin-aot.sh` needs LLVM, and `load_aot_modules` in
 `src/plugin/host.zig` is false, so nothing reads its output yet.
 
-**No Xcode?** `macos/build-dev.sh [--zig]` builds the same app with just the
+**No Xcode?** `apple/build-dev.sh [--zig]` builds the same app with just the
 Command Line Tools (swiftc + a hand-rolled bundle). It fills the slot the Xcode
-build fills, `macos/build-mac/Build/Products/Debug/LookoutMarine.app` — one app
+build fills, `apple/build-mac/Build/Products/Debug/LookoutMarine.app` — one app
 path on disk, so there is never a second bundle to launch by mistake.
 
 You need a baked `.pmtiles` chart to see anything: **File ▸ Open Chart…** picks a
@@ -81,10 +81,10 @@ is chart state, chrome or a plugin surface.
 | `Platform/` | The macOS/iOS seam, the open panels, the defaults store |
 
 `Bridging-Header.h`, `Info.plist`, `LookoutMarine.entitlements` and
-`Assets.xcassets` stay at the top: `macos/project.yml` names all four by that
+`Assets.xcassets` stay at the top: `apple/project.yml` names all four by that
 path, and the iOS target excludes the last three.
 
-`macos/Tests/` is one source directory compiled into both unit test targets.
+`apple/Tests/` is one source directory compiled into both unit test targets.
 
 ## iOS
 

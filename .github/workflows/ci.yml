@@ -67,7 +67,7 @@ jobs:
 
           has () { [ "$changed" = "ALL" ] || echo "$changed" | grep -qE "$1"; }
           core='^(src/|include/|plugins/|scripts/|tools/|test/|build\.zig|vendor/|\.github/workflows/ci\.yml)'
-          for pair in "linux:^linux/" "apple:^macos/" "windows:^windows/" "android:^android/"; do
+          for pair in "linux:^linux/" "apple:^apple/" "windows:^windows/" "android:^android/"; do
             name=${pair%%:*}; own=${pair#*:}
             if has "$core" || has "$own"; then echo "$name=true" >> "$GITHUB_OUTPUT"
             else echo "$name=false" >> "$GITHUB_OUTPUT"; fi
@@ -155,9 +155,9 @@ jobs:
       # separate build step pays that twice for nothing.
       - name: Build and test macOS
         run: |
-          xcodebuild test -project macos/LookoutMarine.xcodeproj -scheme LookoutMarine \
+          xcodebuild test -project apple/LookoutMarine.xcodeproj -scheme LookoutMarine \
             -configuration Debug -destination 'platform=macOS' \
-            -derivedDataPath macos/build-mac \
+            -derivedDataPath apple/build-mac \
             CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=
 
       # The unit tests only. The XCUITests boot a simulator and drive one app
@@ -165,16 +165,16 @@ jobs:
       # cover touch delivery rather than anything a change to the core can
       # break. Run them by hand against a change to the chrome:
       #
-      #   xcodebuild test -project macos/LookoutMarine.xcodeproj \
+      #   xcodebuild test -project apple/LookoutMarine.xcodeproj \
       #     -scheme LookoutMarine-iOS -configuration Debug \
       #     -destination 'platform=iOS Simulator,name=iPhone 17' \
-      #     -derivedDataPath macos/build-mac CODE_SIGNING_ALLOWED=NO \
+      #     -derivedDataPath apple/build-mac CODE_SIGNING_ALLOWED=NO \
       #     -only-testing:LookoutMarine-iOS-UITests
       - name: Build and test iOS
         run: |
-          xcodebuild test -project macos/LookoutMarine.xcodeproj -scheme LookoutMarine-iOS \
+          xcodebuild test -project apple/LookoutMarine.xcodeproj -scheme LookoutMarine-iOS \
             -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17' \
-            -derivedDataPath macos/build-mac \
+            -derivedDataPath apple/build-mac \
             CODE_SIGNING_ALLOWED=NO \
             -skip-testing:LookoutMarine-iOS-UITests
 
@@ -182,7 +182,7 @@ jobs:
       # .app that will not launch.
       - name: Package
         run: |
-          products=macos/build-mac/Build/Products
+          products=apple/build-mac/Build/Products
           tar -czf LookoutMarine-macos.tar.gz -C "$products/Debug" LookoutMarine.app
           tar -czf LookoutMarine-iossimulator.tar.gz \
             -C "$products/Debug-iphonesimulator" LookoutMarine.app
