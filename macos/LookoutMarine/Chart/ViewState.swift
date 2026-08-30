@@ -25,6 +25,17 @@ enum ViewState {
                             rotation_deg: d["rotationDeg"] as? Double ?? 0)
     }
 
+    /// True when this pose is a different one from the last saved.
+    ///
+    /// The periodic save runs off the render tick, and frames keep coming while
+    /// a plugin moves own ship even though the camera is still. A boat at
+    /// anchor with AIS running wrote the same four numbers to disk every three
+    /// seconds, for as long as it lay there.
+    static func differs(_ v: lookout_view, from o: lookout_view) -> Bool {
+        v.lon != o.lon || v.lat != o.lat || v.zoom != o.zoom
+            || v.rotation_deg != o.rotation_deg
+    }
+
     static func save(_ v: lookout_view) {
         Store.shared.set([
             "lon": v.lon,

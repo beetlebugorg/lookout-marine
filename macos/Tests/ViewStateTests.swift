@@ -37,6 +37,25 @@ final class ViewStateTests: ShellTestCase {
         XCTAssertNil(ViewState.load())
     }
 
+    /// The periodic save runs off the render tick, and frames keep coming while
+    /// a plugin moves own ship even though the camera is still.
+    func testAnUnmovedPoseIsNotADifferentOne() {
+        let v = lookout_view(lon: -76.482, lat: 38.9763, zoom: 14.5, rotation_deg: 37)
+        XCTAssertFalse(ViewState.differs(v, from: v))
+    }
+
+    func testEveryFieldCountsAsAMove() {
+        let v = lookout_view(lon: -76.482, lat: 38.9763, zoom: 14.5, rotation_deg: 37)
+        var moved = v; moved.lon += 0.000001
+        XCTAssertTrue(ViewState.differs(moved, from: v))
+        moved = v; moved.lat += 0.000001
+        XCTAssertTrue(ViewState.differs(moved, from: v))
+        moved = v; moved.zoom += 0.000001
+        XCTAssertTrue(ViewState.differs(moved, from: v))
+        moved = v; moved.rotation_deg += 0.000001
+        XCTAssertTrue(ViewState.differs(moved, from: v))
+    }
+
     func testSomethingElseUnderTheKeyIsNoPose() {
         Store.shared.set("not a pose", "chart.view")
         XCTAssertNil(ViewState.load())

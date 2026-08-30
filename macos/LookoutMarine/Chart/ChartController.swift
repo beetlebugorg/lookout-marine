@@ -756,6 +756,8 @@ final class ChartController: NSObject {
 
     private var lastReadoutsAt: TimeInterval = 0
     private var lastViewSavedAt: TimeInterval = 0
+    /// The pose last written down, so an unmoved camera is not written again.
+    private var lastSavedView: lookout_view?
     /// Internal, not private: the raster and chart-link calls in
     /// ChartController+Raster.swift push a readout after a change the
     /// frame loop would not otherwise see.
@@ -811,9 +813,14 @@ final class ChartController: NSObject {
         if model.zoomLevel != v.zoom { model.zoomLevel = v.zoom }
         if model.centerLat != v.lat { model.centerLat = v.lat }
         if model.centerLon != v.lon { model.centerLon = v.lon }
-        // Persist periodically too: a crash or a force-quit never reaches close().
-        if now - lastViewSavedAt >= 3 {
+        // Persist periodically too: a crash or a force-quit never reaches
+        // close(). Only when it has moved: frames keep coming while a plugin
+        // moves own ship, so a boat at anchor wrote the same pose every three
+        // seconds for as long as it lay there.
+        if now - lastViewSavedAt >= 3,
+           lastSavedView.map({ ViewState.differs(v, from: $0) }) ?? true {
             lastViewSavedAt = now
+            lastSavedView = v
             ViewState.save(v)
         }
         let ov = lookout_overscale(h)
