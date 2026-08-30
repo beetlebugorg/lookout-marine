@@ -460,36 +460,83 @@ export fn Java_org_beetlebug_lookout_Lookout_nAtlasCacheReady(env: [*c]j.JNIEnv,
 // viewing_groups_off, ignore_scamin, scamin_filter_gate — survive a
 // round-trip untouched. Same trick as MarinerSettings.swift's `raw`.
 
+/// `pub` throughout, and it has to be: @typeInfo lists only PUBLIC
+/// declarations, and mariner_keys below reads these names out of it to
+/// hand them to the shell. Private constants would leave that table empty.
 const MI = struct {
-    const scheme = 0;
-    const depth_unit = 1;
-    const shallow_contour = 2;
-    const safety_contour = 3;
-    const deep_contour = 4;
-    const safety_depth = 5;
-    const four_shade_water = 6;
-    const display_base = 7;
-    const display_standard = 8;
-    const display_other = 9;
-    const soundings = 10;
-    const text_names = 11;
-    const show_light_descriptions = 12;
-    const text_other = 13;
-    const simplified_points = 14;
-    const boundary_style = 15;
-    const show_full_sector_lines = 16;
-    const data_quality = 17;
-    const show_isolated_dangers_shallow = 18;
-    const show_inform_callouts = 19;
-    const show_meta_bounds = 20;
-    const show_overscale = 21;
-    const size_scale = 22;
-    const text_size_scale = 23;
-    const sounding_size_scale = 24;
-    const date_dependent = 25;
-    const highlight_date_dependent = 26;
-    const count: j.jsize = 27;
+    pub const scheme = 0;
+    pub const depth_unit = 1;
+    pub const shallow_contour = 2;
+    pub const safety_contour = 3;
+    pub const deep_contour = 4;
+    pub const safety_depth = 5;
+    pub const four_shade_water = 6;
+    pub const display_base = 7;
+    pub const display_standard = 8;
+    pub const display_other = 9;
+    pub const soundings = 10;
+    pub const text_names = 11;
+    pub const show_light_descriptions = 12;
+    pub const text_other = 13;
+    pub const simplified_points = 14;
+    pub const boundary_style = 15;
+    pub const show_full_sector_lines = 16;
+    pub const data_quality = 17;
+    pub const show_isolated_dangers_shallow = 18;
+    pub const show_inform_callouts = 19;
+    pub const show_meta_bounds = 20;
+    pub const show_overscale = 21;
+    pub const size_scale = 22;
+    pub const text_size_scale = 23;
+    pub const sounding_size_scale = 24;
+    pub const date_dependent = 25;
+    pub const highlight_date_dependent = 26;
+    pub const count: j.jsize = 27;
 };
+
+/// The mariner field NAMES, in index order, built from the block above at
+/// compile time.
+///
+/// MI and MarinerState.MI in the Kotlin shell are parallel lists: the same
+/// fields, in the same order, written twice, crossing as a flat double[] with
+/// no names in it. A field inserted on one side and not the other misfiles
+/// every setting after it, silently. The Kotlin side can only check the COUNT
+/// on its own, which a reordering passes; handing the names over lets it check
+/// the order too (see nMarinerKeys and MarinerKeysTest).
+///
+/// Indexed by each declaration's VALUE rather than by its position, so the
+/// table is right whatever order @typeInfo reports declarations in, and the
+/// three @compileError guards below hold for the Zig side what the test holds
+/// for the pair.
+const mariner_keys = blk: {
+    const n: usize = @intCast(MI.count);
+    var names = [_][:0]const u8{""} ** n;
+    var seen: usize = 0;
+    for (@typeInfo(MI).@"struct".decls) |d| {
+        if (std.mem.eql(u8, d.name, "count")) continue;
+        const idx: usize = @field(MI, d.name);
+        if (idx >= n) @compileError("MI." ++ d.name ++ " is past MI.count");
+        if (names[idx].len != 0) @compileError("two MI fields share an index: " ++ d.name);
+        names[idx] = d.name;
+        seen += 1;
+    }
+    if (seen != n) @compileError("MI declares fewer fields than MI.count");
+    break :blk names;
+};
+
+/// String[] nMarinerKeys() -- the mariner field names, in index order. Handle
+/// free: it describes the ABI, not an open chart.
+export fn Java_org_beetlebug_lookout_Lookout_nMarinerKeys(env: [*c]j.JNIEnv, cls: j.jclass) j.jobjectArray {
+    _ = cls;
+    const string_cls = env_(env).FindClass.?(env, "java/lang/String") orelse return null;
+    const arr = env_(env).NewObjectArray.?(env, MI.count, string_cls, null) orelse return null;
+    inline for (mariner_keys, 0..) |name, i| {
+        const js = env_(env).NewStringUTF.?(env, name.ptr) orelse return null;
+        env_(env).SetObjectArrayElement.?(env, arr, @intCast(i), js);
+        env_(env).DeleteLocalRef.?(env, js);
+    }
+    return arr;
+}
 
 fn b2f(v: bool) f64 {
     return if (v) 1 else 0;
@@ -884,6 +931,87 @@ export fn Java_org_beetlebug_lookout_Lookout_nPluginsActive(env: [*c]j.JNIEnv, c
 }
 
 /// String nPluginsJson(long h) -- every loaded plugin with its settings schema
+/// int nPluginsConnectionState(long h) -- what the source plugins' connection
+/// rows say between them, as two bits: 1 = a session is open to a gateway,
+/// 2 = one is open or being dialled.
+///
+/// The shell asks this once a second, in the foreground off the frame loop and
+/// in the background as the only work the process does. Answering it from the
+/// registry JVM-side meant building every plugin, every settings field, every
+/// list schema and every row once a second to read a handful of strings. This
+/// walks the same document here instead: one arena, freed before it returns,
+/// and nothing for the JVM to collect.
+///
+/// A token walk rather than a substring search. A plugin's `detail` is free
+/// text it writes itself and may contain anything, including the word it would
+/// be searched for.
+export fn Java_org_beetlebug_lookout_Lookout_nPluginsConnectionState(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) j.jint {
+    _ = env;
+    _ = cls;
+    const h = fromLong(hl) orelse return 0;
+    var len: usize = 0;
+    const ptr = lookout_plugins_json(h.l, &len) orelse return 0;
+    if (len == 0) return 0;
+
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const doc = std.json.parseFromSliceLeaky(std.json.Value, a, ptr[0..len], .{}) catch return 0;
+    const plugins = switch (doc) {
+        .object => |o| o.get("plugins") orelse return 0,
+        else => return 0,
+    };
+    const entries = switch (plugins) {
+        .array => |x| x,
+        else => return 0,
+    };
+
+    var live = false;
+    var trying = false;
+    for (entries.items) |entry| {
+        const obj = switch (entry) {
+            .object => |o| o,
+            else => continue,
+        };
+        // The status is a JSON document a plugin wrote, carried as a string.
+        // A plugin that writes a plain sentence instead simply has no rows.
+        const status = switch (obj.get("status") orelse continue) {
+            .string => |t| t,
+            else => continue,
+        };
+        if (status.len == 0 or status[0] != '{') continue;
+        const inner = std.json.parseFromSliceLeaky(std.json.Value, a, status, .{}) catch continue;
+        const items = switch (inner) {
+            .object => |o| o.get("items") orelse continue,
+            else => continue,
+        };
+        const rows = switch (items) {
+            .array => |x| x,
+            else => continue,
+        };
+        for (rows.items) |row| {
+            const ro = switch (row) {
+                .object => |o| o,
+                else => continue,
+            };
+            const state = switch (ro.get("state") orelse continue) {
+                .string => |t| t,
+                else => continue,
+            };
+            if (std.mem.eql(u8, state, "connected")) {
+                live = true;
+                trying = true;
+            } else if (std.mem.eql(u8, state, "reconnecting") or
+                std.mem.eql(u8, state, "unreachable"))
+            {
+                trying = true;
+            }
+        }
+    }
+    return (if (live) @as(j.jint, 1) else 0) | (if (trying) @as(j.jint, 2) else 0);
+}
+
 /// and the values in force. null when no layer is up.
 export fn Java_org_beetlebug_lookout_Lookout_nPluginsJson(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) j.jstring {
     _ = cls;

@@ -19,6 +19,15 @@
 # When the slot is empty this builds the core without the host rather than
 # failing, and says so.
 #
+# A DEBUG CORE DOES NOT RUN. -Configuration Debug builds the core with
+# -Doptimize=Debug, and the app then dies at startup with a stack overflow
+# (0xC00000FD): Zig's Debug frames are far larger than ReleaseFast's and the
+# app's default 1 MB stack does not hold them. The same shell relinked against
+# a ReleaseFast core starts and runs normally, so it is the core's frames, not
+# the shell's. Debug is still worth building — it is what CI compiles, and it
+# catches what a Release build's inlining hides — but to RUN the app, build the
+# core Release even when building the shell Debug.
+#
 # Usage:  pwsh windows/build-core.ps1 [-Configuration Debug|Release] [-Platform ARM64|x64]
 param(
     [ValidateSet('Debug', 'Release')]

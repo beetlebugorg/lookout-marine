@@ -1,5 +1,8 @@
 package org.beetlebug.lookout;
 
+import org.beetlebug.lookout.settings.MI;
+import org.beetlebug.lookout.settings.MarinerState;
+
 import android.view.Surface;
 
 /**
@@ -14,6 +17,13 @@ import android.view.Surface;
  * thread) and the frame loop (the render thread) may call concurrently.
  * close(), attachSurface() and detachSurface() are the exceptions: run them on
  * the render thread with the frame loop stopped.
+ *
+ * COMPLETENESS IS DELIBERATE. This class mirrors include/lookout.h whole, and
+ * some of what it binds no Kotlin here calls: altStyleActive, pluginConfigGet,
+ * rasterEnabled, rasterOverChart, isOpen, and the three portrayal quick
+ * toggles, which the Mac reaches from its menu bar and this shell has no route
+ * to. Those are gaps in the SHELL, not in the binding, so they stay bound. A
+ * method removed here would have to be found again by reading the header.
  */
 public final class Lookout implements AutoCloseable {
     static {
@@ -186,6 +196,15 @@ public final class Lookout implements AutoCloseable {
      */
     public static final int MARINER_LEN = 27;
 
+    /**
+     * The mariner field names, in index order, as the engine declares them.
+     *
+     * The crossing is a flat double[] with no names in it, so {@link MarinerState}
+     * and the MI block in src/jni_android.zig have to agree field for field.
+     * MARINER_LEN checks the length; this checks the order.
+     */
+    public static String[] marinerKeys()          { return nMarinerKeys(); }
+
     /** Fill {@code out} (length >= {@link #MARINER_LEN}) from the engine. */
     public void getMariner(double[] out)          { if (h != 0) nGetMariner(h, out); }
 
@@ -242,6 +261,7 @@ public final class Lookout implements AutoCloseable {
     private static native boolean nAtlasCacheReady();
     private static native int nOpenFile(long h, String path);
     private static native String nLicensesJson();
+    private static native String[] nMarinerKeys();
     private static native void nGetMariner(long h, double[] out);
     private static native String nGetMarinerDate(long h);
     private static native void nSetMariner(long h, double[] vals, String dateView);
@@ -337,6 +357,16 @@ public final class Lookout implements AutoCloseable {
      */
     public boolean pluginsActive()               { return h != 0 && nPluginsActive(h); }
 
+    /**
+     * What the source plugins' connection rows say between them, as two bits:
+     * 1 a session is open to a gateway, 2 one is open or being dialled.
+     *
+     * Answered by walking the registry natively. The shell asks once a second,
+     * and building the whole registry here to read a handful of strings was the
+     * only work a backgrounded plotter did.
+     */
+    public int pluginsConnectionState()          { return h == 0 ? 0 : nPluginsConnectionState(h); }
+
     /** Every loaded plugin with its settings schema, as JSON. Null when none. */
     public String pluginsJson()                  { return h == 0 ? null : nPluginsJson(h); }
 
@@ -403,6 +433,7 @@ public final class Lookout implements AutoCloseable {
 
     private static native boolean nPluginsLoad(long h, String dir);
     private static native boolean nPluginsActive(long h);
+    private static native int nPluginsConnectionState(long h);
     private static native String nPluginsJson(long h);
     private static native String nPluginConfigGet(long h, String id);
     private static native boolean nPluginConfigSet(long h, String id, String json);

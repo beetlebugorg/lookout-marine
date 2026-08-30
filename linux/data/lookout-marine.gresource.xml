@@ -24,6 +24,7 @@
     <file preprocess="xml-stripblanks">lk-charts-symbolic.svg</file>
     <file preprocess="xml-stripblanks">lk-vessels-symbolic.svg</file>
     <file preprocess="xml-stripblanks">lk-alarms-symbolic.svg</file>
+    <file preprocess="xml-stripblanks">lk-alarm-symbolic.svg</file>
     <file preprocess="xml-stripblanks">lk-advanced-symbolic.svg</file>
   </gresource>
 </gresources>

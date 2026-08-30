@@ -15,7 +15,7 @@ add_project_arguments(cc.get_supported_arguments(
   '-Wno-missing-field-initializers',
 ), language: 'c')
 
-gtk_dep = dependency('gtk4', version: '>= 4.10')
+gtk_dep = dependency('gtk4', version: '>= 4.14')
 # The core is a static library that deliberately leaves the loader to its host,
 # so the executable is what resolves libvulkan.
 vulkan_dep = dependency('vulkan')
@@ -25,7 +25,7 @@ png_dep = dependency('libpng16')
 webp_dep = dependency('libwebp')
 # Chart links: the shell fetches a publisher's MapLibre style and serves its
 # tiles (lookout does no networking), which takes an HTTP client and a JSON
-# writer — lk-json.c only reads.
+# writer — util/json.c only reads.
 soup_dep = dependency('libsoup-3.0')
 json_dep = dependency('json-glib-1.0')
 m_dep = cc.find_library('m', required: false)
@@ -120,31 +120,44 @@ core = custom_target('lookout-core',
 )
 
 sources = files(
-  'src/main.c',
-  'src/lk-about.c',
-  'src/lk-alerts.c',
-  'src/lk-app-model.c',
-  'src/lk-chart-bake.c',
-  'src/lk-chart-controller.c',
-  'src/lk-chart-links.c',
-  'src/lk-chart-scan.c',
-  'src/lk-chart-view.c',
-  'src/lk-discovery.c',
-  'src/lk-hud.c',
-  'src/lk-json.c',
-  'src/lk-licenses.c',
-  'src/lk-mariner.c',
-  'src/lk-native-surface.c',
-  'src/lk-overlay-pick.c',
-  'src/lk-pick-report.c',
-  'src/lk-plugin-install.c',
-  'src/lk-plugins.c',
-  'src/lk-raster.c',
-  'src/lk-search.c',
-  'src/lk-settings-window.c',
-  'src/lk-store.c',
-  'src/lk-table-window.c',
-  'src/lk-window.c',
+  'src/engine/controller.c',
+  'src/engine/surface.c',
+  'src/library/bake.c',
+  'src/library/links.c',
+  'src/library/raster.c',
+  'src/library/scan.c',
+  'src/library/sets.c',
+  'src/model/app-model.c',
+  'src/model/coord.c',
+  'src/model/mariner.c',
+  'src/model/store.c',
+  'src/plugins/discovery.c',
+  'src/plugins/install.c',
+  'src/plugins/registry.c',
+  'src/ui/chart/overlay.c',
+  'src/ui/chart/pick-report.c',
+  'src/ui/chart/view.c',
+  'src/ui/chrome/about.c',
+  'src/ui/chrome/alerts.c',
+  'src/ui/chrome/licenses.c',
+  'src/ui/chrome/search.c',
+  'src/ui/chrome/table-window.c',
+  'src/ui/hud/hud.c',
+  'src/ui/hud/pills.c',
+  'src/ui/hud/scale-bar.c',
+  'src/ui/hud/scale-entry.c',
+  'src/ui/settings/charts.c',
+  'src/ui/settings/depths.c',
+  'src/ui/settings/display.c',
+  'src/ui/settings/plugins-page.c',
+  'src/ui/settings/plugins.c',
+  'src/ui/settings/widgets.c',
+  'src/ui/settings/window.c',
+  'src/ui/dev-hooks.c',
+  'src/ui/open-dialogs.c',
+  'src/ui/startup-view.c',
+  'src/ui/window.c',
+  'src/util/json.c',
 )
 
 # ---- the app's own icons -----------------------------------------------------
@@ -166,16 +179,50 @@ resources = gnome.compile_resources(
     'data' / 'icons' / 'hicolor' / 'scalable' / 'apps',
   ],
   c_name: 'lk',
+  # No constructor. The resource object lives in the shell's static library,
+  # and a static library only gives up an object that resolves an undefined
+  # symbol: with nothing calling into it the object was dropped, its
+  # constructor never ran, and every lk-*-symbolic icon resolved to the broken
+  # image. main.c calls lk_register_resource, which both registers the icons
+  # and is the reference that pulls the object in.
+  extra_args: ['--manual-register'],
+)
+
+# The shell as a static library, so the executable and the test binaries link
+# the same objects. main.c stays out: a test binary carries its own main.
+#
+# The headers among the core outputs order this target after the core build;
+# the archives are link inputs the consumers name for themselves.
+core_headers = [core[2], core[3]]
+core_archives = [core[0], core[1]]
+if plugins
+  core_archives += core[4]
+endif
+
+shell_c_args = c_args + ['-I' + meson.current_build_dir()]
+
+# The shell's own headers are included by a path from src/ — "ui/hud/hud.h",
+# "model/app-model.h". src/ on the include path is what makes those resolve from
+# any directory under it.
+inc = include_directories('src')
+
+lkshell = static_library('lookout-shell',
+  sources, resources, core_headers,
+  c_args: shell_c_args,
+  include_directories: inc,
+  dependencies: deps,
 )
 
 executable('lookout-marine',
-  sources, resources,
-  core,
-  # lookout.h and tile57.h land in the build dir alongside the archives.
-  c_args: c_args + ['-I' + meson.current_build_dir()],
+  'src/main.c', core_headers,
+  link_with: [lkshell] + core_archives,
+  c_args: shell_c_args,
+  include_directories: inc,
   dependencies: deps,
   install: true,
 )
+
+subdir('tests')
 
 # ---- desktop integration -----------------------------------------------------
 #

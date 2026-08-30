@@ -79,7 +79,10 @@ never remembers it from a click.
 
 ## How the pick report is composed
 
-A click on the chart marks the object and opens the report beside the mark.
+The chart menu raises the report: a secondary click, or a held finger, then
+**Pick Report**. A plain click never picks — a stray click while panning used
+to throw a report nobody asked for. The report opens beside a mark at the
+menu's point.
 
 The **engine** composes the report. The core emits `{"report":…,"s57":…}` for each
 picked feature, which is the decoded page beside the raw payload. Every shell only
@@ -100,7 +103,7 @@ movement of the camera retires the report, so it never floats above water that i
 does not describe. **Escape** closes it.
 
 GLib has no JSON reader, and json-glib is not a dependency of GTK. Therefore
-`src/lk-json.c` reads the payload. It is small, and it adds no prerequisite for a
+`src/util/json.c` reads the payload. It is small, and it adds no prerequisite for a
 packager.
 
 ## Handling what the plugins put on the chart
@@ -153,9 +156,9 @@ keeps running.
 ## Opening a file a plugin reads
 
 A manifest claims file types, and a weather file the mariner opens belongs to the
-plugin that reads them. Every way in routes the same way: **Ctrl+Shift+O**, a drop
-on the window, and the recent list all offer the file to the plugins before the
-shell treats it as a chart. The core answers which, so the app never matches an
+plugin that reads them. Every way in routes the same way: **Ctrl+Shift+O** and a
+drop on the window both offer the file to the plugins before the shell treats it
+as a chart. The core answers which, so the app never matches an
 extension itself. A chart always answers 0, and so does a build with no plugin
 layer, which is why one code path serves both.
 
@@ -206,7 +209,7 @@ raster chart, not the ENC: the accent colour while the picture draws, amber whil
 one covers the view and is off. Hiding the ENC above it keeps the accent colour,
 because the picture is still drawn; the "ENC OFF" text carries that.
 
-`src/lk-raster.c` holds the installed list and the on/off state. **The list must
+`src/library/raster.c` holds the installed list and the on/off state. **The list must
 live in the shell.** The engine holds what is open now, and a raster chart belongs
 to one `lookout*` handle. A chart set has to outlive both a change of ENC and a
 restart, so the list is persisted in `settings.ini` and
@@ -309,7 +312,7 @@ because the engine permits only one thread and GTK requires the main thread.
 
 ## Before you build
 
-- **GTK 4.10** or later, the **Vulkan** headers, a Vulkan loader, and the X11 or
+- **GTK 4.14** or later, the **Vulkan** headers, a Vulkan loader, and the X11 or
   Wayland client libraries.
 - **Zig 0.16** on `PATH`. **meson** and **ninja**.
 
@@ -341,30 +344,79 @@ frames.
 
 You need a baked `.pmtiles` chart. Use **Open** in the headerbar to select a folder
 of cells. At the first start, the app looks for `$LOOKOUT_OPEN`. Then it looks for
-the most recent chart. Then it looks for
+the saved chart library. Then it looks for
 `~/.cache/chartplotter/NOAA/tiles/d5/US5MD1MC.pmtiles`. Set
 `$LOOKOUT_VIEW="lon,lat,zoom[,rot]"` to select the first camera position.
 
 ## Where the code lives
 
-| File | Function |
+```
+src/
+  main.c              GtkApplication entry, the CSS, the accelerators
+
+  engine/
+    controller.c      The one lookout* handle, every lookout_* call, the render loop
+    surface.c         The X11 child window / Wayland subsurface the chart presents into
+
+  model/
+    app-model.c       The shared state every widget reads and the commands act on
+    coord.c           The coordinate and scale parsers
+    store.c           Camera pose, recents and settings in one XDG keyfile
+    mariner.c         The live tile57_mariner behind the settings form
+
+  library/
+    sets.c            The sets aboard, which are on, and their background scans
+    scan.c            Looking through a folder or an archive for charts
+    bake.c            Preparing cells and sheets the engine cannot draw yet
+    links.c           Charts by link: a publisher's live map drawn as the chart
+    raster.c          The installed raster charts, and the engine's set election
+
+  plugins/
+    registry.c        The wasm plugins' schemas, values, list rows, apply and save
+    install.c         The .lkplug consent sheet, and the install
+    discovery.c       Browsing the boat's network for what a plugin can talk to
+
+  ui/
+    window.c          The window: titlebar, chart, floating chrome, actions, drops
+    window-private.h  The LkWindow struct the ui/ units share
+    open-dialogs.c    Every file picker, and the one route in
+    startup-view.c    The opening loader and the first-run page
+    dev-hooks.c       The LOOKOUT_* hooks the screenshot script drives
+    chart/
+      view.c          The chart widget: the surface, the transparent hole, all input
+      pick-report.c   The cursor pick: the decode, the card, the callout placement
+      overlay.c       The bubble pinned to a symbol a plugin drew
+    hud/
+      hud.c           The readouts capsule, the raster pill, the bubbles, the formats
+      pills.c         The build indicator and the bake pill
+      scale-bar.c     The distance bar at the bottom left
+      scale-entry.c   Type a scale, or pick a navigational purpose band
+    settings/
+      window.c        The lifecycle, the sidebar, and the Text and Advanced pages
+      private.h       The LkSettings struct the pages share
+      widgets.c       The page, the sections, the rows, the field bindings
+      display.c       The colour scheme, the display category, the soundings rule
+      depths.c        The four contours, the unit, the shading
+      charts.c        The chart by link, the library of sets, the raster charts
+      plugins.c       The controls a plugin declared, and the rows of its lists
+      plugins-page.c  What is loaded, what it may reach, and adding or removing one
+    chrome/
+      alerts.c        The plugin alert strip, and the siren behind an alarm
+      search.c        Coordinate go-to (feature search stubbed)
+      table-window.c  A plugin's declared table, as a window
+      about.c         The About screen
+      licenses.c      The Licenses screen
+
+  util/
+    json.c            A small JSON reader for the engine's pick payload
+    tether.h          Ties a model signal handler to a widget's life
+```
+
+| Elsewhere | Function |
 |------|----------|
-| `src/main.c` | The `GtkApplication` entry point, the CSS, and the accelerators |
-| `src/lk-window.c` | The window: the titlebar, the chart, the floating chrome, the actions, and the open dialog |
-| `src/lk-chart-view.c` | The chart widget. It owns the surface, the transparent hole, and all input. |
-| `src/lk-chart-controller.c` | The one `lookout*` handle, every `lookout_*` call, and the render loop |
-| `src/lk-native-surface.c` | The X11 child window or the Wayland subsurface that the chart draws into |
-| `src/lk-app-model.c` | The shared state, the recents, the open paths, and the coordinate and scale parsers |
-| `src/lk-hud.c` | The readouts capsule, the distance bar, the north control, the scale entry, and the formats |
-| `src/lk-pick-report.c` | The pick report: the decode, the card, and the placement of the callout |
-| `src/lk-raster.c` | The installed raster charts, their on and off, and the set names |
-| `src/lk-json.c` | The JSON reader for the payload of a pick |
-| `src/lk-search.c` | The coordinate go-to function. Feature search is not complete. |
-| `src/lk-mariner.c` | The live `tile57_mariner` behind the settings form |
-| `src/lk-settings-window.c` | The mariner panel (Display, Depths, Text, Charts, Advanced) |
-| `src/lk-store.c` | The camera position, the recents, and the settings in one XDG keyfile |
 | `build-core.sh` | It builds the Zig core where meson expects the outputs. |
 | `screenshots.sh` | It makes the documentation screenshots. Refer to [the protocol](screenshots.md). |
+| `tests/` | The unit and widget suites. Run them with `meson test -C build`. |
 
 ## What to watch out for
 

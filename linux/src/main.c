@@ -6,9 +6,11 @@
 
 #include <gtk/gtk.h>
 
-#include "lk-app-model.h"
-#include "lk-chart-bake.h"
-#include "lk-window.h"
+#include "model/app-model.h"
+#include "library/bake.h"
+#include "ui/window.h"
+
+#include "lk-resources.h"
 
 #define LK_APP_ID "org.beetlebug.LookoutMarine"
 
@@ -32,17 +34,14 @@ static const char *LK_CSS =
     /* The chart window is transparent where the chart-view widget paints nothing,
      * so the below subsurface shows through and the chrome floats over it. */
     ".lk-chart-window { background: transparent; }"
-    /* The startup loader and the empty state. They stand over the chart hole,
-     * which is transparent until the first frame lands, so the card carries
-     * its own opaque surface — a tint of the text colour showed through to the
-     * desktop and was barely legible. */
-    ".lk-card {"
-    "  background: alpha(@theme_bg_color, 0.96);"
-    "  border: 1px solid alpha(@borders, 0.5);"
-    "  border-radius: 16px;"
-    "  padding: 32px 40px;"
-    "  box-shadow: 0 4px 16px alpha(black, 0.25);"
-    "}"
+    /* No chart, no chart window. The loader, the import panel and the first-run
+     * page each stand on a plain page rather than over the water, and this fill
+     * is what makes it a page: it covers the whole window, and the floating
+     * bubbles with it, because a zoom control over a view with nothing to zoom
+     * is chrome offering work it cannot do. The reference paints the same fill
+     * (Chrome.panel, #F8F8F8) and its loader carries it too. Opaque: the chart
+     * window is transparent, so anything less shows the desktop through it. */
+    ".lk-page { background: @theme_bg_color; }"
     /* The readouts, as a capsule at the bottom centre. */
     ".lk-capsule {"
     "  background: alpha(@theme_bg_color, 0.94);"
@@ -206,9 +205,36 @@ static const char *LK_CSS =
     "  border-radius: 6px;"
     "  font-size: 90%;"
     "}"
+    /* The chart menu header: a mark's name, and the coordinate under it. */
+    ".lk-menu-title { font-weight: bold; padding: 4px 10px 0 10px; }"
+    ".lk-menu-coord { padding: 2px 10px 6px 10px; font-size: 90%; }"
+    /* The display settings' scheme swatches: a rounded palette, with a ring on
+       the chosen one. */
+    ".lk-swatch { border-radius: 8px; border: 1px solid alpha(@borders, 0.5); }"
+    ".lk-swatch-current .lk-swatch { border: 3px solid @accent_color; }"
+    /* The chosen scheme's name carries the choice with the ring. */
+    ".lk-swatch-current label { font-weight: bold; }"
+    /* The floating search capsule beside the top-left bubble, and its result
+       row below the field. */
+    ".lk-search-capsule {"
+    "  padding: 4px 12px;"
+    "  border-radius: 999px;"
+    "  background: alpha(@theme_bg_color, 0.92);"
+    "  border: 1px solid alpha(@borders, 0.5);"
+    "  box-shadow: 0 1px 4px alpha(black, 0.2);"
+    "}"
+    ".lk-search-result {"
+    "  padding: 6px 12px;"
+    "  border-radius: 10px;"
+    "  background: alpha(@theme_bg_color, 0.92);"
+    "  border: 1px solid alpha(@borders, 0.5);"
+    "}"
+    ".lk-search-result.lk-search-go { color: @accent_color; }"
+    /* 48px is LK_CHROME_BUBBLE, the bubble diameter Chrome.swift and Chrome.kt
+       use. The layout reserves the same, so the two agree. */
     ".lk-bubble {"
-    "  min-width: 40px;"
-    "  min-height: 40px;"
+    "  min-width: 48px;"
+    "  min-height: 48px;"
     "  padding: 0;"
     "  border-radius: 999px;"
     "  background: alpha(@theme_bg_color, 0.92);"
@@ -219,8 +245,8 @@ static const char *LK_CSS =
      * second frame inside the bubble. The bubble is the only frame there is, so
      * the inner one is taken off and the round shape carries through to it. */
     "menubutton.lk-bubble > button {"
-    "  min-width: 40px;"
-    "  min-height: 40px;"
+    "  min-width: 48px;"
+    "  min-height: 48px;"
     "  padding: 0;"
     "  border-radius: 999px;"
     "  background: none;"
@@ -279,7 +305,7 @@ static const char *LK_CSS =
     ".lk-raster-pill > button:hover { background: alpha(@accent_color, 0.30); }"
     ".lk-raster-pill.lk-off > button:hover { background: alpha(@warning_color, 0.42); }"
     ".lk-raster-bar { opacity: 0.5; }"
-    /* Night. The dark-theme flip (lk-window.c, lk_window_apply_scheme) does
+    /* Night. The dark-theme flip (ui/window.c, lk_window_apply_scheme) does
      * most of the work — every chrome fill above rides @theme_bg_color — and
      * this class quiets the surfaces further, so the brightest thing on deck
      * is the chart, never the readouts floating over it. The fix pill keeps
@@ -325,6 +351,7 @@ lk_app_startup (GtkApplication *app, gpointer user_data)
    * water, a chart, a boat and a bell, and the stock theme carries none of
    * them. This runs at STARTUP rather than in main: there is no display to ask
    * for a theme until GTK is up. */
+  lk_register_resource ();
   gtk_icon_theme_add_resource_path (gtk_icon_theme_get_for_display (gdk_display_get_default ()),
                                     "/org/beetlebug/LookoutMarine/icons");
 
@@ -345,11 +372,14 @@ lk_app_startup (GtkApplication *app, gpointer user_data)
     { "win.toggle-soundings", { "<Control><Shift>s", NULL } },
     { "win.toggle-other",     { "<Control>d", NULL } },
     { "win.search",           { "<Control>f", NULL } },
-    { "win.close-pick",       { "Escape", NULL } },
+    /* Escape is a cascade, not one action: the window handles it in the capture
+       phase (lk_window_escape), so it is not bound to close-pick here. */
     { "win.settings",         { "<Control>comma", NULL } },
     { "win.raster-cycle",     { "<Control>i", NULL } },
     { "win.raster-add",       { "<Control><Shift>i", NULL } },
     { "win.toggle-chart",     { "<Control><Shift>h", NULL } },
+    /* The desktop convention; macOS keeps the system's own fullscreen key. */
+    { "win.full-screen",      { "F11", NULL } },
   };
 
   for (gsize i = 0; i < G_N_ELEMENTS (accels); i++)

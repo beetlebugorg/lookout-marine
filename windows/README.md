@@ -37,6 +37,21 @@ msbuild LookoutMarine.vcxproj /p:Configuration=Release /p:Platform=ARM64
 Use `/p:Platform=x64` on an x64 machine. The app is unpackaged and
 self-contained: the build copies the Windows App SDK runtime next to the exe.
 
+**A Debug CORE does not run.** `build-core.ps1 -Configuration Debug` passes
+`-Doptimize=Debug`, and the app then dies at startup with a stack overflow
+(`0xC00000FD`) — Zig's Debug frames do not fit the default 1 MB stack. The same
+shell relinked against a ReleaseFast core starts and runs normally, so it is the
+core's frames, not the shell's. To debug the SHELL, build the core Release and
+the vcxproj Debug:
+
+```powershell
+pwsh windows/build-core.ps1 -Configuration Release -Platform x64
+msbuild windows/LookoutMarine.vcxproj /p:Configuration=Debug /p:Platform=x64
+```
+
+CI builds the all-Debug pair, which compiles and links but cannot start; it
+never runs the binary, so it stays green.
+
 ### Plugins
 
 Own ship, AIS, NMEA 0183, Signal K and laylines are wasm plugins, and the host
@@ -99,34 +114,97 @@ live in Settings ▸ Plugins. One copy runs per machine (`LOOKOUT_MULTI=1`
 lifts it); `LOOKOUT_CLEAN=1` keeps every plugin on its manifest defaults for
 captures.
 
-## What's in here
+## The source tree
 
-| File | Role |
-|------|------|
-| `ui/MainWindow.xaml.cpp` | Window construction, chrome wiring, the render thread |
-| `ui/MainWindow.Open.cpp` | Open flow, pickers, the chart panel |
-| `ui/MainWindow.Input.cpp` | Gestures, commands, coordinate search |
-| `ui/MainWindow.Hud.cpp` | Readout capsule and the scale bar |
-| `ui/MainWindow.Loader.cpp` | The startup loader phases (atlas / mapping / tessellating) |
-| `ui/MainWindow.Pick.cpp` | The pick report card: ranked pick, object list, decoded rows, raw fold |
-| `ui/MainWindow.Scale.cpp` | The zoom-to-scale panel on the HUD's 1:N readout |
-| `ui/MainWindow.Raster.cpp` | The raster pill and its menu, the add flow, the re-install at every open |
-| `ui/MainWindow.PickAux.cpp` | The files a pick points at (TXTDSC/PICREP) and the picture viewer |
-| `ui/MainWindow.Settings.cpp` | The mariner settings window: the section list, the pages, debounced apply |
-| `ui/MainWindow.Plugins.cpp` | The plugin-declared settings sections, the connection list, capability grants, apply and save |
-| `ui/MainWindow.Alerts.cpp` | The alert strip and the siren: an alarm sounds and repeats until acknowledged |
-| `ui/MainWindow.Vessels.cpp` | Plugin table windows (AIS Targets): shell-side units, seq-gated reload, reveal on chart |
-| `ui/MainWindow.PluginInstall.cpp` | The .lkplug consent sheet, install, and the dropped-file router |
-| `ui/MainWindow.Overlay.cpp` | The bubble pinned to an overlay object, the hover tip, the GPS pill, the follow lock |
-| `src/lk_plugin_model.h` | The shape the plugin registry takes on this side |
-| `ui/winrt_glue.cpp` | Compiles the XAML-generated TUs a command-line build does not auto-register |
-| `src/lk_controller.*` | The one `lookout*` handle; every `lookout_*` call; render-loop helpers |
-| `src/lk_store.*` | Camera pose, recents, mariner settings and the raster chart list in `%APPDATA%\lookout-marine\settings.ini` |
-| `src/lk_coord.*` | Coordinate go-to parser and DMS formatting |
-| `src/lk_paths.*`, `src/lk_format.*`, `src/lk_backdrop.*` | Chart discovery, HUD formatting, the transparent backdrop |
-| `build-core.ps1` | Builds the Zig core where the vcxproj expects its outputs |
-| `LookoutMarine.rc`, `resource.h` | The app icon as a Win32 ICON resource |
-| `LookoutMarine.ico` | The icon itself: 16/32/48/64/128/256 in one container |
+`src/` has a directory per area of the app. Inside an area, **`ui/` is the
+WinUI that draws it and the files beside that directory are the model that
+drives it**: the pick report card sits with the pick decoder, the raster pill
+with the raster paths, the connection list with the registry reader. A change
+to one feature is a change in one directory.
+
+The model files carry **no WinRT**. That is not a style rule: it is what lets
+`build-tests.ps1` link them into a test binary with no XAML host (see **Tests**
+below). The vcxproj marks every one of them `NotUsing` for the precompiled
+header, so a `winrt` include in a model file is a build error rather than a
+quietly lost test suite.
+
+| Directory | What it is |
+|---|---|
+| `src/app/ui/` | The two XAML types (`App`, `MainWindow`), the window shell and the render thread, the menu bubble, the transparent backdrop, and the glue that compiles the XAML-generated TUs a command-line build does not auto-register |
+| `src/chart/` | `lk_pick` — the pick report envelope decoder |
+| `src/chart/ui/` | The open flow and the chart panel, gestures and commands, the mariner's markers, the pick report card and the files a pick points at |
+| `src/hud/` | `lk_text` — the scale, the usage band and the position, as the readouts say them |
+| `src/hud/ui/` | The readout capsule and the scale bar, the startup loader phases, the overlay bubbles and the GPS and follow pills, the zoom-to-scale panel, and `lk_format` (the brushes) |
+| `src/library/` | `lk_paths` (chart and raster discovery, the agency name, the set names) and `lk_bake` (the import's order and progress) |
+| `src/library/ui/` | The sets aboard and their switches, charts by link, the raster underlay and its pill, the import panel |
+| `src/plugins/` | `lk_plugin_registry` (the settings schema and the config object), `lk_table` (the declarations, the rows and the mariner's units), `lk_alerts` (the severity and audibility rules), `lk_discovery` (DNS-SD) |
+| `src/plugins/ui/` | The plugin settings sections and connection lists, the `.lkplug` consent sheet and install, the table windows, the alert strip and its siren |
+| `src/settings/ui/` | The mariner settings window: the section list, the pages, the debounced apply. No model of its own yet — its pages read the core's mariner struct and the plugin registry direct |
+| `src/about/` | `lk_licenses` — the manifest model |
+| `src/about/ui/` | About and the licences screen |
+| `src/engine/` | The seams to what is not XAML: `lk_controller` (the one `lookout*` handle and every `lookout_*` call) and `lk_store` (`%APPDATA%\lookout-marine`), both plain C ports of the Linux shell's own |
+| `src/util/` | What every area uses and none of them owns: `lk_json`, `lk_utf8`, `lk_coord` |
+| `test/` | The model layer's tests and the check harness they are written against |
+
+Two model files are not in the test build because they call the core rather
+than only reasoning about its answers: `lk_licenses_baked.cpp` (which fetches
+the baked manifest) and `lk_bake.cpp` (which drives tile57). Both are split so
+that the part worth testing — reading the manifest, reading a scan — is not
+in them.
+
+At the root: `build-core.ps1` builds the Zig core where the vcxproj expects its
+outputs, `build-tests.ps1` builds and runs the tests, `pch.h` is the WinRT
+precompiled header, and `LookoutMarine.rc` / `resource.h` / `LookoutMarine.ico`
+are the app icon as a Win32 ICON resource.
+
+## Tests
+
+```powershell
+pwsh windows/build-tests.ps1
+```
+
+The suite covers the shell's **model**: the coordinate and scale parsers, the
+JSON reader every seam with the core goes through, the pick report decoder, the
+licence manifest, the plugin registry and the config object that goes back, and
+the alert rules. Not the WinUI layer, which needs a XAML host.
+
+It builds with `zig`, not MSVC, on purpose: `zig` is already a prerequisite of
+this shell, so the tests run for anyone who can build the app — including on a
+machine with no Visual Studio. Nothing in the suite links the core or WinRT,
+which is what keeps that true.
+
+### The development and screenshot hooks
+
+`src/app/ui/DevHooks.cpp` reads these once, just after the first chart opens.
+They exist so a capture is reproducible on any machine, and so the paths a
+mariner reaches by hand can be exercised where nobody can click.
+
+| Hook | What it does |
+|---|---|
+| `LOOKOUT_OPEN=<chart\|dir>` | Open this at startup instead of walking the recents |
+| `LOOKOUT_VIEW=lon,lat,zoom[,rot]` | Pin the opening camera |
+| `LOOKOUT_WINDOW=WIDTHxHEIGHT` | Size the client area in logical points, so a frame is the same anywhere |
+| `LOOKOUT_IMPORT=<folder\|.zip>` | Drive the chart import at startup, the same call the picker makes |
+| `LOOKOUT_ADD=<path>` | Add a folder as a chart set two seconds in |
+| `LOOKOUT_REMOVE=<path>[@secs]` | Take one off, optionally while its own charts are still baking |
+| `LOOKOUT_OPEN_SETTINGS=1\|<section>` | Open the mariner settings, optionally on one section |
+| `LOOKOUT_SHOW=pick[:XxY]\|scale\|table[:…]\|licenses[:id]\|about` | Open one surface three seconds after the chart |
+| `LOOKOUT_CHART_LINK=<url>` | Add and select a chart by link at launch |
+| `LOOKOUT_GESTURE_BENCH=pan\|zoom\|both` | Drive a scripted gesture, write the profile, quit |
+| `LOOKOUT_FRAME_PROF=<path>` | One CSV row per render tick |
+| `LOOKOUT_HITMAP=1` | Log what each tap and pick resolved to |
+| `LOOKOUT_MULTI=1` | Lift the one-copy-per-machine lock |
+| `LOOKOUT_CLEAN=1` | Keep every plugin on its manifest defaults, for captures |
+
+A GUI app cannot start in session 0, so an automated run needs a Task Scheduler
+task with an **Interactive** principal to land in the logged-on session:
+
+```powershell
+$action    = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -File $wrapper"
+$principal = New-ScheduledTaskPrincipal -UserId "$env:COMPUTERNAME\$env:USERNAME" -LogonType Interactive
+Register-ScheduledTask -TaskName 'LookoutSmoke' -Action $action -Principal $principal -Force
+Start-ScheduledTask -TaskName 'LookoutSmoke'
+```
 
 ## The app icon
 

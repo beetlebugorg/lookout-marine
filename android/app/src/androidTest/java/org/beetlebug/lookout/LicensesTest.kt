@@ -1,5 +1,11 @@
 package org.beetlebug.lookout
 
+import org.beetlebug.lookout.charts.Library
+import org.beetlebug.lookout.hud.LookoutTheme
+import org.beetlebug.lookout.licenses.LicenseManifest
+import org.beetlebug.lookout.licenses.LicenseSelection
+import org.beetlebug.lookout.licenses.LicensesScreen
+
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -167,8 +173,16 @@ class LicensesTest {
         }
     }
 
-    /** Ten entries, so the group headings that only earn their place above
-     *  twelve stay away. */
+    /** Ten entries, so neither the search field nor the group headings, which
+     *  only earn their place above twelve, appear. */
+    @Test fun tenComponentsGetNoSearchField() {
+        showLicenses()
+        assertTrue(
+            "a search field appeared below the twelve-row threshold",
+            compose.onAllNodes(hasTestTag("licenses-search")).fetchSemanticsNodes().isEmpty(),
+        )
+    }
+
     @Test fun tenComponentsGetNoGroupHeadings() {
         showLicenses()
         for (group in listOf("CHART AND RENDERING", "PLUGINS", "IMAGES AND DATA", "PLATFORM")) {

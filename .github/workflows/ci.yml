@@ -130,6 +130,14 @@ jobs:
           ninja -C build
           DESTDIR="$PWD/dist" meson install -C build
 
+      # The widget suite needs a display; it skips itself (exit 77) where none
+      # can be opened, so the step is safe on any runner. Xvfb gives it one.
+      - name: Test
+        working-directory: linux
+        run: |
+          sudo apt-get install -y xvfb
+          meson test -C build --print-errorlogs
+
       - uses: actions/upload-artifact@v5
         with:
           name: lookout-marine-linux-x64
@@ -221,6 +229,13 @@ jobs:
       - name: Build core
         run: pwsh windows/build-core.ps1 -Configuration Debug -Platform x64
 
+      # The shell's model layer: the parsers, the formatters, the geometry and
+      # the store. Built with zig, not MSVC, and it links neither the core nor
+      # WinRT — but it needs the core's HEADERS for the types the store and the
+      # chart paths speak in, so it runs after the core.
+      - name: Test the shell
+        run: pwsh windows/build-tests.ps1
+
       - name: Build
         run: |
           msbuild windows/LookoutMarine.vcxproj -t:Restore /p:Configuration=Debug /p:Platform=x64
@@ -252,11 +267,37 @@ jobs:
       - name: Install NDK
         run: sdkmanager "ndk;27.2.12479018" "cmake;3.22.1"
 
+      # Robolectric fetches its android-all runtime the first time it runs.
+      # Without this that is a download on every build.
+      - name: Cache the Robolectric runtime
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository/org/robolectric
+          key: robolectric-${{ runner.os }}
+
       - name: Build
         working-directory: android
         run: ./gradlew assembleDebug
+
+      # The JVM half of the shell's suite: the parsers that read what the core
+      # hands over, the cross-shell formatters, the persistence stores and the
+      # pick callout geometry. It needs no device.
+      #
+      # The other half is instrumented and is not run here. It wants an
+      # emulator, and the app is built arm64-v8a only, so an x86_64 runner
+      # cannot load the core.
+      - name: Test
+        working-directory: android
+        run: ./gradlew testDebugUnitTest
 
       - uses: actions/upload-artifact@v5
         with:
           name: lookout-marine-android-arm64
           path: android/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Upload the test report
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: android-test-report
+          path: android/app/build/reports/tests/testDebugUnitTest
