@@ -9,7 +9,7 @@ lives at the `sdl-gpu` git tag.)
 
 ## Prerequisites
 
-- **Xcode** — macOS 14+ / iOS 15+ deployment targets.
+- **Xcode** — the deployment target is macOS 26 / iOS 26 (`macos/project.yml`).
 - **Zig 0.16.0** on `PATH` (`brew install zig`).
 - **XcodeGen** to generate the project (`brew install xcodegen`).
 - **CMake** to build the WAMR runtime (`brew install cmake`).
@@ -70,12 +70,12 @@ framing for screenshots; `simctl launch` forwards both as `SIMCTL_CHILD_*`).
 | `AppModel.swift` | Shared observable state; open paths (`LOOKOUT_OPEN`, Documents, recents); coordinate parser |
 | `MarinerSettings.swift` | Swift mirror of `tile57_mariner` (round-trips engine-only fields; persists as a versioned dictionary) |
 | `SettingsView.swift` | The S-52 mariner form (⌘, / the gear) |
-| `HUDOverlay.swift` | Cursor lat/lon, 1:N scale, scheme, compass, identify results |
+| `HUDOverlay.swift` | Own ship's position, 1:N scale, the band, the raster pill, the chart menu, the scale entry |
 | `ZoomControls.swift` | Floating +/−/north bubbles |
 | `SearchField.swift` | Coordinate go-to (feature search stubbed) |
 | `OpenPanel.swift` | The Open Chart… pickers (NSOpenPanel / fileImporter hand-off) |
 | `Commands.swift` | Native menu bar (macOS) |
-| `Platform.swift` | The macOS/iOS seam: typealiases, display-link/scale helpers, PassThroughWindow, iOS-15 compat shims |
+| `Platform.swift` | The macOS/iOS seam: typealiases, display-link/scale helpers, the chrome hit map, PassThroughWindow |
 | `project.yml` | XcodeGen target definition (all build settings + the zig pre-build) |
 
 ## iOS
@@ -103,12 +103,13 @@ WindowGroup) with a two-window stack, bottom → top:
    paints over the chart (`hostWindowAboveChart`).
 
 Gestures on the input window: one-finger pan with velocity fling, pinch zoom
-anchored at the centroid (a two-finger drag pans via the centroid at the same
-time), two-finger twist to rotate, tap to identify, double-tap /
-two-finger-tap to zoom in/out, pointer hover readout, and trackpad/wheel zoom
-via a hidden always-recentered `UIScrollView` sink (simulator front-ends feed
-scroll views but never `allowedScrollTypesMask` recognizers). Pinch/pan and
-the chrome buttons are verified end-to-end by the XCUITests.
+anchored at the centroid, two-finger twist to rotate past a dead zone, and
+double-tap / two-finger-tap to zoom in and out. A plain tap closes a pinned
+bubble and does nothing else: what is at a point is asked for by name, from
+the menu a press raises there, which this shell does not carry yet. There is no
+scroll-to-zoom recognizer: `allowedScrollTypesMask` also fires on a pointer
+drag, which then zoomed instead of panning. Pinch, pan and the chrome buttons
+are verified end to end by the XCUITests.
 
 **Building.** No dependency beyond this repo (tile57 arrives as the core's zig
 package dependency; no SDL, no MoltenVK — rendering is direct Metal). Just

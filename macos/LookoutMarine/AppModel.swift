@@ -1467,7 +1467,7 @@ final class AppModel: ObservableObject {
         // back. What a pick MISSES is diagnosed from here.
         if ProcessInfo.processInfo.environment["LOOKOUT_HITMAP"] != nil {
             let classes = results.map(\.cls).joined(separator: ",")
-            NSLog("[pick] at (%.0f, %.0f) -> [%@]", point.x, point.y, classes)
+            lkLog(String(format: "[pick] at (%.0f, %.0f) -> [%@]", point.x, point.y, classes))
         }
     }
 

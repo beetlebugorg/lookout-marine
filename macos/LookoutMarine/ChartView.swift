@@ -538,8 +538,8 @@ final class PassThroughHostingView<Content: View>: NSHostingView<Content> {
         let local = superview.map { convert(point, from: $0) } ?? point
         let inChrome = ChromeHitMap.shared.contains(local)
         if ProcessInfo.processInfo.environment["LOOKOUT_HITMAP"] != nil {
-            NSLog("[hitmap] hitTest (%.0f, %.0f) super=%@ chrome=%d",
-                  local.x, local.y, hit === self ? "self" : "nil", inChrome ? 1 : 0)
+            lkLog(String(format: "[hitmap] hitTest (%.0f, %.0f) super=%@ chrome=%d",
+                         local.x, local.y, hit === self ? "self" : "nil", inChrome ? 1 : 0))
         }
         return inChrome ? self : nil
     }
@@ -893,7 +893,8 @@ final class ChartNSView: NSView {
         // through does nothing instead of acting on what is under the panel.
         if ChromeHitMap.shared.contains(p) {
             if ProcessInfo.processInfo.environment["LOOKOUT_HITMAP"] != nil {
-                NSLog("[hitmap] tapChart refused (%.0f, %.0f): inside chrome", p.x, p.y)
+                lkLog(String(format: "[hitmap] tapChart refused (%.0f, %.0f): inside chrome",
+                             p.x, p.y))
             }
             return
         }

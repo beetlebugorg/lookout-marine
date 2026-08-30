@@ -7,9 +7,9 @@
 //  touchpoints stay `#if`-split: the backing view class, display-link creation,
 //  backing scale, the native-handle kind, and raw event/gesture input.
 //
-//  iOS uses the `LOOKOUT_NATIVE_UIKIT_WINDOWSCENE` ABI kind (SDL can't wrap an
-//  existing UIView): the chart renders in its own full-screen UIWindow behind
-//  the app's transparent chrome window, and ChartUIView forwards gesture input.
+//  Both platforms pass `LOOKOUT_NATIVE_METAL_LAYER`: lookout renders into the
+//  view's own CAMetalLayer. On iOS that view is ChartUIView, in the plain-UIKit
+//  input window under the app's transparent chrome window.
 
 import SwiftUI
 #if canImport(AppKit)
@@ -82,8 +82,8 @@ final class ChromeHitMap {
         // chrome reaches the chart, the first question is what frames the
         // map actually holds; this answers it without a debugger attached.
         if ProcessInfo.processInfo.environment["LOOKOUT_HITMAP"] != nil {
-            NSLog("[hitmap] %@ = (%.0f, %.0f, %.0f, %.0f)",
-                  id, rect.origin.x, rect.origin.y, rect.width, rect.height)
+            lkLog(String(format: "[hitmap] %@ = (%.0f, %.0f, %.0f, %.0f)",
+                         id, rect.origin.x, rect.origin.y, rect.width, rect.height))
         }
     }
 
@@ -118,8 +118,8 @@ final class PassThroughWindow: UIWindow {
         // fallback has a tree to walk only when a client is attached, so a
         // control that depends on it is dead in normal use.
         if ProcessInfo.processInfo.environment["LOOKOUT_HITMAP"] != nil {
-            NSLog("[hitmap] tap win(%.0f, %.0f) chrome(%.0f, %.0f) map=%d",
-                  point.x, point.y, chrome.x, chrome.y, inMap ? 1 : 0)
+            lkLog(String(format: "[hitmap] tap win(%.0f, %.0f) chrome(%.0f, %.0f) map=%d",
+                         point.x, point.y, chrome.x, chrome.y, inMap ? 1 : 0))
         }
         if inMap { return hit }
         return hasInteractiveElement(at: point) ? hit : nil
@@ -201,9 +201,11 @@ enum Platform {
         // was pinned to 60 for a while).
         link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
         // Settle the "is this panel even ProMotion" question in the log: the
-        // fps column can only ever approach THIS number.
-        let maxHz = view.window?.screen.maximumFramesPerSecond ?? UIScreen.main.maximumFramesPerSecond
-        print("[lookout] display maximumFramesPerSecond = \(maxHz)")
+        // fps column can only ever approach THIS number. Through lkLog, so it
+        // reaches the $LOOKOUT_LOG file an .app launched with `open` needs.
+        if let maxHz = view.window?.windowScene?.screen.maximumFramesPerSecond {
+            lkLog("display maximumFramesPerSecond = \(maxHz)")
+        }
         return link
         #endif
     }

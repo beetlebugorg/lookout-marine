@@ -1,8 +1,13 @@
 //  ChartController.swift
 //
 //  The single owner of the `lookout*` handle and the single funnel for every
-//  `lookout_*` call. Per the engine's hard threading contract, ALL of these must
-//  run on ONE thread — the main thread — so the whole class is @MainActor.
+//  `lookout_*` call. The handle is main-actor owned, so the whole class is
+//  @MainActor and every caller reaches it from one place.
+//
+//  THE RENDER IS THE EXCEPTION. `lookout_render` runs on `renderQueue`, off the
+//  main thread, so a gesture burst can never delay a frame slot. The C ABI
+//  serializes itself (api_mu), so a gesture landing mid-render waits a
+//  millisecond or two. See `step` and `renderGate` for the rest of that rule.
 //
 //  It also drives the on-demand render loop: a CADisplayLink that renders only
 //  while something is animating or the scene is dirty, and pauses itself when the
