@@ -225,11 +225,11 @@ final class AppModel {
 
     /// Zoom to a 1:N display scale, about the view centre.
     ///
-    /// At one latitude the denominator is C·cos(lat)/2^zoom. A scale is
-    /// therefore a zoom delta, and the engine zoom can do the work. The engine
+    /// A scale is a zoom delta, and the engine zoom does the work. The engine
     /// keeps its zoom limits and eases the movement.
     func zoomToScale(_ denominator: Double) {
         guard let controller, denominator > 0, readouts.scaleDenominator > 0 else { return }
-        controller.zoomCentered(log2(readouts.scaleDenominator / denominator))
+        controller.zoomCentered(
+            lookout_zoom_delta_for_scale(readouts.scaleDenominator, denominator))
     }
 }
