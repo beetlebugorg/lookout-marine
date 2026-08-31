@@ -1,5 +1,5 @@
 //! The chart-library half of the C ABI (see include/lookout-library.h): the
-//! charts aboard, the scan, the raster underlay, the host-supplied style and
+//! installed charts, the scan, the raster underlay, the host-supplied style
 //! the charts reached by link.
 
 const std = @import("std");

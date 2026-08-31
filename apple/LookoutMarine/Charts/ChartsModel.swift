@@ -1,4 +1,4 @@
-//  ChartsModel.swift — the charts aboard, and the one being drawn.
+//  ChartsModel.swift — the installed charts, and the one being drawn.
 //
 //  Which paths open at launch, the sets the mariner added, the bake that turns
 //  raw cells into charts this app can draw, and the state of the open itself. A
@@ -70,9 +70,9 @@ final class ChartsModel {
         return isOpening ? .mapping(cells: openingCells) : .tessellating
     }
 
-    // MARK: The sets aboard
+    // MARK: The installed sets
 
-    /// The folders of charts aboard, in the order added. A set on this list has
+    /// The installed folders of charts, in the order added. A set on this list has
     /// been looked through and holds charts, so it always opens.
     var sets: [ChartSet] = []
     /// True while a folder is being looked through. The full NOAA library takes
@@ -137,8 +137,8 @@ final class ChartsModel {
         // skips a chart it cannot read anyway. The verified scan runs behind
         // this and fills the Charts panel.
         let off = ChartSetStore.savedOff()
-        var aboard: [String] = []
-        // The pictures aboard are NOT charts to compose. This walk cannot tell
+        var installed: [String] = []
+        // The installed pictures are NOT charts to compose. This walk cannot tell
         // a raster archive from a vector one without opening it, so it takes
         // the answer the last scan already worked out: anything installed as a
         // raster stays out. Opening one as a vector chart composes nonsense.
@@ -146,10 +146,10 @@ final class ChartsModel {
         for dir in ChartSetStore.savedPaths() where !off.contains(dir) {
             for p in cellPaths(for: dir) where !seen.contains(p) {
                 seen.insert(p)
-                aboard.append(p)
+                installed.append(p)
             }
         }
-        if !aboard.isEmpty { return aboard.sorted() }
+        if !installed.isEmpty { return installed.sorted() }
         if let def = Self.defaultChartPath { return [def] }
         return []
     }
@@ -195,10 +195,10 @@ final class ChartsModel {
     private func requestOpen(_ paths: [String]) {
         // Nothing left to draw at all. Switching off the last set, or removing
         // it, has to take the chart off the display: leaving the old one up
-        // says the charts are still aboard when they are not.
+        // says the charts are still installed when they are not.
         //
         // A set of pictures with no survey in it still draws, so the test is
-        // whether anything is aboard, not whether any CELL is.
+        // whether anything is installed, rather than whether any CELL is.
         guard !paths.isEmpty || !raster.paths.isEmpty else { closeChart(); return }
         openSeq += 1
         openRequest = OpenRequest(id: openSeq, paths: paths)
@@ -231,7 +231,7 @@ final class ChartsModel {
         isOpening = false
     }
 
-    // MARK: - The sets aboard
+    // MARK: - The installed sets
 
     /// Every chart the switched-on sets carry, ready to hand to the engine.
     /// Sorted, and with duplicates dropped: two sets may overlap, and the same
@@ -298,7 +298,7 @@ final class ChartsModel {
             // this the refusal read "Still working on . Wait for it to finish."
             let busy = bake?.name ?? scanningName
             emptyPick = busy.isEmpty
-                ? "Still looking through the charts already aboard. Try again in a moment."
+                ? "Still looking through the charts already installed. Try again in a moment."
                 : "Still working on \(busy). Wait for it to finish."
             return
         }
@@ -363,7 +363,7 @@ final class ChartsModel {
                 wanted.append(p)
             }
         }
-        // Anything the mariner added before sets existed stays aboard.
+        // Anything the mariner added before sets existed stays installed.
         for p in raster.paths where !seen.contains(p) && !ChartBake.isDerived(p) {
             let inAnySet = sets.contains { $0.rasterPaths.contains(p) }
             if !inAnySet {
@@ -476,7 +476,7 @@ final class ChartsModel {
         bakeJob?.cancel()
     }
 
-    /// Switch a set on or off. It stays aboard either way. The library is
+    /// Switch a set on or off. It stays installed either way. The library is
     /// composed at open, so this reopens with the new set of charts.
     func setChartSetOn(_ path: String, _ on: Bool) {
         guard let i = sets.firstIndex(where: { $0.path == path }) else { return }
@@ -515,7 +515,7 @@ final class ChartsModel {
         let prepared = gone?.preparedPath ?? ChartBake.preparedDirectory(for: path)
         // The pictures the set carried go with it. syncRasterFromSets keeps a
         // picture that belongs to no set — that is how the ones added before
-        // sets existed stay aboard — and the moment this set is removed, that
+        // sets existed stay installed — and the moment this set is removed, that
         // describes every picture it carried. Without this, removing every set
         // leaves "No charts" in the list and a chart still on screen.
         let carried = Set(gone?.rasters.map(\.path) ?? [])

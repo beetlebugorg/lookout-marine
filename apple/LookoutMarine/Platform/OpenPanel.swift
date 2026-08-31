@@ -206,7 +206,7 @@ extension AppModel {
     ///
     /// A chart ALREADY IN THE APP'S OWN DOCUMENTS is used where it lies. The
     /// app publishes that directory to Files (UIFileSharingEnabled), so the way
-    /// to carry these aboard is to drop them in from a Mac or a drive and pick
+    /// to install these is to drop them in from a Mac or a drive and pick
     /// them here. They are half-gigabyte downloads and copying one would spend
     /// the space twice.
     ///

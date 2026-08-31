@@ -70,7 +70,7 @@ is chart state, chrome or a plugin surface.
 |------|------|
 | `App/` | `@main` App, the two app delegates, the iOS scene and keyboard, `ContentView`, the dev hooks, `AppModel`, the macOS menu bar |
 | `Chart/` | `ChartController` (the `lookout*` handle, the render loop), the two input views, the camera pose |
-| `Charts/` | The sets aboard, the scan, the bake, and the chart-link fetcher |
+| `Charts/` | The installed sets, the scan, the bake, and the chart-link fetcher |
 | `Chrome/` | The tokens and sizes, the button styles, the bubbles, the scale bar, the search field |
 | `Hud/` | The readouts capsule, the position, the raster pill, the scale entry, the chart menu, the marker rename field |
 | `Pick/` | The pick report in both bodies, the decode, the S-57 rows, aux files |

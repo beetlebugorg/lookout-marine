@@ -1,4 +1,4 @@
-//  ChartSetStoreTests.swift — the sets aboard, across launches and across
+//  ChartSetStoreTests.swift — the installed sets, across launches and across
 //  versions of this app.
 //
 //  Only the folder and the switch are stored. The cells are scanned again at
@@ -28,7 +28,7 @@ final class ChartSetStoreTests: ShellTestCase {
         XCTAssertEqual(ChartSetStore.savedPaths(), ["/charts/a"])
     }
 
-    func testSwitchingASetOffKeepsItAboard() {
+    func testSwitchingASetOffKeepsItInstalled() {
         ChartSetStore.add("/charts/a")
         ChartSetStore.setOff("/charts/a", true)
         XCTAssertEqual(ChartSetStore.savedPaths(), ["/charts/a"])

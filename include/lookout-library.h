@@ -1,4 +1,4 @@
-/* lookout-library.h - the charts aboard: the library open now, the folder
+/* lookout-library.h - the installed charts: the library open now, the folder
  * scan, the raster underlay, a host-supplied style and the charts reached by
  * link. Included from lookout.h. */
 #ifndef LOOKOUT_LIBRARY_H

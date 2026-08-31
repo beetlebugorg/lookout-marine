@@ -29,7 +29,7 @@ final class RasterModelTests: ShellTestCase {
                        ["/a/ArcGIS.mbtiles", "/a/Bing.mbtiles"])
     }
 
-    /// A file already aboard is not installed twice.
+    /// A file already installed is not installed twice.
     func testAddIsIdempotent() {
         let (m, e) = model()
         m.add(["/a/one.mbtiles"])
@@ -155,7 +155,7 @@ final class RasterModelTests: ShellTestCase {
         XCTAssertTrue((Store.shared.bool(RasterModel.group, RasterModel.chartHiddenKey) ?? false))
     }
 
-    /// What is aboard is read at init, and anything since deleted is dropped:
+    /// What is installed is read at init, and anything since deleted is dropped:
     /// a stale entry must not become an error dismissed at every launch.
     func testInitDropsPathsThatAreGone() {
         let here = FileManager.default.temporaryDirectory

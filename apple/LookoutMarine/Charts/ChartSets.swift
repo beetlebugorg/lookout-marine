@@ -1,14 +1,14 @@
-//  ChartSets.swift — the charts aboard, and which of them are drawn.
+//  ChartSets.swift — the installed charts, and which of them are drawn.
 //
 //  A SET is a folder the mariner added, or one .zip — which is how a chart
 //  agency publishes them. Either way it carries every chart inside, however
 //  deep: a bake mirrors the exchange set's tree, so a library is nested rather
 //  than flat.
 //
-//  The list answers two questions a file picker cannot. What is aboard, and
+//  The list answers two questions a file picker cannot. What is installed, and
 //  what am I sailing on right now. A folder goes on the list only after the
 //  core has looked through it and found charts, so a set on the list always
-//  opens. Switching a set off keeps it aboard and takes it out of the chart.
+//  opens. Switching a set off keeps it installed and takes it out of the chart.
 //
 //  The core does the looking (lookout_scan_read). It walks the folder, names
 //  every file, and asks tile57 what each archive holds, which is the only way
@@ -106,7 +106,7 @@ struct ChartSet: Identifiable, Hashable {
     /// Picture charts found in the same folder: imagery, and RNC sheets. They
     /// are part of the set, not a separate thing the mariner has to add again.
     var rasters: [ScannedCell]
-    /// False when the mariner switched this set off. It stays aboard.
+    /// False when the mariner switched this set off. It stays installed.
     var on: Bool
 
     var id: String { path }
@@ -299,7 +299,7 @@ enum ChartScan {
     }
 }
 
-/// The sets aboard, and their on and off state, across launches.
+/// The installed sets, and their on and off state, across launches.
 ///
 /// Only the folder and the switch are stored. The cells are scanned again at
 /// launch, because a folder changes underneath the app: a bake finishes, a

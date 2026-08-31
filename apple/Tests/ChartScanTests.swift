@@ -59,7 +59,7 @@ final class ChartScanTests: XCTestCase {
         XCTAssertEqual(set.name, "charts")
     }
 
-    func testASummaryOfWhatIsAboard() throws {
+    func testASummaryOfWhatIsInstalled() throws {
         let set = try XCTUnwrap(ChartScan.scan(try bakedChartDirectory()))
         XCTAssertTrue(set.summary.hasPrefix("1 chart · Harbor · "), set.summary)
         XCTAssertEqual(set.bandCounts.map(\.band), [5])

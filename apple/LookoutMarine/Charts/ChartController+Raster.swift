@@ -85,7 +85,7 @@ extension ChartController {
         let here = rasterSets().filter(\.inView)
         guard !here.isEmpty, !here.contains(where: \.shown), let pick = here.first else { return }
         rasterSetShown(pick.id, true)
-        lkLog("raster: nothing drawn and no survey aboard — showing \(pick.name)")
+        lkLog("raster: nothing drawn and no survey installed — showing \(pick.name)")
     }
 
     /// Turn one raster chart on or off without removing it.
