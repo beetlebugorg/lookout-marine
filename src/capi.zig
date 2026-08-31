@@ -3,8 +3,8 @@
 //! thin, 1:1 wrapper over the Zig `Lookout` widget. Uses the C allocator so C
 //! hosts need no allocator.
 //!
-//! The rest of the ABI is in capi/: format.zig, library.zig, pick.zig,
-//! plugins.zig and settings.zig.
+//! The rest of the ABI is in capi/: format.zig, frame.zig, library.zig,
+//! pick.zig, plugins.zig and settings.zig.
 const std = @import("std");
 const builtin = @import("builtin");
 
@@ -605,6 +605,7 @@ comptime {
     // A Zig build emits a part's exports only when it analyses the file, and a
     // re-export does not analyse it. These references do.
     _ = @import("capi/format.zig");
+    _ = @import("capi/frame.zig");
     _ = @import("capi/library.zig");
     _ = @import("capi/pick.zig");
     _ = @import("capi/settings.zig");

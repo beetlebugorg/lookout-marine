@@ -44,6 +44,7 @@ const plugin_read = @import("plugins");
 const phost = if (plugins_on) @import("plugin/host.zig") else struct {};
 const clock = @import("clock.zig");
 const settings = @import("settings.zig");
+const frame_rules = @import("shell/frame.zig"); // when the next frame is
 
 const MAX_SCHEMES = 3; // day / dusk / night
 
@@ -674,6 +675,11 @@ pub const Lookout = struct {
     /// written again, and when it was written.
     saved_view: ?View = null,
     saved_view_ms: i64 = 0,
+
+    /// The frame loop's own state: when the last tick ran, and how many ticks
+    /// in a row have wanted nothing.
+    last_tick_ms: i64 = 0,
+    quiet_ticks: u32 = 0,
     last_change_ms: i64 = 0, // when the view last moved
     /// When a frame last went out for own ship's own motion (see SHIP_FRAME_MS).
     last_ship_frame_ms: i64 = 0,
@@ -2306,6 +2312,41 @@ pub const Lookout = struct {
     }
     /// Apply the full S-52 state.
     ///
+    // ---- the frame loop -------------------------------------------------------
+
+    /// One tick: advance what is moving, decide whether a frame is wanted, and
+    /// say when to ask again. The gap is measured here and capped.
+    pub fn frameStep(self: *Lookout) frame_rules.Step {
+        const now = clock.ticksMs();
+        const dt = frame_rules.delta(self.last_tick_ms, now);
+        self.last_tick_ms = now;
+
+        if (self.cam.animating()) {
+            self.tickAnim(dt);
+        }
+        // A resolve's answer stalls on the first one without this.
+        self.links.adopt();
+
+        const step = frame_rules.decide(.{
+            .animating = self.cam.animating(),
+            .needs_redraw = self.needsRedraw(),
+            .building = self.isBuilding(),
+            .plugins_active = self.pluginsActive(),
+            .quiet = self.quiet_ticks,
+        });
+        self.quiet_ticks = step.quiet;
+        return step;
+    }
+
+    /// Start the loop again after a change a shell made itself.
+    pub fn frameKick(self: *Lookout) void {
+        self.quiet_ticks = 0;
+        // The next tick is the first one back, so it advances nothing rather
+        // than the whole time the loop was stopped.
+        self.last_tick_ms = 0;
+        self.markDirty();
+    }
+
     // ---- what the engine persists -------------------------------------------
     //
     // The pose and the mariner's display settings, in the store the shell hands

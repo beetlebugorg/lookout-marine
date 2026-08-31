@@ -192,6 +192,42 @@ void lookout_store_remove(lookout_store *s, const char *group, const char *key);
  * the last is a borrowed pointer. */
 void lookout_set_store(lookout *h, lookout_store *s);
 
+/* ---- the frame loop --------------------------------------------------------
+ *
+ * When the next frame is, and what to advance before it: the gap since the last
+ * tick, the fling, the queued chart-link answers, and the verdict.
+ *
+ * lookout_tick_anim, lookout_animating and lookout_needs_redraw stay for a
+ * shell that has not adopted this. */
+
+typedef enum {
+    LOOKOUT_FRAME_RENDER = 0,
+    /* Nothing to draw yet, and something is coming: ask again in `wait_ms`. */
+    LOOKOUT_FRAME_WAIT   = 1,
+    /* Nothing is moving. Stop the loop; lookout_frame_kick starts it again. */
+    LOOKOUT_FRAME_IDLE   = 2
+} lookout_frame_verdict;
+
+typedef struct {
+    lookout_frame_verdict verdict;
+    /* For LOOKOUT_FRAME_WAIT: how long before asking again. 0 means the next
+     * display tick, which is what a build filling in wants. */
+    int wait_ms;
+    /* 1 while a background tessellation is filling in, for the loader. */
+    int building;
+} lookout_frame;
+
+/* One tick. The gap since the last tick is measured here and capped: an app
+ * that was in the background for a minute must not advance a fling by a minute.
+ *
+ * A shell that skips a LOOKOUT_FRAME_RENDER loses nothing, because the next
+ * tick measures the whole elapsed gap. */
+void lookout_frame_next(lookout *h, lookout_frame *out);
+
+/* Start the loop again after a change the shell made itself: a gesture, an
+ * opened chart, a setting. */
+void lookout_frame_kick(lookout *h);
+
 /* ---- the format kit ----------------------------------------------------
  *
  * The strings a mariner reads and the text a mariner types. Each writes into
