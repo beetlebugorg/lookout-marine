@@ -96,6 +96,83 @@ const lookout_license *const *lookout_licenses_all(const lookout_licenses *l, si
  * `copyright`, `url` and `text` are set; the rest are empty. */
 const lookout_license *lookout_licenses_app(const lookout_licenses *l);
 
+/* ---- the settings store ----------------------------------------------------
+ *
+ * What a shell keeps across launches, in one file: the camera pose, the
+ * recents, the mariner settings, the plugin values, the chart links, the chart
+ * sets and the raster charts. Four shells kept four stores over four platform
+ * preference systems, and every one of them had to be taught the same key
+ * names.
+ *
+ * THE FILE IS AN INI at <dir>/settings.ini: `[group]` lines, `key=value` under
+ * them, a list as its items separated and terminated by semicolons. Backslash,
+ * newline, tab, carriage return and (in a list item) the semicolon are escaped.
+ * A key holds text; what a value MEANS is the accessor's business.
+ *
+ * WRITES COALESCE. A pose saved every three seconds does not fsync a file
+ * every three seconds: a write marks the store dirty and the file is written at
+ * the next lookout_store_flush, at lookout_store_close, or once the oldest
+ * unwritten change is a second old.
+ *
+ * ONE LOCK over the file, so two writers cannot interleave and lose a group.
+ *
+ * A FILE THAT WILL NOT PARSE is set aside as settings.ini.broken before an
+ * empty store takes its place, so a mariner's library stays recoverable.
+ *
+ * No handle: a shell reads its store before it opens anything. */
+
+typedef struct lookout_store lookout_store;
+
+/* The groups. A shell that names its own group here names it for every shell. */
+#define LOOKOUT_STORE_VIEW       "view"
+#define LOOKOUT_STORE_RECENTS    "recents"
+#define LOOKOUT_STORE_RASTER     "raster"
+#define LOOKOUT_STORE_MARINER    "mariner.v1"
+#define LOOKOUT_STORE_PLUGINS    "plugins.v1"
+#define LOOKOUT_STORE_CHARTLINKS "chartlinks"
+#define LOOKOUT_STORE_CHARTSETS  "chartsets"
+
+/* Open the store under `dir`, reading settings.ini if it is there. The
+ * directory is made at the first write, not here, so a shell that only reads
+ * leaves no trace. NULL only when the store cannot be allocated. */
+lookout_store *lookout_store_open(const char *dir);
+/* Write anything waiting, then close. */
+void lookout_store_close(lookout_store *s);
+/* Write anything waiting now, whatever the coalesce window says. */
+void lookout_store_flush(lookout_store *s);
+
+int    lookout_store_has(lookout_store *s, const char *group, const char *key);
+/* NULL when the key is not set. Borrowed until the next write to this store. */
+const char *lookout_store_text(lookout_store *s, const char *group, const char *key);
+/* `fallback` when the key is not set or does not parse as a number. */
+double lookout_store_number(lookout_store *s, const char *group, const char *key,
+                            double fallback);
+/* "true" and "1" are true, "false" and "0" false, anything else `fallback`. */
+int    lookout_store_flag(lookout_store *s, const char *group, const char *key,
+                          int fallback);
+/* NULL and *out_n 0 when the key is not set. Borrowed until the next write. */
+const char *const *lookout_store_list(lookout_store *s, const char *group,
+                                      const char *key, size_t *out_n);
+/* The keys set under a group, in the order they were written. This is how a
+ * shell reads back the plugin ids it saved a config for. Borrowed until the
+ * next write. */
+const char *const *lookout_store_keys(lookout_store *s, const char *group,
+                                      size_t *out_n);
+
+void lookout_store_set_text(lookout_store *s, const char *group, const char *key,
+                            const char *value);
+/* Written in its shortest form, so an integral value writes as an integer. */
+void lookout_store_set_number(lookout_store *s, const char *group, const char *key,
+                              double value);
+void lookout_store_set_flag(lookout_store *s, const char *group, const char *key,
+                            int value);
+/* An EMPTY list clears the key: a shell that reads it back gets nothing, which
+ * is what an empty list means. */
+void lookout_store_set_list(lookout_store *s, const char *group, const char *key,
+                            const char *const *items, size_t n);
+/* Forget a key. Forgetting the last key of a group forgets the group. */
+void lookout_store_remove(lookout_store *s, const char *group, const char *key);
+
 /* ---- the format kit ----------------------------------------------------
  *
  * The strings a mariner reads and the text a mariner types. Each writes into
