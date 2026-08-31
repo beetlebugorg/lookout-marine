@@ -173,6 +173,25 @@ void lookout_store_set_list(lookout_store *s, const char *group, const char *key
 /* Forget a key. Forgetting the last key of a group forgets the group. */
 void lookout_store_remove(lookout_store *s, const char *group, const char *key);
 
+/* Hand the store to a chart handle and the ENGINE keeps the camera pose and the
+ * mariner's display settings in it: they are restored at once, the pose is
+ * written down as the mariner moves, and both are written at lookout_close and
+ * lookout_detach_surface. Four shells each had their own copy of this, with the
+ * same fields and the same cadence.
+ *
+ * The store belongs to the SHELL and must outlive the handle. Pass NULL to
+ * detach, which writes the pose down on the way out. A handle with no store
+ * persists nothing and behaves exactly as it did before there was one.
+ *
+ * The pose lands in the `view` group and the settings in `mariner.v1`, under
+ * the names above, so a chart opened on one shell and moved on another reopens
+ * where it was left.
+ *
+ * `device_scale`, `ignore_scamin`, `scamin_filter_gate` and the viewing groups
+ * are NOT saved: the first is the device's, the next two are debug toggles, and
+ * the last is a borrowed pointer. */
+void lookout_set_store(lookout *h, lookout_store *s);
+
 /* ---- the format kit ----------------------------------------------------
  *
  * The strings a mariner reads and the text a mariner types. Each writes into

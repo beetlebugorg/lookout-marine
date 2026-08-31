@@ -121,3 +121,10 @@ export fn lookout_store_remove(s: ?*lookout_store, group: ?[*:0]const u8, key: ?
     const x = s orelse return;
     x.remove(span(group), span(key));
 }
+
+/// Hand a store to a chart handle. See lookout.h.
+export fn lookout_set_store(h: ?*capi.lookout, s: ?*lookout_store) void {
+    const l = capi.locked(h);
+    defer l.apiUnlock();
+    l.setStore(s);
+}
