@@ -1,9 +1,13 @@
 //! The shell kit's C ABI (see include/lookout-shell.h): the format kit and the
-//! license manifest. None of it takes a handle, and none of it allocates.
+//! license manifest. None of it takes a handle.
 
 const std = @import("std");
 
+const capi = @import("../capi.zig");
 const format = @import("../shell/format.zig");
+const lic = @import("../licenses.zig");
+
+const gpa = capi.gpa;
 
 // The buffer sizes lookout-shell.h states, checked against what the kit writes.
 comptime {
@@ -76,7 +80,40 @@ export fn lookout_zoom_delta_for_scale(current_denominator: f64, wanted_denomina
 /// The license manifest baked into this build. See lookout-shell.h. Static, so
 /// it takes no handle and outlives every call.
 export fn lookout_licenses_json(out_len: ?*usize) [*]const u8 {
-    const json = @import("../licenses.zig").json;
+    const json = lic.json;
     if (out_len) |p| p.* = json.len;
     return json.ptr;
+}
+
+pub const lookout_licenses = lic.Read;
+pub const lookout_license = lic.Entry;
+
+fn count(out_n: ?*usize, n: usize) void {
+    if (out_n) |p| p.* = n;
+}
+
+/// Read the components `shell` carries. See lookout-shell.h.
+export fn lookout_licenses_read(shell: ?[*:0]const u8) ?*lookout_licenses {
+    const id = if (shell) |s| std.mem.span(s) else "";
+    return lic.read(gpa, id) catch null;
+}
+
+export fn lookout_licenses_free(l: ?*lookout_licenses) void {
+    if (l) |x| x.free();
+}
+
+/// The components, in the order the manifest lists them.
+export fn lookout_licenses_all(l: ?*const lookout_licenses, out_n: ?*usize) ?[*]const *const lookout_license {
+    const x = l orelse {
+        count(out_n, 0);
+        return null;
+    };
+    count(out_n, x.rows().len);
+    return x.rows().ptr;
+}
+
+/// This app's own terms. Not a component, and not in the count above.
+export fn lookout_licenses_app(l: ?*const lookout_licenses) ?*const lookout_license {
+    const x = l orelse return null;
+    return x.app;
 }

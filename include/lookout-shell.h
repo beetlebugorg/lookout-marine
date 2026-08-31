@@ -52,6 +52,50 @@ extern "C" {
  * safe from any thread. *out_len (NULL to ignore) receives the length. */
 const char *lookout_licenses_json(size_t *out_len);
 
+/* ---- reading the licenses --------------------------------------------------
+ *
+ * The same manifest, as structs, filtered to the shell that asks. A read is a
+ * copy, and everything it hands back dies at lookout_licenses_free. */
+
+typedef struct lookout_licenses lookout_licenses;
+
+/* Above this many components a screen groups the rows under their headings and
+ * offers a search. Below it the headings outnumber the rows. */
+#define LOOKOUT_LICENSES_GROUP_ABOVE 12
+
+/* One component, or this app's own terms. Every field above is documented for
+ * lookout_licenses_json and means the same here. */
+typedef struct {
+    const char *id;
+    const char *name;
+    const char *group;
+    const char *summary;
+    const char *license;
+    const char *license_short;
+    const char *license_note;
+    const char *version;
+    const char *commit;
+    const char *pinned_in;
+    const char *copyright;
+    const char *url;
+    const char *text;
+    const char *notice;
+} lookout_license;
+
+/* The components `shell` carries: "macos", "ios", "android", "linux" or
+ * "windows". One manifest serves every build, so a shell reads the entries that
+ * name it and no others. A shell the manifest never names gets this app's terms
+ * and no components. NULL only when the read cannot be allocated. */
+lookout_licenses *lookout_licenses_read(const char *shell);
+void              lookout_licenses_free(lookout_licenses *l);
+/* The components, in the order the manifest lists them. Group them by `group`
+ * in that order: it is the reading order, not an alphabet. */
+const lookout_license *const *lookout_licenses_all(const lookout_licenses *l, size_t *out_n);
+/* This app's own terms. NOT a component and not in the count above, so it does
+ * not belong in a component tally. Only `name`, `summary`, `license`,
+ * `copyright`, `url` and `text` are set; the rest are empty. */
+const lookout_license *lookout_licenses_app(const lookout_licenses *l);
+
 /* ---- the format kit ----------------------------------------------------
  *
  * The strings a mariner reads and the text a mariner types. Each writes into

@@ -5,6 +5,7 @@
 const std = @import("std");
 
 const lk = @import("../root.zig");
+const clinks = @import("../chartlinks.zig");
 const capi = @import("../capi.zig");
 
 const lookout = capi.lookout;
@@ -65,6 +66,58 @@ export fn lookout_scan_zip(path: [*:0]const u8, out_len: ?*usize) ?[*]const u8 {
     scan_json = json;
     if (out_len) |p| p.* = json.len;
     return json.ptr;
+}
+
+pub const lookout_scan = lk.library.Read;
+pub const lookout_chart_file = lk.library.File;
+pub const lookout_scan_summary = lk.library.Found;
+
+fn count(out_n: ?*usize, n: usize) void {
+    if (out_n) |p| p.* = n;
+}
+
+/// Walk a folder and report what is there, as structs. See lookout-library.h.
+export fn lookout_scan_read(path: [*:0]const u8) ?*lookout_scan {
+    var s = lk.scanCharts(gpa, capi_io, std.mem.span(path)) catch return null;
+    defer s.deinit();
+    return lk.library.toRead(gpa, &s) catch null;
+}
+
+/// lookout_scan_read for a chart set that arrives as one .zip.
+export fn lookout_scan_zip_read(path: [*:0]const u8) ?*lookout_scan {
+    var s = lk.scanZip(gpa, std.mem.span(path)) catch return null;
+    defer s.deinit();
+    return lk.library.toRead(gpa, &s) catch null;
+}
+
+export fn lookout_scan_free(s: ?*lookout_scan) void {
+    if (s) |x| x.free();
+}
+
+/// The totals, and where the scan started. NULL for a read that is not there.
+export fn lookout_scan_found(s: ?*const lookout_scan) ?*const lookout_scan_summary {
+    const x = s orelse return null;
+    return &x.found;
+}
+
+/// The baked archives and the source cells.
+export fn lookout_scan_cells(s: ?*const lookout_scan, out_n: ?*usize) ?[*]const *const lookout_chart_file {
+    const x = s orelse {
+        count(out_n, 0);
+        return null;
+    };
+    count(out_n, x.cells.len);
+    return x.cells.ptr;
+}
+
+/// The picture charts, which belong in the raster chart list.
+export fn lookout_scan_raster(s: ?*const lookout_scan, out_n: ?*usize) ?[*]const *const lookout_chart_file {
+    const x = s orelse {
+        count(out_n, 0);
+        return null;
+    };
+    count(out_n, x.raster.len);
+    return x.raster.ptr;
 }
 
 /// Draw a host-supplied style instead of lookout's portrayal. See lookout.h.
@@ -148,6 +201,38 @@ export fn lookout_chart_links_json(h: ?*lookout) ?[*:0]u8 {
     defer l.apiUnlock();
     const s = l.links.snapshotAlloc(gpa) orelse return null;
     return s.ptr;
+}
+
+pub const lookout_links = clinks.Read;
+pub const lookout_chart_link = clinks.Link;
+pub const lookout_links_status = clinks.State;
+
+/// The same snapshot, as structs. See lookout-library.h.
+export fn lookout_links_read(h: ?*lookout) ?*lookout_links {
+    const l = locked(h);
+    defer l.apiUnlock();
+    return l.links.read(gpa) catch null;
+}
+
+export fn lookout_links_free(r: ?*lookout_links) void {
+    if (r) |x| x.free();
+}
+
+/// The active link, the credit line, the last error and whether a resolve is
+/// in flight. NULL for a read that is not there.
+export fn lookout_links_state(r: ?*const lookout_links) ?*const lookout_links_status {
+    const x = r orelse return null;
+    return &x.state;
+}
+
+/// The links the mariner added, in the order they were added.
+export fn lookout_links_all(r: ?*const lookout_links, out_n: ?*usize) ?[*]const *const lookout_chart_link {
+    const x = r orelse {
+        count(out_n, 0);
+        return null;
+    };
+    count(out_n, x.links.len);
+    return x.links.ptr;
 }
 
 /// Has the snapshot changed since the last poll? See lookout.h.

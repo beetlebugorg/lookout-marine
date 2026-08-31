@@ -15,6 +15,7 @@
 //! It applies to its base cell, and tile57 reads the chain when it bakes.
 
 const std = @import("std");
+const owned = @import("owned");
 const format = @import("shell/format.zig");
 
 /// What a file is, from its name alone.
@@ -443,6 +444,142 @@ fn writeCell(out: *std.ArrayList(u8), alloc: std.mem.Allocator, c: Cell) !void {
     try out.append(alloc, '}');
 }
 
+// ---- the read a shell draws ---------------------------------------------------
+
+/// What a scanned file is. The same six `Kind` names, as the header states
+/// them.
+pub const FileKind = enum(c_int) {
+    /// A baked archive: it draws now.
+    baked = 0,
+    /// An S-57 base cell: it bakes before it draws.
+    source = 1,
+    /// An S-57 update file: it bakes with its base cell.
+    update = 2,
+    /// A picture chart: it draws now, through the raster chart list.
+    raster = 3,
+    /// A picture chart in a format that bakes first.
+    raster_source = 4,
+    /// Not a chart.
+    other = 5,
+};
+
+fn fileKindOf(k: Kind) FileKind {
+    return switch (k) {
+        .baked => .baked,
+        .source => .source,
+        .update => .update,
+        .raster => .raster,
+        .raster_source => .raster_source,
+        .other => .other,
+    };
+}
+
+/// One chart file the scan found.
+pub const File = extern struct {
+    /// The absolute path, or the entry name inside an archive.
+    path: [*:0]const u8,
+    /// The 8 character dataset name.
+    name: [*:0]const u8,
+    kind: FileKind,
+    /// 1 to 6, or 0 when the name carries no usage band.
+    band: c_int,
+    /// The band in the words the readouts use. Empty when `band` is 0.
+    band_name: [*:0]const u8,
+    bytes: u64,
+    /// 0 when the archive states none.
+    scale: f64,
+    /// 1 when the archive states its coverage, and the four edges of it.
+    located: c_int,
+    west: f64,
+    south: f64,
+    east: f64,
+    north: f64,
+};
+
+/// What one folder or archive holds.
+pub const Found = extern struct {
+    /// The folder or file the scan started from.
+    root: [*:0]const u8,
+    /// S-57 update files. Each one bakes with its base cell.
+    updates: usize,
+    /// Files that are not charts.
+    other: usize,
+    /// Files that carry a chart name and that tile57 refused. Always 0 for an
+    /// archive, where the name is the whole answer.
+    refused: usize,
+    /// How many cells bake before they draw.
+    sources: usize,
+    /// The bytes of every cell.
+    bytes: u64,
+    /// The two-letter agency every chart here came from. Empty when they
+    /// disagree, or when nothing here carries a dataset name.
+    producer: [*:0]const u8,
+};
+
+/// A scan, held until the shell frees it.
+pub const Read = struct {
+    arena: std.heap.ArenaAllocator,
+    found: Found = undefined,
+    /// The baked archives and the source cells, by name.
+    cells: []const *const File = &.{},
+    /// The picture charts, which belong in the raster chart list.
+    raster: []const *const File = &.{},
+
+    pub fn free(self: *Read) void {
+        const gpa = self.arena.child_allocator;
+        self.arena.deinit();
+        gpa.destroy(self);
+    }
+};
+
+/// The scan as structs. Both this and `toJson` walk the same `Scan`.
+pub fn toRead(gpa: std.mem.Allocator, s: *const Scan) !*Read {
+    const self = try gpa.create(Read);
+    errdefer gpa.destroy(self);
+    self.* = .{ .arena = std.heap.ArenaAllocator.init(gpa) };
+    errdefer self.arena.deinit();
+    const a = self.arena.allocator();
+
+    self.found = .{
+        .root = try owned.str(a, s.root),
+        .updates = s.updates,
+        .other = s.other,
+        .refused = s.refused,
+        .sources = s.sourceCount(),
+        .bytes = s.totalBytes(),
+        .producer = if (s.producer) |p| try owned.str(a, &p) else try owned.str(a, ""),
+    };
+    self.cells = try readFiles(a, s.cells);
+    self.raster = try readFiles(a, s.raster);
+    return self;
+}
+
+fn readFiles(a: std.mem.Allocator, cells: []const Cell) ![]const *const File {
+    const out = try a.alloc(File, cells.len);
+    const by_ptr = try a.alloc(*const File, cells.len);
+    for (cells, out, by_ptr) |c, *dst, *p| {
+        dst.* = .{
+            .path = try owned.str(a, c.path),
+            .name = try owned.str(a, c.name),
+            .kind = fileKindOf(c.kind),
+            .band = c.band,
+            .band_name = if (c.band >= 1 and c.band <= 6)
+                try owned.str(a, bandName(c.band))
+            else
+                try owned.str(a, ""),
+            .bytes = c.bytes,
+            .scale = c.facts.scale,
+            .located = @intFromBool(c.facts.bounds != null),
+            .west = if (c.facts.bounds) |b| b[0] else 0,
+            .south = if (c.facts.bounds) |b| b[1] else 0,
+            .east = if (c.facts.bounds) |b| b[2] else 0,
+            .north = if (c.facts.bounds) |b| b[3] else 0,
+        };
+        p.* = dst;
+    }
+    return by_ptr;
+}
+
 /// The scan as JSON, for a shell to read. The caller owns the bytes.
 ///
 /// NUL terminated. The length is what a host should use, but a host that
@@ -803,4 +940,72 @@ test "a folder of pictures has no producer to report" {
     });
     defer s.deinit();
     try t.expect(s.producer == null);
+}
+
+test "the typed scan says what the JSON says" {
+    var tmp = t.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    const io = std.Io.Threaded.global_single_threaded.io();
+    try writeTestTree(&tmp, io);
+    const root = try tmpRoot(&tmp);
+    defer t.allocator.free(root);
+
+    var s = try scan(t.allocator, io, root, null, null);
+    defer s.deinit();
+
+    const json = try toJson(t.allocator, &s);
+    defer t.allocator.free(json);
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const doc = try std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), json, .{});
+    const o = doc.object;
+
+    const r = try toRead(t.allocator, &s);
+    defer r.free();
+
+    try t.expectEqualStrings(o.get("root").?.string, std.mem.span(r.found.root));
+    try t.expectEqual(@as(usize, @intCast(o.get("updates").?.integer)), r.found.updates);
+    try t.expectEqual(@as(usize, @intCast(o.get("other").?.integer)), r.found.other);
+    try t.expectEqual(@as(usize, @intCast(o.get("refused").?.integer)), r.found.refused);
+    try t.expectEqual(@as(usize, @intCast(o.get("sources").?.integer)), r.found.sources);
+    try t.expectEqual(@as(u64, @intCast(o.get("bytes").?.integer)), r.found.bytes);
+    // The JSON leaves the producer out when the charts disagree; the read
+    // says so with an empty string.
+    if (o.get("producer")) |p| {
+        try t.expectEqualStrings(p.string, std.mem.span(r.found.producer));
+    } else {
+        try t.expectEqualStrings("", std.mem.span(r.found.producer));
+    }
+
+    try expectSameFiles(o.get("cells").?.array.items, r.cells);
+    try expectSameFiles(o.get("raster").?.array.items, r.raster);
+}
+
+/// One of the scan's two lists, compared field for field against the JSON.
+fn expectSameFiles(list: []const std.json.Value, got: []const *const File) !void {
+    try t.expectEqual(list.len, got.len);
+    for (list, got) |item, f| {
+        const o = item.object;
+        try t.expectEqualStrings(o.get("path").?.string, std.mem.span(f.path));
+        try t.expectEqualStrings(o.get("name").?.string, std.mem.span(f.name));
+        try t.expectEqualStrings(o.get("kind").?.string, @tagName(f.kind));
+        try t.expectEqual(@as(c_int, @intCast(o.get("band").?.integer)), f.band);
+        try t.expectEqual(@as(u64, @intCast(o.get("bytes").?.integer)), f.bytes);
+        // bandName, scale and the bounds appear only when there is one.
+        if (o.get("bandName")) |b| {
+            try t.expectEqualStrings(b.string, std.mem.span(f.band_name));
+        } else {
+            try t.expectEqualStrings("", std.mem.span(f.band_name));
+        }
+        try t.expectEqual(if (o.get("scale")) |v| v.float else 0, f.scale);
+        if (o.get("west")) |w| {
+            try t.expectEqual(@as(c_int, 1), f.located);
+            try t.expectEqual(w.float, f.west);
+            try t.expectEqual(o.get("south").?.float, f.south);
+            try t.expectEqual(o.get("east").?.float, f.east);
+            try t.expectEqual(o.get("north").?.float, f.north);
+        } else {
+            try t.expectEqual(@as(c_int, 0), f.located);
+        }
+    }
 }

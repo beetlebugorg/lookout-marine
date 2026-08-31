@@ -92,6 +92,84 @@ const char *lookout_scan_charts(const char *path, size_t *out_len);
  * same reason. */
 const char *lookout_scan_zip(const char *path, size_t *out_len);
 
+/* ---- reading a scan --------------------------------------------------------
+ *
+ * The same walk, as structs. A read is a copy, so it needs no serializing: two
+ * threads may scan at once and each frees its own answer. */
+
+typedef struct lookout_scan lookout_scan;
+
+/* What a scanned file is. */
+typedef enum {
+    /* A baked archive: it draws now. */
+    LOOKOUT_FILE_BAKED         = 0,
+    /* An S-57 base cell: it bakes before it draws. */
+    LOOKOUT_FILE_SOURCE        = 1,
+    /* An S-57 update file: it bakes with its base cell. */
+    LOOKOUT_FILE_UPDATE        = 2,
+    /* A picture chart: it draws now, through the raster chart list. */
+    LOOKOUT_FILE_RASTER        = 3,
+    /* A picture chart in a format that bakes first. */
+    LOOKOUT_FILE_RASTER_SOURCE = 4,
+    /* Not a chart. */
+    LOOKOUT_FILE_OTHER         = 5
+} lookout_file_kind;
+
+typedef struct {
+    /* The absolute path. For a .zip read this is the ENTRY NAME inside the
+     * archive, which is what the engine's zip bake takes back: there is no
+     * file at it until it is taken out. */
+    const char *path;
+    /* The 8 character dataset name, such as US5MD1MC. */
+    const char *name;
+    lookout_file_kind kind;
+    /* 1 to 6, or 0 when the name carries no usage band. */
+    int band;
+    /* The band in the words the readouts use. Empty when `band` is 0. */
+    const char *band_name;
+    uint64_t bytes;
+    /* 0 when the archive states none. */
+    double scale;
+    /* 1 when the archive states its coverage, and the four edges of it. */
+    int located;
+    double west, south, east, north;
+} lookout_chart_file;
+
+/* The totals, and where the scan started. */
+typedef struct {
+    const char *root;
+    /* S-57 update files. Each one bakes with its base cell. */
+    size_t updates;
+    /* Files that are not charts. */
+    size_t other;
+    /* Files that carry a chart name and that the engine refused. Always 0 for
+     * an archive, where the name is the whole answer. */
+    size_t refused;
+    /* How many cells bake before they draw. */
+    size_t sources;
+    /* The bytes of every cell. */
+    uint64_t bytes;
+    /* The two-letter agency every chart here came from. EMPTY when they
+     * disagree, or when nothing here carries a dataset name: a mixed folder
+     * has no one name, and picking one of them would be wrong. */
+    const char *producer;
+} lookout_scan_summary;
+
+/* Walk a folder and report what is there. NULL when the path cannot be read.
+ * No handle needed: this runs before anything is open. */
+lookout_scan *lookout_scan_read(const char *path);
+/* lookout_scan_read for a chart set that arrives as ONE .zip. Only the
+ * archive's central directory is read; nothing is inflated and nothing is
+ * written. */
+lookout_scan *lookout_scan_zip_read(const char *path);
+void          lookout_scan_free(lookout_scan *s);
+const lookout_scan_summary *lookout_scan_found(const lookout_scan *s);
+/* The baked archives and the source cells, by name. */
+const lookout_chart_file *const *lookout_scan_cells(const lookout_scan *s, size_t *out_n);
+/* The picture charts. A cell here belongs to lookout_raster_add, not to the
+ * chart list. */
+const lookout_chart_file *const *lookout_scan_raster(const lookout_scan *s, size_t *out_n);
+
 /* ---- raster underlay ---------------------------------------------------
  *
  * Satellite imagery and other picture charts the MARINER supplies, drawn
@@ -364,6 +442,39 @@ int lookout_chart_links_changed(lookout *h); /* 1 since last poll, then clears *
  * kept: it is taken for a LOCAL link, whose path may no longer read, and
  * ignored for a network one, which is resolved from its url instead. */
 void lookout_chart_links_import(lookout *h, const char *links_json);
+
+/* ---- reading the links -----------------------------------------------------
+ *
+ * The same snapshot, as structs. It is a copy taken under the api lock, so a
+ * resolve finishing on a fetch thread cannot free a field under the reader. */
+
+typedef struct lookout_links lookout_links;
+
+typedef struct {
+    const char *url;
+    const char *name;
+} lookout_chart_link;
+
+typedef struct {
+    /* The picked link's url. EMPTY draws lookout's own chart, which is what
+     * `active: null` says in the JSON: a url is never empty. */
+    const char *active;
+    /* A condition of service on public tile hosts, not a courtesy: draw it
+     * while a link is active. Empty when there is none. */
+    const char *attribution;
+    /* Empty when the last resolve succeeded. */
+    const char *error;
+    /* 1 while a resolve is in flight. */
+    int busy;
+} lookout_links_status;
+
+/* NULL only when the read cannot be allocated. Poll after
+ * lookout_chart_links_changed, which has ONE consumer. */
+lookout_links *lookout_links_read(lookout *h);
+void           lookout_links_free(lookout_links *r);
+const lookout_links_status *lookout_links_state(const lookout_links *r);
+/* The links the mariner added, in the order they were added. */
+const lookout_chart_link *const *lookout_links_all(const lookout_links *r, size_t *out_n);
 
 #ifdef __cplusplus
 }
