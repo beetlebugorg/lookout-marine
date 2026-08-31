@@ -105,13 +105,12 @@ enum PluginCell {
     case number(Double)
     case text(String)
 
-    /// `kind` is what the plugin sent, which is not always what the column
-    /// type asks for: a string in a distance column stays a string and shows
-    /// as one.
+    /// `kind` is what the plugin sent. A string in a distance column stays a
+    /// string and shows as one.
     init(_ c: lookout_table_cell) {
         switch c.kind {
-        case LOOKOUT_CELL_NUMBER: self = .number(c.number)
-        case LOOKOUT_CELL_TEXT:   self = .text(String(cString: c.text))
+        case LOOKOUT_TABLE_CELL_NUMBER: self = .number(c.number)
+        case LOOKOUT_TABLE_CELL_TEXT:   self = .text(String(cString: c.text))
         default:                  self = .empty
         }
     }

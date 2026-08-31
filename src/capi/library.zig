@@ -110,7 +110,7 @@ export fn lookout_scan_cells(s: ?*const lookout_scan, out_n: ?*usize) ?[*]const 
     return x.cells.ptr;
 }
 
-/// The picture charts, which belong in the raster chart list.
+/// The picture charts. These belong in the raster chart list.
 export fn lookout_scan_raster(s: ?*const lookout_scan, out_n: ?*usize) ?[*]const *const lookout_chart_file {
     const x = s orelse {
         count(out_n, 0);
@@ -205,7 +205,7 @@ export fn lookout_chart_links_json(h: ?*lookout) ?[*:0]u8 {
 
 pub const lookout_links = clinks.Read;
 pub const lookout_chart_link = clinks.Link;
-pub const lookout_links_status = clinks.State;
+pub const lookout_link_state = clinks.State;
 
 /// The same snapshot, as structs. See lookout-library.h.
 export fn lookout_links_read(h: ?*lookout) ?*lookout_links {
@@ -220,7 +220,7 @@ export fn lookout_links_free(r: ?*lookout_links) void {
 
 /// The active link, the credit line, the last error and whether a resolve is
 /// in flight. NULL for a read that is not there.
-export fn lookout_links_state(r: ?*const lookout_links) ?*const lookout_links_status {
+export fn lookout_links_state(r: ?*const lookout_links) ?*const lookout_link_state {
     const x = r orelse return null;
     return &x.state;
 }

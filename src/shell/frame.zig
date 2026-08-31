@@ -20,8 +20,8 @@ pub const Verdict = enum(c_int) {
 /// for a minute must not advance a fling by a minute.
 pub const dt_cap: f64 = 0.05;
 
-/// Quiet ticks before a shell stops. Not zero: a build that finishes just
-/// after a still frame would otherwise never be drawn.
+/// Quiet ticks before a shell stops. At two, a build that finishes just after
+/// a still frame is still drawn.
 pub const quiet_ticks: u32 = 2;
 
 /// The poll rate once a shell has stopped. The AIS store coalesces to 2 Hz;
@@ -36,7 +36,7 @@ pub const Inputs = struct {
     building: bool,
     /// A plugin layer is up, so traffic can arrive with no input behind it.
     plugins_active: bool,
-    /// How many ticks in a row have wanted nothing.
+    /// How many ticks in a row found none of the above.
     quiet: u32,
 };
 
@@ -57,7 +57,7 @@ pub fn delta(last_ms: i64, now_ms: i64) f64 {
 
 pub fn decide(in: Inputs) Step {
     if (in.animating or in.needs_redraw) return .{ .verdict = .render, .quiet = 0 };
-    // Keep ticking so a build appears the moment it lands, rather than at the
+    // Keep ticking so a finished build appears at once instead of at the
     // mariner's next gesture.
     if (in.building) return .{ .verdict = .wait, .quiet = 0 };
 

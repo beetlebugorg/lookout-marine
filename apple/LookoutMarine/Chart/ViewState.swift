@@ -13,8 +13,8 @@
 import Foundation
 
 enum ViewState {
-    /// True when a pose has been saved. Half a pose is no pose, which is the
-    /// same rule the engine reads it by.
+    /// True when a pose has been saved. Half a pose is no pose, the same rule
+    /// the engine reads the store by.
     static func hasSaved() -> Bool {
         let s = Store.shared
         let g = Store.Group.view

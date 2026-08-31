@@ -33,13 +33,13 @@ final class Store {
         static let chartsets = String(cString: LOOKOUT_STORE_CHARTSETS)
     }
 
-    /// The core's store. `lookout_set_store` takes it, so the engine keeps the
+    /// The core's store. `lookout_set_store` reads it, so the engine keeps the
     /// pose and the mariner settings in the same file the shell writes.
     private(set) var handle: OpaquePointer?
 
-    /// A store on `dir`. Nil inside when the core would not open one, which
-    /// leaves every read on its fallback and every write a no-op: a settings
-    /// file that cannot be opened must not stop the chart coming up.
+    /// A store on `dir`. Nil inside when the core cannot open one, leaving
+    /// every read on its fallback and every write a no-op: a settings file
+    /// that cannot be opened must not stop the chart coming up.
     init(directory: String) {
         handle = directory.withCString { lookout_store_open($0) }
         if handle == nil { lkLog("store: could not open \(directory)") }
@@ -144,7 +144,7 @@ final class Store {
         }
     }
 
-    /// An empty list clears the key, which is what an empty list means.
+    /// An empty list clears the key, so a read of it comes back empty.
     func set(_ value: [String], _ group: String, _ key: String) {
         guard let handle else { return }
         let cs = value.map { strdup($0) }

@@ -223,7 +223,7 @@ struct PluginStatusItem {
 /// One service type a list is browsed for.
 struct PluginDiscover {
     let service: String
-    /// The values a discovered item takes beyond its address, in their fields'
+    /// The values a discovered item has beyond its address, in their fields'
     /// own kinds. A Signal K server announces its websocket, so an item added
     /// from one arrives with that field on.
     let set: [String: PluginValue]
@@ -344,8 +344,8 @@ final class PluginSettings: ObservableObject {
     /// the mariner, not by a plugin reporting its rate.
     private let edits = PassthroughSubject<Void, Never>()
 
-    /// One config object per plugin id, which is the object the plugin was
-    /// last handed. The whole object rather than field by field, because a
+    /// One config object per plugin id, the object the plugin was last
+    /// handed. The whole object rather than field by field, because a
     /// LIST is in it: the rows of a mariner's NMEA connections are the shell's
     /// to keep, and there is nothing to get them back from once they are gone.
     /// Replaying the object needs no schema on this side, and the core ignores

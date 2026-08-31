@@ -411,7 +411,7 @@ pub fn build(b: *std.Build) void {
     });
 
     // What a shell reads about the plugins. host.zig and broker.zig import
-    // nothing above src/plugin/, so the part that fills a read takes the shapes
+    // nothing above src/plugin/, so the part that fills a read gets the shapes
     // as a module.
     const plugins_mod = b.createModule(.{
         .root_source_file = b.path("src/plugins.zig"),

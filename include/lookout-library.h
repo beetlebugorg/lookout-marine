@@ -123,7 +123,7 @@ typedef struct {
     /* The 8 character dataset name, such as US5MD1MC. */
     const char *name;
     lookout_file_kind kind;
-    /* 1 to 6, or 0 when the name carries no usage band. */
+    /* 1 to 6, or 0 when the name has no usage band. */
     int band;
     /* The band in the words the readouts use. Empty when `band` is 0. */
     const char *band_name;
@@ -150,8 +150,8 @@ typedef struct {
     /* The bytes of every cell. */
     uint64_t bytes;
     /* The two-letter agency every chart here came from. EMPTY when they
-     * disagree, or when nothing here carries a dataset name: a mixed folder
-     * has no one name, and picking one of them would be wrong. */
+     * disagree, or when no file here has a dataset name. A mixed folder has
+     * no single name, and one of the two would be wrong about the rest. */
     const char *producer;
 } lookout_scan_summary;
 
@@ -456,8 +456,8 @@ typedef struct {
 } lookout_chart_link;
 
 typedef struct {
-    /* The picked link's url. EMPTY draws lookout's own chart, which is what
-     * `active: null` says in the JSON: a url is never empty. */
+    /* The picked link's url. EMPTY draws lookout's own chart, where the JSON
+     * writes `active: null`. A url is never empty. */
     const char *active;
     /* A condition of service on public tile hosts, not a courtesy: draw it
      * while a link is active. Empty when there is none. */
@@ -466,13 +466,13 @@ typedef struct {
     const char *error;
     /* 1 while a resolve is in flight. */
     int busy;
-} lookout_links_status;
+} lookout_link_state;
 
 /* NULL only when the read cannot be allocated. Poll after
  * lookout_chart_links_changed, which has ONE consumer. */
 lookout_links *lookout_links_read(lookout *h);
 void           lookout_links_free(lookout_links *r);
-const lookout_links_status *lookout_links_state(const lookout_links *r);
+const lookout_link_state *lookout_links_state(const lookout_links *r);
 /* The links the mariner added, in the order they were added. */
 const lookout_chart_link *const *lookout_links_all(const lookout_links *r, size_t *out_n);
 

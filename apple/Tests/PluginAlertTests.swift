@@ -2,7 +2,7 @@
 //
 //  The core hands alerts over as structs, so the fixtures here are the C
 //  structs a read holds. The strings live only for the call that reads them
-//  out, which is what a real read gives the shell.
+//  out, the same borrow a real read gives the shell.
 
 import XCTest
 @testable import LookoutMarine

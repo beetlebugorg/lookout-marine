@@ -8,8 +8,8 @@
 //! THE FILE IS AN INI, in the shape linux/src/model/store.c already writes:
 //! `[group]` lines, `key=value` under them, a list as its items separated and
 //! terminated by semicolons. Backslash, newline, tab, carriage return and (in a
-//! list item) the semicolon are escaped. A key holds text; what a value MEANS
-//! is the accessor's business, not the file's.
+//! list item) the semicolon are escaped. A key holds text. What a value MEANS
+//! is the accessor's business.
 //!
 //! WRITES COALESCE. A pose saved every three seconds must not fsync a file
 //! every three seconds, so a write marks the store dirty and the file is
@@ -21,8 +21,8 @@
 //! first one's group.
 //!
 //! A FILE THAT WILL NOT PARSE is set aside as `<name>.broken` before an empty
-//! store takes its place. The next write replaces the live file either way; the
-//! copy is what keeps a mariner's library recoverable.
+//! store replaces it. The next write overwrites the live file either way. The
+//! copy keeps a mariner's library recoverable.
 
 const std = @import("std");
 
@@ -42,8 +42,8 @@ pub const group_chartsets = "chartsets";
 /// The file, under the directory a shell hands over.
 pub const file_name = "settings.ini";
 
-/// How long an unwritten change may wait. A pose lands every three seconds
-/// while the mariner is moving, and one file write a second is plenty.
+/// How long an unwritten change may wait. The engine writes a pose every three
+/// seconds while the mariner is moving, and one file write a second is plenty.
 pub const coalesce_ms: i64 = 1000;
 
 const Entry = struct {
@@ -76,9 +76,9 @@ pub const Store = struct {
     /// than on every change.
     said_write_failed: bool = false,
 
-    /// Open the store under `dir`, reading `settings.ini` if it is there. A
-    /// directory that does not exist is made at the first write, not here: a
-    /// shell that only reads leaves no trace.
+    /// Open the store under `dir`, reading `settings.ini` if it is there. The
+    /// directory is made at the first write, so a shell that only reads leaves
+    /// no trace.
     pub fn open(gpa: std.mem.Allocator, io: std.Io, dir: []const u8) !*Store {
         const self = try gpa.create(Store);
         errdefer gpa.destroy(self);
@@ -163,8 +163,8 @@ pub const Store = struct {
         return splitList(self.reads.allocator(), e.value) catch &.{};
     }
 
-    /// The same items as an array of NUL-terminated pointers, which is what
-    /// the C ABI hands over. Borrowed until the next write.
+    /// The same items as an array of NUL-terminated pointers, the shape the C
+    /// ABI hands over. Borrowed until the next write.
     pub fn listPtrs(self: *Store, group: []const u8, key: []const u8) []const [*:0]const u8 {
         self.mu.lock();
         defer self.mu.unlock();
@@ -217,8 +217,8 @@ pub const Store = struct {
         self.setLocked(group, key, if (value) "true" else "false");
     }
 
-    /// Set a key to a list. An EMPTY list clears the key: a shell that reads
-    /// it back gets nothing, which is what an empty list means.
+    /// Set a key to a list. An EMPTY list clears the key, so a read of it
+    /// comes back empty.
     pub fn setList(self: *Store, group: []const u8, key: []const u8, items: []const []const u8) void {
         if (items.len == 0) {
             self.remove(group, key);
@@ -260,8 +260,8 @@ pub const Store = struct {
 
     fn load(self: *Store) void {
         const bytes = std.Io.Dir.cwd().readFileAlloc(self.io, self.path, self.gpa, .limited(8 << 20)) catch |e| {
-            // A file that is not there is an empty store, which is what a
-            // first launch has.
+            // A file that is not there is an empty store, the state of a
+            // first launch.
             if (e != error.FileNotFound) self.setAside();
             return;
         };
@@ -286,8 +286,8 @@ pub const Store = struct {
     fn parse(self: *Store, bytes: []const u8) !void {
         self.mu.lock();
         defer self.mu.unlock();
-        // The index, not a pointer: a later group appends to the list and
-        // would move the one being filled out from under a pointer.
+        // The index. A later group appends to the list, which moves the
+        // one being filled out, so a pointer to it goes stale.
         var group: ?usize = null;
         var it = std.mem.splitScalar(u8, bytes, '\n');
         while (it.next()) |raw| {
@@ -401,8 +401,8 @@ pub const Store = struct {
         self.markDirtyLocked();
     }
 
-    /// A write invalidates every borrowed read, which is the contract, so the
-    /// read arena goes back with it.
+    /// A write invalidates every borrowed read, so the read arena goes back
+    /// with it.
     fn markDirtyLocked(self: *Store) void {
         _ = self.reads.reset(.retain_capacity);
         const now = clock.wallMs();
@@ -450,8 +450,8 @@ pub fn unescape(a: std.mem.Allocator, s: []const u8) ![:0]const u8 {
     return out.toOwnedSliceSentinel(a, 0);
 }
 
-/// A slice of slices as a slice of pointers. A `[:0]const u8` is a slice, not a
-/// pointer, so the C side needs its own array rather than a cast.
+/// A slice of slices as a slice of pointers. A `[:0]const u8` is a slice of
+/// its own, so a cast would hand C an array of the wrong stride.
 fn asPtrs(a: std.mem.Allocator, items: []const [:0]const u8) []const [*:0]const u8 {
     const out = a.alloc([*:0]const u8, items.len) catch return &.{};
     for (items, out) |s, *dst| dst.* = s.ptr;
@@ -592,7 +592,7 @@ test "a value with a newline or a separator in it comes back whole" {
         s.setText(group_plugins, "org.example", "{\"note\":\"line\nbreak\"}");
         // And a value that holds a BACKSLASH, which the escape must not eat.
         s.setText(group_plugins, "org.other", "C:\\charts\\enc");
-        // A path with the list separator in it is one item, not two.
+        // A path holding the list separator stays one item.
         s.setList(group_chartsets, "paths", &.{ "/a;b/charts", "/c\td" });
     }
 

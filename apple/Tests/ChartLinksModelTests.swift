@@ -51,7 +51,7 @@ final class ChartLinksModelTests: ShellTestCase {
         XCTAssertNil(m.error)
     }
 
-    /// The changed flag has one consumer, so a poll with nothing new answers
+    /// The changed flag has one consumer, so a poll with no change returns
     /// nil and the list stands.
     func testNothingNewLeavesTheListAlone() {
         let m = model()

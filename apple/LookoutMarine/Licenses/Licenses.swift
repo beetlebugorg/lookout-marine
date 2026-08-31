@@ -17,8 +17,7 @@ import UIKit
 
 // MARK: - The manifest
 
-/// One component the build carries. The core states every field; nothing here
-/// decides what a license says.
+/// One component of the build. The core states every field.
 struct LicenseComponent: Identifiable, Hashable {
     let id: String
     let name: String

@@ -745,8 +745,7 @@ final class ChartController: NSObject {
     /// after a change the frame loop would not otherwise see.
     ///
     /// Each model reads its own values off this controller through its seam.
-    /// What is left here is the throttle, which is the render loop's business
-    /// and no model's.
+    /// The throttle stays here, because it belongs to the render loop.
     func pushReadouts() {
         guard let model, handle != nil else { return }
         // The readouts are human-readable text, so 10Hz is as fast as they can

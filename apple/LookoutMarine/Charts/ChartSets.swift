@@ -226,9 +226,9 @@ struct ChartSet: Identifiable, Hashable {
 enum ChartScan {
     /// Every scan runs here, one at a time.
     ///
-    /// A read is this caller's own copy, so two at once would be safe. They
-    /// are serialized because two scans of a big library would fight for the
-    /// same disk.
+    /// A read is this caller's own copy, so two at once are safe. They are
+    /// serialized because two scans of a big library compete for the same
+    /// disk.
     private static let queue = DispatchQueue(label: "org.beetlebug.lookout.chartscan")
 
     /// Walk `path` and report what is there. Runs the core's scan, which opens

@@ -31,13 +31,13 @@ final class StoreImportTests: ShellTestCase {
         XCTAssertEqual(s.number(Store.Group.view, "lon"), -76.482)
         XCTAssertEqual(s.number(Store.Group.view, "lat"), 38.9763)
         XCTAssertEqual(s.number(Store.Group.view, "zoom"), 14.5)
-        // The key was rotationDeg and is rotation_deg, which is what every
-        // other shell writes and what the engine reads.
+        // The key was rotationDeg and is rotation_deg, the name every other
+        // shell writes and the engine reads.
         XCTAssertEqual(s.number(Store.Group.view, "rotation_deg"), 37)
     }
 
-    /// The engine reads these back, so what matters here is that each one
-    /// lands under its own name in the mariner group.
+    /// The engine reads these back, so this checks each one goes in under its
+    /// own name in the mariner group.
     func testTheMarinerSettingsComeAcrossFieldForField() {
         defaults.set(["scheme": 2, "safety_contour": 5.5, "text_names": false,
                       "date_view": "20260401"] as [String: Any], forKey: "mariner.v1")
@@ -71,7 +71,7 @@ final class StoreImportTests: ShellTestCase {
     }
 
     /// The plugin settings were two dictionaries and are one config object per
-    /// plugin, which is the object the plugin was handed.
+    /// plugin, the object the plugin was handed.
     func testThePluginSettingsAreJoinedBackIntoOneObject() {
         defaults.set(["org.beetlebug.ais": ["cpa_limit": 926.0]], forKey: "plugins.v1")
         defaults.set(["org.beetlebug.nmea0183":

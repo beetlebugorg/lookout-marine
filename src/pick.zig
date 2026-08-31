@@ -246,7 +246,7 @@ pub const Empty = enum(c_int) {
     reads = 0,
     /// The cell gave the feature no attributes at all.
     no_attributes = 1,
-    /// What it gave is provenance, which is not what a mariner asked for.
+    /// What it gave is provenance, and the mariner asked about the water.
     source_only = 2,
 };
 

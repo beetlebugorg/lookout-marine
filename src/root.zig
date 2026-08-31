@@ -677,7 +677,7 @@ pub const Lookout = struct {
     saved_view_ms: i64 = 0,
 
     /// The frame loop's own state: when the last tick ran, and how many ticks
-    /// in a row have wanted nothing.
+    /// in a row found nothing to draw.
     last_tick_ms: i64 = 0,
     quiet_ticks: u32 = 0,
     last_change_ms: i64 = 0, // when the view last moved
@@ -2381,8 +2381,8 @@ pub const Lookout = struct {
     }
 
     /// The saved pose, or null when there has never been one. Half a pose is
-    /// no pose: the opening view then comes from `defaultView`, which is the
-    /// same policy every host gets.
+    /// no pose, and the opening view then comes from `defaultView`, the same
+    /// policy every host gets.
     fn readView(store: *settings.Store) ?View {
         const g = settings.group_view;
         if (!store.has(g, "lon") or !store.has(g, "lat") or !store.has(g, "zoom")) return null;
@@ -2431,8 +2431,8 @@ pub const Lookout = struct {
     /// being appended.
     ///
     /// `device_scale`, `ignore_scamin`, `scamin_filter_gate` and the viewing
-    /// groups are left out on purpose. The first is this device's, the next two
-    /// are debug toggles, and the last is a borrowed pointer.
+    /// groups are left out. The first belongs to this device, the next two are
+    /// debug toggles, and the last is a borrowed pointer.
     fn saveMariner(self: *Lookout) void {
         writeMariner(self.store orelse return, self.mariner);
     }
@@ -3168,8 +3168,8 @@ pub const Lookout = struct {
         }
     }
 
-    /// The features under a point, worth reporting, without the ones a pick
-    /// reports twice, best first. Allocated in `a`. Both `pickRanked` and
+    /// The features under a point that a pick should report, without the ones
+    /// it reports twice, best first. Allocated in `a`. Both `pickRanked` and
     /// `pickRead` start here, so the two answer with the same objects in the
     /// same order.
     fn rankedFeatures(self: *Lookout, a: std.mem.Allocator, lon: f64, lat: f64) []pick_rules.Feature {
@@ -4016,8 +4016,7 @@ test "what the engine does not persist stays out of the store" {
     m.scamin_filter_gate = true;
     Lookout.writeMariner(f.store, m);
 
-    // This device's scale and the two debug toggles belong to the run, not to
-    // the mariner.
+    // The device scale and the two debug toggles belong to the run.
     const g = settings.group_mariner;
     try t.expect(!f.store.has(g, "device_scale"));
     try t.expect(!f.store.has(g, "ignore_scamin"));

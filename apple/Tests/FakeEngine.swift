@@ -70,7 +70,7 @@ final class FakeEngine: RasterEngine, ChartLinkEngine, PluginEngine,
     func ownShip() -> (state: FixState, lat: Double, lon: Double)? { ship }
 
     // MARK: Chart links
-    /// What chartLinksSnapshot answers. Nil means the core had nothing new.
+    /// What chartLinksSnapshot returns. Nil is no change since the last poll.
     var links: ChartLinkSnapshot?
     func addChartLink(_ link: String) { note("addChartLink(\(link))") }
     func refreshChartLink(_ url: String) { note("refreshChartLink(\(url))") }

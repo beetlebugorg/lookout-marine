@@ -1,6 +1,6 @@
 //! The settings store's C ABI (see include/lookout-shell.h).
 //!
-//! No handle: a shell reads its store before it opens anything, and the store
+//! No handle. A shell reads its store before it opens anything, and the store
 //! outlives whatever chart is up.
 
 const std = @import("std");

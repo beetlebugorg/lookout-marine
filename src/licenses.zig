@@ -91,8 +91,8 @@ pub const Read = struct {
     }
 };
 
-/// The components `shell` carries, and this app's terms. `shell` is one of
-/// `shell_ids`; a shell the manifest never names gets the app entry and no
+/// The components `shell` ships with, and this app's terms. `shell` is one of
+/// `shell_ids`. A shell the manifest never names gets the app entry and no
 /// components.
 pub fn read(gpa: std.mem.Allocator, shell: []const u8) !*Read {
     const self = try gpa.create(Read);
@@ -266,7 +266,7 @@ test "ids are unique" {
     }
 }
 
-test "a read holds the components one shell carries and no others" {
+test "a read holds the components one shell ships with and no others" {
     const a = std.testing.allocator;
     const p = try parse(a);
     defer p.deinit();
@@ -329,7 +329,7 @@ test "this app's own entry rides beside the components, out of the count" {
     try std.testing.expectEqualStrings(p.value.app.name, std.mem.span(r.app.name));
     try std.testing.expectEqualStrings(p.value.app.license, std.mem.span(r.app.license));
     try std.testing.expectEqualStrings(p.value.app.text, std.mem.span(r.app.text));
-    // It is not a component, so the fields only a component has are empty.
+    // The fields only a component has are empty on the app entry.
     try std.testing.expectEqualStrings("", std.mem.span(r.app.id));
     try std.testing.expectEqualStrings("", std.mem.span(r.app.group));
     for (r.rows()) |e| try std.testing.expect(e != r.app);
@@ -340,6 +340,6 @@ test "a shell the manifest never names carries nothing" {
     const r = try read(a, "amiga");
     defer r.free();
     try std.testing.expectEqual(@as(usize, 0), r.rows().len);
-    // The app's terms still ship: they are this app's, not a component's.
+    // The app's own terms still ship.
     try std.testing.expect(std.mem.span(r.app.name).len > 0);
 }

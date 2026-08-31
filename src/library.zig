@@ -481,7 +481,7 @@ pub const File = extern struct {
     /// The 8 character dataset name.
     name: [*:0]const u8,
     kind: FileKind,
-    /// 1 to 6, or 0 when the name carries no usage band.
+    /// 1 to 6, or 0 when the name has no usage band.
     band: c_int,
     /// The band in the words the readouts use. Empty when `band` is 0.
     band_name: [*:0]const u8,
@@ -512,7 +512,7 @@ pub const Found = extern struct {
     /// The bytes of every cell.
     bytes: u64,
     /// The two-letter agency every chart here came from. Empty when they
-    /// disagree, or when nothing here carries a dataset name.
+    /// disagree, or when no file here has a dataset name.
     producer: [*:0]const u8,
 };
 

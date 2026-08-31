@@ -9,7 +9,7 @@ import XCTest
 @testable import LookoutMarine
 
 /// One row as the core hands it over. The strings live only for the call that
-/// reads them out, which is what a real read gives the shell.
+/// reads them out, the same borrow a real read gives the shell.
 private func row(_ label: String, _ value: String, depth: Int32 = 0,
                  file: Bool = false, picture: Bool = false) -> PickDecoded.Row {
     label.withCString { l in
@@ -94,8 +94,8 @@ final class PickDecodedTests: XCTestCase {
         XCTAssertEqual(d.rawRows.map(\.value), ["1", "2", "75"])
     }
 
-    /// The core's verdict when there is nothing to read. A blank body reads as
-    /// a defect, so the report says which kind of nothing it found.
+    /// The core's verdict when the body has nothing to read. A blank body
+    /// reads as a defect, so the report states which kind it is.
     func testTheTwoEmptyKinds() {
         XCTAssertEqual(decoded(empty: LOOKOUT_PICK_NO_ATTRIBUTES).empty, .noAttributes)
         XCTAssertEqual(decoded(empty: LOOKOUT_PICK_SOURCE_ONLY).empty, .sourceOnly)

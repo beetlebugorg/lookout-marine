@@ -468,7 +468,7 @@ export fn lookout_plugin_item_text(it: ?*const lookout_plugin_item, key: ?[*:0]c
     return v.text;
 }
 
-/// The values an item added from a find takes beyond its name, address and port.
+/// The values an item added from a find has beyond its name, address and port.
 export fn lookout_plugin_service_values(svc: ?*const lookout_plugin_service, out_n: ?*usize) ?[*]const *const lookout_plugin_value {
     const rec = pl.recOf(pl.ServiceRec, svc orelse {
         count(out_n, 0);
@@ -562,7 +562,7 @@ export fn lookout_table_columns(t: ?*const lookout_table, out_n: ?*usize) ?[*]co
 }
 
 /// Read one table's rows, already in order. NULL when the plugin or the table
-/// is unknown. `sort_key` NULL or empty takes the declared default sort.
+/// is unknown. `sort_key` NULL or empty uses the declared default sort.
 export fn lookout_table_rows_read(
     h: ?*lookout,
     id: ?[*:0]const u8,

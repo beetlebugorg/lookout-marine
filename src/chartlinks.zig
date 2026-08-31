@@ -1129,8 +1129,8 @@ pub const Links = struct {
         }
         out.links = by_ptr;
         out.state = .{
-            // Empty is lookout's own chart, which is what null says in the
-            // JSON: a url is never empty.
+            // Empty is lookout's own chart, where the JSON writes null. A url
+            // is never empty.
             .active = try owned.str(a, self.active orelse ""),
             .attribution = try owned.str(a, self.attribution),
             .err = try owned.str(a, self.err),

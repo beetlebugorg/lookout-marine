@@ -12,8 +12,8 @@ import SwiftUI
 
 /// What one pick result shows. The CORE composes it: lookout_picks_read hands
 /// over the page the engine wrote beside the payload the cell states, already
-/// flattened into rows. Nothing here decides what a mariner reads;
-/// tile57_s57_report and src/pick.zig do, once, for every shell.
+/// flattened into rows. What a mariner reads is settled in
+/// tile57_s57_report and src/pick.zig, once, for every shell.
 struct PickDecoded: Identifiable, Hashable {
     /// One line of the page, or one line of the source fold. `depth` indents a
     /// sub-attribute under its heading.
@@ -105,7 +105,7 @@ struct PickDecoded: Identifiable, Hashable {
     }
 
     /// The report as plain text for the clipboard: the payload as the cell
-    /// states it, which is how a chart problem gets reported.
+    /// states it, in the words a chart problem is reported in.
     var plainText: String {
         var text = "\(cls)  \(chart)\n"
         for row in rawRows {

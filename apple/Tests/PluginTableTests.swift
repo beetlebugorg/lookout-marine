@@ -65,19 +65,19 @@ private enum Sent {
 private func cell(_ sent: Sent, _ type: lookout_column_type = LOOKOUT_COLUMN_TEXT) -> PluginCell {
     switch sent {
     case .absent:
-        return "".withCString { PluginCell(lookout_table_cell(type: type, kind: LOOKOUT_CELL_ABSENT,
+        return "".withCString { PluginCell(lookout_table_cell(type: type, kind: LOOKOUT_TABLE_CELL_ABSENT,
                                                               number: 0, text: $0)) }
     case .number(let v):
-        return "".withCString { PluginCell(lookout_table_cell(type: type, kind: LOOKOUT_CELL_NUMBER,
+        return "".withCString { PluginCell(lookout_table_cell(type: type, kind: LOOKOUT_TABLE_CELL_NUMBER,
                                                               number: v, text: $0)) }
     case .text(let s):
-        return s.withCString { PluginCell(lookout_table_cell(type: type, kind: LOOKOUT_CELL_TEXT,
+        return s.withCString { PluginCell(lookout_table_cell(type: type, kind: LOOKOUT_TABLE_CELL_TEXT,
                                                              number: 0, text: $0)) }
     }
 }
 
 /// One row as the core hands it over. `columns` is the declaration's count,
-/// which is what pads a short row.
+/// and pads a short row.
 private func row(id: String = "r",
                  band: Int32 = 0,
                  at: (lon: Double, lat: Double)? = nil,

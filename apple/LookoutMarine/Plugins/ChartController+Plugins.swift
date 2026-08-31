@@ -21,8 +21,8 @@ extension ChartController {
 
     /// Read the plugins, hand the read to `body`, and free it. Everything the
     /// read hands over dies when `body` returns, so `body` copies out what it
-    /// keeps. Nil when no plugin layer is up, which is not the same answer as
-    /// a read holding no plugins.
+    /// keeps. Nil when no plugin layer is up. A read holding no plugins is a
+    /// different result.
     func withPlugins<T>(_ body: (OpaquePointer) -> T) -> T? {
         guard let h = handle, let read = lookout_plugins_read(h) else { return nil }
         defer { lookout_plugins_free(read) }

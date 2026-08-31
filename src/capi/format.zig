@@ -1,5 +1,5 @@
 //! The shell kit's C ABI (see include/lookout-shell.h): the format kit and the
-//! license manifest. None of it takes a handle.
+//! license manifest. None of it needs a handle.
 
 const std = @import("std");
 
@@ -78,7 +78,7 @@ export fn lookout_zoom_delta_for_scale(current_denominator: f64, wanted_denomina
 // ---- licenses ----------------------------------------------------------------
 
 /// The license manifest baked into this build. See lookout-shell.h. Static, so
-/// it takes no handle and outlives every call.
+/// it needs no handle and outlives every call.
 export fn lookout_licenses_json(out_len: ?*usize) [*]const u8 {
     const json = lic.json;
     if (out_len) |p| p.* = json.len;
@@ -92,7 +92,7 @@ fn count(out_n: ?*usize, n: usize) void {
     if (out_n) |p| p.* = n;
 }
 
-/// Read the components `shell` carries. See lookout-shell.h.
+/// Read the components `shell` ships with. See lookout-shell.h.
 export fn lookout_licenses_read(shell: ?[*:0]const u8) ?*lookout_licenses {
     const id = if (shell) |s| std.mem.span(s) else "";
     return lic.read(gpa, id) catch null;

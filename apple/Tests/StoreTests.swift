@@ -29,7 +29,7 @@ final class StoreTests: ShellTestCase {
                        "https://h/style.json")
     }
 
-    /// A fallback is what an unset key answers, not what a set one does.
+    /// The fallback applies to an unset key. A set one reads its value.
     func testAFallbackIsForAnUnsetKey() {
         XCTAssertNil(Store.shared.bool(Store.Group.raster, "chart_hidden", true))
         Store.shared.set(false, Store.Group.raster, "chart_hidden")
@@ -44,14 +44,14 @@ final class StoreTests: ShellTestCase {
         XCTAssertEqual(Store.shared.strings(group, "off"), ["/b"])
     }
 
-    /// An empty list clears the key, which is what an empty list means.
+    /// An empty list clears the key, so a read of it comes back empty.
     func testAnEmptyListClearsTheKey() {
         Store.shared.set(["/a"], group, "paths")
         Store.shared.set([], group, "paths")
         XCTAssertFalse(Store.shared.has(group, "paths"))
     }
 
-    /// A path with the list separator in it is one entry, not two.
+    /// A path holding the list separator stays one entry.
     func testASeparatorInAValueSurvives() {
         Store.shared.set(["/a;b/charts", "/c/charts"], group, "paths")
         XCTAssertEqual(Store.shared.strings(group, "paths"), ["/a;b/charts", "/c/charts"])

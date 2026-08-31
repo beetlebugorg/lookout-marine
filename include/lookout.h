@@ -338,7 +338,7 @@ typedef enum {
     LOOKOUT_PICK_READS         = 0,
     /* The cell gave the feature no attributes at all. */
     LOOKOUT_PICK_NO_ATTRIBUTES = 1,
-    /* What it gave is provenance, which is not what the mariner asked. */
+    /* What it gave is provenance, and the mariner asked about the water. */
     LOOKOUT_PICK_SOURCE_ONLY   = 2
 } lookout_pick_empty;
 

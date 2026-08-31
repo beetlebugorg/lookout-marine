@@ -82,14 +82,14 @@ typedef struct {
     const char *notice;
 } lookout_license;
 
-/* The components `shell` carries: "macos", "ios", "android", "linux" or
+/* The components `shell` ships with: "macos", "ios", "android", "linux" or
  * "windows". One manifest serves every build, so a shell reads the entries that
  * name it and no others. A shell the manifest never names gets this app's terms
  * and no components. NULL only when the read cannot be allocated. */
 lookout_licenses *lookout_licenses_read(const char *shell);
 void              lookout_licenses_free(lookout_licenses *l);
 /* The components, in the order the manifest lists them. Group them by `group`
- * in that order: it is the reading order, not an alphabet. */
+ * in that order, which the manifest sets. */
 const lookout_license *const *lookout_licenses_all(const lookout_licenses *l, size_t *out_n);
 /* This app's own terms. NOT a component and not in the count above, so it does
  * not belong in a component tally. Only `name`, `summary`, `license`,
@@ -117,7 +117,7 @@ const lookout_license *lookout_licenses_app(const lookout_licenses *l);
  * ONE LOCK over the file, so two writers cannot interleave and lose a group.
  *
  * A FILE THAT WILL NOT PARSE is set aside as settings.ini.broken before an
- * empty store takes its place, so a mariner's library stays recoverable.
+ * empty store replaces it, so a mariner's library stays recoverable.
  *
  * No handle: a shell reads its store before it opens anything. */
 
@@ -133,8 +133,8 @@ typedef struct lookout_store lookout_store;
 #define LOOKOUT_STORE_CHARTSETS  "chartsets"
 
 /* Open the store under `dir`, reading settings.ini if it is there. The
- * directory is made at the first write, not here, so a shell that only reads
- * leaves no trace. NULL only when the store cannot be allocated. */
+ * directory is made at the first write, so a shell that only reads leaves no
+ * trace. NULL only when the store cannot be allocated. */
 lookout_store *lookout_store_open(const char *dir);
 /* Write anything waiting, then close. */
 void lookout_store_close(lookout_store *s);
@@ -166,8 +166,7 @@ void lookout_store_set_number(lookout_store *s, const char *group, const char *k
                               double value);
 void lookout_store_set_flag(lookout_store *s, const char *group, const char *key,
                             int value);
-/* An EMPTY list clears the key: a shell that reads it back gets nothing, which
- * is what an empty list means. */
+/* An EMPTY list clears the key, so a read of it comes back empty. */
 void lookout_store_set_list(lookout_store *s, const char *group, const char *key,
                             const char *const *items, size_t n);
 /* Forget a key. Forgetting the last key of a group forgets the group. */
@@ -183,7 +182,7 @@ void lookout_store_remove(lookout_store *s, const char *group, const char *key);
  * detach, which writes the pose down on the way out. A handle with no store
  * persists nothing and behaves exactly as it did before there was one.
  *
- * The pose lands in the `view` group and the settings in `mariner.v1`, under
+ * The pose goes in the `view` group and the settings in `mariner.v1`, under
  * the names above, so a chart opened on one shell and moved on another reopens
  * where it was left.
  *
@@ -210,8 +209,8 @@ typedef enum {
 
 typedef struct {
     lookout_frame_verdict verdict;
-    /* For LOOKOUT_FRAME_WAIT: how long before asking again. 0 means the next
-     * display tick, which is what a build filling in wants. */
+    /* For LOOKOUT_FRAME_WAIT: how long before asking again. 0 is the next
+     * display tick, the rate a build fills in at. */
     int wait_ms;
     /* 1 while a background tessellation is filling in, for the loader. */
     int building;

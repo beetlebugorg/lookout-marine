@@ -333,7 +333,7 @@ test "a latitude keeps two degree digits" {
 }
 
 test "the rounding carries into the degree" {
-    // 59.9996' rounds to 60.000', which is the next degree. Printed as
+    // 59.9996' rounds to 60.000', a whole degree on. Printed as
     // 38°60.000'N it is a position no chart has.
     var b: [coord_max]u8 = undefined;
     try t.expectEqualStrings("39°00.000'N", dm(&b, 38 + 59.9996 / 60.0, true));

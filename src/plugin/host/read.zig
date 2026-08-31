@@ -105,7 +105,7 @@ fn allowlist(
     };
 }
 
-/// The scalar settings, then the lists, which is the order the JSON writes.
+/// The scalar settings, then the lists, in the order the JSON writes them.
 fn settings(a: std.mem.Allocator, e: *const Entry) ![]const *const pl.Setting {
     const recs = try a.alloc(pl.SettingRec, e.manifest.settings.len + e.manifest.lists.len);
     for (e.manifest.settings, e.values, recs[0..e.manifest.settings.len]) |f, v, *dst| {
@@ -210,7 +210,7 @@ fn listRec(a: std.mem.Allocator, l: List, rows_json: []const u8) !pl.SettingRec 
 }
 
 /// The items a list holds, from the JSON array the host keeps for it. An item
-/// with no id is skipped, which is what a shell reading the JSON does.
+/// with no id is skipped, matching what a shell reading the JSON does.
 fn listItems(
     a: std.mem.Allocator,
     fields: []const *const pl.Setting,
@@ -239,7 +239,7 @@ fn listItems(
     return pl.published(pl.ItemRec, "item", a, try recs.toOwnedSlice(a));
 }
 
-/// One value per field, taking the field's default where the item says nothing.
+/// One value per field, falling back to the field's default.
 fn values(
     a: std.mem.Allocator,
     fields: []const *const pl.Setting,
@@ -269,7 +269,7 @@ fn value(a: std.mem.Allocator, f: *const pl.Setting, v: ?std.json.Value) !pl.Val
 }
 
 /// What to browse the network for, and the values an item added from a find
-/// takes beyond its name, address and port.
+/// has beyond its name, address and port.
 fn listServices(
     a: std.mem.Allocator,
     fields: []const *const pl.Setting,
@@ -568,7 +568,7 @@ test "the shipped AIS plugin declares the collision alarm the readouts show" {
     try t.expectEqual(Field.Kind.toggle, alarm.kind);
     try t.expectEqual(@as(f64, 1), alarm.default_value);
 
-    // The vessel controls sit with the other vessel settings, not the alarms.
+    // The vessel controls go with the other vessel settings.
     const vectors = settingNamed(m, "vector_min") orelse return error.NoVectorMin;
     try t.expectEqual(manifest.Tab.vessels, vectors.tab);
     try t.expectEqualStrings("AIS targets", vectors.group);

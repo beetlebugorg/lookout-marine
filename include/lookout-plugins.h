@@ -158,7 +158,7 @@ typedef struct {
     const char *label;
     /* One sentence on what it does. Empty when the manifest declares none. */
     const char *desc;
-    /* The heading it sits under. Empty when the schema declares no groups. */
+    /* The heading it goes under. Empty when the schema declares no groups. */
     const char *group;
     lookout_plugin_setting_kind kind;
     lookout_section section;
@@ -220,7 +220,7 @@ typedef struct {
     const char *text;
 } lookout_plugin_value;
 
-/* One value per field, in field order. A field the item says nothing about
+/* One value per field, in field order. A field the item omits
  * reads as that field's default. */
 const lookout_plugin_value *const *lookout_plugin_item_values(
     const lookout_plugin_item *it, size_t *out_n);
@@ -237,7 +237,7 @@ typedef struct {
 
 const lookout_plugin_service *const *lookout_plugin_setting_services(
     const lookout_plugin_setting *s, size_t *out_n);
-/* The values an item added from a find takes beyond its name, address and
+/* The values an item added from a find has beyond its name, address and
  * port. */
 const lookout_plugin_value *const *lookout_plugin_service_values(
     const lookout_plugin_service *svc, size_t *out_n);
@@ -494,8 +494,8 @@ typedef struct {
     const char *sort_key;
     int sort_ascending;
     /* The row keys holding a position. Empty when a row of this table is not
-     * locatable; both are set together. Activating a locatable row centres the
-     * chart and pins its bubble, which is shell-side work. */
+     * locatable; both are set together. Centring the chart on a locatable row
+     * and pinning its bubble is shell-side work. */
     const char *at_lat;
     const char *at_lon;
     /* 1 while lookout_plugin_table_open has said the table is on screen. */
@@ -528,17 +528,17 @@ typedef struct {
  * send, which renders as a dash: never heard and heard as zero are different
  * values. */
 typedef enum {
-    LOOKOUT_CELL_ABSENT = 0,
-    LOOKOUT_CELL_NUMBER = 1,
-    LOOKOUT_CELL_TEXT   = 2
-} lookout_cell_kind;
+    LOOKOUT_TABLE_CELL_ABSENT = 0,
+    LOOKOUT_TABLE_CELL_NUMBER = 1,
+    LOOKOUT_TABLE_CELL_TEXT   = 2
+} lookout_table_cell_kind;
 
 /* One value of one row. `type` says how to FORMAT it, `kind` says which field
  * holds it. A plugin may send a string for a numeric column, and the shell
  * shows the string. */
 typedef struct {
     lookout_column_type type;
-    lookout_cell_kind kind;
+    lookout_table_cell_kind kind;
     double number;
     const char *text;
 } lookout_table_cell;
@@ -549,7 +549,7 @@ typedef struct {
  * flag column is the exception: an empty flag is a row with nothing wrong with
  * it, so it sorts by severity and reverses like any other.
  *
- * `sort_key` NULL or empty takes the declared default sort. NULL when the
+ * `sort_key` NULL or empty uses the declared default sort. NULL when the
  * plugin or the table is unknown. */
 lookout_table_rows *lookout_table_rows_read(lookout *h, const char *id, const char *key,
                                             const char *sort_key, int ascending);
