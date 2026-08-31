@@ -798,9 +798,8 @@ final class ChartController: NSObject {
 
     // MARK: - Fixture capture
 
-    /// $LOOKOUT_DUMP_JSON=<dir>: write every document this shell parses out of
-    /// the core, then quit. The parser tests read the result, so a fixture is
-    /// the core's own output and can be captured again when the core changes:
+    /// $LOOKOUT_DUMP_JSON=<dir>: write every JSON document this shell reads out
+    /// of the core, then quit. It is for reading a real registry by hand:
     ///
     ///     LOOKOUT_MULTI=1 LOOKOUT_CLEAN=1 \
     ///     LOOKOUT_OPEN=<chart.pmtiles> LOOKOUT_DUMP_JSON=<dir> \

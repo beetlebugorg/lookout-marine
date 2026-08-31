@@ -12,15 +12,19 @@ extension ChartController {
     /// Every table the loaded plugins declare. The shell builds a menu item
     /// and a window per declaration and knows nothing about the plugins.
     func tableSpecs() -> [PluginTableSpec] {
-        guard let h = handle else { return [] }
-        var len = 0
-        guard let raw = lookout_plugin_tables_json(h, &len), len > 0 else { return [] }
-        // Borrowed until the next plugin query, so decode before anything else
-        // runs.
-        let data = Data(bytes: raw, count: len)
-        guard let top = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let list = top["tables"] as? [[String: Any]] else { return [] }
-        return list.compactMap { PluginTableSpec($0) }
+        guard let h = handle, let read = lookout_tables_read(h) else { return [] }
+        defer { lookout_tables_free(read) }
+        var n = 0
+        guard let all = lookout_tables_all(read, &n) else { return [] }
+        return (0..<n).compactMap { i in
+            guard let t = all[i] else { return nil }
+            var cn = 0
+            var columns: [PluginTableColumn] = []
+            if let cols = lookout_table_columns(t, &cn) {
+                columns = (0..<cn).compactMap { k in cols[k].map { PluginTableColumn($0.pointee) } }
+            }
+            return PluginTableSpec(t.pointee, columns: columns)
+        }
     }
 
     /// One table's rows, already ordered by the plugin's bands and then by the
@@ -30,20 +34,29 @@ extension ChartController {
     func tableRows(plugin: String, key: String, sortKey: String, ascending: Bool, columns: Int)
         -> (seq: Int, rows: [PluginTableRow])? {
         guard let h = handle else { return nil }
-        var len = 0
-        let raw = plugin.withCString { p in
+        let read = plugin.withCString { p in
             key.withCString { k in
                 sortKey.withCString { s in
-                    lookout_plugin_table_rows(h, p, k, s, ascending ? 1 : 0, &len)
+                    lookout_table_rows_read(h, p, k, s, ascending ? 1 : 0)
                 }
             }
         }
-        guard let raw, len > 0 else { return nil }
-        let data = Data(bytes: raw, count: len)
-        guard let top = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let list = top["rows"] as? [[String: Any]] else { return nil }
-        let rows = list.compactMap { PluginTableRow($0, columns: columns) }
-        return (top["seq"] as? Int ?? 0, rows)
+        guard let read else { return nil }
+        defer { lookout_table_rows_free(read) }
+        var n = 0
+        guard let all = lookout_table_rows_all(read, &n) else {
+            return (Int(lookout_table_rows_seq(read)), [])
+        }
+        let rows: [PluginTableRow] = (0..<n).compactMap { i in
+            guard let r = all[i] else { return nil }
+            var cn = 0
+            var cells: [PluginCell] = []
+            if let cs = lookout_table_row_cells(r, &cn) {
+                cells = (0..<cn).compactMap { k in cs[k].map { PluginCell($0.pointee) } }
+            }
+            return PluginTableRow(r.pointee, cells: cells, columns: columns)
+        }
+        return (Int(lookout_table_rows_seq(read)), rows)
     }
 
 
@@ -55,15 +68,12 @@ extension ChartController {
     /// answered first, then the loudest, then the oldest. `seq` moves when the
     /// set has changed since the last read.
     func pluginAlerts() -> (seq: Int, alerts: [PluginAlert])? {
-        guard let h = handle else { return nil }
-        var len = 0
-        guard let raw = lookout_plugin_alerts_json(h, &len), len > 0 else { return nil }
-        // Borrowed until the next plugin query, so decode before anything else
-        // runs.
-        let data = Data(bytes: raw, count: len)
-        guard let top = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let list = top["alerts"] as? [[String: Any]] else { return nil }
-        return (top["seq"] as? Int ?? 0, list.compactMap { PluginAlert($0) })
+        guard let h = handle, let read = lookout_alerts_read(h) else { return nil }
+        defer { lookout_alerts_free(read) }
+        let seq = Int(lookout_alerts_seq(read))
+        var n = 0
+        guard let all = lookout_alerts_all(read, &n) else { return (seq, []) }
+        return (seq, (0..<n).compactMap { i in all[i].map { PluginAlert($0.pointee) } })
     }
 
     /// Silence one alert. It stays listed until the condition clears.
