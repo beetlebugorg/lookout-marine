@@ -75,11 +75,13 @@ final class ChartController: NSObject {
     weak var model: AppModel?
 
     private var displayLink: CADisplayLink?
+    /// The link's own timestamp, for the frame profiler's gap. The gap the
+    /// engine advances by is its own, measured in lookout_frame_next.
     private var lastTimestamp: CFTimeInterval = 0
-    private var idleTicks = 0
     /// Runs only while the display link is paused and plugins are loaded.
     /// See "Idle poll" below.
-    private var idlePoll: Timer?
+    /// The one-shot the core asked for with LOOKOUT_FRAME_WAIT.
+    private var wake: Timer?
     /// Rendering runs OFF the main thread so UIKit gesture bursts can never
     /// delay a frame slot (the 120Hz budget is 8.3ms). The display link stays
     /// on main as the pacemaker; each tick hands one render to this queue.
@@ -352,14 +354,14 @@ final class ChartController: NSObject {
                                             selector: #selector(displayLinkFired(_:)))
         link.add(to: .main, forMode: .common)
         lastTimestamp = 0
-        idleTicks = 0
         displayLink = link
     }
 
     private func stopDisplayLink() {
         displayLink?.invalidate()
         displayLink = nil
-        stopIdlePoll()
+        wake?.invalidate()
+        wake = nil
     }
 
     /// A pick report and the chart menu both belong to the view they were
@@ -376,8 +378,9 @@ final class ChartController: NSObject {
 
     /// Resume ticking after any state change (mutating calls funnel through here).
     func kick() {
-        stopIdlePoll()
-        idleTicks = 0
+        wake?.invalidate()
+        wake = nil
+        if let h = handle { lookout_frame_kick(h) }
         if let link = displayLink {
             if link.isPaused { lastTimestamp = 0; link.isPaused = false }
         } else {
@@ -385,32 +388,14 @@ final class ChartController: NSObject {
         }
     }
 
-    // MARK: - Idle poll
-    //
-    // The display link pauses when nothing is moving, and only input restarts
-    // it. A plugin posts geometry with no input behind it, so while plugins
-    // are loaded a timer polls needs-redraw and kicks the link when it answers
-    // yes. Without it, AIS traffic froze until the mariner touched the
-    // trackpad.
-
-    /// Poll rate while paused. The AIS store coalesces to 2 Hz; this is twice
-    /// that.
-    private static let idlePollInterval: TimeInterval = 0.25
-
-    private func startIdlePoll() {
-        guard idlePoll == nil, let h = handle, lookout_plugins_active(h) != 0 else { return }
-        idlePoll = Timer.scheduledTimer(withTimeInterval: Self.idlePollInterval,
-                                        repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self, let h = self.handle else { return }
-                if lookout_needs_redraw(h) != 0 { self.kick() }
-            }
+    /// Ask again in `ms`, for a LOOKOUT_FRAME_WAIT with a rate on it. The core
+    /// sets the rate and the shell runs the timer.
+    private func scheduleWake(after ms: Int32) {
+        wake?.invalidate()
+        wake = Timer.scheduledTimer(withTimeInterval: Double(ms) / 1000,
+                                    repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.kick() }
         }
-    }
-
-    private func stopIdlePoll() {
-        idlePoll?.invalidate()
-        idlePoll = nil
     }
 
     @objc private nonisolated func displayLinkFired(_ link: CADisplayLink) {
@@ -462,9 +447,9 @@ final class ChartController: NSObject {
         // thread, and with it the display link and every queued gesture, for
         // the length of someone else's frame.
         //
-        // Skipping is safe for the animation: `dt` is measured from the last
-        // tick that RAN, so the next one advances by the whole elapsed time
-        // rather than losing it.
+        // Skipping is safe for the animation: the engine measures its gap from
+        // the last tick that RAN, so the next one advances by the whole elapsed
+        // time.
         guard renderGate.wait(timeout: .now()) == .success else {
             frameProf?.tick(gap: link.timestamp - lastTimestamp, dispatched: false,
                             dropped: true, building: true, zoom: 0)
@@ -473,15 +458,15 @@ final class ChartController: NSObject {
         var slotHeld = true
         defer { if slotHeld { renderGate.signal() } }
 
-        let now = link.timestamp
-        var dt = lastTimestamp == 0 ? 0 : now - lastTimestamp
-        lastTimestamp = now
-        if dt > 0.05 { dt = 0.05 } // cap after an idle gap
+        let gap = lastTimestamp == 0 ? 0 : link.timestamp - lastTimestamp
+        lastTimestamp = link.timestamp
 
-        let animating = lookout_animating(h) != 0
-        if animating { lookout_tick_anim(h, dt) }
+        // The core measures its own gap, advances the fling, adopts the
+        // chart-link answers waiting, and says what to do.
+        var f = lookout_frame()
+        lookout_frame_next(h, &f)
 
-        let building = lookout_is_building(h) != 0
+        let building = f.building != 0
         if model?.readouts.isBuilding != building { model?.readouts.isBuilding = building }
 
         gestureBench?.step(self)
@@ -493,9 +478,9 @@ final class ChartController: NSObject {
             zoomNow = v.zoom
         }
 
-        if animating || lookout_needs_redraw(h) != 0 {
+        if f.verdict == LOOKOUT_FRAME_RENDER {
             let prof = frameProf
-            prof?.tick(gap: dt, dispatched: true, dropped: false, building: building, zoom: zoomNow)
+            prof?.tick(gap: gap, dispatched: true, dropped: false, building: building, zoom: zoomNow)
             // The slot passes to the render; it signals the gate when done.
             slotHeld = false
             renderQueue.async { [weak self] in
@@ -508,26 +493,25 @@ final class ChartController: NSObject {
                     self?.pushReadouts()
                 }
             }
-            idleTicks = 0
             // The first scene is up once a frame has gone out with no build
             // outstanding. Own ship moves between fixes, so with plugins
-            // running the loop may never reach the idle branch below.
+            // running the loop may never stop.
             if !building, model?.charts.firstBuildDone == false { model?.charts.firstBuildDone = true }
-        } else if building {
-            // A background tessellation is filling in — keep ticking so it appears.
-            idleTicks = 0
-        } else {
-            // Static: pause after a couple of quiet ticks so idle is ~0% CPU.
-            // Reaching idle also means the first scene after an open has
-            // rendered — retire the startup loader.
-            if model?.charts.firstBuildDone == false { model?.charts.firstBuildDone = true }
-            idleTicks += 1
-            // A gesture bench drives from this tick, so pausing would strand it
-            // in whatever phase it had reached.
-            if idleTicks > 2 && gestureBench == nil {
-                link.isPaused = true
-                startIdlePoll()
-            }
+            return
+        }
+
+        // The verdict is not RENDER, so a frame has already gone out. Retire
+        // the startup loader.
+        if model?.charts.firstBuildDone == false { model?.charts.firstBuildDone = true }
+
+        // A gesture bench drives from this tick, so pausing would strand it in
+        // whatever phase it had reached.
+        guard gestureBench == nil else { return }
+        if f.verdict == LOOKOUT_FRAME_IDLE {
+            link.isPaused = true
+        } else if f.wait_ms > 0 {
+            link.isPaused = true
+            scheduleWake(after: f.wait_ms)
         }
     }
 
