@@ -344,10 +344,13 @@ final class PluginSettings: ObservableObject {
     /// the mariner, not by a plugin reporting its rate.
     private let edits = PassthroughSubject<Void, Never>()
 
-    private static let defaultsKey = "plugins.v1"
-    /// The rows of every list, as JSON per plugin and list key. Separate from
-    /// `plugins.v1` because a row is not a number: one key, one shape.
-    private static let listsKey = "plugins.lists.v1"
+    /// One config object per plugin id, which is the object the plugin was
+    /// last handed. The whole object rather than field by field, because a
+    /// LIST is in it: the rows of a mariner's NMEA connections are the shell's
+    /// to keep, and there is nothing to get them back from once they are gone.
+    /// Replaying the object needs no schema on this side, and the core ignores
+    /// a key the manifest no longer declares.
+    private static let group = Store.Group.plugins
 
     /// True while the core is not answering. Kept so the log line is written
     /// once, on the way into trouble and on the way out: the status poll asks
@@ -701,19 +704,11 @@ final class PluginSettings: ObservableObject {
 
     private func applyAndSave() {
         guard let controller else { return }
-        var saved: [String: [String: Double]] = [:]
-        var savedRows: [String: [String: String]] = [:]
         for p in plugins where !p.fields.isEmpty || !p.lists.isEmpty {
-            controller.setPluginConfig(p.id, Self.configJSON(p.fields, p.lists, p.rows))
-            var one: [String: Double] = [:]
-            for f in p.fields { one[f.key] = f.value }
-            if !one.isEmpty { saved[p.id] = one }
-            var lists: [String: String] = [:]
-            for l in p.lists { lists[l.key] = Self.rowsJSON(l, p.rows[l.key] ?? []) }
-            if !lists.isEmpty { savedRows[p.id] = lists }
+            let json = Self.configJSON(p.fields, p.lists, p.rows)
+            controller.setPluginConfig(p.id, json)
+            Store.shared.set(json, Self.group, p.id)
         }
-        Store.shared.set(saved, Self.defaultsKey)
-        Store.shared.set(savedRows, Self.listsKey)
     }
 
     /// Push the saved settings into the plugins that just came up. Called once
@@ -726,27 +721,13 @@ final class PluginSettings: ObservableObject {
         // the developer's own instruments, and a frame taken through one
         // publishes other people's vessel names, MMSIs and positions.
         if ProcessInfo.processInfo.environment["LOOKOUT_CLEAN"] != nil { return }
-        let saved = Store.shared.dictionary(defaultsKey) ?? [:]
-        let savedRows = Store.shared.dictionary(listsKey) ?? [:]
-        if saved.isEmpty && savedRows.isEmpty { return }
-        let loaded = controller.withPlugins { Self.registry($0) } ?? []
-        for p in loaded where !p.fields.isEmpty || !p.lists.isEmpty {
-            var fields = p.fields
-            if let one = saved[p.id] as? [String: Double] {
-                for i in fields.indices {
-                    if let v = one[fields[i].key] { fields[i].value = v }
-                }
-            }
-            // A saved list REPLACES what the core holds, including the row the
-            // host seeded from LOOKOUT_NMEA: the mariner's list is the truth
-            // once there is one.
-            var body = configBody(fields)
-            for l in p.lists {
-                guard let text = (savedRows[p.id] as? [String: String])?[l.key] else { continue }
-                body.append("\"\(l.key)\":\(text)")
-            }
-            if body.isEmpty { continue }
-            controller.setPluginConfig(p.id, "{" + body.joined(separator: ",") + "}")
+        // The object the plugin was last handed goes back as it stands. A
+        // saved list REPLACES what the core holds, including the row the host
+        // seeded from LOOKOUT_NMEA: the mariner's list is the truth once there
+        // is one.
+        for id in Store.shared.keys(group) {
+            guard let json = Store.shared.string(group, id) else { continue }
+            controller.setPluginConfig(id, json)
         }
     }
 

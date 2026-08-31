@@ -306,17 +306,19 @@ enum ChartScan {
 /// drive is unplugged, the mariner deletes a region. Storing the cell list
 /// would mean offering charts that are no longer there.
 struct ChartSetStore {
-    private static let pathsKey = "lookout.chartsets"
-    private static let offKey = "lookout.chartsets.off"
+    private static let group = Store.Group.chartsets
+    private static let pathsKey = "paths"
+    private static let offKey = "off"
+    private static let migratedKey = "raster_migrated"
     /// What the sets replaced. Read once, so a mariner who had charts open
     /// before this list existed still has them after.
-    private static let legacyKey = "lookout.recents"
+    private static let recents = Store.Group.recents
 
     /// Raster charts added before sets existed, as the folders they live in.
     /// One list means one list: a picture the mariner added by hand is a set
     /// like any other, not a second kind of thing in a second section.
     private static func legacyRasterFolders() -> [String] {
-        let files = Store.shared.strings("lookout.rastercharts") ?? []
+        let files = Store.shared.strings(RasterModel.group, RasterModel.pathsKey)
         var seen = Set<String>()
         var out: [String] = []
         for f in files where FileManager.default.fileExists(atPath: f) {
@@ -333,15 +335,16 @@ struct ChartSetStore {
     }
 
     static func savedPaths() -> [String] {
-        if let saved = Store.shared.strings(pathsKey) {
+        if Store.shared.has(group, pathsKey) {
+            let saved = Store.shared.strings(group, pathsKey)
             // A mariner who had raster charts before this list existed gets
             // them as sets, once.
             let missing = legacyRasterFolders().filter { !saved.contains($0) }
-            guard !missing.isEmpty, !Store.shared.bool("lookout.chartsets.rastermigrated")
+            guard !missing.isEmpty, Store.shared.bool(group, migratedKey) != true
             else { return saved }
-            Store.shared.set(true, "lookout.chartsets.rastermigrated")
+            Store.shared.set(true, group, migratedKey)
             let merged = saved + missing
-            Store.shared.set(merged, pathsKey)
+            Store.shared.set(merged, group, pathsKey)
             return merged
         }
         // No list yet means this build has never run here. Carry the last
@@ -352,33 +355,32 @@ struct ChartSetStore {
         // The paths are not filtered here. A scan decides what is a chart, so
         // an entry that was never a chart library, or has since been deleted,
         // drops out on its own the first time the list is built.
-        let legacy = (Store.shared.strings(legacyKey) ?? [])
-            + legacyRasterFolders()
-        Store.shared.set(true, "lookout.chartsets.rastermigrated")
-        if !legacy.isEmpty { Store.shared.set(legacy, pathsKey) }
+        let legacy = Store.shared.strings(recents, "paths") + legacyRasterFolders()
+        Store.shared.set(true, group, migratedKey)
+        if !legacy.isEmpty { Store.shared.set(legacy, group, pathsKey) }
         return legacy
     }
 
     static func savedOff() -> Set<String> {
-        Set(Store.shared.strings(offKey) ?? [])
+        Set(Store.shared.strings(group, offKey))
     }
 
     /// Put a folder on the list. Adding one already there changes nothing.
     static func add(_ path: String) {
         var paths = savedPaths()
         if !paths.contains(path) { paths.append(path) }
-        Store.shared.set(paths, pathsKey)
+        Store.shared.set(paths, group, pathsKey)
     }
 
     /// Take a folder off the list. This is the ONLY thing that shortens it.
     static func remove(_ path: String) {
-        Store.shared.set(savedPaths().filter { $0 != path }, pathsKey)
-        Store.shared.set(Array(savedOff().subtracting([path])), offKey)
+        Store.shared.set(savedPaths().filter { $0 != path }, group, pathsKey)
+        Store.shared.set(Array(savedOff().subtracting([path])), group, offKey)
     }
 
     static func setOff(_ path: String, _ off: Bool) {
         var list = savedOff()
         if off { list.insert(path) } else { list.remove(path) }
-        Store.shared.set(Array(list), offKey)
+        Store.shared.set(Array(list), group, offKey)
     }
 }

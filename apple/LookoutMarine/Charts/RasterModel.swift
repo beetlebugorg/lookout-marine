@@ -55,20 +55,22 @@ final class RasterModel {
 
     /// Persisted, because a chart set is a half-gigabyte download the mariner
     /// picked deliberately — asking again every launch would be its own bug.
-    static let pathsKey = "lookout.rastercharts"
-    static let offKey = "lookout.rastercharts.off"
-    static let hiddenKey = "lookout.rastercharts.hidden"
-    static let chartHiddenKey = "lookout.chart.hidden"
+    /// The core's raster group, and the key names every shell writes.
+    static let group = Store.Group.raster
+    static let pathsKey = "paths"
+    static let offKey = "off"
+    static let hiddenKey = "hidden"
+    static let chartHiddenKey = "chart_hidden"
 
     init() {
         // Drop anything that has since been deleted or unplugged, so a stale
         // entry never becomes an error the mariner has to dismiss at every
         // launch.
-        paths = (Store.shared.strings(Self.pathsKey) ?? [])
+        paths = (Store.shared.strings(Self.group, Self.pathsKey))
             .filter { FileManager.default.fileExists(atPath: $0) }
-        off = Set(Store.shared.strings(Self.offKey) ?? [])
-        hidden = Set(Store.shared.strings(Self.hiddenKey) ?? [])
-        chartHiddenSaved = Store.shared.bool(Self.chartHiddenKey)
+        off = Set(Store.shared.strings(Self.group, Self.offKey))
+        hidden = Set(Store.shared.strings(Self.group, Self.hiddenKey))
+        chartHiddenSaved = Store.shared.bool(Self.group, Self.chartHiddenKey) ?? false
     }
 
     /// Hide or show the vector chart, leaving the picture beneath it.
@@ -77,7 +79,7 @@ final class RasterModel {
         c.toggleChart()
         chartHidden = c.chartHidden()
         chartHiddenSaved = chartHidden
-        Store.shared.set(chartHidden, Self.chartHiddenKey)
+        Store.shared.set(chartHidden, Self.group, Self.chartHiddenKey)
     }
 
     /// Install the raster charts the mariner chose, and return the sentence for
@@ -96,7 +98,7 @@ final class RasterModel {
                 failed.append((p as NSString).lastPathComponent)
             }
         }
-        Store.shared.set(paths, Self.pathsKey)
+        Store.shared.set(paths, Self.group, Self.pathsKey)
 
         // Read the whole state back, not just the name. The pill is built from
         // the set list and what is available, and those reach it through the
@@ -166,7 +168,7 @@ final class RasterModel {
         }
         guard next != hidden else { return }
         hidden = next
-        Store.shared.set(Array(next), Self.hiddenKey)
+        Store.shared.set(Array(next), Self.group, Self.hiddenKey)
     }
 
     /// Draw one set, or none for -1.
@@ -189,7 +191,7 @@ final class RasterModel {
     /// Turn one raster chart on or off. It stays installed either way.
     func setEnabled(_ path: String, _ on: Bool) {
         if on { off.remove(path) } else { off.insert(path) }
-        Store.shared.set(Array(off), Self.offKey)
+        Store.shared.set(Array(off), Self.group, Self.offKey)
         engine?.setRasterEnabled(path, on)
         // Read the selection back: switching off the last file of the drawn set
         // moves the selection, and the pill must not keep naming a chart that
@@ -203,8 +205,8 @@ final class RasterModel {
     func remove(_ path: String) {
         paths.removeAll { $0 == path }
         off.remove(path)
-        Store.shared.set(paths, Self.pathsKey)
-        Store.shared.set(Array(off), Self.offKey)
+        Store.shared.set(paths, Self.group, Self.pathsKey)
+        Store.shared.set(Array(off), Self.group, Self.offKey)
     }
 
     /// Forget every installed source. The engine has no remove yet, so this
@@ -217,9 +219,9 @@ final class RasterModel {
         paths.removeAll()
         off.removeAll()
         hidden.removeAll()
-        Store.shared.set(paths, Self.pathsKey)
-        Store.shared.set(Array(off), Self.offKey)
-        Store.shared.set(Array(hidden), Self.hiddenKey)
+        Store.shared.set(paths, Self.group, Self.pathsKey)
+        Store.shared.set(Array(off), Self.group, Self.offKey)
+        Store.shared.set(Array(hidden), Self.group, Self.hiddenKey)
     }
 
     /// Step to the next set, with "no picture" as one position — so the same

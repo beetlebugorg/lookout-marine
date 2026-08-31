@@ -52,23 +52,23 @@ final class ChartSetStoreTests: ShellTestCase {
     /// after. Without it their charts are simply gone at the next launch, with
     /// the folder still on disk.
     func testTheLastOpenedPathsAreCarriedAcrossOnce() {
-        Store.shared.set(["/charts/old"], "lookout.recents")
+        Store.shared.set(["/charts/old"], Store.Group.recents, "paths")
         XCTAssertEqual(ChartSetStore.savedPaths(), ["/charts/old"])
         // Written through, so the next launch reads the new list.
-        Store.shared.remove("lookout.recents")
+        Store.shared.remove(Store.Group.recents, "paths")
         XCTAssertEqual(ChartSetStore.savedPaths(), ["/charts/old"])
     }
 
     /// The paths are not filtered on the way across. A scan decides what is a
     /// chart, so an entry that was never one drops out on its own.
     func testAPathThatIsNotThereIsStillCarriedAcross() {
-        Store.shared.set(["/no/such/folder"], "lookout.recents")
+        Store.shared.set(["/no/such/folder"], Store.Group.recents, "paths")
         XCTAssertEqual(ChartSetStore.savedPaths(), ["/no/such/folder"])
     }
 
     func testNoSetsAndNoRecentsIsStillEmpty() {
         XCTAssertTrue(ChartSetStore.savedPaths().isEmpty)
-        XCTAssertNil(Store.shared.strings("lookout.chartsets"))
+        XCTAssertTrue(Store.shared.strings(Store.Group.chartsets, "paths").isEmpty)
     }
 
     /// A raster chart added before sets existed arrives as the folder it lives
@@ -77,8 +77,8 @@ final class ChartSetStoreTests: ShellTestCase {
         let dir = try temporaryDirectory()
         let file = (dir as NSString).appendingPathComponent("photo.mbtiles")
         FileManager.default.createFile(atPath: file, contents: Data("x".utf8))
-        Store.shared.set([file], "lookout.rastercharts")
-        Store.shared.set(["/charts/a"], "lookout.chartsets")
+        Store.shared.set([file], RasterModel.group, RasterModel.pathsKey)
+        Store.shared.set(["/charts/a"], Store.Group.chartsets, "paths")
 
         XCTAssertEqual(ChartSetStore.savedPaths(), ["/charts/a", dir])
         // The migration flag stops it running twice, so a folder the mariner
@@ -92,15 +92,15 @@ final class ChartSetStoreTests: ShellTestCase {
     /// would otherwise arrive as 900 sets.
     func testWhatThisAppPreparedIsNotCarriedAcross() throws {
         let root = try XCTUnwrap(ChartBake.chartsRoot)
-        Store.shared.set([root + "/Set/US5MD1MC/US5MD1MC.pmtiles"], "lookout.rastercharts")
-        Store.shared.set(["/charts/a"], "lookout.chartsets")
+        Store.shared.set([root + "/Set/US5MD1MC/US5MD1MC.pmtiles"], RasterModel.group, RasterModel.pathsKey)
+        Store.shared.set(["/charts/a"], Store.Group.chartsets, "paths")
         XCTAssertEqual(ChartSetStore.savedPaths(), ["/charts/a"])
     }
 
     /// A file that is no longer on the disk brings nothing across.
     func testAMissingRasterChartBringsNoFolder() {
-        Store.shared.set(["/no/such/photo.mbtiles"], "lookout.rastercharts")
-        Store.shared.set(["/charts/a"], "lookout.chartsets")
+        Store.shared.set(["/no/such/photo.mbtiles"], RasterModel.group, RasterModel.pathsKey)
+        Store.shared.set(["/charts/a"], Store.Group.chartsets, "paths")
         XCTAssertEqual(ChartSetStore.savedPaths(), ["/charts/a"])
     }
 

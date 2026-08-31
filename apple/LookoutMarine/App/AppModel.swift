@@ -62,6 +62,9 @@ final class AppModel {
     }
 
     init() {
+        // What the mariner already has, out of the defaults domain and into
+        // the core store. Once, before anything reads a setting.
+        Store.shared.importDefaults()
         charts = ChartsModel(raster: raster)
         // Anything a previous run renamed on its way to being deleted.
         ChartBake.sweepTrash()

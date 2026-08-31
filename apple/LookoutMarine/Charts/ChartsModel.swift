@@ -142,7 +142,7 @@ final class ChartsModel {
         // a raster archive from a vector one without opening it, so it takes
         // the answer the last scan already worked out: anything installed as a
         // raster stays out. Opening one as a vector chart composes nonsense.
-        var seen = Set(Store.shared.strings(RasterModel.pathsKey) ?? [])
+        var seen = Set(Store.shared.strings(RasterModel.group, RasterModel.pathsKey))
         for dir in ChartSetStore.savedPaths() where !off.contains(dir) {
             for p in cellPaths(for: dir) where !seen.contains(p) {
                 seen.insert(p)
@@ -373,7 +373,7 @@ final class ChartsModel {
         }
         guard wanted != raster.paths else { return }
         raster.paths = wanted
-        Store.shared.set(raster.paths, RasterModel.pathsKey)
+        Store.shared.set(raster.paths, RasterModel.group, RasterModel.pathsKey)
     }
 
     /// Any chart work running now: a scan or a bake. The pill, the first-run
@@ -535,7 +535,7 @@ final class ChartsModel {
             let kept = raster.paths.filter { !carried.contains($0) }
             if kept != raster.paths {
                 raster.paths = kept
-                Store.shared.set(raster.paths, RasterModel.pathsKey)
+                Store.shared.set(raster.paths, RasterModel.group, RasterModel.pathsKey)
             }
         }
         syncRasterFromSets()

@@ -137,50 +137,50 @@ final class MarinerSettings: ObservableObject {
     //
     // Saved field-by-field, NOT as raw struct bytes: the engine struct's layout
     // is an ABI detail that changes (it did twice this week); a versioned
-    // dictionary survives that. Unknown/missing keys keep engine defaults.
+    // group of named keys survives that. Unknown or missing keys keep engine
+    // defaults. The group is the core's, so every shell writes the same names.
 
-    private static let defaultsKey = "mariner.v1"
+    private static let group = Store.Group.mariner
 
     nonisolated static func save(_ m: tile57_mariner) {
-        var d: [String: Any] = [:]
-        d["scheme"] = Int(m.scheme.rawValue)
-        d["depth_unit"] = Int(m.depth_unit.rawValue)
-        d["shallow_contour"] = m.shallow_contour
-        d["safety_contour"] = m.safety_contour
-        d["deep_contour"] = m.deep_contour
-        d["safety_depth"] = m.safety_depth
-        d["four_shade_water"] = m.four_shade_water
-        d["display_base"] = m.display_base
-        d["display_standard"] = m.display_standard
-        d["display_other"] = m.display_other
-        d["soundings"] = Int(m.soundings)
-        d["text_names"] = m.text_names
-        d["show_light_descriptions"] = m.show_light_descriptions
-        d["text_other"] = m.text_other
-        d["simplified_points"] = m.simplified_points
-        d["boundary_style"] = Int(m.boundary_style.rawValue)
-        d["show_full_sector_lines"] = m.show_full_sector_lines
-        d["data_quality"] = m.data_quality
-        d["show_isolated_dangers_shallow"] = m.show_isolated_dangers_shallow
-        d["show_inform_callouts"] = m.show_inform_callouts
-        d["show_meta_bounds"] = m.show_meta_bounds
-        d["show_overscale"] = m.show_overscale
-        d["size_scale"] = m.size_scale
-        d["text_size_scale"] = m.text_size_scale
-        d["sounding_size_scale"] = m.sounding_size_scale
-        d["date_dependent"] = m.date_dependent
-        d["highlight_date_dependent"] = m.highlight_date_dependent
-        d["date_view"] = m.dateViewString
-        Store.shared.set(d, defaultsKey)
+        let s = Store.shared
+        s.set(Int(m.scheme.rawValue), group, "scheme")
+        s.set(Int(m.depth_unit.rawValue), group, "depth_unit")
+        s.set(m.shallow_contour, group, "shallow_contour")
+        s.set(m.safety_contour, group, "safety_contour")
+        s.set(m.deep_contour, group, "deep_contour")
+        s.set(m.safety_depth, group, "safety_depth")
+        s.set(m.four_shade_water, group, "four_shade_water")
+        s.set(m.display_base, group, "display_base")
+        s.set(m.display_standard, group, "display_standard")
+        s.set(m.display_other, group, "display_other")
+        s.set(Int(m.soundings), group, "soundings")
+        s.set(m.text_names, group, "text_names")
+        s.set(m.show_light_descriptions, group, "show_light_descriptions")
+        s.set(m.text_other, group, "text_other")
+        s.set(m.simplified_points, group, "simplified_points")
+        s.set(Int(m.boundary_style.rawValue), group, "boundary_style")
+        s.set(m.show_full_sector_lines, group, "show_full_sector_lines")
+        s.set(m.data_quality, group, "data_quality")
+        s.set(m.show_isolated_dangers_shallow, group, "show_isolated_dangers_shallow")
+        s.set(m.show_inform_callouts, group, "show_inform_callouts")
+        s.set(m.show_meta_bounds, group, "show_meta_bounds")
+        s.set(m.show_overscale, group, "show_overscale")
+        s.set(m.size_scale, group, "size_scale")
+        s.set(m.text_size_scale, group, "text_size_scale")
+        s.set(m.sounding_size_scale, group, "sounding_size_scale")
+        s.set(m.date_dependent, group, "date_dependent")
+        s.set(m.highlight_date_dependent, group, "highlight_date_dependent")
+        s.set(m.dateViewString, group, "date_view")
     }
 
     /// Overlay the saved settings onto `m` (typically the engine defaults +
     /// device_scale). Missing keys leave the field untouched.
     nonisolated static func applySavedOverlay(_ m: inout tile57_mariner) {
-        guard let d = Store.shared.dictionary(defaultsKey) else { return }
-        func f(_ k: String) -> Double? { d[k] as? Double }
-        func b(_ k: String) -> Bool? { d[k] as? Bool }
-        func i(_ k: String) -> Int? { d[k] as? Int }
+        let s = Store.shared
+        func f(_ k: String) -> Double? { s.number(group, k) }
+        func b(_ k: String) -> Bool? { s.bool(group, k) }
+        func i(_ k: String) -> Int? { f(k).map { Int($0) } }
         if let v = i("scheme") { m.scheme = tile57_scheme(UInt32(v)) }
         if let v = i("depth_unit") { m.depth_unit = tile57_depth_unit(UInt32(v)) }
         if let v = f("shallow_contour") { m.shallow_contour = v }
@@ -208,7 +208,7 @@ final class MarinerSettings: ObservableObject {
         if let v = f("sounding_size_scale"), v > 0 { m.sounding_size_scale = v }
         if let v = b("date_dependent") { m.date_dependent = v }
         if let v = b("highlight_date_dependent") { m.highlight_date_dependent = v }
-        if let v = d["date_view"] as? String { m.setDateView(v) }
+        if let v = s.string(group, "date_view") { m.setDateView(v) }
     }
 
     private func defaultMariner() -> tile57_mariner {

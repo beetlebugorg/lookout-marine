@@ -23,7 +23,10 @@ final class ViewStateTests: ShellTestCase {
 
     /// A pose saved before rotation existed still opens, north up.
     func testAPoseWithNoRotationOpensNorthUp() throws {
-        Store.shared.set(["lon": -76.0, "lat": 38.0, "zoom": 12.0], "chart.view")
+        let s = Store.shared
+        s.set(-76.0, Store.Group.view, "lon")
+        s.set(38.0, Store.Group.view, "lat")
+        s.set(12.0, Store.Group.view, "zoom")
         let v = try XCTUnwrap(ViewState.load())
         XCTAssertEqual(v.rotation_deg, 0)
     }
@@ -31,9 +34,13 @@ final class ViewStateTests: ShellTestCase {
     /// Half a pose is no pose: the opening view then comes from the core, which
     /// is the same policy every host gets.
     func testAHalfPoseIsNoPose() {
-        Store.shared.set(["lon": -76.0, "lat": 38.0], "chart.view")
+        let s = Store.shared
+        s.set(-76.0, Store.Group.view, "lon")
+        s.set(38.0, Store.Group.view, "lat")
         XCTAssertNil(ViewState.load())
-        Store.shared.set(["zoom": 12.0], "chart.view")
+        s.remove(Store.Group.view, "lon")
+        s.remove(Store.Group.view, "lat")
+        s.set(12.0, Store.Group.view, "zoom")
         XCTAssertNil(ViewState.load())
     }
 
@@ -56,8 +63,14 @@ final class ViewStateTests: ShellTestCase {
         XCTAssertTrue(ViewState.differs(moved, from: v))
     }
 
-    func testSomethingElseUnderTheKeyIsNoPose() {
-        Store.shared.set("not a pose", "chart.view")
-        XCTAssertNil(ViewState.load())
+    /// The pose goes in the core's view group under the key names every shell
+    /// writes, so a pose saved by one shell opens in another.
+    func testThePoseIsInTheCoresViewGroup() {
+        ViewState.save(lookout_view(lon: -76.482, lat: 38.9763, zoom: 14.5, rotation_deg: 37))
+        let s = Store.shared
+        XCTAssertEqual(s.number(Store.Group.view, "lon"), -76.482)
+        XCTAssertEqual(s.number(Store.Group.view, "lat"), 38.9763)
+        XCTAssertEqual(s.number(Store.Group.view, "zoom"), 14.5)
+        XCTAssertEqual(s.number(Store.Group.view, "rotation_deg"), 37)
     }
 }

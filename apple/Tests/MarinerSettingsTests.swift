@@ -104,7 +104,8 @@ final class MarinerSettingsTests: ShellTestCase {
 
     /// A key this build does not know about leaves the field alone.
     func testAnUnknownKeyChangesNothing() {
-        Store.shared.set(["scheme": 1, "not_a_field": 9], "mariner.v1")
+        Store.shared.set(1, Store.Group.mariner, "scheme")
+        Store.shared.set(9, Store.Group.mariner, "not_a_field")
         var m = defaults()
         MarinerSettings.applySavedOverlay(&m)
         XCTAssertEqual(m.scheme.rawValue, 1)

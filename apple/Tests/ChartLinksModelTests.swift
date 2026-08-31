@@ -116,15 +116,21 @@ final class ChartLinksModelTests: ShellTestCase {
     }
 
     /// The old UserDefaults list is handed to the core once and then dropped.
+    /// It reads UserDefaults directly, so the test does too.
     func testTheOldStoreIsHandedOverAndForgotten() {
         let m = model()
+        let d = UserDefaults.standard
         let old = try! JSONSerialization.data(withJSONObject: [["url": "https://a", "name": "A"]])
-        Store.shared.set(old, "lookout.chartlinks")
-        Store.shared.set("https://a", "lookout.chartlinks.active")
+        d.set(old, forKey: "lookout.chartlinks")
+        d.set("https://a", forKey: "lookout.chartlinks.active")
+        defer {
+            d.removeObject(forKey: "lookout.chartlinks")
+            d.removeObject(forKey: "lookout.chartlinks.active")
+        }
         m.migrate()
         XCTAssertTrue(engine.calls.contains("importChartLinks"))
-        XCTAssertNil(Store.shared.data("lookout.chartlinks"))
-        XCTAssertNil(Store.shared.string("lookout.chartlinks.active"))
+        XCTAssertNil(d.data(forKey: "lookout.chartlinks"))
+        XCTAssertNil(d.string(forKey: "lookout.chartlinks.active"))
     }
 
     func testNothingToMigrateAsksNothing() {
