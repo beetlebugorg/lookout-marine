@@ -7,11 +7,10 @@ final class PluginConfigTests: XCTestCase {
 
     /// A toggle crosses as a JSON bool, which is the only shape the core takes.
     func testAToggleCrossesAsABool() {
-        let fields = PluginSettings.registry("""
-            {"plugins":[{"id":"p","settings":[
-              {"key":"cpa_alarm","kind":"toggle","default":true,"value":true},
-              {"key":"cpa_limit","kind":"number","min":0,"max":9260,"value":926}]}]}
-            """)!.first!.fields
+        let fields = [
+            PluginFixture.toggle("cpa_alarm", "Collision alarm", tab: "alarms", true),
+            PluginFixture.number("cpa_limit", "CPA", tab: "alarms", min: 0, max: 9260, 926),
+        ]
         XCTAssertEqual(PluginSettings.configJSON(fields),
                        #"{"cpa_alarm":true,"cpa_limit":926}"#)
     }
@@ -39,14 +38,17 @@ final class PluginConfigTests: XCTestCase {
     /// A list crosses as its WHOLE array of rows, every column the schema
     /// declares, and the row id the shell assigned.
     func testAListCrossesWholeWithItsRowIds() {
-        let p = PluginSettings.registry("""
-            {"plugins":[{"id":"p","lists":[{"key":"connections","item_fields":[
-              {"key":"host","kind":"text","default":""},
-              {"key":"port","kind":"number","min":1,"max":65535,"default":10110},
-              {"key":"enabled","kind":"toggle","default":true}],
-              "rows":[{"id":"r1","host":"gw.local","port":10110,"enabled":true},
-                      {"id":"r2","host":"","port":2000,"enabled":false}]}]}]}
-            """)!.first!
+        let list = PluginFixture.list("p", "connections", group: "Connections", fields: [
+            PluginFixture.text("host", "Address"),
+            PluginFixture.number("port", "Port", tab: "connections", min: 1, max: 65535, 10110),
+            PluginFixture.toggle("enabled", "On", tab: "connections", true),
+        ], addLabel: "Add Connection")
+        let p = PluginFixture.plugin("p", "P", lists: [list], rows: ["connections": [
+            PluginFixture.item("r1", ["host": .text("gw.local"), "port": .number(10110),
+                                      "enabled": .toggle(true)]),
+            PluginFixture.item("r2", ["host": .text(""), "port": .number(2000),
+                                      "enabled": .toggle(false)]),
+        ]])
         XCTAssertEqual(
             PluginSettings.configJSON(p.fields, p.lists, p.rows),
             #"{"connections":[{"id":"r1","host":"gw.local","port":10110,"enabled":true},"#
@@ -56,18 +58,19 @@ final class PluginConfigTests: XCTestCase {
     /// A cell the row does not hold is written from the schema default, so the
     /// plugin never gets a short row.
     func testAMissingCellIsWrittenFromTheDefault() {
-        let p = PluginSettings.registry("""
-            {"plugins":[{"id":"p","lists":[{"key":"k","item_fields":[
-              {"key":"port","kind":"number","default":10110}],
-              "rows":[{"id":"r"}]}]}]}
-            """)!.first!
+        let list = PluginFixture.list("p", "k", group: "K", fields: [
+            PluginFixture.number("port", "Port", tab: "connections", min: 0, max: 65535, 10110),
+        ], addLabel: "Add")
+        let p = PluginFixture.plugin("p", "P", lists: [list],
+                                     rows: ["k": [PluginFixture.item("r", [:])]])
         XCTAssertEqual(PluginSettings.rowsJSON(p.lists[0], p.rows["k"] ?? []),
                        #"[{"id":"r","port":10110}]"#)
     }
 
     func testAnEmptyListIsAnEmptyArray() {
-        let p = PluginSettings.registry(
-            #"{"plugins":[{"id":"p","lists":[{"key":"k","item_fields":[]}]}]}"#)!.first!
+        let p = PluginFixture.plugin("p", "P", lists: [
+            PluginFixture.list("p", "k", group: "K", fields: [], addLabel: "Add"),
+        ])
         XCTAssertEqual(PluginSettings.configJSON(p.fields, p.lists, p.rows), #"{"k":[]}"#)
     }
 }

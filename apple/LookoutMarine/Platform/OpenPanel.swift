@@ -122,7 +122,7 @@ extension AppModel {
     /// message. Empty when no plugin claims one, which is the state a build
     /// with no plugin layer is always in.
     func pluginFileTypes() -> [String] {
-        PluginSettings.parse(controller?.pluginsJSON())
+        (controller?.withPlugins { PluginSettings.registry($0) } ?? [])
             .filter(\.live)
             .flatMap(\.fileTypes)
     }

@@ -223,10 +223,10 @@ struct PluginStatusItem {
 /// One service type a list is browsed for.
 struct PluginDiscover {
     let service: String
-    /// The columns a discovered row takes beyond its address, as the manifest
-    /// wrote them. A Signal K server announces its websocket, so a row added
-    /// from one arrives with that column on.
-    let set: [String: Any]
+    /// The values a discovered item takes beyond its address, in their fields'
+    /// own kinds. A Signal K server announces its websocket, so an item added
+    /// from one arrives with that field on.
+    let set: [String: PluginValue]
 }
 
 /// A repeating group the mariner adds rows to.
@@ -368,15 +368,15 @@ final class PluginSettings: ObservableObject {
 
     /// The registry as the core has it, or nil when the core did not answer.
     ///
-    /// NIL IS NOT AN EMPTY REGISTRY. `lookout_plugins_json` returns NULL with
-    /// no chart open, in a build with the plugin layer compiled out, and if
-    /// the registry JSON cannot be built at all; a core holding no plugins
-    /// answers `{"plugins":[]}` instead. Reading the two the same way is what
+    /// NIL IS NOT AN EMPTY REGISTRY. `lookout_plugins_read` answers NULL with
+    /// no chart open and in a build with the plugin layer compiled out; a core
+    /// holding no plugins answers a read with no rows. Reading the two the
+    /// same way is what
     /// emptied this whole window — Vessels, Alarms, Connections and every
     /// plugin row — the moment one read came back nil, which looked from the
     /// outside like a trapping plugin taking the settings schema with it.
     private func readRegistry() -> [PluginInfo]? {
-        guard let fresh = Self.registry(controller?.pluginsJSON()) else {
+        guard let fresh = controller?.withPlugins({ Self.registry($0) }) ?? nil else {
             noteUnreadable()
             return nil
         }
@@ -445,7 +445,7 @@ final class PluginSettings: ObservableObject {
     /// second and threw them all away; this reads the status out of the
     /// document and nothing else.
     private func refreshStatus() {
-        guard let fresh = Self.statuses(controller?.pluginsJSON()) else {
+        guard let fresh = controller?.withPlugins({ Self.statuses($0) }) ?? nil else {
             noteUnreadable()
             return
         }
@@ -585,7 +585,7 @@ final class PluginSettings: ObservableObject {
         for f in list.itemFields { cells[f.key] = PluginValue(nil, f) }
         let preset = list.discover.first { $0.service == service.service }?.set ?? [:]
         for f in list.itemFields {
-            if let raw = preset[f.key] { cells[f.key] = PluginValue(raw, f) }
+            if let v = preset[f.key] { cells[f.key] = v }
         }
         if let f = list.itemFields.first(where: { $0.key == "host" }) {
             cells[f.key] = PluginValue(service.host, f)
@@ -729,7 +729,8 @@ final class PluginSettings: ObservableObject {
         let saved = Store.shared.dictionary(defaultsKey) ?? [:]
         let savedRows = Store.shared.dictionary(listsKey) ?? [:]
         if saved.isEmpty && savedRows.isEmpty { return }
-        for p in parse(controller.pluginsJSON()) where !p.fields.isEmpty || !p.lists.isEmpty {
+        let loaded = controller.withPlugins { Self.registry($0) } ?? []
+        for p in loaded where !p.fields.isEmpty || !p.lists.isEmpty {
             var fields = p.fields
             if let one = saved[p.id] as? [String: Double] {
                 for i in fields.indices {
@@ -810,141 +811,255 @@ final class PluginSettings: ObservableObject {
             : String(format: "%g", v)
     }
 
-    // MARK: - Parsing the registry JSON
+    // MARK: - Reading the registry
     //
-    // Pure, so `nonisolated`: they read a string and build value types, touch
-    // nothing this class owns, and are called from the tests off the main
-    // actor as well as from `bind` on it.
+    // Pure, so `nonisolated`: they read the core's typed answer and build value
+    // types, touch nothing this class owns, and are called from `bind` on the
+    // main actor and from the tests off it.
+    //
+    // A READ IS NOT AN EMPTY REGISTRY. `lookout_plugins_read` answers NULL with
+    // no chart open and in a build with the plugin layer compiled out; a core
+    // holding no plugins answers a read with no rows. Reading the two the same
+    // way is what emptied this whole window — Vessels, Alarms, Connections and
+    // every plugin row — the moment one read came back nil.
 
-    /// The registry, or an empty list when the core did not answer. For the
-    /// callers that have nothing to fall back on; anything holding a previous
-    /// registry wants `registry(_:)` and its nil.
-    nonisolated static func parse(_ json: String?) -> [PluginInfo] {
-        registry(json) ?? []
+    /// Every plugin the read holds.
+    nonisolated static func registry(_ read: OpaquePointer) -> [PluginInfo] {
+        var n = 0
+        guard let all = lookout_plugins_all(read, &n) else { return [] }
+        var out: [PluginInfo] = []
+        out.reserveCapacity(n)
+        for i in 0..<n {
+            guard let p = all[i] else { continue }
+            out.append(info(p))
+        }
+        return out
     }
 
     /// Every plugin's status document, by id, WITHOUT building the registry.
-    /// Nil for the same reasons `registry` answers nil.
-    nonisolated static func statuses(_ json: String?) -> [String: String]? {
-        guard let json, let data = json.data(using: .utf8),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let list = root["plugins"] as? [[String: Any]]
-        else { return nil }
+    /// The poll wants one string per plugin, and building the whole registry
+    /// for that allocated every settings field, list schema and declared item
+    /// once a second and threw them all away.
+    nonisolated static func statuses(_ read: OpaquePointer) -> [String: String] {
+        var n = 0
+        guard let all = lookout_plugins_all(read, &n) else { return [:] }
         var out: [String: String] = [:]
-        for o in list {
-            guard let id = o["id"] as? String else { continue }
-            out[id] = o["status"] as? String ?? ""
+        for i in 0..<n {
+            guard let p = all[i] else { continue }
+            out[String(cString: p.pointee.id)] = String(cString: p.pointee.status)
         }
         return out
     }
 
-    /// The registry, or NIL when there was no registry to read: no chart open,
-    /// no plugin layer, or JSON that is not one. A core with no plugins loaded
-    /// answers `{"plugins":[]}`, which parses to an empty list and is a
-    /// different thing.
-    nonisolated static func registry(_ json: String?) -> [PluginInfo]? {
-        guard let json, let data = json.data(using: .utf8),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let list = root["plugins"] as? [[String: Any]]
-        else { return nil }
+    /// One plugin: what it is, what it asked consent for, and what it lets the
+    /// mariner set.
+    nonisolated private static func info(_ p: UnsafePointer<lookout_plugin>) -> PluginInfo {
+        let id = String(cString: p.pointee.id)
+        var fields: [PluginField] = []
+        var lists: [PluginListSchema] = []
+        var rows: [String: [PluginRow]] = [:]
 
-        return list.compactMap { o in
-            guard let id = o["id"] as? String else { return nil }
-            return PluginInfo(
-                id: id,
-                name: o["name"] as? String ?? id,
-                version: o["version"] as? String ?? "",
-                origin: o["origin"] as? String ?? "bundled",
-                live: o["live"] as? Bool ?? false,
-                status: PluginStatus(o["status"] as? String ?? ""),
-                capabilities: (o["capabilities"] as? [[String: Any]] ?? []).compactMap { c in
-                    guard let cap = c["cap"] as? String else { return nil }
-                    return PluginCapability(
-                        cap: cap,
-                        sentence: c["sentence"] as? String ?? cap,
-                        hosts: c["hosts"] as? [String] ?? [],
-                        granted: c["granted"] as? Bool ?? true
-                    )
-                },
-                fields: (o["settings"] as? [[String: Any]] ?? []).compactMap(field(from:)),
-                lists: (o["lists"] as? [[String: Any]] ?? []).compactMap { listSchema(from: $0, pluginID: id) },
-                rows: listRows(o, pluginID: id),
-                fileTypes: o["file_types"] as? [String] ?? []
-            )
-        }
-    }
-
-    /// One repeating group's schema: what a row holds and where the rows show.
-    nonisolated private static func listSchema(from o: [String: Any], pluginID: String) -> PluginListSchema? {
-        guard let key = o["key"] as? String else { return nil }
-        return PluginListSchema(
-            pluginID: pluginID,
-            key: key,
-            group: o["group"] as? String ?? "",
-            tab: o["tab"] as? String ?? "advanced",
-            itemFields: (o["item_fields"] as? [[String: Any]] ?? []).compactMap(field(from:)),
-            footer: o["footer"] as? String ?? "",
-            empty: o["empty"] as? String ?? "",
-            addLabel: o["add_label"] as? String ?? "",
-            switchKey: o["switch_key"] as? String ?? "",
-            discover: (o["discover"] as? [[String: Any]] ?? []).compactMap { d in
-                guard let service = d["service"] as? String else { return nil }
-                return PluginDiscover(service: service, set: d["set"] as? [String: Any] ?? [:])
-            },
-            maxRows: (o["max_rows"] as? NSNumber)?.intValue ?? 0
-        )
-    }
-
-    /// The rows in force for every list of one plugin, keyed by list key.
-    nonisolated private static func listRows(_ o: [String: Any], pluginID: String) -> [String: [PluginRow]] {
-        var out: [String: [PluginRow]] = [:]
-        for l in o["lists"] as? [[String: Any]] ?? [] {
-            guard let key = l["key"] as? String else { continue }
-            let fields = (l["item_fields"] as? [[String: Any]] ?? []).compactMap(field(from:))
-            out[key] = (l["rows"] as? [[String: Any]] ?? []).compactMap { row in
-                guard let id = row["id"] as? String else { return nil }
-                var cells: [String: PluginValue] = [:]
-                for f in fields { cells[f.key] = PluginValue(row[f.key], f) }
-                return PluginRow(id: id, cells: cells)
+        var n = 0
+        if let settings = lookout_plugin_settings(p, &n) {
+            for i in 0..<n {
+                guard let s = settings[i] else { continue }
+                if s.pointee.kind == LOOKOUT_PLUGIN_SETTING_LIST {
+                    let schema = listSchema(s, pluginID: id)
+                    lists.append(schema)
+                    rows[schema.key] = items(s)
+                } else {
+                    fields.append(field(s))
+                }
             }
         }
+
+        let caps = capabilities(p)
+        return PluginInfo(
+            id: id,
+            name: String(cString: p.pointee.name),
+            version: String(cString: p.pointee.version),
+            origin: originName(p.pointee.origin),
+            live: p.pointee.live != 0,
+            status: PluginStatus(String(cString: p.pointee.status)),
+            capabilities: caps,
+            fields: fields,
+            lists: lists,
+            rows: rows,
+            // The extensions the `files` capability may open. A manifest that
+            // claims file types needs that capability, so its allowlist is
+            // where they are.
+            fileTypes: caps.first { $0.cap == "files" }?.hosts ?? []
+        )
+    }
+
+    nonisolated private static func capabilities(
+        _ p: UnsafePointer<lookout_plugin>
+    ) -> [PluginCapability] {
+        var n = 0
+        guard let caps = lookout_plugin_capabilities(p, &n) else { return [] }
+        var out: [PluginCapability] = []
+        out.reserveCapacity(n)
+        for i in 0..<n {
+            guard let c = caps[i] else { continue }
+            out.append(PluginCapability(
+                cap: String(cString: c.pointee.name),
+                sentence: String(cString: c.pointee.sentence),
+                hosts: allowlist(c),
+                granted: c.pointee.granted != 0))
+        }
         return out
     }
 
-    nonisolated private static func field(from o: [String: Any]) -> PluginField? {
-        guard let key = o["key"] as? String,
-              let kindText = o["kind"] as? String,
-              let kind = PluginField.Kind(rawValue: kindText)
-        else { return nil }
-        var value: Double = 0, fallback: Double = 0
-        switch kind {
-        case .toggle:
-            value = (o["value"] as? Bool ?? false) ? 1 : 0
-            fallback = (o["default"] as? Bool ?? false) ? 1 : 0
-        case .number:
-            value = (o["value"] as? NSNumber)?.doubleValue ?? 0
-            fallback = (o["default"] as? NSNumber)?.doubleValue ?? value
-        case .text:
-            break // a text field only ever lives in a row; its value is there
+    /// What the mariner consented to for one capability: the addresses it may
+    /// dial, the topics it may publish, the ports it may listen on, the
+    /// extensions it may open.
+    nonisolated private static func allowlist(
+        _ c: UnsafePointer<lookout_plugin_capability>
+    ) -> [String] {
+        var n = 0
+        guard let allows = lookout_plugin_capability_allows(c, &n) else { return [] }
+        var out: [String] = []
+        out.reserveCapacity(n)
+        for i in 0..<n {
+            guard let s = allows[i] else { continue }
+            out.append(String(cString: s))
         }
-        // A schema that declares no label, description, group or section still
-        // renders: the key names the control and the core's fallback section
-        // takes it.
+        return out
+    }
+
+    nonisolated private static func field(
+        _ s: UnsafePointer<lookout_plugin_setting>
+    ) -> PluginField {
+        let f = s.pointee
         return PluginField(
-            key: key,
-            label: o["label"] as? String ?? key,
-            desc: o["desc"] as? String ?? "",
-            kind: kind,
-            unit: o["unit"] as? String ?? "",
-            group: o["group"] as? String ?? "",
-            tab: o["tab"] as? String ?? "advanced",
-            min: (o["min"] as? NSNumber)?.doubleValue ?? 0,
-            max: (o["max"] as? NSNumber)?.doubleValue ?? 1,
-            defaultValue: fallback,
-            defaultText: o["default"] as? String ?? "",
-            optional: o["optional"] as? Bool ?? false,
-            placeholder: o["placeholder"] as? String ?? "",
-            value: value
-        )
+            key: String(cString: f.key),
+            label: String(cString: f.label),
+            desc: String(cString: f.desc),
+            kind: kindOf(f.kind),
+            unit: String(cString: f.unit),
+            group: String(cString: f.group),
+            tab: sectionName(f.section),
+            min: f.min,
+            max: f.max,
+            defaultValue: f.default_number,
+            defaultText: String(cString: f.default_text),
+            optional: f.optional != 0,
+            placeholder: String(cString: f.placeholder),
+            value: f.value)
+    }
+
+    /// A setting the mariner adds more of: its wording, the shape of one item,
+    /// and what to browse the network for.
+    nonisolated private static func listSchema(
+        _ s: UnsafePointer<lookout_plugin_setting>,
+        pluginID: String
+    ) -> PluginListSchema {
+        let l = s.pointee
+        var n = 0
+        var itemFields: [PluginField] = []
+        if let fs = lookout_plugin_setting_fields(s, &n) {
+            for i in 0..<n {
+                guard let f = fs[i] else { continue }
+                itemFields.append(field(f))
+            }
+        }
+        return PluginListSchema(
+            pluginID: pluginID,
+            key: String(cString: l.key),
+            group: String(cString: l.group),
+            tab: sectionName(l.section),
+            itemFields: itemFields,
+            footer: String(cString: l.footer),
+            empty: String(cString: l.empty),
+            addLabel: String(cString: l.add_label),
+            switchKey: String(cString: l.switch_key),
+            discover: services(s),
+            maxRows: Int(l.max_items))
+    }
+
+    nonisolated private static func services(
+        _ s: UnsafePointer<lookout_plugin_setting>
+    ) -> [PluginDiscover] {
+        var n = 0
+        guard let found = lookout_plugin_setting_services(s, &n) else { return [] }
+        var out: [PluginDiscover] = []
+        out.reserveCapacity(n)
+        for i in 0..<n {
+            guard let svc = found[i] else { continue }
+            var m = 0
+            var set: [String: PluginValue] = [:]
+            if let vals = lookout_plugin_service_values(svc, &m) {
+                for j in 0..<m {
+                    guard let v = vals[j] else { continue }
+                    set[String(cString: v.pointee.key)] = value(v)
+                }
+            }
+            out.append(PluginDiscover(service: String(cString: svc.pointee.type), set: set))
+        }
+        return out
+    }
+
+    /// The items in force, each with one value per field of its list.
+    nonisolated private static func items(
+        _ s: UnsafePointer<lookout_plugin_setting>
+    ) -> [PluginRow] {
+        var n = 0
+        guard let all = lookout_plugin_setting_items(s, &n) else { return [] }
+        var out: [PluginRow] = []
+        out.reserveCapacity(n)
+        for i in 0..<n {
+            guard let it = all[i] else { continue }
+            var m = 0
+            var cells: [String: PluginValue] = [:]
+            if let vals = lookout_plugin_item_values(it, &m) {
+                for j in 0..<m {
+                    guard let v = vals[j] else { continue }
+                    cells[String(cString: v.pointee.key)] = value(v)
+                }
+            }
+            out.append(PluginRow(id: String(cString: it.pointee.id), cells: cells))
+        }
+        return out
+    }
+
+    nonisolated private static func value(
+        _ v: UnsafePointer<lookout_plugin_value>
+    ) -> PluginValue {
+        switch v.pointee.kind {
+        case LOOKOUT_PLUGIN_SETTING_TOGGLE: return .toggle(v.pointee.number != 0)
+        case LOOKOUT_PLUGIN_SETTING_TEXT:   return .text(String(cString: v.pointee.text))
+        default:                            return .number(v.pointee.number)
+        }
+    }
+
+    nonisolated private static func kindOf(_ k: lookout_plugin_setting_kind) -> PluginField.Kind {
+        switch k {
+        case LOOKOUT_PLUGIN_SETTING_TOGGLE: return .toggle
+        case LOOKOUT_PLUGIN_SETTING_TEXT:   return .text
+        default:                            return .number
+        }
+    }
+
+    /// The core's own section names, which are the ids the settings window
+    /// files its own sections under.
+    nonisolated private static func sectionName(_ s: lookout_section) -> String {
+        switch s {
+        case LOOKOUT_SECTION_DISPLAY:     return "display"
+        case LOOKOUT_SECTION_DEPTHS:      return "depths"
+        case LOOKOUT_SECTION_TEXT:        return "text"
+        case LOOKOUT_SECTION_CHARTS:      return "charts"
+        case LOOKOUT_SECTION_VESSELS:     return "vessels"
+        case LOOKOUT_SECTION_ALARMS:      return "alarms"
+        case LOOKOUT_SECTION_CONNECTIONS: return "connections"
+        default:                          return "advanced"
+        }
+    }
+
+    nonisolated private static func originName(_ o: lookout_plugin_origin) -> String {
+        switch o {
+        case LOOKOUT_ORIGIN_INSTALLED: return "installed"
+        case LOOKOUT_ORIGIN_DEVELOPER: return "developer"
+        default:                       return "bundled"
+        }
     }
 }

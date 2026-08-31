@@ -520,3 +520,103 @@ test "a capability's allowlist is what the manifest named" {
     // A capability with nothing to name has no entries.
     try t.expectEqual(@as(usize, 0), (try allowlist(a, &m, .ais_read)).len);
 }
+
+// The shipped manifests. `zig build test` runs from the build root, so these
+// are the files in the tree. What each plugin declares is a product decision,
+// and nothing else checks it.
+
+const io = std.Io.Threaded.global_single_threaded.io();
+
+fn shipped(a: std.mem.Allocator, id: []const u8) !manifest.Manifest {
+    const path = try std.fmt.allocPrint(a, "plugins/{s}/manifest.json", .{id});
+    const text = std.Io.Dir.cwd().readFileAlloc(io, path, a, .limited(64 << 10)) catch |e| {
+        std.debug.print("cannot read {s}: {s}\n", .{ path, @errorName(e) });
+        return e;
+    };
+    return manifest.parseManifest(a, text);
+}
+
+fn settingNamed(m: manifest.Manifest, key: []const u8) ?Field {
+    for (m.settings) |f| {
+        if (std.mem.eql(u8, f.key, key)) return f;
+    }
+    return null;
+}
+
+test "the shipped AIS plugin declares the collision alarm the readouts show" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const m = try shipped(a, "ais");
+    const cpa = settingNamed(m, "cpa_limit") orelse return error.NoCpaLimit;
+    try t.expectEqual(Field.Kind.number, cpa.kind);
+    try t.expectEqualStrings("Closest approach (CPA)", cpa.label);
+    try t.expectEqualStrings("m", cpa.unit);
+    try t.expectEqualStrings("Collision alarm", cpa.group);
+    try t.expectEqual(manifest.Tab.alarms, cpa.tab);
+    try t.expectEqual(@as(f64, 93), cpa.min);
+    try t.expectEqual(@as(f64, 9260), cpa.max);
+    try t.expectEqual(@as(f64, 926), cpa.default_value);
+
+    const tcpa = settingNamed(m, "tcpa_limit") orelse return error.NoTcpaLimit;
+    try t.expectEqualStrings("min", tcpa.unit);
+    try t.expectEqual(@as(f64, 1), tcpa.min);
+    try t.expectEqual(@as(f64, 60), tcpa.max);
+
+    const alarm = settingNamed(m, "cpa_alarm") orelse return error.NoCpaAlarm;
+    try t.expectEqual(Field.Kind.toggle, alarm.kind);
+    try t.expectEqual(@as(f64, 1), alarm.default_value);
+
+    // The vessel controls sit with the other vessel settings, not the alarms.
+    const vectors = settingNamed(m, "vector_min") orelse return error.NoVectorMin;
+    try t.expectEqual(manifest.Tab.vessels, vectors.tab);
+    try t.expectEqualStrings("AIS targets", vectors.group);
+}
+
+test "the shipped NMEA plugin declares the connections the mariner adds" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const m = try shipped(a, "nmea0183");
+    try t.expectEqual(@as(usize, 1), m.lists.len);
+    const l = m.lists[0];
+    try t.expectEqualStrings("connections", l.key);
+    try t.expectEqualStrings("Connections", l.group);
+    try t.expectEqual(manifest.Tab.connections, l.tab);
+    try t.expectEqualStrings("Add Connection", l.add_label);
+    try t.expectEqualStrings("enabled", l.switch_key);
+    try t.expectEqual(@as(usize, 1), l.discover.len);
+    try t.expectEqualStrings("_nmea-0183._tcp", l.discover[0].service);
+
+    const want = [_][]const u8{ "name", "host", "port", "enabled" };
+    try t.expectEqual(want.len, l.items.len);
+    for (l.items, want) |f, key| try t.expectEqualStrings(key, f.key);
+    try t.expect(l.items[0].optional); // the name may be left empty
+    try t.expect(!l.items[1].optional); // the address may not
+    try t.expectEqual(@as(f64, 10110), l.items[2].default_value);
+}
+
+test "the shipped plugins ask consent in the core's own words" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const m = try shipped(a, "nmea0183");
+    var said: std.ArrayList([]const u8) = .empty;
+    for (host.sentence_order) |cap| {
+        if (!m.caps.contains(cap)) continue;
+        var out: std.ArrayList(u8) = .empty;
+        try install.writeSentence(&out, a, cap, &m);
+        try said.append(a, try out.toOwnedSlice(a));
+    }
+    const want = [_][]const u8{
+        "Provide instrument values to the chart.",
+        "Provide AIS targets to the chart.",
+        "Share data with other plugins: nmea0183.",
+        "Connect to instruments on: your own network.",
+    };
+    try t.expectEqual(want.len, said.items.len);
+    for (said.items, want) |got, expect| try t.expectEqualStrings(expect, got);
+}

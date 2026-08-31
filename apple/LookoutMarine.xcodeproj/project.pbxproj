@@ -59,6 +59,7 @@
 		3BB8351FA18F78ADAB5F6203 /* OverlayLayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7AE039534D7B01FBAAD147A /* OverlayLayer.swift */; };
 		3D050E1C7846F727E703C605 /* StoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EA86C2284DD80FD535E34EE /* StoreTests.swift */; };
 		4148E59BA5FAB3A4D649B10E /* ChartController+Pick.swift in Sources */ = {isa = PBXBuildFile; fileRef = 860AB3C55FFA32BF43DE7194 /* ChartController+Pick.swift */; };
+		420539335C4083E0F9A894F0 /* PluginFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06051C0CFD3D2B3001B1661D /* PluginFixture.swift */; };
 		424454A97A24F08E54F8DB86 /* PluginConfigTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CAC9F938CDB51E28B5E98CE /* PluginConfigTests.swift */; };
 		4271F2EF029019817F438D42 /* ChartBake.swift in Sources */ = {isa = PBXBuildFile; fileRef = C440A0CF1A4AE2740ACEFF2F /* ChartBake.swift */; };
 		439A3F30EECCD482821F6221 /* S57.swift in Sources */ = {isa = PBXBuildFile; fileRef = 206815E0AADF6C389FC1E6E7 /* S57.swift */; };
@@ -131,6 +132,7 @@
 		9A7402704824F7BDC3E43058 /* ViewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D36819F503E24F82BD18F6B /* ViewState.swift */; };
 		9B5D5B30A13DEA2CAA3AA35F /* ChromeHitRegion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48C28C1F70D85569D7DEA1F7 /* ChromeHitRegion.swift */; };
 		9B5E568A4400963C83A8E4FE /* ChartController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C315E2FD12D936B349662AB2 /* ChartController.swift */; };
+		9BD41031FD7BB1957063AC91 /* PluginFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06051C0CFD3D2B3001B1661D /* PluginFixture.swift */; };
 		9D025672CE6D11F8AF612D74 /* StartupLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43B1D53AEBA3A1562C76642D /* StartupLoader.swift */; };
 		9D812EF56B0E8575A83D77B9 /* ScaleParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BD93ECA0EF5B7BC7893551B /* ScaleParserTests.swift */; };
 		9E390CFF6C492104AFEF0BD5 /* RasterPill.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4116F62995684CE961ACFBFE /* RasterPill.swift */; };
@@ -275,6 +277,7 @@
 
 /* Begin PBXFileReference section */
 		02618015841FF6935C44305E /* ReadoutsCapsule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadoutsCapsule.swift; sourceTree = "<group>"; };
+		06051C0CFD3D2B3001B1661D /* PluginFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginFixture.swift; sourceTree = "<group>"; };
 		062B6FAD3068E7DB70544982 /* DepthsSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DepthsSection.swift; sourceTree = "<group>"; };
 		063DCA330E7899B8CCE880A8 /* UniformTypeIdentifiers.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UniformTypeIdentifiers.framework; path = System/Library/Frameworks/UniformTypeIdentifiers.framework; sourceTree = SDKROOT; };
 		06BD91FFFE38B9BD5B086791 /* ReadoutsModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadoutsModelTests.swift; sourceTree = "<group>"; };
@@ -555,6 +558,7 @@
 				B1C44341E0A9C0B713D97E32 /* PlacementTests.swift */,
 				28D24F09A3F5CB1D1A2E3E49 /* PluginAlertTests.swift */,
 				0CAC9F938CDB51E28B5E98CE /* PluginConfigTests.swift */,
+				06051C0CFD3D2B3001B1661D /* PluginFixture.swift */,
 				821B5ED7454E2C00FA897B56 /* PluginPackageTests.swift */,
 				7275481E39C90E641E17E551 /* PluginPollTests.swift */,
 				48FA710C0489FE5DE3CDB3BE /* PluginRegistryTests.swift */,
@@ -1099,6 +1103,7 @@
 				52AFAE4BCB8FA4AFBD4C103D /* PlacementTests.swift in Sources */,
 				8D0769C29DF1033756668E4F /* PluginAlertTests.swift in Sources */,
 				424454A97A24F08E54F8DB86 /* PluginConfigTests.swift in Sources */,
+				420539335C4083E0F9A894F0 /* PluginFixture.swift in Sources */,
 				606C8CB59EE44B3D51EA08DE /* PluginPackageTests.swift in Sources */,
 				D0C7BEA75DBF27CF969CAD07 /* PluginPollTests.swift in Sources */,
 				CEFBD3E91B5295073ECB3BDE /* PluginRegistryTests.swift in Sources */,
@@ -1234,6 +1239,7 @@
 				CA995EEE58DEC4884B53AE75 /* PlacementTests.swift in Sources */,
 				1CC2EEC8A6FA6384EAD7A66B /* PluginAlertTests.swift in Sources */,
 				5C6439B656E0C69AEFF5F5F2 /* PluginConfigTests.swift in Sources */,
+				9BD41031FD7BB1957063AC91 /* PluginFixture.swift in Sources */,
 				89A4726EAB6D55604C60CD2E /* PluginPackageTests.swift in Sources */,
 				8042BD77A8379128A5DC8B69 /* PluginPollTests.swift in Sources */,
 				F9DAA35B47AAB4FBC066A103 /* PluginRegistryTests.swift in Sources */,
