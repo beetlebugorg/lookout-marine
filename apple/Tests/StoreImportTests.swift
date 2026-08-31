@@ -26,27 +26,28 @@ final class StoreImportTests: ShellTestCase {
         defaults.set(["lon": -76.482, "lat": 38.9763, "zoom": 14.5, "rotationDeg": 37.0],
                      forKey: "chart.view")
         Store.shared.importDefaults(defaults)
-        let v = ViewState.load()
-        XCTAssertEqual(v?.lon, -76.482)
-        XCTAssertEqual(v?.lat, 38.9763)
-        XCTAssertEqual(v?.zoom, 14.5)
+        let s = Store.shared
+        XCTAssertTrue(ViewState.hasSaved())
+        XCTAssertEqual(s.number(Store.Group.view, "lon"), -76.482)
+        XCTAssertEqual(s.number(Store.Group.view, "lat"), 38.9763)
+        XCTAssertEqual(s.number(Store.Group.view, "zoom"), 14.5)
         // The key was rotationDeg and is rotation_deg, which is what every
-        // other shell writes.
-        XCTAssertEqual(v?.rotation_deg, 37)
+        // other shell writes and what the engine reads.
+        XCTAssertEqual(s.number(Store.Group.view, "rotation_deg"), 37)
     }
 
+    /// The engine reads these back, so what matters here is that each one
+    /// lands under its own name in the mariner group.
     func testTheMarinerSettingsComeAcrossFieldForField() {
         defaults.set(["scheme": 2, "safety_contour": 5.5, "text_names": false,
                       "date_view": "20260401"] as [String: Any], forKey: "mariner.v1")
         Store.shared.importDefaults(defaults)
-        var m = tile57_mariner()
-        lookout_mariner_defaults(&m)
-        m.text_names = true
-        MarinerSettings.applySavedOverlay(&m)
-        XCTAssertEqual(m.scheme.rawValue, 2)
-        XCTAssertEqual(m.safety_contour, 5.5)
-        XCTAssertFalse(m.text_names)
-        XCTAssertEqual(m.dateViewString, "20260401")
+        let s = Store.shared
+        let g = Store.Group.mariner
+        XCTAssertEqual(s.number(g, "scheme"), 2)
+        XCTAssertEqual(s.number(g, "safety_contour"), 5.5)
+        XCTAssertEqual(s.bool(g, "text_names"), false)
+        XCTAssertEqual(s.string(g, "date_view"), "20260401")
     }
 
     func testTheListsComeAcross() {

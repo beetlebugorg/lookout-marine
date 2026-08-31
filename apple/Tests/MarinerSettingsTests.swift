@@ -1,7 +1,9 @@
-//  MarinerSettingsTests.swift — the S-52 mariner state, saved and put back.
+//  MarinerSettingsTests.swift — the S-52 mariner state, as the form holds it.
 //
-//  Saved field by field, not as raw struct bytes: the engine struct's layout is
-//  an ABI detail that changes, and a versioned dictionary survives that.
+//  Saving it is the ENGINE's: lookout_set_store hands it the shell's store and
+//  it writes every field. src/root.zig asserts the round trip, the zero-scale
+//  rule and what a missing key does. What is left here is the fixed
+//  date_view[9] array and the form's own mappings.
 
 import XCTest
 @testable import LookoutMarine
@@ -12,103 +14,6 @@ final class MarinerSettingsTests: ShellTestCase {
         var m = tile57_mariner()
         lookout_mariner_defaults(&m)
         return m
-    }
-
-    func testNothingSavedLeavesTheEngineDefaults() {
-        var m = defaults()
-        let before = m
-        MarinerSettings.applySavedOverlay(&m)
-        XCTAssertEqual(m.safety_contour, before.safety_contour)
-        XCTAssertEqual(m.scheme.rawValue, before.scheme.rawValue)
-    }
-
-    func testEveryFieldRoundTrips() {
-        var saved = defaults()
-        saved.scheme = tile57_scheme(2)
-        saved.depth_unit = tile57_depth_unit(1)
-        saved.shallow_contour = 3
-        saved.safety_contour = 7
-        saved.deep_contour = 22
-        saved.safety_depth = 6
-        saved.four_shade_water = false
-        saved.display_base = true
-        saved.display_standard = true
-        saved.display_other = true
-        saved.soundings = 2
-        saved.text_names = false
-        saved.show_light_descriptions = false
-        saved.text_other = false
-        saved.simplified_points = true
-        saved.boundary_style = tile57_boundary_style(1)
-        saved.show_full_sector_lines = true
-        saved.data_quality = true
-        saved.show_isolated_dangers_shallow = true
-        saved.show_inform_callouts = true
-        saved.show_meta_bounds = true
-        saved.show_overscale = false
-        saved.size_scale = 1.25
-        saved.text_size_scale = 0.75
-        saved.sounding_size_scale = 1.5
-        saved.date_dependent = false
-        saved.highlight_date_dependent = true
-        saved.setDateView("20260401")
-        MarinerSettings.save(saved)
-
-        var m = defaults()
-        MarinerSettings.applySavedOverlay(&m)
-        XCTAssertEqual(m.scheme.rawValue, 2)
-        XCTAssertEqual(m.depth_unit.rawValue, 1)
-        XCTAssertEqual(m.shallow_contour, 3)
-        XCTAssertEqual(m.safety_contour, 7)
-        XCTAssertEqual(m.deep_contour, 22)
-        XCTAssertEqual(m.safety_depth, 6)
-        XCTAssertFalse(m.four_shade_water)
-        XCTAssertTrue(m.display_other)
-        XCTAssertEqual(m.soundings, 2)
-        XCTAssertFalse(m.text_names)
-        XCTAssertFalse(m.show_light_descriptions)
-        XCTAssertFalse(m.text_other)
-        XCTAssertTrue(m.simplified_points)
-        XCTAssertEqual(m.boundary_style.rawValue, 1)
-        XCTAssertTrue(m.show_full_sector_lines)
-        XCTAssertTrue(m.data_quality)
-        XCTAssertTrue(m.show_isolated_dangers_shallow)
-        XCTAssertTrue(m.show_inform_callouts)
-        XCTAssertTrue(m.show_meta_bounds)
-        XCTAssertFalse(m.show_overscale)
-        XCTAssertEqual(m.size_scale, 1.25)
-        XCTAssertEqual(m.text_size_scale, 0.75)
-        XCTAssertEqual(m.sounding_size_scale, 1.5)
-        XCTAssertFalse(m.date_dependent)
-        XCTAssertTrue(m.highlight_date_dependent)
-        XCTAssertEqual(m.dateViewString, "20260401")
-    }
-
-    /// A zero size scale would draw nothing. A saved zero is ignored rather
-    /// than applied.
-    func testAZeroSizeScaleIsIgnored() {
-        var saved = defaults()
-        saved.size_scale = 0
-        saved.text_size_scale = 0
-        saved.sounding_size_scale = 0
-        MarinerSettings.save(saved)
-        var m = defaults()
-        m.size_scale = 1
-        m.text_size_scale = 1
-        m.sounding_size_scale = 1
-        MarinerSettings.applySavedOverlay(&m)
-        XCTAssertEqual(m.size_scale, 1)
-        XCTAssertEqual(m.text_size_scale, 1)
-        XCTAssertEqual(m.sounding_size_scale, 1)
-    }
-
-    /// A key this build does not know about leaves the field alone.
-    func testAnUnknownKeyChangesNothing() {
-        Store.shared.set(1, Store.Group.mariner, "scheme")
-        Store.shared.set(9, Store.Group.mariner, "not_a_field")
-        var m = defaults()
-        MarinerSettings.applySavedOverlay(&m)
-        XCTAssertEqual(m.scheme.rawValue, 1)
     }
 
     // MARK: The fixed date_view[9] array

@@ -144,12 +144,10 @@ final class AppModel {
         }
     }
 
-    /// Scheme changes from the MENU must persist like ones from the settings
-    /// form (the form saves in its own apply path).
+    /// Scheme changes from the MENU persist like ones from the settings form:
+    /// the engine writes every mariner change down.
     func cycleScheme() {
-        guard let c = controller else { return }
-        c.cycleScheme()
-        MarinerSettings.save(c.getMariner())
+        controller?.cycleScheme()
     }
 
     /// Set the color scheme directly (0 day / 1 dusk / 2 night).
@@ -158,7 +156,6 @@ final class AppModel {
         var m = c.getMariner()
         m.scheme = tile57_scheme(UInt32(s))
         c.setMariner(m)
-        MarinerSettings.save(m)
     }
 
     /// Parse the search text as a coordinate and recenter. True when it was a

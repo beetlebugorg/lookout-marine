@@ -33,7 +33,9 @@ final class Store {
         static let chartsets = String(cString: LOOKOUT_STORE_CHARTSETS)
     }
 
-    private let handle: OpaquePointer?
+    /// The core's store. `lookout_set_store` takes it, so the engine keeps the
+    /// pose and the mariner settings in the same file the shell writes.
+    private(set) var handle: OpaquePointer?
 
     /// A store on `dir`. Nil inside when the core would not open one, which
     /// leaves every read on its fallback and every write a no-op: a settings

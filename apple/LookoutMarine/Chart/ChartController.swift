@@ -195,16 +195,20 @@ final class ChartController: NSObject {
         // lands a moment later than the rest of the replay.
         model?.chartDidOpen()
 
-        // Reopen where we left off. With nothing saved the opening view is the
-        // engine's own (lookout_default_view) — the same policy every host gets,
-        // rather than each shell inventing its own idea of "the initial view".
+        // The shell's settings file. The engine restores the pose and the
+        // mariner's settings out of it, writes the pose down as the mariner
+        // moves, and writes both at close.
+        lookout_set_store(h, Store.shared.handle)
+
+        // With nothing saved the opening view is the engine's own
+        // (lookout_default_view) — the same policy every host gets, rather than
+        // each shell inventing its own idea of "the initial view".
         var v = lookout_view()
-        if let saved = ViewState.load() {
-            v = saved
-        } else {
+        if !ViewState.hasSaved() {
             lookout_default_view(h, &v)
+            lookout_set_view(h, &v)
         }
-        lookout_set_view(h, &v)
+        lookout_get_view(h, &v)
 
         // Dev hook, mirroring $LOOKOUT_OPEN: $LOOKOUT_VIEW="lon,lat,zoom[,rot]"
         // replaces the fit view at open — deterministic framing for dev runs
@@ -242,13 +246,6 @@ final class ChartController: NSObject {
         // but the mariner's device_scale (symbol/text physical size) is set from the
         // backing scale factor here in the bridge, per the app spec.
         syncDeviceScale()
-
-        // Saved mariner settings (contours, scheme, toggles) overlay the engine
-        // defaults — the settings form saves on every applied edit, so the
-        // chart reopens exactly as the mariner left it.
-        var mm = getMariner()
-        MarinerSettings.applySavedOverlay(&mm)
-        setMariner(mm)
 
         // The plugin sets, in the order that decides an id collision: whatever
         // LOOKOUT_PLUGINS brought up inside lookout_open loaded first, so a
@@ -335,12 +332,9 @@ final class ChartController: NSObject {
         let h = handle
         handle = nil
         renderQueue.sync {}
-        if let h {
-            var v = lookout_view()
-            lookout_get_view(h, &v) // the pose to reopen on, before the handle dies
-            ViewState.save(v)
-            lookout_close(h)
-        }
+        // lookout_close writes the pose down itself, out of the store the
+        // shell handed over.
+        if let h { lookout_close(h) }
     }
 
     /// How many vector charts are open. Zero is a library of pictures alone.
@@ -747,15 +741,12 @@ final class ChartController: NSObject {
     // MARK: - Push live readouts to the UI
 
     private var lastReadoutsAt: TimeInterval = 0
-    private var lastViewSavedAt: TimeInterval = 0
-    /// The pose last written down, so an unmoved camera is not written again.
-    private var lastSavedView: lookout_view?
     /// Internal, not private: the raster and chart-link calls push a readout
     /// after a change the frame loop would not otherwise see.
     ///
     /// Each model reads its own values off this controller through its seam.
-    /// What is left here is the throttle and the camera pose, which are the
-    /// render loop's business and no model's.
+    /// What is left here is the throttle, which is the render loop's business
+    /// and no model's.
     func pushReadouts() {
         guard let model, handle != nil else { return }
         // The readouts are human-readable text, so 10Hz is as fast as they can
@@ -772,20 +763,6 @@ final class ChartController: NSObject {
         // until it is done.
         model.chartLinks.poll()
 
-        saveViewIfMoved(now)
-    }
-
-    /// Write the camera pose down periodically: a crash or a force-quit never
-    /// reaches close(). Only when it has moved — frames keep coming while a
-    /// plugin moves own ship, so a boat at anchor wrote the same pose every
-    /// three seconds for as long as it lay there.
-    private func saveViewIfMoved(_ now: TimeInterval) {
-        guard now - lastViewSavedAt >= 3 else { return }
-        let v = currentView
-        guard lastSavedView.map({ ViewState.differs(v, from: $0) }) ?? true else { return }
-        lastViewSavedAt = now
-        lastSavedView = v
-        ViewState.save(v)
     }
 
     // MARK: - Fixture capture

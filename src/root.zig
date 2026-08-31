@@ -2498,7 +2498,6 @@ pub const Lookout = struct {
     pub fn setMariner(self: *Lookout, m: Mariner) void {
         const scheme_changed = self.mariner.scheme != m.scheme;
         self.mariner = m;
-        self.saveMariner();
         // The symbol artwork carries its own colours, so a palette change is a
         // different sheet, not a different uniform.
         if (scheme_changed) self.sprite_scheme = null;
@@ -2506,6 +2505,10 @@ pub const Lookout = struct {
     }
 
     fn deriveLive(self: *Lookout) void {
+        // Every path that changes the mariner state comes through here,
+        // including the convenience toggles, which set the field themselves
+        // rather than going back through setMariner.
+        self.saveMariner();
         self.render_size_scale = if (self.mariner.size_scale == 0) 1.0 else @floatCast(self.mariner.size_scale);
         self.style_dirty = true;
         self.markDirty();
@@ -3831,14 +3834,37 @@ test "the mariner settings go into the store field for field" {
     var f = try StoreFixture.init();
     defer f.deinit();
 
+    // Every field the engine persists, each set away from its default, so a
+    // field left out of writeMariner or restoreMariner fails here.
     var m: Mariner = undefined;
     cc.tile57_mariner_defaults(&m);
     m.scheme = cc.TILE57_SCHEME_NIGHT;
     m.depth_unit = cc.TILE57_DEPTH_FEET;
-    m.safety_contour = 5.5;
-    m.text_names = !m.text_names;
+    m.shallow_contour = 3;
+    m.safety_contour = 7;
+    m.deep_contour = 22;
+    m.safety_depth = 6;
+    m.four_shade_water = false;
+    m.display_base = true;
+    m.display_standard = true;
+    m.display_other = true;
     m.soundings = 2;
+    m.text_names = false;
+    m.show_light_descriptions = false;
+    m.text_other = false;
+    m.simplified_points = true;
+    m.boundary_style = cc.TILE57_BOUNDARY_PLAIN;
+    m.show_full_sector_lines = true;
+    m.data_quality = true;
+    m.show_isolated_dangers_shallow = true;
+    m.show_inform_callouts = true;
+    m.show_meta_bounds = true;
+    m.show_overscale = false;
     m.size_scale = 1.25;
+    m.text_size_scale = 0.75;
+    m.sounding_size_scale = 1.5;
+    m.date_dependent = false;
+    m.highlight_date_dependent = true;
     _ = std.fmt.bufPrintZ(&m.date_view, "20260401", .{}) catch unreachable;
     Lookout.writeMariner(f.store, m);
 
@@ -3847,11 +3873,51 @@ test "the mariner settings go into the store field for field" {
     Lookout.restoreMariner(f.store, &got);
     try t.expectEqual(m.scheme, got.scheme);
     try t.expectEqual(m.depth_unit, got.depth_unit);
-    try t.expectEqual(m.safety_contour, got.safety_contour);
-    try t.expectEqual(m.text_names, got.text_names);
+    try t.expectEqual(@as(f64, 3), got.shallow_contour);
+    try t.expectEqual(@as(f64, 7), got.safety_contour);
+    try t.expectEqual(@as(f64, 22), got.deep_contour);
+    try t.expectEqual(@as(f64, 6), got.safety_depth);
+    try t.expect(!got.four_shade_water);
+    try t.expect(got.display_base);
+    try t.expect(got.display_standard);
+    try t.expect(got.display_other);
     try t.expectEqual(@as(u8, 2), got.soundings);
+    try t.expect(!got.text_names);
+    try t.expect(!got.show_light_descriptions);
+    try t.expect(!got.text_other);
+    try t.expect(got.simplified_points);
+    try t.expectEqual(m.boundary_style, got.boundary_style);
+    try t.expect(got.show_full_sector_lines);
+    try t.expect(got.data_quality);
+    try t.expect(got.show_isolated_dangers_shallow);
+    try t.expect(got.show_inform_callouts);
+    try t.expect(got.show_meta_bounds);
+    try t.expect(!got.show_overscale);
     try t.expectEqual(@as(f64, 1.25), got.size_scale);
+    try t.expectEqual(@as(f64, 0.75), got.text_size_scale);
+    try t.expectEqual(@as(f64, 1.5), got.sounding_size_scale);
+    try t.expect(!got.date_dependent);
+    try t.expect(got.highlight_date_dependent);
     try t.expectEqualStrings("20260401", std.mem.sliceTo(&got.date_view, 0));
+}
+
+test "an empty date reads as today, whatever was saved before" {
+    const t = std.testing;
+    var f = try StoreFixture.init();
+    defer f.deinit();
+
+    var m: Mariner = undefined;
+    cc.tile57_mariner_defaults(&m);
+    _ = std.fmt.bufPrintZ(&m.date_view, "20260401", .{}) catch unreachable;
+    Lookout.writeMariner(f.store, m);
+    @memset(&m.date_view, 0);
+    Lookout.writeMariner(f.store, m);
+
+    var got: Mariner = undefined;
+    cc.tile57_mariner_defaults(&got);
+    _ = std.fmt.bufPrintZ(&got.date_view, "20251231", .{}) catch unreachable;
+    Lookout.restoreMariner(f.store, &got);
+    try t.expectEqualStrings("", std.mem.sliceTo(&got.date_view, 0));
 }
 
 test "a key the store does not hold leaves the field alone" {

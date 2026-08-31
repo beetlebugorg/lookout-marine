@@ -1,7 +1,9 @@
-//  ViewStateTests.swift — the camera pose across launches.
+//  ViewStateTests.swift — whether there is a camera pose to reopen on.
 //
-//  Reopening on the far side of the world from where you left is the kind of
-//  thing a chartplotter must not do.
+//  The pose itself is the engine's: it restores, writes and re-writes it out of
+//  the store the shell hands over, and src/root.zig asserts that. What is left
+//  here is the one question the shell asks, because the answer decides whether
+//  it asks the core for an opening view instead.
 
 import XCTest
 @testable import LookoutMarine
@@ -9,68 +11,29 @@ import XCTest
 final class ViewStateTests: ShellTestCase {
 
     func testNothingSavedIsNoPose() {
-        XCTAssertNil(ViewState.load())
-    }
-
-    func testAPoseRoundTrips() throws {
-        ViewState.save(lookout_view(lon: -76.482, lat: 38.9763, zoom: 14.5, rotation_deg: 37))
-        let v = try XCTUnwrap(ViewState.load())
-        XCTAssertEqual(v.lon, -76.482, accuracy: 1e-12)
-        XCTAssertEqual(v.lat, 38.9763, accuracy: 1e-12)
-        XCTAssertEqual(v.zoom, 14.5, accuracy: 1e-12)
-        XCTAssertEqual(v.rotation_deg, 37, accuracy: 1e-12)
-    }
-
-    /// A pose saved before rotation existed still opens, north up.
-    func testAPoseWithNoRotationOpensNorthUp() throws {
-        let s = Store.shared
-        s.set(-76.0, Store.Group.view, "lon")
-        s.set(38.0, Store.Group.view, "lat")
-        s.set(12.0, Store.Group.view, "zoom")
-        let v = try XCTUnwrap(ViewState.load())
-        XCTAssertEqual(v.rotation_deg, 0)
+        XCTAssertFalse(ViewState.hasSaved())
     }
 
     /// Half a pose is no pose: the opening view then comes from the core, which
-    /// is the same policy every host gets.
-    func testAHalfPoseIsNoPose() {
+    /// is the same policy every host gets, and the same rule the engine reads
+    /// the store by.
+    func testHalfAPoseIsNoPose() {
         let s = Store.shared
         s.set(-76.0, Store.Group.view, "lon")
         s.set(38.0, Store.Group.view, "lat")
-        XCTAssertNil(ViewState.load())
-        s.remove(Store.Group.view, "lon")
-        s.remove(Store.Group.view, "lat")
+        XCTAssertFalse(ViewState.hasSaved())
         s.set(12.0, Store.Group.view, "zoom")
-        XCTAssertNil(ViewState.load())
+        XCTAssertTrue(ViewState.hasSaved())
     }
 
-    /// The periodic save runs off the render tick, and frames keep coming while
-    /// a plugin moves own ship even though the camera is still.
-    func testAnUnmovedPoseIsNotADifferentOne() {
-        let v = lookout_view(lon: -76.482, lat: 38.9763, zoom: 14.5, rotation_deg: 37)
-        XCTAssertFalse(ViewState.differs(v, from: v))
-    }
-
-    func testEveryFieldCountsAsAMove() {
-        let v = lookout_view(lon: -76.482, lat: 38.9763, zoom: 14.5, rotation_deg: 37)
-        var moved = v; moved.lon += 0.000001
-        XCTAssertTrue(ViewState.differs(moved, from: v))
-        moved = v; moved.lat += 0.000001
-        XCTAssertTrue(ViewState.differs(moved, from: v))
-        moved = v; moved.zoom += 0.000001
-        XCTAssertTrue(ViewState.differs(moved, from: v))
-        moved = v; moved.rotation_deg += 0.000001
-        XCTAssertTrue(ViewState.differs(moved, from: v))
-    }
-
-    /// The pose goes in the core's view group under the key names every shell
-    /// writes, so a pose saved by one shell opens in another.
-    func testThePoseIsInTheCoresViewGroup() {
-        ViewState.save(lookout_view(lon: -76.482, lat: 38.9763, zoom: 14.5, rotation_deg: 37))
+    /// A pose saved before rotation existed is still a pose. The engine opens
+    /// it north up.
+    func testAPoseWithNoRotationIsStillAPose() {
         let s = Store.shared
-        XCTAssertEqual(s.number(Store.Group.view, "lon"), -76.482)
-        XCTAssertEqual(s.number(Store.Group.view, "lat"), 38.9763)
-        XCTAssertEqual(s.number(Store.Group.view, "zoom"), 14.5)
-        XCTAssertEqual(s.number(Store.Group.view, "rotation_deg"), 37)
+        s.set(-76.0, Store.Group.view, "lon")
+        s.set(38.0, Store.Group.view, "lat")
+        s.set(12.0, Store.Group.view, "zoom")
+        XCTAssertTrue(ViewState.hasSaved())
+        XCTAssertNil(s.number(Store.Group.view, "rotation_deg"))
     }
 }
