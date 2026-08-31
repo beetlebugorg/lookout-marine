@@ -63,6 +63,185 @@ int lookout_plugins_active(lookout *h);
  * no plugin layer is up. *out_len (NULL to ignore) receives the length. */
 const char *lookout_plugins_json(lookout *h, size_t *out_len);
 
+/* ---- reading the plugins ---------------------------------------------------
+ *
+ * One read, then ask a plugin what it asks consent for and what it lets the
+ * mariner set.
+ *
+ * A read is a copy taken under the api lock, so the engine goes on changing
+ * while you hold one, and everything it hands back dies at
+ * lookout_plugins_free.
+ *
+ * Every collection is one call that returns a borrowed array and its length.
+ * Every struct in one of those arrays is read-only and holds no collection of
+ * its own: ask for that with the next call down. Every string is
+ * NUL-terminated. */
+
+typedef struct lookout_plugins lookout_plugins;
+
+/* NULL when no plugin layer is up. */
+lookout_plugins *lookout_plugins_read(lookout *h);
+void             lookout_plugins_free(lookout_plugins *p);
+
+/* ---- what is loaded -------------------------------------------------------- */
+
+typedef enum {
+    LOOKOUT_ORIGIN_BUNDLED   = 0,
+    LOOKOUT_ORIGIN_INSTALLED = 1,
+    LOOKOUT_ORIGIN_DEVELOPER = 2
+} lookout_plugin_origin;
+
+typedef struct {
+    const char *id;
+    const char *name;
+    const char *version;
+    /* The status document the plugin wrote, as text. */
+    const char *status;
+    /* Only an installed plugin offers Uninstall; a developer copy says so. */
+    lookout_plugin_origin origin;
+    int live;
+} lookout_plugin;
+
+const lookout_plugin *const *lookout_plugins_all(const lookout_plugins *p,
+                                                 size_t *out_n);
+/* The plugin holding `id`, or NULL. For a shell keeping a selection across a
+ * read. */
+const lookout_plugin *lookout_plugins_find(const lookout_plugins *p, const char *id);
+
+/* ---- what a plugin asks consent for ---------------------------------------- */
+
+/* One capability the manifest asked for, in the consent sheet's wording. The
+ * wording is the core's, so every shell says the same thing. */
+typedef struct {
+    const char *name;      /* "net.http", "ais.read" */
+    const char *sentence;
+    /* Tracks lookout_plugin_grant_set. */
+    int granted;
+} lookout_plugin_capability;
+
+const lookout_plugin_capability *const *lookout_plugin_capabilities(
+    const lookout_plugin *p, size_t *out_n);
+
+/* What the mariner consented to: the addresses net.http may dial, the topics
+ * bus.publish may publish, the ports net.udp may listen on, the extensions
+ * `files` may open. A capability grants nothing on its own, so an empty
+ * allowlist reaches nothing, and a capability with nothing to name is empty. */
+const char *const *lookout_plugin_capability_allows(
+    const lookout_plugin_capability *c, size_t *out_n);
+
+/* ---- what a plugin lets the mariner set ------------------------------------ */
+
+typedef enum {
+    LOOKOUT_PLUGIN_SETTING_NUMBER = 0,
+    LOOKOUT_PLUGIN_SETTING_TOGGLE = 1,
+    LOOKOUT_PLUGIN_SETTING_TEXT   = 2,
+    /* A setting the mariner adds more than one of: the connections are the
+     * first. It declares the shape of one item and keeps a value per item, so
+     * `value` means nothing on it. See the item calls below. */
+    LOOKOUT_PLUGIN_SETTING_LIST   = 3
+} lookout_plugin_setting_kind;
+
+/* Where a setting belongs. These are the app's own settings sections, which a
+ * plugin's settings file into alongside the shell's, so a mariner meets no
+ * plugin system. */
+typedef enum {
+    LOOKOUT_SECTION_DISPLAY = 0, LOOKOUT_SECTION_DEPTHS, LOOKOUT_SECTION_TEXT,
+    LOOKOUT_SECTION_CHARTS,      LOOKOUT_SECTION_VESSELS,
+    LOOKOUT_SECTION_ALARMS,      LOOKOUT_SECTION_CONNECTIONS,
+    LOOKOUT_SECTION_ADVANCED
+} lookout_section;
+
+/* One setting. The fields below the kind apply to that kind only. A field of a
+ * LIST setting has this same shape and leaves `value` at its default. */
+typedef struct {
+    const char *key;
+    const char *label;
+    /* One sentence on what it does. Empty when the manifest declares none. */
+    const char *desc;
+    /* The heading it sits under. Empty when the schema declares no groups. */
+    const char *group;
+    lookout_plugin_setting_kind kind;
+    lookout_section section;
+
+    /* NUMBER */
+    const char *unit;
+    double min, max;
+    double default_number;
+
+    /* TEXT */
+    const char *default_text;
+    const char *placeholder;
+    /* The mariner may leave it empty. */
+    int optional;
+    /* The longest text the core keeps. */
+    size_t max_text;
+
+    /* LIST. The plugin's own wording; empty when the manifest declares none,
+     * in which case use your own. */
+    const char *footer;
+    const char *empty;
+    const char *add_label;
+    /* Which toggle field is the item's own switch. Empty means the first
+     * toggle field. */
+    const char *switch_key;
+    /* How many items the core keeps. Past this the host drops the item, so
+     * stop offering Add here. */
+    size_t max_items;
+
+    /* NUMBER and TOGGLE: the value in force. A toggle is 0 or 1. */
+    double value;
+} lookout_plugin_setting;
+
+const lookout_plugin_setting *const *lookout_plugin_settings(
+    const lookout_plugin *p, size_t *out_n);
+
+/* ---- the items of a LIST setting ------------------------------------------- */
+
+/* The shape of one item. */
+const lookout_plugin_setting *const *lookout_plugin_setting_fields(
+    const lookout_plugin_setting *s, size_t *out_n);
+
+/* One item. The items are the shell's: it assigns each one an id when it is
+ * added, keeps the id for the item's whole life, and sends them all back on
+ * every edit. */
+typedef struct {
+    const char *id;
+} lookout_plugin_item;
+
+const lookout_plugin_item *const *lookout_plugin_setting_items(
+    const lookout_plugin_setting *s, size_t *out_n);
+
+/* One value an item holds, in its field's kind. */
+typedef struct {
+    const char *key;
+    lookout_plugin_setting_kind kind;
+    /* A number, and 0 or 1 for a toggle. */
+    double number;
+    const char *text;
+} lookout_plugin_value;
+
+/* One value per field, in field order. A field the item says nothing about
+ * reads as that field's default. */
+const lookout_plugin_value *const *lookout_plugin_item_values(
+    const lookout_plugin_item *it, size_t *out_n);
+/* The same values by field key, for a caller that knows what it wants. */
+double      lookout_plugin_item_number(const lookout_plugin_item *it, const char *key);
+int         lookout_plugin_item_flag(const lookout_plugin_item *it, const char *key);
+const char *lookout_plugin_item_text(const lookout_plugin_item *it, const char *key);
+
+/* What to browse the boat's network for on a LIST setting's behalf. The host
+ * browses nothing itself: the platform's own Bonjour API is the shell's. */
+typedef struct {
+    const char *type;      /* "_signalk-ws._tcp" */
+} lookout_plugin_service;
+
+const lookout_plugin_service *const *lookout_plugin_setting_services(
+    const lookout_plugin_setting *s, size_t *out_n);
+/* The values an item added from a find takes beyond its name, address and
+ * port. */
+const lookout_plugin_value *const *lookout_plugin_service_values(
+    const lookout_plugin_service *svc, size_t *out_n);
+
 /* ---- plugin install and consent ------------------------------------------ */
 
 /* Name the per-user plugin directory, for platforms whose environment cannot.

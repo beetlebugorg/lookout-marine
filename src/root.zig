@@ -40,6 +40,7 @@ pub const Scheme = cc.tile57_scheme;
 /// `-Dplugins` there are no WAMR headers for src/plugin/wasm.zig's @cImport to
 /// find, so the file must not be analysed at all.
 const plugins_on = @import("build_options").plugins;
+const plugin_read = @import("plugins");
 const phost = if (plugins_on) @import("plugin/host.zig") else struct {};
 const clock = @import("clock.zig");
 
@@ -1522,6 +1523,20 @@ pub const Lookout = struct {
         ps.json.clearRetainingCapacity();
         ps.host.registryJson(&ps.json) catch return null;
         return ps.json.items;
+    }
+
+    /// What a shell reads about the plugins: what is loaded, what each asks
+    /// consent for, and what each lets the mariner set. The caller frees it.
+    /// Null when no plugin layer is up.
+    pub fn readPlugins(self: *Lookout) ?*plugin_read.Read {
+        if (!plugins_on) return null;
+        const ps = self.plugins orelse return null;
+        const out = plugin_read.Read.init(self.alloc) catch return null;
+        phost.read.build(&ps.host, out) catch {
+            out.free();
+            return null;
+        };
+        return out;
     }
 
     /// One plugin's settings, as JSON. Borrowed until the next call.

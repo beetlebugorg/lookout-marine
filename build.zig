@@ -401,6 +401,15 @@ pub fn build(b: *std.Build) void {
     };
     const cfg = Cfg{ .b = b, .tile57_inc = tile57_inc, .tile57_lib = tile57_lib, .charttable_mod = charttable_mod, .android = is_android, .build_opts_mod = build_opts_mod, .plugins = plugins, .wamr_dir = wamr_dir, .vk_loader = is_android or is_linux };
 
+    // What a shell reads about the plugins. host.zig and broker.zig import
+    // nothing above src/plugin/, so the part that fills a read takes the shapes
+    // as a module.
+    const plugins_mod = b.createModule(.{
+        .root_source_file = b.path("src/plugins.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     // ---- the core: static library (C ABI in capi.zig -> include/lookout.h) ----
     const lib_mod = b.createModule(.{
         .root_source_file = b.path("src/capi.zig"),
@@ -413,6 +422,7 @@ pub fn build(b: *std.Build) void {
         // export — strip so the panic path never pulls it in.
         .strip = target.result.os.tag == .ios,
     });
+    lib_mod.addImport("plugins", plugins_mod);
     cfg.apply(lib_mod, is_apple);
     const lib = b.addLibrary(.{ .name = "lookout_marine", .linkage = .static, .root_module = lib_mod });
     if (android_libc) |libc| lib.setLibCFile(libc); // NDK sysroot for the C deps
@@ -503,6 +513,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
+    test_mod.addImport("plugins", plugins_mod);
     cfg.apply(test_mod, true);
     const tests = b.addTest(.{ .root_module = test_mod });
     const test_step = b.step("test", "Run unit tests");
@@ -514,6 +525,7 @@ pub fn build(b: *std.Build) void {
     // These do not need tile57 or a GPU, so they skip cfg.apply.
     const pure_test_roots = [_][]const u8{
         "src/shell/format.zig",
+        "src/plugins.zig",
         "src/plugin/store.zig",
         "src/plugin/aisstore.zig",
         "src/overlay.zig",
@@ -746,6 +758,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .link_libc = true,
         });
+        host_mod.addImport("plugins", plugins_mod);
         host_mod.addIncludePath(b.path(b.fmt("{s}/include", .{wamr_dir})));
         host_mod.addObjectFile(b.path(b.fmt("{s}/lib/libvmlib.a", .{wamr_dir})));
         test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = host_mod })).step);
@@ -772,6 +785,7 @@ pub fn build(b: *std.Build) void {
                 .optimize = optimize,
                 .link_libc = true,
             });
+            host_smoke_mod.addImport("plugins", plugins_mod);
             host_smoke_mod.addImport("host", host_mod);
             host_smoke_mod.addImport("overlay", ov_mod);
             host_smoke_mod.addAnonymousImport("echo_plugin_wasm", .{ .root_source_file = bin });
@@ -800,6 +814,7 @@ pub fn build(b: *std.Build) void {
                         .optimize = optimize,
                         .link_libc = true,
                     });
+                    nmea_mod.addImport("plugins", plugins_mod);
                     nmea_mod.addImport("host", host_mod);
                     nmea_mod.addAnonymousImport("nmea_plugin_wasm", .{ .root_source_file = nbin });
                     nmea_mod.addAnonymousImport("nmea_manifest", .{ .root_source_file = b.path("plugins/nmea0183/manifest.json") });
@@ -820,6 +835,7 @@ pub fn build(b: *std.Build) void {
                         .optimize = optimize,
                         .link_libc = true,
                     });
+                    sk_mod.addImport("plugins", plugins_mod);
                     sk_mod.addImport("host", host_mod);
                     sk_mod.addAnonymousImport("signalk_plugin_wasm", .{ .root_source_file = sbin });
                     sk_mod.addAnonymousImport("signalk_manifest", .{ .root_source_file = b.path("plugins/signalk/manifest.json") });
@@ -842,6 +858,7 @@ pub fn build(b: *std.Build) void {
                     .optimize = optimize,
                     .link_libc = true,
                 });
+                alarm_mod.addImport("plugins", plugins_mod);
                 alarm_mod.addImport("host", host_mod);
                 alarm_mod.addImport("overlay", ov_mod);
                 alarm_mod.addAnonymousImport("ais_plugin_wasm", .{ .root_source_file = abin });
@@ -862,6 +879,7 @@ pub fn build(b: *std.Build) void {
                     .optimize = optimize,
                     .link_libc = true,
                 });
+                install_mod.addImport("plugins", plugins_mod);
                 install_mod.addImport("host", host_mod);
                 install_mod.addImport("overlay", ov_mod);
                 install_mod.addAnonymousImport("windline_plugin_wasm", .{ .root_source_file = wbin });
@@ -889,6 +907,7 @@ pub fn build(b: *std.Build) void {
                 .optimize = optimize,
                 .link_libc = true,
             });
+            isolation_mod.addImport("plugins", plugins_mod);
             isolation_mod.addImport("host", host_mod);
             isolation_mod.addImport("overlay", ov_mod);
             isolation_mod.addAnonymousImport("echo_plugin_wasm", .{ .root_source_file = bin });
@@ -918,6 +937,7 @@ pub fn build(b: *std.Build) void {
                 .optimize = optimize,
                 .link_libc = true,
             });
+            restart_mod.addImport("plugins", plugins_mod);
             restart_mod.addImport("host", host_mod);
             restart_mod.addImport("overlay", ov_mod);
             restart_mod.addAnonymousImport("echo_plugin_wasm", .{ .root_source_file = bin });
@@ -940,6 +960,7 @@ pub fn build(b: *std.Build) void {
         // The test module's root, and the core files it reaches. pick and the
         // renderer layer are reached only through root.zig's `test` block.
         "src/root.zig",
+        "src/owned.zig",
         "src/licenses.zig",
         "src/pick.zig",
         "src/ct/host.zig",
@@ -956,6 +977,7 @@ pub fn build(b: *std.Build) void {
         "src/plugin/host/install.zig",
         "src/plugin/host/manifest.zig",
         "src/plugin/host/settings_json.zig",
+        "src/plugin/host/read.zig",
         "src/plugin/broker/alerts.zig",
         "src/plugin/broker/budgets.zig",
         "src/plugin/broker/caps.zig",

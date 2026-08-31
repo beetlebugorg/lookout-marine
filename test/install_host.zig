@@ -28,6 +28,7 @@
 const std = @import("std");
 const host = @import("host");
 const overlay = @import("overlay");
+const plugins = @import("plugins");
 
 const broker = host.broker;
 const vstore = host.store;
@@ -287,6 +288,67 @@ fn exists(path: []const u8) bool {
     return true;
 }
 
+/// Walk the typed read beside the JSON registry and compare every plugin.
+fn expectReadMatchesJson(alloc: std.mem.Allocator, h: *host.Host, json: []const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const doc = try std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), json, .{});
+    const list = doc.object.get("plugins").?.array;
+
+    const read = try plugins.Read.init(alloc);
+    defer read.free();
+    try host.read.build(h, read);
+
+    try must(list.items.len == read.rows.len, "the two reads hold the same plugins");
+    for (list.items, read.rows) |item, p| {
+        const o = item.object;
+        try must(std.mem.eql(u8, o.get("id").?.string, std.mem.span(p.id)), "same id");
+        try must(std.mem.eql(u8, o.get("name").?.string, std.mem.span(p.name)), "same name");
+        try must(std.mem.eql(u8, o.get("version").?.string, std.mem.span(p.version)), "same version");
+        try must(std.mem.eql(u8, o.get("status").?.string, std.mem.span(p.status)), "same status");
+        try must(std.mem.eql(u8, o.get("origin").?.string, @tagName(p.origin)), "same origin");
+        try must(o.get("live").?.bool == (p.live != 0), "same live flag");
+
+        const rec = plugins.recOf(plugins.PluginRec, p);
+
+        const caps = o.get("capabilities").?.array;
+        try must(caps.items.len == rec.capabilities_len, "same capability count");
+        for (caps.items, rec.capabilities[0..rec.capabilities_len]) |c, cap| {
+            const co = c.object;
+            try must(std.mem.eql(u8, co.get("cap").?.string, std.mem.span(cap.name)), "same capability");
+            try must(std.mem.eql(u8, co.get("sentence").?.string, std.mem.span(cap.sentence)), "same sentence");
+            try must(co.get("granted").?.bool == (cap.granted != 0), "same grant");
+
+            // The JSON writes a capability's reach as "hosts" or "ports", and
+            // the file types at plugin level. The read puts all three on the
+            // capability that named them.
+            const named: usize = if (std.mem.eql(u8, std.mem.span(cap.name), "files"))
+                (if (o.get("file_types")) |x| x.array.items.len else 0)
+            else if (co.get("hosts")) |x|
+                x.array.items.len
+            else if (co.get("ports")) |x|
+                x.array.items.len
+            else
+                0;
+            const cap_rec = plugins.recOf(plugins.CapabilityRec, cap);
+            try must(named == cap_rec.allows_len, "same allowlist");
+        }
+
+        const fields = o.get("settings").?.array;
+        const lists = if (o.get("lists")) |x| x.array.items.len else 0;
+        try must(fields.items.len + lists == rec.settings_len, "same setting count");
+        for (fields.items, rec.settings[0..fields.items.len]) |f, setting| {
+            const fo = f.object;
+            try must(std.mem.eql(u8, fo.get("key").?.string, std.mem.span(setting.key)), "same setting key");
+            try must(std.mem.eql(u8, fo.get("kind").?.string, @tagName(setting.kind)), "same setting kind");
+            try must(std.mem.eql(u8, fo.get("tab").?.string, @tagName(setting.section)), "same setting section");
+        }
+        for (rec.settings[fields.items.len..rec.settings_len]) |setting| {
+            try must(setting.kind == .list, "a list setting follows the scalars");
+        }
+    }
+}
+
 fn must(cond: bool, comptime what: []const u8) !void {
     if (cond) return;
     std.debug.print("\nFAILED: {s}\n", .{what});
@@ -460,6 +522,10 @@ test "the downwind example installs hot, draws, loses a grant live, and uninstal
         try must(std.mem.indexOf(u8, reg.items, "\"origin\":\"installed\"") != null, "registry says installed");
         try must(std.mem.indexOf(u8, reg.items, "\"version\":\"1.0\"") != null, "registry has the version");
         try must(std.mem.indexOf(u8, reg.items, "\"cap\":\"overlay.draw\",\"sentence\":\"Draw on the chart.\",\"granted\":true") != null, "registry grants draw");
+
+        // The typed read says what the JSON says. Both walk one Entry, so a
+        // manifest field added to one and left out of the other shows up here.
+        try expectReadMatchesJson(alloc, h, reg.items);
 
         // It draws: both inputs fresh, one dashed line downwind.
         pushFix(&rig, p.index, 38.9763);

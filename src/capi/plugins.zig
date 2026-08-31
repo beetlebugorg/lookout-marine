@@ -9,6 +9,7 @@ const std = @import("std");
 
 const lk = @import("../root.zig");
 const capi = @import("../capi.zig");
+const pl = @import("plugins");
 
 const lookout = capi.lookout;
 const gpa = capi.gpa;
@@ -328,4 +329,151 @@ export fn lookout_overlay_info(h: ?*lookout, id: [*:0]const u8, out: *lookout_ov
     const hit = l.overlayInfo(std.mem.span(id)) orelse return 0;
     fillObj(out, hit);
     return 1;
+}
+
+// ---- reading the plugins ------------------------------------------------------
+// The shapes are src/plugins.zig's; see include/lookout-plugins.h for what a
+// shell reads out of them. Every collection is one call that returns a borrowed
+// array and its length.
+
+pub const lookout_plugins = pl.Read;
+pub const lookout_plugin = pl.Plugin;
+pub const lookout_plugin_capability = pl.Capability;
+pub const lookout_plugin_setting = pl.Setting;
+pub const lookout_plugin_item = pl.Item;
+pub const lookout_plugin_value = pl.Value;
+pub const lookout_plugin_service = pl.Service;
+
+fn count(out_n: ?*usize, n: usize) void {
+    if (out_n) |p| p.* = n;
+}
+
+/// Read the plugins. See lookout-plugins.h.
+export fn lookout_plugins_read(h: ?*lookout) ?*lookout_plugins {
+    const l = locked(h);
+    defer l.apiUnlock();
+    return l.readPlugins();
+}
+
+/// Free a read and everything reached through it.
+export fn lookout_plugins_free(p: ?*lookout_plugins) void {
+    if (p) |x| x.free();
+}
+
+/// Every plugin loaded.
+export fn lookout_plugins_all(p: ?*const lookout_plugins, out_n: ?*usize) ?[*]const *const lookout_plugin {
+    const x = p orelse {
+        count(out_n, 0);
+        return null;
+    };
+    count(out_n, x.rows.len);
+    return x.rows.ptr;
+}
+
+/// The plugin holding `id`, or null.
+export fn lookout_plugins_find(p: ?*const lookout_plugins, id: ?[*:0]const u8) ?*const lookout_plugin {
+    const x = p orelse return null;
+    const want = std.mem.span(id orelse return null);
+    for (x.rows) |row| {
+        if (std.mem.eql(u8, std.mem.span(row.id), want)) return row;
+    }
+    return null;
+}
+
+/// Every capability this plugin's manifest asked for.
+export fn lookout_plugin_capabilities(p: ?*const lookout_plugin, out_n: ?*usize) ?[*]const *const lookout_plugin_capability {
+    const rec = pl.recOf(pl.PluginRec, p orelse {
+        count(out_n, 0);
+        return null;
+    });
+    count(out_n, rec.capabilities_len);
+    return rec.capabilities;
+}
+
+/// What the mariner consented to for this capability.
+export fn lookout_plugin_capability_allows(c: ?*const lookout_plugin_capability, out_n: ?*usize) ?[*]const [*:0]const u8 {
+    const rec = pl.recOf(pl.CapabilityRec, c orelse {
+        count(out_n, 0);
+        return null;
+    });
+    count(out_n, rec.allows_len);
+    return rec.allows;
+}
+
+/// Every setting this plugin declares, in declaration order.
+export fn lookout_plugin_settings(p: ?*const lookout_plugin, out_n: ?*usize) ?[*]const *const lookout_plugin_setting {
+    const rec = pl.recOf(pl.PluginRec, p orelse {
+        count(out_n, 0);
+        return null;
+    });
+    count(out_n, rec.settings_len);
+    return rec.settings;
+}
+
+/// The shape of one item of a list setting.
+export fn lookout_plugin_setting_fields(s: ?*const lookout_plugin_setting, out_n: ?*usize) ?[*]const *const lookout_plugin_setting {
+    const rec = pl.recOf(pl.SettingRec, s orelse {
+        count(out_n, 0);
+        return null;
+    });
+    count(out_n, rec.fields_len);
+    return rec.fields;
+}
+
+/// The items a list setting holds.
+export fn lookout_plugin_setting_items(s: ?*const lookout_plugin_setting, out_n: ?*usize) ?[*]const *const lookout_plugin_item {
+    const rec = pl.recOf(pl.SettingRec, s orelse {
+        count(out_n, 0);
+        return null;
+    });
+    count(out_n, rec.items_len);
+    return rec.items;
+}
+
+/// What to browse the boat's network for on a list setting's behalf.
+export fn lookout_plugin_setting_services(s: ?*const lookout_plugin_setting, out_n: ?*usize) ?[*]const *const lookout_plugin_service {
+    const rec = pl.recOf(pl.SettingRec, s orelse {
+        count(out_n, 0);
+        return null;
+    });
+    count(out_n, rec.services_len);
+    return rec.services;
+}
+
+/// One value per field of the item's list, in field order.
+export fn lookout_plugin_item_values(it: ?*const lookout_plugin_item, out_n: ?*usize) ?[*]const *const lookout_plugin_value {
+    const rec = pl.recOf(pl.ItemRec, it orelse {
+        count(out_n, 0);
+        return null;
+    });
+    count(out_n, rec.values_len);
+    return rec.values;
+}
+
+/// One item value by field key. 0 when the item holds no such field.
+export fn lookout_plugin_item_number(it: ?*const lookout_plugin_item, key: ?[*:0]const u8) f64 {
+    const v = pl.itemValue(it orelse return 0, std.mem.span(key orelse return 0)) orelse return 0;
+    return v.number;
+}
+
+/// One item toggle by field key. 0 when the item holds no such field.
+export fn lookout_plugin_item_flag(it: ?*const lookout_plugin_item, key: ?[*:0]const u8) c_int {
+    const v = pl.itemValue(it orelse return 0, std.mem.span(key orelse return 0)) orelse return 0;
+    return @intFromBool(v.number != 0);
+}
+
+/// One item string by field key. Empty when the item holds no such field.
+export fn lookout_plugin_item_text(it: ?*const lookout_plugin_item, key: ?[*:0]const u8) [*:0]const u8 {
+    const v = pl.itemValue(it orelse return "", std.mem.span(key orelse return "")) orelse return "";
+    return v.text;
+}
+
+/// The values an item added from a find takes beyond its name, address and port.
+export fn lookout_plugin_service_values(svc: ?*const lookout_plugin_service, out_n: ?*usize) ?[*]const *const lookout_plugin_value {
+    const rec = pl.recOf(pl.ServiceRec, svc orelse {
+        count(out_n, 0);
+        return null;
+    });
+    count(out_n, rec.values_len);
+    return rec.values;
 }
