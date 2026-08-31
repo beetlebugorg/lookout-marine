@@ -15,6 +15,7 @@
 //! It applies to its base cell, and tile57 reads the chain when it bakes.
 
 const std = @import("std");
+const format = @import("shell/format.zig");
 
 /// What a file is, from its name alone.
 pub const Kind = enum {
@@ -33,17 +34,7 @@ pub const Kind = enum {
 };
 
 /// The usage bands S-57 numbers 1 to 6, in the words the readouts use.
-pub fn bandName(band: u8) []const u8 {
-    return switch (band) {
-        1 => "Overview",
-        2 => "General",
-        3 => "Coastal",
-        4 => "Approach",
-        5 => "Harbor",
-        6 => "Berthing",
-        else => "Unknown",
-    };
-}
+pub const bandName = format.bandName;
 
 /// The name of the file, without its directory.
 pub fn baseName(path: []const u8) []const u8 {

@@ -509,6 +509,7 @@ pub fn build(b: *std.Build) void {
     // phase gate runs and what an agent runs by hand are the same compilation.
     // These do not need tile57 or a GPU, so they skip cfg.apply.
     const pure_test_roots = [_][]const u8{
+        "src/shell/format.zig",
         "src/plugin/store.zig",
         "src/plugin/aisstore.zig",
         "src/overlay.zig",
