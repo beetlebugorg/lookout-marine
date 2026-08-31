@@ -401,6 +401,15 @@ pub fn build(b: *std.Build) void {
     };
     const cfg = Cfg{ .b = b, .tile57_inc = tile57_inc, .tile57_lib = tile57_lib, .charttable_mod = charttable_mod, .android = is_android, .build_opts_mod = build_opts_mod, .plugins = plugins, .wamr_dir = wamr_dir, .vk_loader = is_android or is_linux };
 
+    // A read's arena and its publishing helpers. Both the plugin shapes and
+    // src/pick.zig hang off it, and a file belongs to one module, so it is a
+    // module rather than an import by path.
+    const owned_mod = b.createModule(.{
+        .root_source_file = b.path("src/owned.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     // What a shell reads about the plugins. host.zig and broker.zig import
     // nothing above src/plugin/, so the part that fills a read takes the shapes
     // as a module.
@@ -409,6 +418,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    plugins_mod.addImport("owned", owned_mod);
 
     // ---- the core: static library (C ABI in capi.zig -> include/lookout.h) ----
     const lib_mod = b.createModule(.{
@@ -423,6 +433,7 @@ pub fn build(b: *std.Build) void {
         .strip = target.result.os.tag == .ios,
     });
     lib_mod.addImport("plugins", plugins_mod);
+    lib_mod.addImport("owned", owned_mod);
     cfg.apply(lib_mod, is_apple);
     const lib = b.addLibrary(.{ .name = "lookout_marine", .linkage = .static, .root_module = lib_mod });
     if (android_libc) |libc| lib.setLibCFile(libc); // NDK sysroot for the C deps
@@ -514,6 +525,7 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     test_mod.addImport("plugins", plugins_mod);
+    test_mod.addImport("owned", owned_mod);
     cfg.apply(test_mod, true);
     const tests = b.addTest(.{ .root_module = test_mod });
     const test_step = b.step("test", "Run unit tests");
@@ -524,6 +536,7 @@ pub fn build(b: *std.Build) void {
     // phase gate runs and what an agent runs by hand are the same compilation.
     // These do not need tile57 or a GPU, so they skip cfg.apply.
     const pure_test_roots = [_][]const u8{
+        "src/owned.zig",
         "src/shell/format.zig",
         "src/plugins.zig",
         "src/plugin/store.zig",
@@ -587,6 +600,9 @@ pub fn build(b: *std.Build) void {
         // world space, so they take its camera. Cheap for the roots that do
         // not: an unimported module is not analysed.
         mod.addImport("charttable", cfg.charttable_mod);
+        // src/plugins.zig hangs its shapes off the read arena; cheap for the
+        // roots that do not, because an unimported module is not analysed.
+        mod.addImport("owned", owned_mod);
         if (cfg.vk_loader) mod.linkSystemLibrary("vulkan", .{});
         test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = mod })).step);
     }
@@ -759,6 +775,7 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
         });
         host_mod.addImport("plugins", plugins_mod);
+        host_mod.addImport("owned", owned_mod);
         host_mod.addIncludePath(b.path(b.fmt("{s}/include", .{wamr_dir})));
         host_mod.addObjectFile(b.path(b.fmt("{s}/lib/libvmlib.a", .{wamr_dir})));
         test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = host_mod })).step);
@@ -786,6 +803,7 @@ pub fn build(b: *std.Build) void {
                 .link_libc = true,
             });
             host_smoke_mod.addImport("plugins", plugins_mod);
+            host_smoke_mod.addImport("owned", owned_mod);
             host_smoke_mod.addImport("host", host_mod);
             host_smoke_mod.addImport("overlay", ov_mod);
             host_smoke_mod.addAnonymousImport("echo_plugin_wasm", .{ .root_source_file = bin });
@@ -815,6 +833,7 @@ pub fn build(b: *std.Build) void {
                         .link_libc = true,
                     });
                     nmea_mod.addImport("plugins", plugins_mod);
+                    nmea_mod.addImport("owned", owned_mod);
                     nmea_mod.addImport("host", host_mod);
                     nmea_mod.addAnonymousImport("nmea_plugin_wasm", .{ .root_source_file = nbin });
                     nmea_mod.addAnonymousImport("nmea_manifest", .{ .root_source_file = b.path("plugins/nmea0183/manifest.json") });
@@ -836,6 +855,7 @@ pub fn build(b: *std.Build) void {
                         .link_libc = true,
                     });
                     sk_mod.addImport("plugins", plugins_mod);
+                    sk_mod.addImport("owned", owned_mod);
                     sk_mod.addImport("host", host_mod);
                     sk_mod.addAnonymousImport("signalk_plugin_wasm", .{ .root_source_file = sbin });
                     sk_mod.addAnonymousImport("signalk_manifest", .{ .root_source_file = b.path("plugins/signalk/manifest.json") });
@@ -859,6 +879,7 @@ pub fn build(b: *std.Build) void {
                     .link_libc = true,
                 });
                 alarm_mod.addImport("plugins", plugins_mod);
+                alarm_mod.addImport("owned", owned_mod);
                 alarm_mod.addImport("host", host_mod);
                 alarm_mod.addImport("overlay", ov_mod);
                 alarm_mod.addAnonymousImport("ais_plugin_wasm", .{ .root_source_file = abin });
@@ -880,6 +901,7 @@ pub fn build(b: *std.Build) void {
                     .link_libc = true,
                 });
                 install_mod.addImport("plugins", plugins_mod);
+                install_mod.addImport("owned", owned_mod);
                 install_mod.addImport("host", host_mod);
                 install_mod.addImport("overlay", ov_mod);
                 install_mod.addAnonymousImport("windline_plugin_wasm", .{ .root_source_file = wbin });
@@ -908,6 +930,7 @@ pub fn build(b: *std.Build) void {
                 .link_libc = true,
             });
             isolation_mod.addImport("plugins", plugins_mod);
+            isolation_mod.addImport("owned", owned_mod);
             isolation_mod.addImport("host", host_mod);
             isolation_mod.addImport("overlay", ov_mod);
             isolation_mod.addAnonymousImport("echo_plugin_wasm", .{ .root_source_file = bin });
@@ -938,6 +961,7 @@ pub fn build(b: *std.Build) void {
                 .link_libc = true,
             });
             restart_mod.addImport("plugins", plugins_mod);
+            restart_mod.addImport("owned", owned_mod);
             restart_mod.addImport("host", host_mod);
             restart_mod.addImport("overlay", ov_mod);
             restart_mod.addAnonymousImport("echo_plugin_wasm", .{ .root_source_file = bin });
@@ -960,7 +984,6 @@ pub fn build(b: *std.Build) void {
         // The test module's root, and the core files it reaches. pick and the
         // renderer layer are reached only through root.zig's `test` block.
         "src/root.zig",
-        "src/owned.zig",
         "src/licenses.zig",
         "src/pick.zig",
         "src/ct/host.zig",

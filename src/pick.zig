@@ -17,6 +17,7 @@
 //!   4. A depth reads in the unit the chart is drawn in, and states that unit.
 
 const std = @import("std");
+const owned = @import("owned");
 
 /// One picked feature, as the engine reports it.
 pub const Feature = struct {
@@ -234,6 +235,285 @@ pub fn depthsInUnit(a: std.mem.Allocator, s57: []const u8, feet: bool) []const u
     return out.items;
 }
 
+// ---- the read a shell renders ------------------------------------------------
+//
+// The same pick as `lookout_pick_ranked`, as structs: the composed page beside
+// the payload the cell states, so a shell renders one and folds the other.
+
+/// Why a feature's body has nothing to read.
+pub const Empty = enum(c_int) {
+    /// It has something to read.
+    reads = 0,
+    /// The cell gave the feature no attributes at all.
+    no_attributes = 1,
+    /// What it gave is provenance, which is not what a mariner asked for.
+    source_only = 2,
+};
+
+/// One line of the page, or one line of the fold. `depth` indents a
+/// sub-attribute under its heading.
+pub const ReportRow = extern struct {
+    label: [*:0]const u8,
+    value: [*:0]const u8,
+    depth: c_int,
+    /// 1 when the value names a file the bake stored beside the chart, and
+    /// 1 again when that file is a picture rather than text.
+    file: c_int,
+    picture: c_int,
+};
+
+pub const Report = extern struct {
+    /// The S-57 class and the cell, as the engine reported them.
+    cls: [*:0]const u8,
+    chart: [*:0]const u8,
+    /// The operative fact, then the object in chart language. `subtitle` is
+    /// empty when the page has none.
+    title: [*:0]const u8,
+    subtitle: [*:0]const u8,
+    chip: [*:0]const u8,
+    /// The provenance line: the cell, the source, its date, the scale range.
+    footnote: [*:0]const u8,
+    empty: Empty,
+    /// The payload as the cell states it, in METRES, for the clipboard.
+    raw: [*:0]const u8,
+};
+
+pub const ReportRec = extern struct {
+    report: Report,
+    notes: [*]const [*:0]const u8,
+    notes_len: usize,
+    rows: [*]const *const ReportRow,
+    rows_len: usize,
+    source: [*]const *const ReportRow,
+    source_len: usize,
+};
+
+/// The features under a point, best first.
+pub const Read = owned.Owned(Report);
+
+pub const str = owned.str;
+pub const published = owned.published;
+
+/// The record behind a feature a shell holds. The public struct is the
+/// record's first field, so the pointer is the record's own address.
+pub fn recOf(f: *const Report) *const ReportRec {
+    return @ptrCast(@alignCast(f));
+}
+
+/// One feature's record: the page the engine composed, parsed into the structs,
+/// and the payload folded into rows beside it.
+///
+/// `page` is what tile57_s57_report wrote, `raw` the payload as the cell states
+/// it. A page that does not parse leaves the class and the cell on screen, which
+/// is what the engine's own fallback does.
+pub fn record(
+    a: std.mem.Allocator,
+    sa: std.mem.Allocator,
+    f: Feature,
+    raw: []const u8,
+    page: []const u8,
+) !ReportRec {
+    const none = try str(a, "");
+    // A page that does not parse leaves every field empty, and the
+    // fallbacks below put the class and the cell back on screen.
+    const parsed: ?std.json.Value = std.json.parseFromSliceLeaky(std.json.Value, sa, page, .{}) catch null;
+    const obj: ?std.json.ObjectMap = if (parsed) |v|
+        (if (v == .object) v.object else null)
+    else
+        null;
+
+    const field = struct {
+        fn go(o: ?std.json.ObjectMap, key: []const u8) ?std.json.Value {
+            return (o orelse return null).get(key);
+        }
+    }.go;
+    const text = struct {
+        fn go(o: ?std.json.ObjectMap, key: []const u8) []const u8 {
+            const v = (o orelse return "").get(key) orelse return "";
+            return if (v == .string) v.string else "";
+        }
+    }.go;
+
+    // The notes: what the cell wrote for a mariner to read.
+    var notes = std.ArrayList([*:0]const u8).empty;
+    if (field(obj, "notes")) |v| {
+        if (v == .array) {
+            for (v.array.items) |item| {
+                if (item == .string) try notes.append(a, try str(a, item.string));
+            }
+        }
+    }
+
+    // The detail rows, in the reading order the engine put them in.
+    var rows = std.ArrayList(ReportRow).empty;
+    if (field(obj, "rows")) |v| {
+        if (v == .array) {
+            for (v.array.items) |item| {
+                if (item != .object) continue;
+                const r = item.object;
+                const label = text(r, "label");
+                const value = text(r, "value");
+                const depth = if (r.get("depth")) |d| (if (d == .integer) d.integer else 0) else 0;
+                const file = if (r.get("file")) |x| (x == .bool and x.bool) else false;
+                const picture = if (r.get("picture")) |x| (x == .bool and x.bool) else false;
+                try rows.append(a, .{
+                    .label = try str(a, label),
+                    .value = try str(a, value),
+                    .depth = @intCast(depth),
+                    .file = @intFromBool(file),
+                    .picture = @intFromBool(picture),
+                });
+            }
+        }
+    }
+
+    // The fold: the payload as the cell states it, in metres.
+    var fold = std.ArrayList(Row).empty;
+    try foldRows(sa, &fold, raw);
+    const source = try a.alloc(ReportRow, fold.items.len);
+    for (fold.items, source) |row, *dst| dst.* = .{
+        .label = try str(a, row.name),
+        .value = try str(a, row.value),
+        .depth = row.depth,
+        .file = @intFromBool(isFileRef(row.name, row.value)),
+        .picture = @intFromBool(isPicture(row.value)),
+    };
+
+    const subtitle = text(obj, "subtitle");
+    const title = text(obj, "title");
+    const chip = text(obj, "chip");
+    const footnote = text(obj, "footnote");
+    const empty = text(obj, "empty");
+
+    return .{
+        .report = .{
+            .cls = try str(a, f.cls),
+            .chart = try str(a, f.chart),
+            // The engine falls back to the class and the cell when a
+            // compose fails, and so does the read.
+            .title = if (title.len > 0) try str(a, title) else try str(a, f.cls),
+            .subtitle = if (subtitle.len > 0) try str(a, subtitle) else none,
+            .chip = if (chip.len > 0) try str(a, chip) else try str(a, f.cls),
+            .footnote = if (footnote.len > 0) try str(a, footnote) else try str(a, f.chart),
+            .empty = if (std.mem.eql(u8, empty, "none"))
+                .no_attributes
+            else if (std.mem.eql(u8, empty, "source"))
+                .source_only
+            else
+                .reads,
+            .raw = try str(a, raw),
+        },
+        .notes = notes.items.ptr,
+        .notes_len = notes.items.len,
+        .rows = try byPtr(a, ReportRow, rows.items),
+        .rows_len = rows.items.len,
+        .source = try byPtr(a, ReportRow, source),
+        .source_len = source.len,
+    };
+}
+
+/// An array of values as an array of pointers into it.
+fn byPtr(a: std.mem.Allocator, comptime T: type, items: []T) ![*]const *const T {
+    const out = try a.alloc(*const T, items.len);
+    for (items, out) |*item, *dst| dst.* = item;
+    return out.ptr;
+}
+
+// ---- the source fold ---------------------------------------------------------
+//
+// The payload as the cell states it, one row per value. Four shells had four
+// implementations of the same walk, and they had drifted on what a JSON null
+// and a JSON boolean read as. This is the one walk they all call now.
+
+/// One row of the fold. A container becomes a heading row with no value and
+/// its parts indent under it: S-101 nests where S-57 was flat.
+pub const Row = struct {
+    name: []const u8,
+    value: []const u8,
+    depth: u8,
+};
+
+/// The attribute names whose value points at a file beside the chart rather
+/// than holding what it says.
+const file_refs = [_][]const u8{ "TXTDSC", "NTXTDS", "PICREP", "fileReference" };
+
+/// True when this row names a file the bake stored beside the chart.
+pub fn isFileRef(name: []const u8, value: []const u8) bool {
+    if (value.len == 0) return false;
+    for (file_refs) |n| if (std.mem.eql(u8, n, name)) return true;
+    return false;
+}
+
+const picture_suffixes = [_][]const u8{ ".tif", ".tiff", ".jpg", ".jpeg", ".png" };
+
+/// True when the file a row names is an image rather than text. The compare is
+/// case-insensitive: a cell writes US348MDE.TIF as often as .tif.
+pub fn isPicture(value: []const u8) bool {
+    for (picture_suffixes) |suffix| {
+        if (value.len < suffix.len) continue;
+        if (std.ascii.eqlIgnoreCase(value[value.len - suffix.len ..], suffix)) return true;
+    }
+    return false;
+}
+
+/// The payload flattened depth-first, object keys in alphabetical order, into
+/// `out`. Everything is allocated in `a`.
+///
+/// A payload that does not parse gives no rows. The top-level object writes no
+/// heading of its own, so its attributes are at depth 0.
+pub fn foldRows(a: std.mem.Allocator, out: *std.ArrayList(Row), payload: []const u8) !void {
+    const parsed = std.json.parseFromSlice(std.json.Value, a, payload, .{}) catch return;
+    try foldValue(a, out, parsed.value, null, 0);
+}
+
+fn foldValue(
+    a: std.mem.Allocator,
+    out: *std.ArrayList(Row),
+    v: std.json.Value,
+    name: ?[]const u8,
+    depth: u8,
+) !void {
+    switch (v) {
+        .object => |obj| {
+            if (name) |n| try out.append(a, .{ .name = n, .value = "", .depth = depth });
+            var keys = std.ArrayList([]const u8).empty;
+            var it = obj.iterator();
+            while (it.next()) |e| try keys.append(a, e.key_ptr.*);
+            std.mem.sort([]const u8, keys.items, {}, struct {
+                fn lt(_: void, x: []const u8, y: []const u8) bool {
+                    return std.mem.lessThan(u8, x, y);
+                }
+            }.lt);
+            for (keys.items) |k| {
+                try foldValue(a, out, obj.get(k).?, k, if (name == null) depth else depth + 1);
+            }
+        },
+        .array => |arr| {
+            if (name) |n| try out.append(a, .{ .name = n, .value = "", .depth = depth });
+            for (arr.items) |item| try foldValue(a, out, item, null, depth + 1);
+        },
+        else => try out.append(a, .{
+            .name = name orelse "",
+            .value = try foldText(a, v),
+            .depth = depth,
+        }),
+    }
+}
+
+/// One scalar as the fold prints it. A null keeps its name with no value, so
+/// the fold still says the cell wrote the attribute.
+fn foldText(a: std.mem.Allocator, v: std.json.Value) ![]const u8 {
+    return switch (v) {
+        .null => "",
+        .bool => |b| if (b) "true" else "false",
+        .integer => |i| try std.fmt.allocPrint(a, "{d}", .{i}),
+        .float => |f| try std.fmt.allocPrint(a, "{d}", .{f}),
+        .number_string => |s| s,
+        .string => |s| s,
+        else => "",
+    };
+}
+
 test "a sounding beats the water it sits in" {
     const sounding = Feature{ .cls = "SOUNDG", .s57 = "{\"VALSOU\":\"5.4\"}", .chart = "C" };
     const depare = Feature{ .cls = "DEPARE", .s57 = "{\"DRVAL1\":\"5.4\"}", .chart = "C" };
@@ -374,4 +654,208 @@ test "order puts the aimed-at object first" {
     try std.testing.expectEqualStrings("LIGHTS", fs[0].cls);
     try std.testing.expectEqualStrings("DEPARE", fs[1].cls);
     try std.testing.expectEqualStrings("LNDARE", fs[2].cls);
+}
+
+test "the fold walks the payload depth first with the keys sorted" {
+    const a = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    var rows = std.ArrayList(Row).empty;
+    try foldRows(arena.allocator(), &rows,
+        \\{"OBJNAM":"Thomas Point","COLOUR":"4","information":{"text":"Seasonal","lang":"eng"}}
+    );
+
+    // The top-level object writes no heading of its own, so its attributes sit
+    // at depth 0 and read alphabetically.
+    try std.testing.expectEqual(@as(usize, 5), rows.items.len);
+    try std.testing.expectEqualStrings("COLOUR", rows.items[0].name);
+    try std.testing.expectEqualStrings("4", rows.items[0].value);
+    try std.testing.expectEqual(@as(u8, 0), rows.items[0].depth);
+    try std.testing.expectEqualStrings("OBJNAM", rows.items[1].name);
+
+    // A complex attribute is a heading, and its parts indent under it.
+    try std.testing.expectEqualStrings("information", rows.items[2].name);
+    try std.testing.expectEqualStrings("", rows.items[2].value);
+    try std.testing.expectEqual(@as(u8, 0), rows.items[2].depth);
+    try std.testing.expectEqualStrings("lang", rows.items[3].name);
+    try std.testing.expectEqual(@as(u8, 1), rows.items[3].depth);
+    try std.testing.expectEqualStrings("text", rows.items[4].name);
+    try std.testing.expectEqualStrings("Seasonal", rows.items[4].value);
+}
+
+test "the fold indents an array under its name" {
+    const a = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    var rows = std.ArrayList(Row).empty;
+    try foldRows(arena.allocator(), &rows,
+        \\{"NINFOM":["one","two"]}
+    );
+    try std.testing.expectEqual(@as(usize, 3), rows.items.len);
+    try std.testing.expectEqualStrings("NINFOM", rows.items[0].name);
+    try std.testing.expectEqualStrings("", rows.items[0].value);
+    // An element has no name of its own.
+    try std.testing.expectEqualStrings("", rows.items[1].name);
+    try std.testing.expectEqualStrings("one", rows.items[1].value);
+    try std.testing.expectEqual(@as(u8, 1), rows.items[1].depth);
+    try std.testing.expectEqualStrings("two", rows.items[2].value);
+}
+
+test "the fold prints every scalar the way the shells will read it" {
+    const a = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    var rows = std.ArrayList(Row).empty;
+    try foldRows(arena.allocator(), &rows,
+        \\{"a":17,"b":5.4,"c":true,"d":false,"e":null,"f":"text"}
+    );
+    try std.testing.expectEqual(@as(usize, 6), rows.items.len);
+    try std.testing.expectEqualStrings("17", rows.items[0].value);
+    try std.testing.expectEqualStrings("5.4", rows.items[1].value);
+    try std.testing.expectEqualStrings("true", rows.items[2].value);
+    try std.testing.expectEqualStrings("false", rows.items[3].value);
+    // A null keeps its name, so the fold still says the cell wrote it.
+    try std.testing.expectEqualStrings("e", rows.items[4].name);
+    try std.testing.expectEqualStrings("", rows.items[4].value);
+    try std.testing.expectEqualStrings("text", rows.items[5].value);
+}
+
+test "a payload that does not parse gives no rows" {
+    const a = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    var rows = std.ArrayList(Row).empty;
+    try foldRows(arena.allocator(), &rows, "not json at all");
+    try std.testing.expectEqual(@as(usize, 0), rows.items.len);
+}
+
+test "a file reference is the four attributes that name one" {
+    try std.testing.expect(isFileRef("TXTDSC", "US348MDE.TXT"));
+    try std.testing.expect(isFileRef("NTXTDS", "US348MDE.TXT"));
+    try std.testing.expect(isFileRef("PICREP", "US348MDE.TIF"));
+    try std.testing.expect(isFileRef("fileReference", "US348MDE.TXT"));
+    try std.testing.expect(!isFileRef("INFORM", "US348MDE.TXT"));
+    // A named attribute with nothing in it points at no file.
+    try std.testing.expect(!isFileRef("TXTDSC", ""));
+}
+
+test "a picture is the file the shell can show" {
+    try std.testing.expect(isPicture("US348MDE.TIF"));
+    try std.testing.expect(isPicture("a.tiff"));
+    try std.testing.expect(isPicture("a.jpg"));
+    try std.testing.expect(isPicture("a.jpeg"));
+    try std.testing.expect(isPicture("a.PNG"));
+    try std.testing.expect(!isPicture("US348MDE.TXT"));
+    try std.testing.expect(!isPicture(".png.txt"));
+    try std.testing.expect(!isPicture("png"));
+}
+
+test "a page parses into the structs the shell reads" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const rec = try record(a, a, .{
+        .cls = "LIGHTS",
+        .chart = "US5MD1MC",
+        .s57 = "",
+    },
+        \\{"COLOUR":"4","INFORM":"Seasonal aid","TXTDSC":"US348MDE.TXT"}
+    ,
+        \\{"title":"Fl G 4s","subtitle":"Light","chip":"Light","notes":["Seasonal aid"],
+        \\"rows":[{"label":"Colour","value":"green"},
+        \\{"label":"Description","value":"US348MDE.TXT","file":true},
+        \\{"label":"Language","value":"eng","depth":1}],
+        \\"footnote":"US5MD1MC  ·  US,US,graph,Chart 12283"}
+    );
+
+    try std.testing.expectEqualStrings("LIGHTS", std.mem.span(rec.report.cls));
+    try std.testing.expectEqualStrings("US5MD1MC", std.mem.span(rec.report.chart));
+    try std.testing.expectEqualStrings("Fl G 4s", std.mem.span(rec.report.title));
+    try std.testing.expectEqualStrings("Light", std.mem.span(rec.report.subtitle));
+    try std.testing.expectEqualStrings("Light", std.mem.span(rec.report.chip));
+    try std.testing.expectEqualStrings("US5MD1MC  ·  US,US,graph,Chart 12283",
+        std.mem.span(rec.report.footnote));
+    try std.testing.expectEqual(Empty.reads, rec.report.empty);
+
+    try std.testing.expectEqual(@as(usize, 1), rec.notes_len);
+    try std.testing.expectEqualStrings("Seasonal aid", std.mem.span(rec.notes[0]));
+
+    try std.testing.expectEqual(@as(usize, 3), rec.rows_len);
+    try std.testing.expectEqualStrings("Colour", std.mem.span(rec.rows[0].label));
+    try std.testing.expectEqualStrings("green", std.mem.span(rec.rows[0].value));
+    try std.testing.expectEqual(@as(c_int, 0), rec.rows[0].depth);
+    try std.testing.expectEqual(@as(c_int, 0), rec.rows[0].file);
+    // A row the engine marked as a file keeps the mark, and it is not a picture.
+    try std.testing.expectEqual(@as(c_int, 1), rec.rows[1].file);
+    try std.testing.expectEqual(@as(c_int, 0), rec.rows[1].picture);
+    // A sub-attribute indents under its heading.
+    try std.testing.expectEqual(@as(c_int, 1), rec.rows[2].depth);
+}
+
+test "the fold rides beside the page, in the cell's own words" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const raw =
+        \\{"VALSOU":"5.4","PICREP":"US348MDE.TIF"}
+    ;
+    const rec = try record(a, a, .{ .cls = "SOUNDG", .chart = "C", .s57 = "" }, raw,
+        \\{"title":"17 ft","rows":[{"label":"Depth","value":"17 ft"}]}
+    );
+
+    // The page states the depth in the mariner's unit; the fold keeps the
+    // metres the cell wrote.
+    try std.testing.expectEqualStrings("17 ft", std.mem.span(rec.rows[0].value));
+    try std.testing.expectEqual(@as(usize, 2), rec.source_len);
+    try std.testing.expectEqualStrings("PICREP", std.mem.span(rec.source[0].label));
+    try std.testing.expectEqual(@as(c_int, 1), rec.source[0].file);
+    try std.testing.expectEqual(@as(c_int, 1), rec.source[0].picture);
+    try std.testing.expectEqualStrings("VALSOU", std.mem.span(rec.source[1].label));
+    try std.testing.expectEqualStrings("5.4", std.mem.span(rec.source[1].value));
+    // And the whole payload stays reachable for the clipboard.
+    try std.testing.expectEqualStrings(raw, std.mem.span(rec.report.raw));
+}
+
+test "a page that says nothing says why" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const f = Feature{ .cls = "DEPARE", .chart = "US5MD1MC", .s57 = "" };
+
+    const none = try record(a, a, f, "{}", "{\"title\":\"Depth area\",\"empty\":\"none\"}");
+    try std.testing.expectEqual(Empty.no_attributes, none.report.empty);
+
+    const source = try record(a, a, f, "{}", "{\"title\":\"Depth area\",\"empty\":\"source\"}");
+    try std.testing.expectEqual(Empty.source_only, source.report.empty);
+
+    const reads = try record(a, a, f, "{}", "{\"title\":\"Depth area\"}");
+    try std.testing.expectEqual(Empty.reads, reads.report.empty);
+}
+
+test "a page that does not parse leaves the class and the cell on screen" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const rec = try record(a, a,
+        .{ .cls = "OBSTRN", .chart = "US5MD1MC", .s57 = "" },
+        "{\"CATOBS\":\"6\"}", "not json at all");
+
+    try std.testing.expectEqualStrings("OBSTRN", std.mem.span(rec.report.title));
+    try std.testing.expectEqualStrings("OBSTRN", std.mem.span(rec.report.chip));
+    try std.testing.expectEqualStrings("US5MD1MC", std.mem.span(rec.report.footnote));
+    try std.testing.expectEqualStrings("", std.mem.span(rec.report.subtitle));
+    try std.testing.expectEqual(@as(usize, 0), rec.notes_len);
+    try std.testing.expectEqual(@as(usize, 0), rec.rows_len);
+    // The fold still shows everything the cell wrote.
+    try std.testing.expectEqual(@as(usize, 1), rec.source_len);
+    try std.testing.expectEqualStrings("CATOBS", std.mem.span(rec.source[0].label));
+}
+
+test "a record's public struct is the record's own address" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const rec = try a.create(ReportRec);
+    rec.* = try record(a, a, .{ .cls = "LNDARE", .chart = "C", .s57 = "" }, "{}", "{}");
+    try std.testing.expectEqual(rec, recOf(&rec.report));
 }

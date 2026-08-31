@@ -2895,7 +2895,40 @@ pub const Lookout = struct {
         var arena = std.heap.ArenaAllocator.init(self.alloc);
         defer arena.deinit();
         const a = arena.allocator();
+        const kept = self.rankedFeatures(a, lon, lat);
 
+        // The engine composes each feature's page. The page and the raw
+        // payload travel together as {"report":...,"s57":...}: the report
+        // for the shell to render, the raw payload for the source fold and
+        // the clipboard. Depths convert before the compose, so the report
+        // reads in the mariner's unit and the source keeps the cell's
+        // metres. When the compose fails, the core emits the raw payload
+        // alone and the shell still shows the fold.
+        const feet = self.mariner.depth_unit == cc.TILE57_DEPTH_FEET;
+        if (cb.feature) |emit| {
+            for (kept) |f| {
+                const converted = pick_rules.depthsInUnit(a, f.s57, feet);
+                const raw: []const u8 = if (f.s57.len > 0) f.s57 else "{}";
+                var rep: ?[*]u8 = null;
+                var rep_len: usize = 0;
+                var terr: cc.tile57_error = undefined;
+                const payload: []const u8 = blk: {
+                    if (cc.tile57_s57_report(f.cls.ptr, f.cls.len, f.chart.ptr, f.chart.len, converted.ptr, converted.len, &rep, &rep_len, &terr) == cc.TILE57_OK and rep != null and rep_len > 0) {
+                        defer cc.tile57_free(rep);
+                        break :blk std.fmt.allocPrint(a, "{{\"report\":{s},\"s57\":{s}}}", .{ rep.?[0..rep_len], raw }) catch f.s57;
+                    }
+                    break :blk f.s57;
+                };
+                emit(cb.ctx, f.cls.ptr, f.cls.len, payload.ptr, payload.len, f.chart.ptr, f.chart.len);
+            }
+        }
+    }
+
+    /// The features under a point, worth reporting, without the ones a pick
+    /// reports twice, best first. Allocated in `a`. Both `pickRanked` and
+    /// `pickRead` start here, so the two answer with the same objects in the
+    /// same order.
+    fn rankedFeatures(self: *Lookout, a: std.mem.Allocator, lon: f64, lat: f64) []pick_rules.Feature {
         var collected = std.ArrayList(pick_rules.Feature).empty;
         const Collect = struct {
             list: *std.ArrayList(pick_rules.Feature),
@@ -2932,33 +2965,44 @@ pub const Lookout = struct {
             if (!seen) kept.append(a, f) catch {};
         }
         pick_rules.order(kept.items);
-
-        // The engine composes each feature's page. The page and the raw
-        // payload travel together as {"report":...,"s57":...}: the report
-        // for the shell to render, the raw payload for the source fold and
-        // the clipboard. Depths convert before the compose, so the report
-        // reads in the mariner's unit and the source keeps the cell's
-        // metres. When the compose fails, the core emits the raw payload
-        // alone and the shell still shows the fold.
-        const feet = self.mariner.depth_unit == cc.TILE57_DEPTH_FEET;
-        if (cb.feature) |emit| {
-            for (kept.items) |f| {
-                const converted = pick_rules.depthsInUnit(a, f.s57, feet);
-                const raw: []const u8 = if (f.s57.len > 0) f.s57 else "{}";
-                var rep: ?[*]u8 = null;
-                var rep_len: usize = 0;
-                var terr: cc.tile57_error = undefined;
-                const payload: []const u8 = blk: {
-                    if (cc.tile57_s57_report(f.cls.ptr, f.cls.len, f.chart.ptr, f.chart.len, converted.ptr, converted.len, &rep, &rep_len, &terr) == cc.TILE57_OK and rep != null and rep_len > 0) {
-                        defer cc.tile57_free(rep);
-                        break :blk std.fmt.allocPrint(a, "{{\"report\":{s},\"s57\":{s}}}", .{ rep.?[0..rep_len], raw }) catch f.s57;
-                    }
-                    break :blk f.s57;
-                };
-                emit(cb.ctx, f.cls.ptr, f.cls.len, payload.ptr, payload.len, f.chart.ptr, f.chart.len);
-            }
-        }
+        return kept.items;
     }
+
+    /// The same pick, as structs: the composed page beside the payload the
+    /// cell states. The read holds one arena and the caller frees it.
+    pub fn pickRead(self: *Lookout, lon: f64, lat: f64) !*pick_rules.Read {
+        const out = try pick_rules.Read.init(self.alloc);
+        errdefer out.free();
+        const a = out.alloc();
+
+        var scratch = std.heap.ArenaAllocator.init(self.alloc);
+        defer scratch.deinit();
+        const sa = scratch.allocator();
+        const kept = self.rankedFeatures(sa, lon, lat);
+
+        const feet = self.mariner.depth_unit == cc.TILE57_DEPTH_FEET;
+        const recs = try a.alloc(pick_rules.ReportRec, kept.len);
+        for (kept, recs) |f, *rec| {
+            // Depths convert before the compose, so the page reads in the
+            // mariner's unit and the fold keeps the cell's metres.
+            const converted = pick_rules.depthsInUnit(sa, f.s57, feet);
+            const raw: []const u8 = if (f.s57.len > 0) f.s57 else "{}";
+            var rep: ?[*]u8 = null;
+            var rep_len: usize = 0;
+            var terr: cc.tile57_error = undefined;
+            const page: []const u8 = blk: {
+                if (cc.tile57_s57_report(f.cls.ptr, f.cls.len, f.chart.ptr, f.chart.len, converted.ptr, converted.len, &rep, &rep_len, &terr) == cc.TILE57_OK and rep != null and rep_len > 0) {
+                    break :blk sa.dupe(u8, rep.?[0..rep_len]) catch "{}";
+                }
+                break :blk "{}";
+            };
+            if (rep) |p| cc.tile57_free(p);
+            rec.* = try pick_rules.record(a, sa, f, raw, page);
+        }
+        out.rows = try pick_rules.published(pick_rules.ReportRec, "report", a, recs);
+        return out;
+    }
+
 
     // ---- the raster underlay --------------------------------------------------
     //

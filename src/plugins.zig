@@ -10,7 +10,7 @@
 //! same Entry.
 
 const std = @import("std");
-const owned = @import("owned.zig");
+const owned = @import("owned");
 
 pub const str = owned.str;
 pub const strs = owned.strs;

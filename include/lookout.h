@@ -324,6 +324,68 @@ void lookout_pick(lookout *h, double lon, double lat, const tile57_query_cb *cb)
  * list untouched, in metres. */
 void lookout_pick_ranked(lookout *h, double lon, double lat, const tile57_query_cb *cb);
 
+/* ---- reading the pick ------------------------------------------------------
+ *
+ * The same pick as lookout_pick_ranked, as structs: the page the engine
+ * composed beside the payload the cell states. A read is a copy, and everything
+ * it hands back dies at lookout_picks_free. */
+
+typedef struct lookout_picks lookout_picks;
+
+/* Why a feature's body has nothing to read. */
+typedef enum {
+    /* It has something to read. */
+    LOOKOUT_PICK_READS         = 0,
+    /* The cell gave the feature no attributes at all. */
+    LOOKOUT_PICK_NO_ATTRIBUTES = 1,
+    /* What it gave is provenance, which is not what the mariner asked. */
+    LOOKOUT_PICK_SOURCE_ONLY   = 2
+} lookout_pick_empty;
+
+/* One line of the page, or one line of the source fold. `depth` indents a
+ * sub-attribute under its heading: S-101 nests where S-57 was flat. */
+typedef struct {
+    const char *label;
+    const char *value;
+    int depth;
+    /* 1 when the value names a file the bake stored beside the chart
+     * (TXTDSC, NTXTDS, PICREP, fileReference), and 1 again when that file is a
+     * picture rather than text. lookout_aux_file reads it. */
+    int file;
+    int picture;
+} lookout_pick_row;
+
+typedef struct {
+    /* The S-57 class and the cell, as the engine reported them. */
+    const char *cls;
+    const char *chart;
+    /* The operative fact, then the object in chart language. `subtitle` is
+     * empty when the page has none. */
+    const char *title;
+    const char *subtitle;
+    const char *chip;
+    /* The provenance line: the cell, the source, its date, the scale range. */
+    const char *footnote;
+    lookout_pick_empty empty;
+    /* The payload as the cell states it, in METRES, for the clipboard. The
+     * page above states depths in the mariner's unit. */
+    const char *raw;
+} lookout_pick_feature;
+
+/* The features under a point, best first, by the rules lookout_pick_ranked
+ * applies. NULL only when the read cannot be allocated. */
+lookout_picks *lookout_picks_read(lookout *h, double lon, double lat);
+void           lookout_picks_free(lookout_picks *p);
+const lookout_pick_feature *const *lookout_picks_all(const lookout_picks *p, size_t *out_n);
+/* What the cell wrote for a mariner to read. */
+const char *const *lookout_pick_notes(const lookout_pick_feature *f, size_t *out_n);
+/* The page's detail rows, in reading order. */
+const lookout_pick_row *const *lookout_pick_rows(const lookout_pick_feature *f, size_t *out_n);
+/* The payload flattened depth first, object keys in alphabetical order. A
+ * container becomes a heading row with no value and its parts indent under it.
+ * This is the source fold, and the clipboard copy. */
+const lookout_pick_row *const *lookout_pick_source(const lookout_pick_feature *f, size_t *out_n);
+
 /* A file a picked feature points at, rather than carries: TXTDSC and NTXTDS name
  * a text file, PICREP names a picture, and S-101 puts the same in a
  * fileReference. `cell` is the chart name the pick reported; `name` is the value

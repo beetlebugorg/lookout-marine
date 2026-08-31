@@ -3,7 +3,8 @@
 //! thin, 1:1 wrapper over the Zig `Lookout` widget. Uses the C allocator so C
 //! hosts need no allocator.
 //!
-//! The rest of the ABI is in capi/: format.zig, library.zig and plugins.zig.
+//! The rest of the ABI is in capi/: format.zig, library.zig, pick.zig and
+//! plugins.zig.
 const std = @import("std");
 const builtin = @import("builtin");
 
@@ -605,6 +606,7 @@ comptime {
     // re-export does not analyse it. These references do.
     _ = @import("capi/format.zig");
     _ = @import("capi/library.zig");
+    _ = @import("capi/pick.zig");
     _ = @import("capi/plugins.zig");
     // The Android Java shell's JNI natives ride in the same archive (they
     // wrap this C ABI for org.beetlebug.lookout.Lookout). Only an android
