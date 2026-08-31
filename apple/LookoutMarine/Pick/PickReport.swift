@@ -10,60 +10,110 @@
 
 import SwiftUI
 
-/// What one pick result shows. The ENGINE composes the report — the core
-/// emits {"report":…,"s57":…} per feature, the decoded page beside the raw
-/// payload — and this parses it. Nothing here decides what a mariner reads;
-/// tile57_s57_report does, once, for every shell.
-struct PickDecoded {
-    struct ReportRow: Identifiable {
+/// What one pick result shows. The CORE composes it: lookout_picks_read hands
+/// over the page the engine wrote beside the payload the cell states, already
+/// flattened into rows. Nothing here decides what a mariner reads;
+/// tile57_s57_report and src/pick.zig do, once, for every shell.
+struct PickDecoded: Identifiable, Hashable {
+    /// One line of the page, or one line of the source fold. `depth` indents a
+    /// sub-attribute under its heading.
+    struct Row: Identifiable, Hashable {
         let label: String
         let value: String
         let depth: Int
+        /// The value names a file beside the chart, and whether it is a picture.
         let file: Bool
         let picture: Bool
         var id: String { "\(depth)/\(label)/\(value)" }
+
+        init(label: String, value: String, depth: Int = 0,
+             file: Bool = false, picture: Bool = false) {
+            self.label = label
+            self.value = value
+            self.depth = depth
+            self.file = file
+            self.picture = picture
+        }
+
+        init(_ r: lookout_pick_row) {
+            self.init(label: String(cString: r.label),
+                      value: String(cString: r.value),
+                      depth: Int(r.depth),
+                      file: r.file != 0,
+                      picture: r.picture != 0)
+        }
     }
 
     /// Why the body has nothing to read, when it does not.
-    enum EmptyKind { case noAttributes, sourceOnly }
+    enum EmptyKind: Hashable { case noAttributes, sourceOnly }
 
-    let feature: PickFeature
+    let id = UUID()
+    /// The S-57 object-class acronym, and the cell it came from.
+    let cls: String
+    let chart: String
     let title: String
     let subtitle: String?
     let chip: String
     let notes: [String]
-    let reportRows: [ReportRow]
+    let reportRows: [Row]
     let footnote: String
     let empty: EmptyKind?
     /// The payload as the cell states it, for the fold and the clipboard.
-    let rawRows: [S57.Row]
+    let rawRows: [Row]
 
-    init(_ feature: PickFeature) {
-        self.feature = feature
-        let root = (try? JSONSerialization.jsonObject(with: Data(feature.s57.utf8)))
-            as? [String: Any]
-        let report = root?["report"] as? [String: Any]
-        // A payload without the envelope is a raw object — the core's
-        // fallback when a compose fails. The fold still shows everything.
-        let raw = report != nil ? root?["s57"] : root as Any?
-        title = report?["title"] as? String ?? feature.cls
-        subtitle = report?["subtitle"] as? String
-        chip = report?["chip"] as? String ?? feature.cls
-        notes = report?["notes"] as? [String] ?? []
-        reportRows = ((report?["rows"] as? [[String: Any]]) ?? []).map { r in
-            ReportRow(label: r["label"] as? String ?? "",
-                      value: r["value"] as? String ?? "",
-                      depth: r["depth"] as? Int ?? 0,
-                      file: r["file"] as? Bool ?? false,
-                      picture: r["picture"] as? Bool ?? false)
+    init(cls: String,
+         chart: String,
+         title: String,
+         subtitle: String? = nil,
+         chip: String,
+         notes: [String] = [],
+         reportRows: [Row] = [],
+         footnote: String,
+         empty: EmptyKind? = nil,
+         rawRows: [Row] = []) {
+        self.cls = cls
+        self.chart = chart
+        self.title = title
+        self.subtitle = subtitle
+        self.chip = chip
+        self.notes = notes
+        self.reportRows = reportRows
+        self.footnote = footnote
+        self.empty = empty
+        self.rawRows = rawRows
+    }
+
+    /// One feature of a read, with its notes, rows and fold already read out
+    /// of it. Every string is copied, so the report outlives the read.
+    init(_ f: lookout_pick_feature, notes: [String], rows: [Row], source: [Row]) {
+        let subtitle = String(cString: f.subtitle)
+        let empty: EmptyKind? = switch f.empty {
+        case LOOKOUT_PICK_NO_ATTRIBUTES: .noAttributes
+        case LOOKOUT_PICK_SOURCE_ONLY:   .sourceOnly
+        default:                         nil
         }
-        footnote = report?["footnote"] as? String ?? feature.chart
-        empty = switch report?["empty"] as? String {
-        case "none": .noAttributes
-        case "source": .sourceOnly
-        default: nil
+        self.init(cls: String(cString: f.cls),
+                  chart: String(cString: f.chart),
+                  title: String(cString: f.title),
+                  subtitle: subtitle.isEmpty ? nil : subtitle,
+                  chip: String(cString: f.chip),
+                  notes: notes,
+                  reportRows: rows,
+                  footnote: String(cString: f.footnote),
+                  empty: empty,
+                  rawRows: source)
+    }
+
+    /// The report as plain text for the clipboard: the payload as the cell
+    /// states it, which is how a chart problem gets reported.
+    var plainText: String {
+        var text = "\(cls)  \(chart)\n"
+        for row in rawRows {
+            let indent = String(repeating: "  ", count: row.depth)
+            text += row.value.isEmpty ? "\(indent)\(row.label):\n"
+                                      : "\(indent)\(row.label): \(row.value)\n"
         }
-        rawRows = S57.rows(of: raw)
+        return text
     }
 }
 
@@ -96,7 +146,7 @@ private struct PickControls: View {
 
     private func copyReport() {
         guard model.overlay.pickResults.indices.contains(model.overlay.pickIndex) else { return }
-        Pasteboard.copy(S57.plainText(model.overlay.pickResults[model.overlay.pickIndex]))
+        Pasteboard.copy(model.overlay.pickResults[model.overlay.pickIndex].plainText)
     }
 }
 
@@ -131,7 +181,7 @@ private struct PickContent: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             ForEach(decoded.reportRows) { row in
-                DecodedRow(model: model, row: row, cell: decoded.feature.chart)
+                DecodedRow(model: model, row: row, cell: decoded.chart)
             }
         }
         .padding(.top, 10)
@@ -200,7 +250,7 @@ private struct RawRows: View {
     var body: some View {
         ForEach(decoded.rawRows) { row in
             HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Text(row.value.isEmpty ? row.name : "\(row.name):")
+                Text(row.value.isEmpty ? row.label : "\(row.label):")
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(Chrome.muted)
                     .frame(width: 92 - CGFloat(row.depth) * 12, alignment: .leading)
@@ -221,7 +271,7 @@ private struct RawRows: View {
 /// it. The engine decoded both; this only lays them out.
 private struct DecodedRow: View {
     var model: AppModel
-    let row: PickDecoded.ReportRow
+    let row: PickDecoded.Row
     let cell: String
 
     var body: some View {
@@ -357,13 +407,13 @@ struct PickCallout: View {
         return min(want, max(280, viewWidth - Chrome.margin * 2))
     }
 
-    private var feature: PickFeature? {
+    private var decoded: PickDecoded? {
         guard model.overlay.pickResults.indices.contains(model.overlay.pickIndex) else { return nil }
         return model.overlay.pickResults[model.overlay.pickIndex]
     }
 
     var body: some View {
-        if let feature {
+        if let decoded {
             HStack(alignment: .top, spacing: 0) {
                 if model.overlay.pickResults.count > 1 {
                     // The detail column is measured; the list column follows
@@ -400,7 +450,7 @@ struct PickCallout: View {
                     .background(Chrome.panel)
                     Divider().overlay(Chrome.rule)
                 }
-                detail(feature)
+                detail(decoded)
                     .measureSize { detailHeight = $0.height }
                     .frame(maxWidth: .infinity, alignment: .topLeading)
             }
@@ -458,10 +508,9 @@ struct PickCallout: View {
         }
     }
 
-    private func listRow(_ i: Int, _ f: PickFeature) -> some View {
-        let d = PickDecoded(f)
+    private func listRow(_ i: Int, _ d: PickDecoded) -> some View {
         let selected = i == model.overlay.pickIndex
-        let isNote = f.cls.hasPrefix("M_")
+        let isNote = d.cls.hasPrefix("M_")
         return Button { model.overlay.pickIndex = i } label: {
             HStack(spacing: 7) {
                 if isNote {
@@ -498,8 +547,7 @@ struct PickCallout: View {
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
-    private func detail(_ feature: PickFeature) -> some View {
-        let decoded = PickDecoded(feature)
+    private func detail(_ decoded: PickDecoded) -> some View {
         let cap = max(48, roomBelow - headerHeight - floorHeight)
         return VStack(alignment: .leading, spacing: 0) {
             PickHeader(model: model, decoded: decoded)
@@ -549,14 +597,13 @@ struct PickSheet: View {
 
     @State private var foldOpen = false
 
-    private var feature: PickFeature? {
+    private var decoded: PickDecoded? {
         guard model.overlay.pickResults.indices.contains(model.overlay.pickIndex) else { return nil }
         return model.overlay.pickResults[model.overlay.pickIndex]
     }
 
     var body: some View {
-        if let feature {
-            let decoded = PickDecoded(feature)
+        if let decoded {
             VStack(alignment: .leading, spacing: 0) {
                 PickHeader(model: model, decoded: decoded, compact: true)
                 if model.overlay.pickResults.count > 1 { chips }
@@ -596,7 +643,7 @@ struct PickSheet: View {
             HStack(spacing: 6) {
                 ForEach(Array(model.overlay.pickResults.enumerated()), id: \.element.id) { i, f in
                     let selected = i == model.overlay.pickIndex
-                    let chip = PickDecoded(f).chip
+                    let chip = f.chip
                     Button { model.overlay.pickIndex = i } label: {
                         Text(chip)
                             .font(.system(size: 12, weight: .semibold))

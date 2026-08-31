@@ -744,6 +744,9 @@ test "a picture is the file the shell can show" {
     try std.testing.expect(isPicture("a.tiff"));
     try std.testing.expect(isPicture("a.jpg"));
     try std.testing.expect(isPicture("a.jpeg"));
+    // A cell writes the suffix in either case.
+    try std.testing.expect(isPicture("CHART.TIFF"));
+    try std.testing.expect(isPicture("a.JPEG"));
     try std.testing.expect(isPicture("a.PNG"));
     try std.testing.expect(!isPicture("US348MDE.TXT"));
     try std.testing.expect(!isPicture(".png.txt"));

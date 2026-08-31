@@ -30,14 +30,6 @@ import UIKit
 #endif
 import QuartzCore
 
-/// One S-57 feature returned by a cursor pick.
-struct PickFeature: Identifiable, Hashable {
-    let id = UUID()
-    let cls: String     // S-57 object-class acronym (e.g. "LIGHTS", "DEPARE")
-    let chart: String   // source cell name
-    let s57: String     // full S-57 attribute JSON (unused in the HUD line)
-}
-
 /// One overlay object the mariner pinned: which object it is, what it says
 /// now, and where it draws now. Re-read from the core every render tick.
 struct OverlayPin: Equatable {

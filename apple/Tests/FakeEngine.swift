@@ -107,7 +107,7 @@ final class FakeEngine: RasterEngine, ChartLinkEngine, PluginEngine,
     /// mapping is enough: no test here is about the projection.
     var geoAt: (lon: Double, lat: Double)? = (lon: -76.0, lat: 39.0)
     var screenAt = CGPoint(x: 100, y: 100)
-    var features: [PickFeature] = []
+    var features: [PickDecoded] = []
     var revealPin: OverlayPin?
     var markerList: [ChartMarker] = []
     var markerAt: ChartMarker?
@@ -117,7 +117,7 @@ final class FakeEngine: RasterEngine, ChartLinkEngine, PluginEngine,
 
     func geo(atPoint pt: CGPoint) -> (lon: Double, lat: Double)? { geoAt }
     func screenPoint(forGeoLon lon: Double, lat: Double) -> CGPoint { screenAt }
-    func pick(lon: Double, lat: Double) -> [PickFeature] { features }
+    func pick(lon: Double, lat: Double) -> [PickDecoded] { features }
     func reveal(lon: Double, lat: Double) -> OverlayPin? { revealPin }
     func panRevealingPick(dxPt: CGFloat, dyPt: CGFloat) { panned.append(dyPt) }
     func markers() -> [ChartMarker] { markerList }

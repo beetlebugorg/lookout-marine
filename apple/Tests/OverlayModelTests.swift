@@ -18,8 +18,9 @@ final class OverlayModelTests: ShellTestCase {
         return m
     }
 
-    private func feature(_ cls: String) -> PickFeature {
-        PickFeature(cls: cls, chart: "US5MD1MC", s57: "{}")
+    private func feature(_ cls: String) -> PickDecoded {
+        PickDecoded(cls: cls, chart: "US5MD1MC", title: cls, chip: cls,
+                    footnote: "US5MD1MC")
     }
 
     private func mark(_ id: UInt64, _ name: String = "Anchorage") -> ChartMarker {
