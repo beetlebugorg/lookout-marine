@@ -11,6 +11,7 @@
 const std = @import("std");
 
 const broker = @import("../broker.zig");
+const pl = @import("plugins");
 const caps = @import("caps.zig");
 const testing = @import("testing.zig");
 
@@ -557,4 +558,69 @@ test "revoking alerts.raise takes back what it raised" {
 
     f.broker.withdraw(0, .alerts_raise, 1000);
     try t.expectEqual(@as(usize, 0), f.count());
+}
+
+test "the typed alerts say what the JSON says" {
+    const a = t.allocator;
+    const fx = try AlertFixture.init();
+    defer fx.deinit();
+
+    fx.raise(
+        \\{"severity":"alarm","title":"AIS CPA alarm","body":"ANNE: CPA 124 m in 585 s"}
+    );
+    fx.raise(
+        \\{"severity":"warning","title":"Depth","body":"3.1 m under the keel"}
+    );
+
+    var text: std.ArrayList(u8) = .empty;
+    defer text.deinit(a);
+    try fx.read(&text);
+
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const doc = try std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), text.items, .{});
+
+    const read = try pl.Alerts.init(a);
+    defer read.free();
+    try fx.broker.alertsRead(read);
+
+    try t.expectEqual(@as(u64, @intCast(doc.object.get("seq").?.integer)), read.seq);
+    const list = doc.object.get("alerts").?.array;
+    try t.expectEqual(list.items.len, read.rows.len);
+    for (list.items, read.rows) |item, got| {
+        const o = item.object;
+        try t.expectEqual(@as(u64, @intCast(o.get("id").?.integer)), got.id);
+        try t.expectEqualStrings(o.get("plugin").?.string, std.mem.span(got.plugin));
+        try t.expectEqualStrings(o.get("title").?.string, std.mem.span(got.title));
+        try t.expectEqualStrings(o.get("body").?.string, std.mem.span(got.body));
+        try t.expectEqualStrings(o.get("severity").?.string, @tagName(got.severity));
+        try t.expectEqual(o.get("acknowledged").?.bool, got.acknowledged != 0);
+        try t.expectEqual(o.get("raised").?.integer, got.raised);
+    }
+}
+
+test "the typed alerts keep the order the shell draws" {
+    const a = t.allocator;
+    const fx = try AlertFixture.init();
+    defer fx.deinit();
+
+    fx.raise(
+        \\{"severity":"notice","title":"A","body":"a"}
+    );
+    fx.raise(
+        \\{"severity":"alarm","title":"B","body":"b"}
+    );
+    fx.raise(
+        \\{"severity":"warning","title":"C","body":"c"}
+    );
+
+    const read = try pl.Alerts.init(a);
+    defer read.free();
+    try fx.broker.alertsRead(read);
+
+    // The loudest first among what nobody has answered.
+    try t.expectEqual(@as(usize, 3), read.rows.len);
+    try t.expectEqualStrings("B", std.mem.span(read.rows[0].title));
+    try t.expectEqualStrings("C", std.mem.span(read.rows[1].title));
+    try t.expectEqualStrings("A", std.mem.span(read.rows[2].title));
 }

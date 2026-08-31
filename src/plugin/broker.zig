@@ -81,6 +81,7 @@ const http = @import("broker/http.zig");
 const ws_mod = @import("broker/ws.zig");
 const storage = @import("broker/storage.zig");
 const registry_json = @import("broker/registry_json.zig");
+const pl = @import("plugins");
 const natives = @import("broker/natives.zig");
 const testing = @import("broker/testing.zig");
 
@@ -212,6 +213,18 @@ const printableKey = storage.printableKey;
 const baseName = storage.baseName;
 const Order = tables.Order;
 const AlertOrder = alerts.Order;
+
+fn columnTypeOf(c: ColumnType) pl.ColumnType {
+    return switch (c) {
+        .distance => .distance,
+        .speed => .speed,
+        .bearing => .bearing,
+        .duration => .duration,
+        .number => .number,
+        .text => .text,
+        .flag => .flag,
+    };
+}
 const freeAlert = alerts.freeAlert;
 const freeCells = tables.freeCells;
 const freeRow = tables.freeRow;
@@ -924,6 +937,40 @@ pub const Broker = struct {
         try out.appendSlice(alloc, "]}");
     }
 
+    /// Every alert raised and not yet cleared, as typed rows. The order is the
+    /// one `alertsJson` writes, and both read the same list, so a field added
+    /// to one and left out of the other fails the test in host_smoke.
+    pub fn alertsRead(self: *Broker, out: *pl.Alerts) !void {
+        self.mu.lock();
+        defer self.mu.unlock();
+        self.clearAlertsLocked(monoMs());
+        const a = out.alloc();
+
+        const order = try a.alloc(u32, self.alerts.items.len);
+        for (order, 0..) |*x, i| x.* = @intCast(i);
+        std.mem.sort(u32, order, AlertOrder{ .alerts = self.alerts.items }, AlertOrder.less);
+
+        const recs = try a.alloc(pl.AlertRec, order.len);
+        for (order, recs) |idx, *rec| {
+            const src = self.alerts.items[idx];
+            rec.* = .{ .alert = .{
+                .id = src.id,
+                .plugin = try pl.str(a, src.plugin_id),
+                .title = try pl.str(a, src.title),
+                .body = try pl.str(a, src.body),
+                .severity = switch (src.severity) {
+                    .notice => .notice,
+                    .warning => .warning,
+                    .alarm => .alarm,
+                },
+                .acknowledged = @intFromBool(src.acknowledged),
+                .raised = src.raised_ms,
+            } };
+        }
+        out.rows = try pl.published(pl.AlertRec, "alert", a, recs);
+        out.seq = self.alerts_seq;
+    }
+
     /// Retire the alerts nobody is keeping alive. An ACKNOWLEDGED alert with
     /// nothing happening to it for `alert_clear_ms` is a condition that has
     /// passed, so the same condition returning raises a fresh alert and sounds
@@ -1383,6 +1430,119 @@ pub const Broker = struct {
             });
         }
         try out.appendSlice(alloc, "]}");
+    }
+
+    /// Every table the loaded plugins declare, as typed rows. Both this and
+    /// `tablesJson` walk the same list.
+    pub fn tablesRead(self: *Broker, out: *pl.Tables) !void {
+        self.mu.lock();
+        defer self.mu.unlock();
+        const a = out.alloc();
+        const none = try pl.str(a, "");
+
+        const recs = try a.alloc(pl.TableRec, self.tables.items.len);
+        for (self.tables.items, recs) |*tab, *rec| {
+            const cols = try a.alloc(pl.Column, tab.columns.len);
+            for (tab.columns, cols) |c, *dst| dst.* = .{
+                .key = try pl.str(a, c.key),
+                .label = try pl.str(a, c.label),
+                .type = columnTypeOf(c.type),
+            };
+            const by_ptr = try a.alloc(*const pl.Column, cols.len);
+            for (cols, by_ptr) |*c, *dst| dst.* = c;
+
+            rec.* = .{
+                .table = .{
+                    .plugin = try pl.str(a, tab.plugin_id),
+                    .key = try pl.str(a, tab.key),
+                    .title = try pl.str(a, tab.title),
+                    .menu = try pl.str(a, tab.menu),
+                    .sort_key = try pl.str(a, tab.sort_key),
+                    .sort_ascending = @intFromBool(tab.sort_asc),
+                    .at_lat = if (tab.at_lat.len > 0) try pl.str(a, tab.at_lat) else none,
+                    .at_lon = if (tab.at_lat.len > 0) try pl.str(a, tab.at_lon) else none,
+                    .open = @intFromBool(tab.open),
+                    .rows = tab.rows.items.len,
+                    .seq = tab.seq,
+                },
+                .columns = by_ptr.ptr,
+                .columns_len = by_ptr.len,
+            };
+        }
+        out.rows = try pl.published(pl.TableRec, "table", a, recs);
+    }
+
+    /// One table's rows, as typed rows, in the order `tableRowsJson` writes.
+    /// False when no such table is declared.
+    pub fn tableRowsRead(
+        self: *Broker,
+        plugin_id: []const u8,
+        key: []const u8,
+        sort_key: []const u8,
+        ascending: bool,
+        out: *pl.Rows,
+    ) !bool {
+        self.mu.lock();
+        defer self.mu.unlock();
+        const a = out.alloc();
+        const tab = self.tableByIdLocked(plugin_id, key) orelse return false;
+
+        var col: ?usize = null;
+        var asc = ascending;
+        if (sort_key.len > 0) col = tab.column(sort_key);
+        if (col == null) {
+            col = if (tab.sort_key.len > 0) tab.column(tab.sort_key) else null;
+            asc = tab.sort_asc;
+        }
+
+        const order = try a.alloc(u32, tab.rows.items.len);
+        for (order, 0..) |*x, i| x.* = @intCast(i);
+        const kind: ColumnType = if (col) |c| tab.columns[c].type else .text;
+        std.mem.sort(u32, order, Order{
+            .rows = tab.rows.items,
+            .col = col,
+            .asc = asc,
+            .kind = kind,
+        }, Order.less);
+
+        const none = try pl.str(a, "");
+        const recs = try a.alloc(pl.RowRec, order.len);
+        for (order, recs) |idx, *rec| {
+            const r = tab.rows.items[idx];
+            const cells = try a.alloc(pl.Cell, r.cells.len);
+            for (r.cells, cells, 0..) |c, *dst, k| {
+                const ct: pl.ColumnType = if (k < tab.columns.len)
+                    columnTypeOf(tab.columns[k].type)
+                else
+                    .text;
+                dst.* = switch (c) {
+                    .none => .{ .type = ct, .kind = .absent, .number = 0, .text = none },
+                    .num => |x| if (std.math.isFinite(x))
+                        .{ .type = ct, .kind = .number, .number = x, .text = none }
+                    else
+                        .{ .type = ct, .kind = .absent, .number = 0, .text = none },
+                    .text => |x| .{ .type = ct, .kind = .text, .number = 0, .text = try pl.str(a, x) },
+                };
+            }
+            const by_ptr = try a.alloc(*const pl.Cell, cells.len);
+            for (cells, by_ptr) |*c, *dst| dst.* = c;
+
+            const located = r.lat != null and r.lon != null;
+            rec.* = .{
+                .row = .{
+                    .id = try pl.str(a, r.id),
+                    .band = @intCast(r.band),
+                    .located = @intFromBool(located),
+                    .lon = if (located) r.lon.? else 0,
+                    .lat = if (located) r.lat.? else 0,
+                },
+                .cells = by_ptr.ptr,
+                .cells_len = by_ptr.len,
+            };
+        }
+        out.rows = try pl.published(pl.RowRec, "row", a, recs);
+        out.seq = tab.seq;
+        return true;
     }
 
     /// One table's rows, IN ORDER: band first, then the column the shell asked

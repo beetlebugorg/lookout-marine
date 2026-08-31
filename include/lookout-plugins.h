@@ -416,6 +416,152 @@ const char *lookout_plugin_alerts_json(lookout *h, size_t *out_len);
  * holds that id. */
 int lookout_plugin_alert_ack(lookout *h, uint64_t id);
 
+/* ---- reading the alerts ----------------------------------------------------
+ *
+ * The same alerts, as structs. A read is a copy, and everything it hands back
+ * dies at lookout_alerts_free. */
+
+typedef struct lookout_alerts lookout_alerts;
+
+/* An alarm is audible and repeats until it is acknowledged. A warning and a
+ * notice are visible only. A marine alarm does not time out, and looking at it
+ * is not acknowledging it. */
+typedef enum {
+    LOOKOUT_ALERT_NOTICE  = 0,
+    LOOKOUT_ALERT_WARNING = 1,
+    LOOKOUT_ALERT_ALARM   = 2
+} lookout_alert_severity;
+
+typedef struct {
+    /* What lookout_plugin_alert_ack names. Never reused. */
+    uint64_t id;
+    const char *plugin;
+    const char *title;
+    const char *body;
+    lookout_alert_severity severity;
+    int acknowledged;
+    /* Wall clock in milliseconds since the epoch. */
+    int64_t raised;
+} lookout_alert;
+
+/* NULL when no plugin layer is up. */
+lookout_alerts *lookout_alerts_read(lookout *h);
+void            lookout_alerts_free(lookout_alerts *a);
+/* Bumps on every change to the set: re-read when it moves, and leave the list
+ * alone when it has not. */
+uint64_t lookout_alerts_seq(const lookout_alerts *a);
+/* Every alert raised and not yet seen off. The order is fixed: what nobody has
+ * answered first, then the loudest, then the oldest, so an alert on screen does
+ * not jump when another arrives beneath it. */
+const lookout_alert *const *lookout_alerts_all(const lookout_alerts *a, size_t *out_n);
+
+/* ---- reading the tables ----------------------------------------------------
+ *
+ * The declarations, then one table's rows. Both are reads, freed by their own
+ * call. */
+
+typedef struct lookout_tables     lookout_tables;
+typedef struct lookout_table_rows lookout_table_rows;
+
+/* What a column holds. The type is what makes sorting honest, and the plugin
+ * sends SI: distance in METRES, speed in METRES PER SECOND, bearing in DEGREES
+ * TRUE, duration in SECONDS. The shell formats for the mariner's units. */
+typedef enum {
+    LOOKOUT_COLUMN_DISTANCE = 0,
+    LOOKOUT_COLUMN_SPEED    = 1,
+    LOOKOUT_COLUMN_BEARING  = 2,
+    LOOKOUT_COLUMN_DURATION = 3,
+    LOOKOUT_COLUMN_NUMBER   = 4,
+    LOOKOUT_COLUMN_TEXT     = 5,
+    /* "alarm", "warning" or empty. Colour the row by it. */
+    LOOKOUT_COLUMN_FLAG     = 6
+} lookout_column_type;
+
+typedef struct {
+    const char *key;
+    const char *label;
+    lookout_column_type type;
+} lookout_table_column;
+
+typedef struct {
+    const char *plugin;
+    const char *key;
+    const char *title;
+    /* The menu to put this table's item in: "Vessels > AIS Targets…". */
+    const char *menu;
+    /* The column to sort by until the mariner says otherwise, and which way.
+     * Empty when the table declares no default. */
+    const char *sort_key;
+    int sort_ascending;
+    /* The row keys holding a position. Empty when a row of this table is not
+     * locatable; both are set together. Activating a locatable row centres the
+     * chart and pins its bubble, which is shell-side work. */
+    const char *at_lat;
+    const char *at_lon;
+    /* 1 while lookout_plugin_table_open has said the table is on screen. */
+    int open;
+    /* How many rows the plugin is holding now. */
+    size_t rows;
+    /* Bumps on every accepted batch. Re-read the rows when it moves. */
+    uint64_t seq;
+} lookout_table;
+
+/* NULL when no plugin layer is up. */
+lookout_tables *lookout_tables_read(lookout *h);
+void            lookout_tables_free(lookout_tables *t);
+const lookout_table *const *lookout_tables_all(const lookout_tables *t, size_t *out_n);
+const lookout_table_column *const *lookout_table_columns(const lookout_table *t,
+                                                         size_t *out_n);
+
+typedef struct {
+    const char *id;
+    /* The plugin's own ordering policy, 0 first. A column sort never crosses a
+     * band, so a plugin that puts its alarmed rows in band 0 keeps them at the
+     * top whatever the mariner sorted by. */
+    int32_t band;
+    /* 1 when the table declares an `at` and this row holds one. */
+    int located;
+    double lon, lat;
+} lookout_table_row;
+
+/* Which of a cell's two values holds it. `absent` is a cell the plugin did not
+ * send, which renders as a dash: never heard and heard as zero are different
+ * values. */
+typedef enum {
+    LOOKOUT_CELL_ABSENT = 0,
+    LOOKOUT_CELL_NUMBER = 1,
+    LOOKOUT_CELL_TEXT   = 2
+} lookout_cell_kind;
+
+/* One value of one row. `type` says how to FORMAT it, `kind` says which field
+ * holds it. A plugin may send a string for a numeric column, and the shell
+ * shows the string. */
+typedef struct {
+    lookout_column_type type;
+    lookout_cell_kind kind;
+    double number;
+    const char *text;
+} lookout_table_cell;
+
+/* One table's rows, ALREADY IN ORDER: the plugin's bands first, then `sort_key`
+ * within each band, then arrival. Rows equal on the sorted column keep the
+ * order they arrived in, and an empty cell sorts last in both directions. A
+ * flag column is the exception: an empty flag is a row with nothing wrong with
+ * it, so it sorts by severity and reverses like any other.
+ *
+ * `sort_key` NULL or empty takes the declared default sort. NULL when the
+ * plugin or the table is unknown. */
+lookout_table_rows *lookout_table_rows_read(lookout *h, const char *id, const char *key,
+                                            const char *sort_key, int ascending);
+void     lookout_table_rows_free(lookout_table_rows *r);
+/* The table's batch sequence when these rows were read. */
+uint64_t lookout_table_rows_seq(const lookout_table_rows *r);
+const lookout_table_row *const *lookout_table_rows_all(const lookout_table_rows *r,
+                                                       size_t *out_n);
+/* One cell per declared column, in declaration order. */
+const lookout_table_cell *const *lookout_table_row_cells(const lookout_table_row *row,
+                                                         size_t *out_n);
+
 /* Offer a file the mariner opened to the plugins.
  *
  * A manifest claims file types — "file_types":[".grib2",".grb"] — and this

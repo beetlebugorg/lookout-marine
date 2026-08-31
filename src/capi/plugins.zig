@@ -477,3 +477,144 @@ export fn lookout_plugin_service_values(svc: ?*const lookout_plugin_service, out
     count(out_n, rec.values_len);
     return rec.values;
 }
+
+// ---- reading the alerts and the tables ----------------------------------------
+
+pub const lookout_alerts = pl.Alerts;
+pub const lookout_alert = pl.Alert;
+pub const lookout_tables = pl.Tables;
+pub const lookout_table = pl.Table;
+pub const lookout_table_column = pl.Column;
+pub const lookout_table_rows = pl.Rows;
+pub const lookout_table_row = pl.Row;
+pub const lookout_table_cell = pl.Cell;
+
+/// Read the alerts. See lookout-plugins.h.
+export fn lookout_alerts_read(h: ?*lookout) ?*lookout_alerts {
+    if (comptime !plugins_enabled) return null;
+    const l = locked(h);
+    defer l.apiUnlock();
+    const ps = l.plugins orelse return null;
+    const out = lookout_alerts.init(gpa) catch return null;
+    ps.br.alertsRead(out) catch {
+        out.free();
+        return null;
+    };
+    return out;
+}
+
+export fn lookout_alerts_free(a: ?*lookout_alerts) void {
+    if (a) |x| x.free();
+}
+
+/// Bumps on every change to the set. Re-read when it moves.
+export fn lookout_alerts_seq(a: ?*const lookout_alerts) u64 {
+    const x = a orelse return 0;
+    return x.seq;
+}
+
+/// Every alert raised and not yet seen off, most urgent first.
+export fn lookout_alerts_all(a: ?*const lookout_alerts, out_n: ?*usize) ?[*]const *const lookout_alert {
+    const x = a orelse {
+        count(out_n, 0);
+        return null;
+    };
+    count(out_n, x.rows.len);
+    return x.rows.ptr;
+}
+
+/// Read the tables the loaded plugins declare. See lookout-plugins.h.
+export fn lookout_tables_read(h: ?*lookout) ?*lookout_tables {
+    if (comptime !plugins_enabled) return null;
+    const l = locked(h);
+    defer l.apiUnlock();
+    const ps = l.plugins orelse return null;
+    const out = lookout_tables.init(gpa) catch return null;
+    ps.br.tablesRead(out) catch {
+        out.free();
+        return null;
+    };
+    return out;
+}
+
+export fn lookout_tables_free(t: ?*lookout_tables) void {
+    if (t) |x| x.free();
+}
+
+/// Every table declared, in declaration order.
+export fn lookout_tables_all(t: ?*const lookout_tables, out_n: ?*usize) ?[*]const *const lookout_table {
+    const x = t orelse {
+        count(out_n, 0);
+        return null;
+    };
+    count(out_n, x.rows.len);
+    return x.rows.ptr;
+}
+
+/// The columns one table declares, in declaration order.
+export fn lookout_table_columns(t: ?*const lookout_table, out_n: ?*usize) ?[*]const *const lookout_table_column {
+    const rec = pl.recOf(pl.TableRec, t orelse {
+        count(out_n, 0);
+        return null;
+    });
+    count(out_n, rec.columns_len);
+    return rec.columns;
+}
+
+/// Read one table's rows, already in order. NULL when the plugin or the table
+/// is unknown. `sort_key` NULL or empty takes the declared default sort.
+export fn lookout_table_rows_read(
+    h: ?*lookout,
+    id: ?[*:0]const u8,
+    key: ?[*:0]const u8,
+    sort_key: ?[*:0]const u8,
+    ascending: c_int,
+) ?*lookout_table_rows {
+    if (comptime !plugins_enabled) return null;
+    const l = locked(h);
+    defer l.apiUnlock();
+    const ps = l.plugins orelse return null;
+    const out = lookout_table_rows.init(gpa) catch return null;
+    const want: []const u8 = if (sort_key) |x| std.mem.span(x) else "";
+    const found = ps.br.tableRowsRead(
+        std.mem.span(id orelse return null),
+        std.mem.span(key orelse return null),
+        want,
+        ascending != 0,
+        out,
+    ) catch false;
+    if (!found) {
+        out.free();
+        return null;
+    }
+    return out;
+}
+
+export fn lookout_table_rows_free(r: ?*lookout_table_rows) void {
+    if (r) |x| x.free();
+}
+
+/// The table's batch sequence when these rows were read.
+export fn lookout_table_rows_seq(r: ?*const lookout_table_rows) u64 {
+    const x = r orelse return 0;
+    return x.seq;
+}
+
+export fn lookout_table_rows_all(r: ?*const lookout_table_rows, out_n: ?*usize) ?[*]const *const lookout_table_row {
+    const x = r orelse {
+        count(out_n, 0);
+        return null;
+    };
+    count(out_n, x.rows.len);
+    return x.rows.ptr;
+}
+
+/// One cell per declared column, in declaration order.
+export fn lookout_table_row_cells(row: ?*const lookout_table_row, out_n: ?*usize) ?[*]const *const lookout_table_cell {
+    const rec = pl.recOf(pl.RowRec, row orelse {
+        count(out_n, 0);
+        return null;
+    });
+    count(out_n, rec.cells_len);
+    return rec.cells;
+}

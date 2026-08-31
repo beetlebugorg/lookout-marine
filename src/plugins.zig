@@ -137,6 +137,30 @@ pub const ServiceRec = extern struct {
 /// The read a shell holds until it frees it.
 pub const Read = owned.Owned(Plugin);
 
+// ---- what the plugins are alarming about --------------------------------------
+
+/// An alarm is audible and repeats until it is acknowledged. A warning and a
+/// notice are visible only. A marine alarm does not time out, and looking at it
+/// is not acknowledging it.
+pub const Severity = enum(c_int) { notice = 0, warning = 1, alarm = 2 };
+
+pub const Alert = extern struct {
+    /// What an acknowledgement names. Never reused.
+    id: u64,
+    plugin: [*:0]const u8,
+    title: [*:0]const u8,
+    body: [*:0]const u8,
+    severity: Severity,
+    acknowledged: c_int,
+    /// Wall clock in milliseconds since the epoch.
+    raised: i64,
+};
+
+pub const AlertRec = extern struct { alert: Alert };
+
+/// The alerts a shell holds until it frees them.
+pub const Alerts = owned.Owned(Alert);
+
 /// The record a published pointer came from. `Pub` is the record's first field,
 /// so the pointer is the record's address.
 pub fn recOf(comptime Rec: type, p: anytype) *const Rec {
@@ -191,4 +215,109 @@ test "an item finds its value by field key" {
     try t.expectEqualStrings("10.0.0.4", std.mem.span(itemValue(items[0], "host").?.text));
     try t.expectEqual(@as(f64, 10111), itemValue(items[0], "port").?.number);
     try t.expect(itemValue(items[0], "enabled") == null);
+}
+
+// ---- the tables the plugins declare -------------------------------------------
+
+/// What a column holds. The type is what makes sorting honest, and the plugin
+/// sends SI: distance in metres, speed in metres per second, bearing in degrees
+/// true, duration in seconds. The shell formats for the mariner's units.
+pub const ColumnType = enum(c_int) {
+    distance = 0,
+    speed = 1,
+    bearing = 2,
+    duration = 3,
+    number = 4,
+    text = 5,
+    /// "alarm", "warning" or empty. The shell colours the row by it.
+    flag = 6,
+};
+
+pub const Column = extern struct {
+    key: [*:0]const u8,
+    label: [*:0]const u8,
+    type: ColumnType,
+};
+
+pub const Table = extern struct {
+    plugin: [*:0]const u8,
+    key: [*:0]const u8,
+    title: [*:0]const u8,
+    /// The menu a shell puts this table's item in.
+    menu: [*:0]const u8,
+    /// The column to sort by until the mariner says otherwise, and which way.
+    /// Empty when the table declares no default.
+    sort_key: [*:0]const u8,
+    sort_ascending: c_int,
+    /// The row keys holding a position. Empty when a row of this table is not
+    /// locatable; both are set together.
+    at_lat: [*:0]const u8,
+    at_lon: [*:0]const u8,
+    /// 1 while a shell has told the plugin the table is on screen.
+    open: c_int,
+    /// How many rows the plugin is holding now.
+    rows: usize,
+    /// Bumps on every accepted batch. Re-read the rows when it moves.
+    seq: u64,
+};
+
+pub const TableRec = extern struct {
+    table: Table,
+    columns: [*]const *const Column,
+    columns_len: usize,
+};
+
+/// The tables a shell holds until it frees them.
+pub const Tables = owned.Owned(Table);
+
+// ---- one table's rows ---------------------------------------------------------
+
+pub const Row = extern struct {
+    id: [*:0]const u8,
+    /// The plugin's own ordering policy, 0 first. A column sort never crosses
+    /// a band, so a plugin that puts its alarmed rows in band 0 keeps them at
+    /// the top whatever the mariner sorted by.
+    band: i32,
+    /// 1 when the table declares an `at` and this row holds one.
+    located: c_int,
+    lon: f64,
+    lat: f64,
+};
+
+pub const RowRec = extern struct {
+    row: Row,
+    cells: [*]const *const Cell,
+    cells_len: usize,
+};
+
+/// Which of a cell's two values holds it. `absent` is a cell the plugin did not
+/// send, which renders as a dash: never heard and heard as zero are different
+/// values.
+pub const CellKind = enum(c_int) {
+    absent = 0,
+    number = 1,
+    text = 2,
+};
+
+/// One value of one row. `type` says how to format it, `kind` says which field
+/// holds it. A plugin may send a string for a numeric column.
+pub const Cell = extern struct {
+    type: ColumnType,
+    kind: CellKind,
+    number: f64,
+    text: [*:0]const u8,
+};
+
+/// One table's rows, already in order.
+pub const Rows = owned.Owned(Row);
+
+test "the table enum values are the ones the header states" {
+    try t.expectEqual(@as(c_int, 0), @intFromEnum(ColumnType.distance));
+    try t.expectEqual(@as(c_int, 6), @intFromEnum(ColumnType.flag));
+    try t.expectEqual(@as(c_int, 2), @intFromEnum(Severity.alarm));
+    try t.expectEqual(@as(c_int, 0), @intFromEnum(CellKind.absent));
+    try t.expectEqual(@as(c_int, 2), @intFromEnum(CellKind.text));
+    try t.expectEqual(@as(usize, 0), @offsetOf(TableRec, "table"));
+    try t.expectEqual(@as(usize, 0), @offsetOf(RowRec, "row"));
+    try t.expectEqual(@as(usize, 0), @offsetOf(AlertRec, "alert"));
 }

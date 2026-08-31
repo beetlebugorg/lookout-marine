@@ -19,6 +19,9 @@ pub fn Owned(comptime T: type) type {
 
         arena: std.heap.ArenaAllocator,
         rows: []const *const T = &.{},
+        /// Bumps whenever the set changes, for a read a shell polls. Zero for
+        /// a read with nothing to poll.
+        seq: u64 = 0,
 
         pub fn init(gpa: std.mem.Allocator) !*Self {
             const self = try gpa.create(Self);
