@@ -82,7 +82,7 @@ pub fn fmtScale(buf: []u8, denominator: f64) []const u8 {
 }
 
 /// The usage bands S-57 numbers 1 to 6, in the words the readouts use.
-pub fn bandName(band: u8) []const u8 {
+pub fn bandName(band: u8) [:0]const u8 {
     return switch (band) {
         1 => "Overview",
         2 => "General",
@@ -96,7 +96,7 @@ pub fn bandName(band: u8) []const u8 {
 
 /// The S-52 navigational purpose band for a display scale. A band is named from
 /// the denominator BELOW its ceiling.
-pub fn bandForDenominator(denominator: f64) []const u8 {
+pub fn bandForDenominator(denominator: f64) [:0]const u8 {
     if (!(denominator >= 0.001)) return "—";
     if (denominator < 5_000) return "Berthing";
     if (denominator < 25_000) return "Harbor";

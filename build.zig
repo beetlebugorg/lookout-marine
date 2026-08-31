@@ -418,6 +418,10 @@ pub fn build(b: *std.Build) void {
     if (android_libc) |libc| lib.setLibCFile(libc); // NDK sysroot for the C deps
 
     lib.installHeader(b.path("include/lookout.h"), "lookout.h");
+    // lookout.h includes these three, so they install beside it.
+    lib.installHeader(b.path("include/lookout-library.h"), "lookout-library.h");
+    lib.installHeader(b.path("include/lookout-plugins.h"), "lookout-plugins.h");
+    lib.installHeader(b.path("include/lookout-shell.h"), "lookout-shell.h");
     // tile57.h rides along (lookout.h includes it), so the app's header search
     // path is just <prefix>/include.
     lib.installHeader(tile57_dep.path("include/tile57.h"), "tile57.h");
