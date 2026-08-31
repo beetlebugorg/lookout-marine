@@ -70,14 +70,14 @@ final class FakeEngine: RasterEngine, ChartLinkEngine, PluginEngine,
     func ownShip() -> (state: FixState, lat: Double, lon: Double)? { ship }
 
     // MARK: Chart links
-    /// What chartLinksSnapshot answers. Nil means the core had nothing.
-    var linksJSON: String?
+    /// What chartLinksSnapshot answers. Nil means the core had nothing new.
+    var links: ChartLinkSnapshot?
     func addChartLink(_ link: String) { note("addChartLink(\(link))") }
     func refreshChartLink(_ url: String) { note("refreshChartLink(\(url))") }
     func removeChartLink(_ url: String) { note("removeChartLink(\(url))") }
     func selectChartLink(_ url: String?) { note("selectChartLink(\(url ?? "nil"))") }
     func importChartLinks(_ json: String) { note("importChartLinks") }
-    func chartLinksSnapshot() -> String? { linksJSON }
+    func chartLinksSnapshot() -> ChartLinkSnapshot? { links }
 
     // MARK: Plugins
     var specs: [PluginTableSpec] = []

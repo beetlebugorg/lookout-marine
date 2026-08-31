@@ -7,26 +7,37 @@
 
 import Foundation
 
+/// The link list and the state beside it, as the core hands it over. One read,
+/// because a resolve finishing on a fetch thread could free a borrowed field
+/// under this shell.
+struct ChartLinkSnapshot {
+    var links: [ChartLinksModel.ChartLink]
+    /// The picked link's url; nil draws the built-in chart.
+    var active: String?
+    var attribution: String
+    var error: String
+    var busy: Bool
+}
+
 @MainActor
 @Observable
 final class ChartLinksModel {
     /// One chart the mariner added by link, as the core reports it. Picking it
     /// renders that publisher's style INSTEAD of the built-in chart — Lookout's
     /// own chart is just the default entry in the same list.
-    struct ChartLink: Decodable, Identifiable, Hashable {
+    struct ChartLink: Identifiable, Hashable {
         var url: String
         var name: String
         var id: String { url }
-    }
 
-    /// The snapshot, as one document. One document because a resolve finishing
-    /// on a fetch thread could free a borrowed field under this shell.
-    private struct Snapshot: Decodable {
-        var links: [ChartLink]
-        var active: String?
-        var attribution: String
-        var error: String
-        var busy: Bool
+        init(url: String, name: String) {
+            self.url = url
+            self.name = name
+        }
+
+        init(_ l: lookout_chart_link) {
+            self.init(url: String(cString: l.url), name: String(cString: l.name))
+        }
     }
 
     var list: [ChartLink] = []
@@ -65,9 +76,7 @@ final class ChartLinksModel {
     /// Take the core's snapshot, if it changed. Called once per readout tick:
     /// the changed flag has one consumer.
     func poll() {
-        guard let json = engine?.chartLinksSnapshot(),
-              let data = json.data(using: .utf8),
-              let snap = try? JSONDecoder().decode(Snapshot.self, from: data) else { return }
+        guard let snap = engine?.chartLinksSnapshot() else { return }
         if list != snap.links { list = snap.links }
         if active != snap.active { active = snap.active }
         if busy != snap.busy { busy = snap.busy }

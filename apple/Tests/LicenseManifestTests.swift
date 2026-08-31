@@ -1,7 +1,8 @@
 //  LicenseManifestTests.swift — the components this build carries.
 //
-//  lookout_licenses_json is static in the core and needs no chart, so these run
-//  against the live list rather than a fixture.
+//  lookout_licenses_read is static in the core and needs no chart, so these run
+//  against the live list rather than a fixture. The core filters it to this
+//  shell, and asserts that filtering in src/licenses.zig.
 
 import XCTest
 @testable import LookoutMarine
@@ -13,23 +14,28 @@ final class LicenseManifestTests: XCTestCase {
     }
 
     func testTheBuildCarriesAList() throws {
-        let m = try XCTUnwrap(manifest, "lookout_licenses_json did not decode")
+        let m = try XCTUnwrap(manifest, "lookout_licenses_read gave nothing")
         XCTAssertFalse(m.components.isEmpty)
         XCTAssertFalse(m.app.name.isEmpty)
         XCTAssertFalse(m.app.license.isEmpty)
         XCTAssertFalse(m.app.text.isEmpty)
     }
 
-    /// Only what this shell links. A component that ships on Linux alone must
-    /// not appear in the Mac's list.
-    func testEveryComponentBelongsToThisShell() throws {
-        let m = try XCTUnwrap(manifest)
-        XCTAssertTrue(m.components.allSatisfy { $0.shells.contains(LicenseManifest.shell) })
+    /// The core filters by shell id, so this shell has to name itself the way
+    /// the manifest does. A wrong id here is an empty screen.
+    func testThisShellNamesItselfTheWayTheManifestDoes() throws {
         #if os(macOS)
         XCTAssertEqual(LicenseManifest.shell, "macos")
         #else
         XCTAssertEqual(LicenseManifest.shell, "ios")
         #endif
+        let m = try XCTUnwrap(manifest)
+        XCTAssertFalse(m.components.isEmpty)
+    }
+
+    /// The count a screen starts grouping and searching above is the core's.
+    func testTheGroupThresholdIsTheCores() {
+        XCTAssertEqual(LicenseManifest.groupAbove, 12)
     }
 
     /// The chart engine is the one component About names, so the screen breaks
@@ -101,14 +107,25 @@ final class LicenseManifestTests: XCTestCase {
         XCTAssertEqual(component(version: "", commit: "").pinLabel, "")
     }
 
+    /// One component as the core hands it over.
     private func component(license: String = "MIT", short: String = "",
                            version: String = "", commit: String = "") -> LicenseComponent {
-        let json = """
-        {"id":"x","name":"X","group":"g","summary":"s","license":"\(license)",
-         "license_short":"\(short)","license_note":"","version":"\(version)",
-         "commit":"\(commit)","pinned_in":"p","copyright":"c","url":"u",
-         "shells":["macos","ios"],"text":"t","notice":""}
-        """
-        return try! JSONDecoder().decode(LicenseComponent.self, from: Data(json.utf8))
+        "x".withCString { id in
+            license.withCString { lic in
+                short.withCString { sh in
+                    version.withCString { ver in
+                        commit.withCString { com in
+                            "".withCString { e in
+                                LicenseComponent(lookout_license(
+                                    id: id, name: id, group: id, summary: id,
+                                    license: lic, license_short: sh, license_note: e,
+                                    version: ver, commit: com, pinned_in: id,
+                                    copyright: id, url: id, text: id, notice: e))
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }

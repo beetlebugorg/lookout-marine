@@ -1,6 +1,6 @@
 //  ChartScanTests.swift — what the core reports about a folder.
 //
-//  lookout_scan_charts needs no chart open, so these run against the live core
+//  lookout_scan_read needs no chart open, so these run against the live core
 //  over the baked cell this repository carries for the Android build. When the
 //  repository is not beside the test bundle they skip rather than assert
 //  against nothing.
@@ -32,7 +32,7 @@ final class ChartScanTests: XCTestCase {
         XCTAssertTrue(set.rasters.isEmpty)
         let cell = try XCTUnwrap(set.cells.first)
         XCTAssertEqual(cell.name, "US5MD1MC")
-        XCTAssertEqual(cell.kind, "baked")
+        XCTAssertEqual(cell.kind, .baked)
         XCTAssertEqual(cell.band, 5)
         XCTAssertEqual(cell.stem, "US5MD1MC")
         XCTAssertGreaterThan(cell.bytes, 0)
@@ -105,7 +105,7 @@ final class ChartSetTests: XCTestCase {
                  cells: cells, rasters: rasters, on: true)
     }
 
-    private func cell(_ name: String, band: Int = 5, kind: String = "baked",
+    private func cell(_ name: String, band: Int = 5, kind: ScannedCell.Kind = .baked,
                       bytes: Int64 = 1_000_000, archived: Bool = false) -> ScannedCell {
         ScannedCell(path: "/charts/\(name)/\(name).pmtiles", name: name, kind: kind,
                     band: band, bytes: bytes, archived: archived)
@@ -130,7 +130,7 @@ final class ChartSetTests: XCTestCase {
 
     func testTheSummaryCountsBothKindsAndTheBandRange() {
         let s = set(cells: [cell("US1AA", band: 2), cell("US5BB", band: 5)],
-                    rasters: [cell("photo", band: 0, kind: "raster")])
+                    rasters: [cell("photo", band: 0, kind: .raster)])
         XCTAssertTrue(s.summary.hasPrefix("2 charts · 1 picture · General to Harbor · "),
                       s.summary)
     }
@@ -162,19 +162,19 @@ final class ChartSetTests: XCTestCase {
 
     /// A raw S-57 cell and a BSB sheet both prepare first.
     func testWhatHasToBePreparedFirst() {
-        XCTAssertTrue(cell("a", kind: "source").needsBake)
-        XCTAssertTrue(cell("a", kind: "raster_source").needsBake)
-        XCTAssertFalse(cell("a", kind: "baked").needsBake)
-        XCTAssertFalse(cell("a", kind: "raster").needsBake)
-        XCTAssertTrue(cell("a", kind: "raster").isRaster)
-        XCTAssertTrue(cell("a", kind: "raster_source").isRaster)
-        XCTAssertFalse(cell("a", kind: "baked").isRaster)
+        XCTAssertTrue(cell("a", kind: .source).needsBake)
+        XCTAssertTrue(cell("a", kind: .rasterSource).needsBake)
+        XCTAssertFalse(cell("a", kind: .baked).needsBake)
+        XCTAssertFalse(cell("a", kind: .raster).needsBake)
+        XCTAssertTrue(cell("a", kind: .raster).isRaster)
+        XCTAssertTrue(cell("a", kind: .rasterSource).isRaster)
+        XCTAssertFalse(cell("a", kind: .baked).isRaster)
     }
 
     /// Offering to prepare them again would say the work is unfinished when it
     /// is as finished as it will get.
     func testWhatIsLeftAfterAPrepareIsCountedAsRefused() {
-        let cells = [cell("a"), cell("b", kind: "source")]
+        let cells = [cell("a"), cell("b", kind: .source)]
         XCTAssertEqual(set(cells: cells, prepared: nil).refusedCount, 0)
         XCTAssertEqual(set(cells: cells, prepared: "/prepared").refusedCount, 1)
         XCTAssertTrue(set(cells: cells, prepared: "/prepared").isDerived)
@@ -185,11 +185,11 @@ final class ChartSetTests: XCTestCase {
     /// provider is the decision a mariner makes; two hundred is not.
     func testPicturesAreGroupedByProvider() {
         let rasters = [
-            ScannedCell(path: "/a/ArcGIS-1.mbtiles", name: "ArcGIS-1.mbtiles", kind: "raster",
+            ScannedCell(path: "/a/ArcGIS-1.mbtiles", name: "ArcGIS-1.mbtiles", kind: .raster,
                         band: 0, bytes: 1),
-            ScannedCell(path: "/a/ArcGIS-2.mbtiles", name: "ArcGIS-2.mbtiles", kind: "raster",
+            ScannedCell(path: "/a/ArcGIS-2.mbtiles", name: "ArcGIS-2.mbtiles", kind: .raster,
                         band: 0, bytes: 1),
-            ScannedCell(path: "/a/Bing-1.mbtiles", name: "Bing-1.mbtiles", kind: "raster",
+            ScannedCell(path: "/a/Bing-1.mbtiles", name: "Bing-1.mbtiles", kind: .raster,
                         band: 0, bytes: 1),
         ]
         let groups = set(rasters: rasters).rasterGroups(label: RasterModel.providerLabel)
@@ -200,7 +200,7 @@ final class ChartSetTests: XCTestCase {
     /// A picture still inside an archive is not drawable yet.
     func testAnUnpreparedPictureIsNotOffered() {
         let s = set(rasters: [ScannedCell(path: "/a/x.kap", name: "x.kap",
-                                          kind: "raster_source", band: 0, bytes: 1)])
+                                          kind: .rasterSource, band: 0, bytes: 1)])
         XCTAssertTrue(s.rasterPaths.isEmpty)
         XCTAssertTrue(s.rasterGroups(label: RasterModel.providerLabel).isEmpty)
     }

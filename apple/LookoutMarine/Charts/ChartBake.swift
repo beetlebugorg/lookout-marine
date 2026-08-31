@@ -137,7 +137,7 @@ private enum Prepare {
     case lift
 
     init(_ c: ScannedCell) {
-        if c.kind == "source" { self = .cell } else if c.kind == "raster_source" {
+        if c.kind == .source { self = .cell } else if c.kind == .rasterSource {
             self = .sheet
         } else {
             self = .lift

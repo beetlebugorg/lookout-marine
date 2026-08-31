@@ -18,16 +18,18 @@ final class ChartLinksModelTests: ShellTestCase {
         return m
     }
 
-    private let snapshot = """
-    {"links":[{"url":"https://a/style.json","name":"A"},
-              {"url":"https://b/style.json","name":"B"}],
-     "active":"https://b/style.json",
-     "attribution":"© A publisher","error":"","busy":false}
-    """
+    /// A read as the core hands it over.
+    private let snapshot = ChartLinkSnapshot(
+        links: [ChartLinksModel.ChartLink(url: "https://a/style.json", name: "A"),
+                ChartLinksModel.ChartLink(url: "https://b/style.json", name: "B")],
+        active: "https://b/style.json",
+        attribution: "© A publisher",
+        error: "",
+        busy: false)
 
     func testPollRendersTheSnapshot() {
         let m = model()
-        engine.linksJSON = snapshot
+        engine.links = snapshot
         m.poll()
         XCTAssertEqual(m.list.map(\.name), ["A", "B"])
         XCTAssertEqual(m.active, "https://b/style.json")
@@ -40,7 +42,8 @@ final class ChartLinksModelTests: ShellTestCase {
     /// the chrome tests for nil.
     func testEmptyStringsBecomeNothing() {
         let m = model()
-        engine.linksJSON = #"{"links":[],"active":null,"attribution":"","error":"","busy":false}"#
+        engine.links = ChartLinkSnapshot(links: [], active: nil, attribution: "",
+                                         error: "", busy: false)
         m.attribution = "stale"
         m.error = "stale"
         m.poll()
@@ -48,11 +51,13 @@ final class ChartLinksModelTests: ShellTestCase {
         XCTAssertNil(m.error)
     }
 
-    func testNothingReadableLeavesTheListAlone() {
+    /// The changed flag has one consumer, so a poll with nothing new answers
+    /// nil and the list stands.
+    func testNothingNewLeavesTheListAlone() {
         let m = model()
-        engine.linksJSON = snapshot
+        engine.links = snapshot
         m.poll()
-        engine.linksJSON = nil
+        engine.links = nil
         m.poll()
         XCTAssertEqual(m.list.count, 2)
     }

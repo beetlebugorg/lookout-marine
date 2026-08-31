@@ -41,7 +41,7 @@ protocol ChartLinkEngine: AnyObject {
     func removeChartLink(_ url: String)
     func selectChartLink(_ url: String?)
     func importChartLinks(_ json: String)
-    func chartLinksSnapshot() -> String?
+    func chartLinksSnapshot() -> ChartLinkSnapshot?
 }
 
 /// What PluginsModel asks the chart for.

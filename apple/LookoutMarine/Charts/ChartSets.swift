@@ -10,10 +10,10 @@
 //  core has looked through it and found charts, so a set on the list always
 //  opens. Switching a set off keeps it aboard and takes it out of the chart.
 //
-//  The core does the looking (lookout_scan_charts). It walks the folder, names
+//  The core does the looking (lookout_scan_read). It walks the folder, names
 //  every file, and asks tile57 what each archive holds, which is the only way
 //  to tell a chart from a picture archive or a foreign bake. An archive is
-//  read the same way (lookout_scan_zip) but only its listing: 36 ms for the
+//  read the same way (lookout_scan_zip_read) but only its listing: 36 ms for the
 //  7,224 charts in NOAA's All_ENCs.zip, against about 3 seconds to walk the
 //  same charts unpacked. Nothing inside one can be verified or drawn until it
 //  has been taken out, which is what `archived` marks.
@@ -22,11 +22,26 @@ import Foundation
 
 /// One chart the scan found.
 struct ScannedCell: Identifiable, Hashable {
+    /// What a scanned file is, as the core names it.
+    enum Kind {
+        case baked, source, update, raster, rasterSource, other
+
+        init(_ k: lookout_file_kind) {
+            switch k {
+            case LOOKOUT_FILE_SOURCE:        self = .source
+            case LOOKOUT_FILE_UPDATE:        self = .update
+            case LOOKOUT_FILE_RASTER:        self = .raster
+            case LOOKOUT_FILE_RASTER_SOURCE: self = .rasterSource
+            case LOOKOUT_FILE_OTHER:         self = .other
+            default:                         self = .baked
+            }
+        }
+    }
+
     let path: String
     /// The 8 character dataset name, such as US5MD1MC.
     let name: String
-    /// "baked" draws now. "source" is an S-57 cell that bakes first.
-    let kind: String
+    let kind: Kind
     /// 1 to 6, or 0 when the name carries no usage band. The name of the band
     /// comes from ChartSet.bandName, so a set and a cell cannot disagree.
     let band: Int
@@ -35,19 +50,38 @@ struct ScannedCell: Identifiable, Hashable {
     /// chart cannot be opened, whatever it is: it has to come out first.
     var archived: Bool = false
 
+    init(path: String, name: String, kind: Kind, band: Int, bytes: Int64,
+         archived: Bool = false) {
+        self.path = path
+        self.name = name
+        self.kind = kind
+        self.band = band
+        self.bytes = bytes
+        self.archived = archived
+    }
+
+    init(_ f: lookout_chart_file, archived: Bool) {
+        self.init(path: String(cString: f.path),
+                  name: String(cString: f.name),
+                  kind: Kind(f.kind),
+                  band: Int(f.band),
+                  bytes: Int64(f.bytes),
+                  archived: archived)
+    }
+
     var id: String { path }
     /// The name without its extension, which is what a prepared archive and
     /// the file it was made from have in common.
     var stem: String { (name as NSString).deletingPathExtension }
     /// True when this file must be prepared before it can be drawn: an S-57 or
     /// S-101 cell, or a BSB/KAP sheet.
-    var needsBake: Bool { kind == "source" || kind == "raster_source" }
+    var needsBake: Bool { kind == .source || kind == .rasterSource }
     /// True when something has to happen before the engine can be handed this.
     /// Inside an archive that is everything, including a chart that is already
     /// baked: it still has to be got out.
     var needsPrepare: Bool { archived || needsBake }
     /// True when this is a picture rather than the survey.
-    var isRaster: Bool { kind == "raster" || kind == "raster_source" }
+    var isRaster: Bool { kind == .raster || kind == .rasterSource }
 }
 
 /// What one folder holds.
@@ -192,10 +226,9 @@ struct ChartSet: Identifiable, Hashable {
 enum ChartScan {
     /// Every scan runs here, one at a time.
     ///
-    /// lookout_scan_charts hands back a pointer the core owns until the NEXT
-    /// call, so two scans at once free each other's answer and a folder comes
-    /// back empty. Serializing is right on its own terms as well: two scans of
-    /// a big library at once would fight for the same disk.
+    /// A read is this caller's own copy, so two at once would be safe. They
+    /// are serialized because two scans of a big library would fight for the
+    /// same disk.
     private static let queue = DispatchQueue(label: "org.beetlebug.lookout.chartscan")
 
     /// Walk `path` and report what is there. Runs the core's scan, which opens
@@ -235,46 +268,34 @@ enum ChartScan {
 
     private static func scanLocked(_ path: String) -> ChartSet? {
         let archive = isArchive(path)
-        var len = 0
-        guard let raw = archive ? lookout_scan_zip(path, &len) : lookout_scan_charts(path, &len),
-              len > 0
+        guard let read = archive ? lookout_scan_zip_read(path) : lookout_scan_read(path),
+              let found = lookout_scan_found(read)
         else { return nil }
-        // Build from the reported length, not as a C string. The core hands
-        // back a counted buffer, and reading it to a NUL would run past the
-        // end of the answer.
-        let json = raw.withMemoryRebound(to: UInt8.self, capacity: len) {
-            String(decoding: UnsafeBufferPointer(start: $0, count: len), as: UTF8.self)
-        }
-        guard let o = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any]
-        else { return nil }
+        defer { lookout_scan_free(read) }
 
-        let cells = (o["cells"] as? [[String: Any]] ?? []).map { c in
-            ScannedCell(
-                path: c["path"] as? String ?? "",
-                name: c["name"] as? String ?? "",
-                kind: c["kind"] as? String ?? "baked",
-                band: c["band"] as? Int ?? 0,
-                bytes: c["bytes"] as? Int64 ?? Int64(c["bytes"] as? Int ?? 0),
-                archived: archive
-            )
-        }
-        let raster = (o["raster"] as? [[String: Any]] ?? []).map { c in
-            ScannedCell(
-                path: c["path"] as? String ?? "",
-                name: c["name"] as? String ?? "",
-                kind: c["kind"] as? String ?? "raster",
-                band: 0,
-                bytes: c["bytes"] as? Int64 ?? Int64(c["bytes"] as? Int ?? 0),
-                archived: archive)
-        }
+        var n = 0
+        let cells = Self.scanned(lookout_scan_cells(read, &n), n, archived: archive)
+        let raster = Self.scanned(lookout_scan_raster(read, &n), n, archived: archive)
+        // The core states no producer when the charts disagree, and says so
+        // with an empty string.
+        let producer = String(cString: found.pointee.producer)
         return ChartSet(
-            path: o["root"] as? String ?? path,
-            producer: o["producer"] as? String,
+            path: String(cString: found.pointee.root),
+            producer: producer.isEmpty ? nil : producer,
             preparedPath: nil,
             cells: cells,
             rasters: raster,
             on: true
         )
+    }
+
+    /// One of the scan's two lists, copied out of the read.
+    private static func scanned(_ p: UnsafePointer<UnsafePointer<lookout_chart_file>?>?,
+                                _ n: Int, archived: Bool) -> [ScannedCell] {
+        guard let p else { return [] }
+        return (0..<n).compactMap { i in
+            p[i].map { ScannedCell($0.pointee, archived: archived) }
+        }
     }
 }
 

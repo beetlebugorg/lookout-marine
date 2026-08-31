@@ -52,11 +52,23 @@ extension ChartController {
     /// Everything the chart list shows, or nil when nothing changed since the
     /// last poll. The flag has ONE consumer, so this is called from exactly one
     /// place: pushReadouts.
-    func chartLinksSnapshot() -> String? {
+    func chartLinksSnapshot() -> ChartLinkSnapshot? {
         guard let h = handle, lookout_chart_links_changed(h) != 0 else { return nil }
-        guard let c = lookout_chart_links_json(h) else { return nil }
-        defer { lookout_string_free(c) }
-        return String(cString: c)
+        guard let read = lookout_links_read(h), let st = lookout_links_state(read) else { return nil }
+        defer { lookout_links_free(read) }
+        var n = 0
+        var links: [ChartLinksModel.ChartLink] = []
+        if let all = lookout_links_all(read, &n) {
+            links = (0..<n).compactMap { all[$0].map { ChartLinksModel.ChartLink($0.pointee) } }
+        }
+        // The core writes an empty url for lookout's own chart, because a url
+        // is never empty.
+        let active = String(cString: st.pointee.active)
+        return ChartLinkSnapshot(links: links,
+                                 active: active.isEmpty ? nil : active,
+                                 attribution: String(cString: st.pointee.attribution),
+                                 error: String(cString: st.pointee.error),
+                                 busy: st.pointee.busy != 0)
     }
 
     /// Is a publisher's style the one being drawn?
