@@ -3,6 +3,7 @@ package org.beetlebug.lookout
 import org.beetlebug.lookout.engine.ChartEngine
 import org.beetlebug.lookout.plugins.PluginField
 import org.beetlebug.lookout.plugins.PluginRegistry
+import org.beetlebug.lookout.plugins.SettingsSection
 import org.beetlebug.lookout.plugins.parseTableSpecs
 
 import androidx.test.core.app.ActivityScenario
@@ -19,9 +20,9 @@ import org.junit.runner.RunWith
  *
  * Everything else that reads the registry is driven from a fixture, because a
  * fixture can be shaped for the case under test. What a fixture cannot do is
- * disagree with the core: it is transcribed from `Host.pluginsJson` and the
- * shipped manifests, and it will keep agreeing with itself after either one
- * changes. This is the test that fails instead.
+ * disagree with the core: it is transcribed from the shipped manifests, and it
+ * keeps agreeing with itself after either one changes. This is the test that
+ * fails instead.
  *
  * It needs the real Activity, because the registry belongs to an open engine
  * and the engine wants a Surface. That makes it the slowest test here and the
@@ -43,7 +44,7 @@ class LivePluginsTest {
      * Open the app and wait for the plugin layer. The chart open and the atlas
      * bake come first, so this is seconds rather than milliseconds.
      */
-    private fun withRegistry(block: (PluginRegistry, String) -> Unit) {
+    private fun withRegistry(block: (PluginRegistry, Lookout) -> Unit) {
         ActivityScenario.launch(LookoutActivity::class.java).use {
             // The chart open and the atlas bake come first, so the engine is
             // seconds away even on the bundled cell.
@@ -60,12 +61,12 @@ class LivePluginsTest {
             )
 
             val ready = waitFor(REGISTRY_TIMEOUT_MS) {
-                val j = ChartEngine.get().lookout?.pluginsJson()
-                j != null && PluginRegistry.parse(j).plugins.size >= bundled.size
+                val l = ChartEngine.get().lookout
+                l != null && (PluginRegistry.read(l)?.plugins?.size ?: 0) >= bundled.size
             }
             assertTrue("the plugin layer came up short of the bundled set", ready)
-            val payload = ChartEngine.get().lookout!!.pluginsJson()!!
-            block(PluginRegistry.parse(payload), payload)
+            val l = ChartEngine.get().lookout!!
+            block(PluginRegistry.read(l)!!, l)
         }
     }
 
@@ -105,6 +106,32 @@ class LivePluginsTest {
         withRegistry { reg, _ ->
             assertTrue(reg.plugins.all { it.bundled })
             assertTrue("a bundled plugin was listed as managed", reg.managed.isEmpty())
+        }
+    }
+
+    /**
+     * A schema that names no label still renders: the key names the control.
+     * The fixture cannot show this, because a fixture sets a label.
+     */
+    @Test fun everySettingHasALabelAndASection() {
+        withRegistry { reg, _ ->
+            val fields = reg.plugins.flatMap { it.fields } +
+                reg.plugins.flatMap { p -> p.lists.flatMap { it.itemFields } }
+            assertTrue("no settings were read", fields.isNotEmpty())
+            assertTrue("a setting read with no label", fields.all { it.label.isNotEmpty() })
+            assertTrue(
+                "a setting landed outside the known sections",
+                fields.all { f -> SettingsSection.all.any { it.id == f.tab } },
+            )
+        }
+    }
+
+    /** The consent wording is the core's, so every shell says the same thing. */
+    @Test fun everyCapabilityHasTheCoresOwnSentence() {
+        withRegistry { reg, _ ->
+            val caps = reg.plugins.flatMap { it.capabilities }
+            assertTrue("no capabilities were read", caps.isNotEmpty())
+            assertTrue("a capability read with no sentence", caps.all { it.sentence.isNotEmpty() })
         }
     }
 

@@ -410,7 +410,62 @@ public final class Lookout implements AutoCloseable {
     public int pluginsConnectionState()          { return h == 0 ? 0 : nPluginsConnectionState(h); }
 
     /** Every loaded plugin with its settings schema, as JSON. Null when none. */
-    public String pluginsJson()                  { return h == 0 ? null : nPluginsJson(h); }
+
+    // ---- the plugin registry, read typed ----
+    //
+    // A read is a snapshot: one arena, every string borrowed from it, alive
+    // until pluginsFree. Read it on one thread, decode it, free it.
+    //
+    // A READ OF 0 IS NOT AN EMPTY REGISTRY. pluginsRead returns 0 with no chart
+    // open and in a build with the plugin layer compiled out; a core holding no
+    // plugins returns a snapshot with no rows.
+
+    public long pluginsRead()                    { return h == 0 ? 0 : nPluginsRead(h); }
+    public static void pluginsFree(long p)       { if (p != 0) nPluginsFree(p); }
+
+    public static int pluginCount(long p)        { return nPluginCount(p); }
+
+    /** field: 0 id, 1 name, 2 version, 3 status. */
+    public static String pluginText(long p, int i, int field) { return nPluginText(p, i, field); }
+    /** field: 0 origin, 1 live. */
+    public static int pluginInt(long p, int i, int field)     { return nPluginInt(p, i, field); }
+
+    public static int capCount(long p, int i)    { return nCapCount(p, i); }
+    /** field: 0 name, 1 sentence. */
+    public static String capText(long p, int i, int c, int field) { return nCapText(p, i, c, field); }
+    public static boolean capGranted(long p, int i, int c) { return nCapGranted(p, i, c) != 0; }
+    public static String[] capAllows(long p, int i, int c) { return nCapAllows(p, i, c); }
+
+    public static int settingCount(long p, int i)             { return nSettingCount(p, i); }
+    /** How many fields one item of a list setting has. */
+    public static int settingFieldCount(long p, int i, int s) { return nSettingFieldCount(p, i, s); }
+
+    // A setting is addressed by (plugin, setting, fi). fi of -1 is the setting
+    // itself; 0 or more is that setting's fi'th list field.
+
+    /** field: 0 key, 1 label, 2 desc, 3 group, 4 unit, 5 defaultText,
+     *  6 placeholder, 7 footer, 8 empty, 9 addLabel, 10 switchKey. */
+    public static String settingText(long p, int i, int s, int fi, int field) {
+        return nSettingText(p, i, s, fi, field);
+    }
+    /** field: 0 min, 1 max, 2 defaultNumber, 3 value. */
+    public static double settingNumber(long p, int i, int s, int fi, int field) {
+        return nSettingNumber(p, i, s, fi, field);
+    }
+    /** field: 0 kind, 1 section, 2 optional, 3 maxText, 4 maxItems. */
+    public static int settingInt(long p, int i, int s, int fi, int field) {
+        return nSettingInt(p, i, s, fi, field);
+    }
+
+    public static int itemCount(long p, int i, int s)            { return nItemCount(p, i, s); }
+    public static String itemId(long p, int i, int s, int it)     { return nItemId(p, i, s, it); }
+    /** One item's cells as {key, text, key, text, ...}. */
+    public static String[] itemValues(long p, int i, int s, int it) { return nItemValues(p, i, s, it); }
+
+    /** The DNS-SD service types a list setting declares. */
+    public static String[] services(long p, int i, int s)         { return nServices(p, i, s); }
+    /** What a row added from a find sets, as {key, text, ...}. */
+    public static String[] serviceSet(long p, int i, int s, int sv) { return nServiceSet(p, i, s, sv); }
 
     /** One plugin's settings as a JSON object, or null for an unknown id. */
     public String pluginConfigGet(String id)     { return h == 0 ? null : nPluginConfigGet(h, id); }
@@ -476,7 +531,25 @@ public final class Lookout implements AutoCloseable {
     private static native boolean nPluginsLoad(long h, String dir);
     private static native boolean nPluginsActive(long h);
     private static native int nPluginsConnectionState(long h);
-    private static native String nPluginsJson(long h);
+    private static native long nPluginsRead(long h);
+    private static native void nPluginsFree(long p);
+    private static native int nPluginCount(long p);
+    private static native String nPluginText(long p, int i, int field);
+    private static native int nPluginInt(long p, int i, int field);
+    private static native int nCapCount(long p, int i);
+    private static native String nCapText(long p, int i, int c, int field);
+    private static native int nCapGranted(long p, int i, int c);
+    private static native String[] nCapAllows(long p, int i, int c);
+    private static native int nSettingCount(long p, int i);
+    private static native int nSettingFieldCount(long p, int i, int s);
+    private static native String nSettingText(long p, int i, int s, int fi, int field);
+    private static native double nSettingNumber(long p, int i, int s, int fi, int field);
+    private static native int nSettingInt(long p, int i, int s, int fi, int field);
+    private static native int nItemCount(long p, int i, int s);
+    private static native String nItemId(long p, int i, int s, int it);
+    private static native String[] nItemValues(long p, int i, int s, int it);
+    private static native String[] nServices(long p, int i, int s);
+    private static native String[] nServiceSet(long p, int i, int s, int sv);
     private static native String nPluginConfigGet(long h, String id);
     private static native boolean nPluginConfigSet(long h, String id, String json);
     private static native String nPluginAlertsJson(long h);

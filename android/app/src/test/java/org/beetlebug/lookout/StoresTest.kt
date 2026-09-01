@@ -154,7 +154,7 @@ class StoresTest {
     // ---- the plugin settings the mariner typed ------------------------------
 
     @Test fun aConnectionListSurvivesTheNextLaunch() {
-        val schema = PluginRegistry.parse(Fixtures.registry)
+        val schema = PluginRegistry(PluginFixture.shipped)
             .lists("connections").first { it.key == "connections" }
         val json = """[{"id":"row-1","host":"192.168.1.50","port":10110,"enabled":true}]"""
 

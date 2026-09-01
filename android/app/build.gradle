@@ -166,3 +166,8 @@ tasks.register('stageBundledPlugins', Copy) {
     into layout.buildDirectory.dir('generated/lookout-assets/plugins')
 }
 android.sourceSets.main.assets.srcDir(layout.buildDirectory.dir('generated/lookout-assets'))
+
+// The plugin fixture is read by both suites: the JVM tests build a registry
+// from it, and the on-device tests check the core still agrees with it.
+android.sourceSets.test.java.srcDir('src/testShared/java')
+android.sourceSets.androidTest.java.srcDir('src/testShared/java')

@@ -47,35 +47,58 @@ class ConnectionEditorTest {
         get() = InstrumentationRegistry.getInstrumentation().targetContext
 
     /** A gateway list and an alarm group, as the core states them. */
-    private val json = """
-    {"plugins":[
-     {"id":"org.beetlebug.nmea0183","name":"NMEA 0183","version":"1.0","origin":"bundled",
-      "status":"{\"state\":\"running\",\"items\":[{\"id\":\"row-a\",\"state\":\"connected\",\"detail\":\"44 msg/s\"},{\"id\":\"row-b\",\"state\":\"unreachable\",\"detail\":\"no route to host\"}]}",
-      "capabilities":[],"settings":[],
-      "lists":[{"key":"connections","group":"Connections",
-        "footer":"Give the address of your instrument network's gateway.",
-        "empty":"No connections yet.","add_label":"Add Connection","switch_key":"enabled",
-        "tab":"connections","max_rows":2,
-        "item_fields":[
-         {"key":"name","label":"Name","kind":"text","optional":true,"default":"","max_len":120},
-         {"key":"host","label":"Address","kind":"text","default":"","max_len":120},
-         {"key":"port","label":"Port","kind":"number","min":1,"max":65535,"default":10110},
-         {"key":"enabled","label":"On","kind":"toggle","default":true}],
-        "rows":[
-         {"id":"row-a","name":"Masthead","host":"192.168.1.50","port":10110,"enabled":true},
-         {"id":"row-b","name":"","host":"nav.local","port":10111,"enabled":false}]}]},
-     {"id":"org.beetlebug.ais","name":"AIS targets","version":"1.0","origin":"bundled",
-      "status":"Tracking 14 targets","capabilities":[],
-      "settings":[
-       {"key":"cpa_limit","label":"Closest approach (CPA)","desc":"Alarm when a vessel will pass closer than this.","kind":"number","unit":"m","min":93,"max":9260,"default":926,"group":"Collision alarm","tab":"alarms","value":926},
-       {"key":"cpa_alarm","label":"Collision alarm","desc":"Sound the alarm and colour the vessel red.","kind":"toggle","default":true,"group":"Collision alarm","tab":"alarms","value":true}]},
-     {"id":"org.example.grib","name":"GRIB weather","version":"0.4.1","origin":"installed",
-      "status":"{\"state\":\"degraded\",\"detail\":\"no file loaded\"}",
-      "capabilities":[{"cap":"net.http","sentence":"Fetch forecasts from the internet.","granted":false}],
-      "settings":[]}]}
-    """.trimIndent()
-
-    private val registry get() = PluginRegistry.parse(json)
+    private val registry get() = PluginRegistry(listOf(
+        PluginFixture.plugin(
+            "org.beetlebug.nmea0183", "NMEA 0183",
+            status = """{"state":"running","items":[""" +
+                """{"id":"row-a","state":"connected","detail":"44 msg/s"},""" +
+                """{"id":"row-b","state":"unreachable","detail":"no route to host"}]}""",
+            lists = listOf(PluginFixture.list(
+                "org.beetlebug.nmea0183", "connections", group = "Connections",
+                fields = listOf(
+                    PluginFixture.text("name", "Name", optional = true),
+                    PluginFixture.text("host", "Address"),
+                    PluginFixture.number("port", "Port", tab = "connections",
+                        min = 1.0, max = 65535.0, value = 10110.0),
+                    PluginFixture.toggle("enabled", "On", tab = "connections", on = true),
+                ),
+                footer = "Give the address of your instrument network's gateway.",
+                empty = "No connections yet.",
+                addLabel = "Add Connection",
+                // Two, so the editor stops offering Add at the cap.
+                maxRows = 2,
+            )),
+            rows = mapOf("connections" to listOf(
+                PluginFixture.row("row-a", mapOf(
+                    "name" to "Masthead", "host" to "192.168.1.50",
+                    "port" to "10110", "enabled" to "true",
+                )),
+                PluginFixture.row("row-b", mapOf(
+                    "name" to "", "host" to "nav.local",
+                    "port" to "10111", "enabled" to "false",
+                )),
+            )),
+        ),
+        PluginFixture.plugin(
+            "org.beetlebug.ais", "AIS targets",
+            status = "Tracking 14 targets",
+            fields = listOf(
+                PluginFixture.number("cpa_limit", "Closest approach (CPA)", unit = "m",
+                    group = "Collision alarm", tab = "alarms",
+                    min = 93.0, max = 9260.0, value = 926.0,
+                    desc = "Alarm when a vessel will pass closer than this."),
+                PluginFixture.toggle("cpa_alarm", "Collision alarm",
+                    group = "Collision alarm", tab = "alarms", on = true,
+                    desc = "Sound the alarm and colour the vessel red."),
+            ),
+        ),
+        PluginFixture.plugin(
+            "org.example.grib", "GRIB weather", origin = "installed",
+            status = """{"state":"degraded","detail":"no file loaded"}""",
+            capabilities = listOf(PluginFixture.cap(
+                "net.http", "Fetch forecasts from the internet.", granted = false)),
+        ),
+    ))
 
     private fun plugins() = PluginSettingsController(ctx, EngineAccess()) {}
 
@@ -148,11 +171,14 @@ class ConnectionEditorTest {
 
     /** An empty list says what the plugin says, not what the shell would. */
     @Test fun anEmptyListSaysWhatTheManifestSays() {
-        val empty = PluginRegistry.parse(
-            """{"plugins":[{"id":"x","name":"X","lists":[{"key":"k","group":"Servers",
-               "empty":"No servers yet.","add_label":"Add Server","tab":"connections",
-               "max_rows":8,"item_fields":[],"rows":[]}]}]}"""
-        )
+        val empty = PluginRegistry(listOf(PluginFixture.plugin(
+            "x", "X",
+            lists = listOf(PluginFixture.list(
+                "x", "k", group = "Servers", fields = emptyList(),
+                empty = "No servers yet.", addLabel = "Add Server",
+            )),
+            rows = mapOf("k" to emptyList()),
+        )))
         compose.setContent {
             LookoutTheme(dark = false) {
                 Column { PluginLists(empty, "connections", plugins(), first = true) }
@@ -193,11 +219,11 @@ class ConnectionEditorTest {
      * a control that does nothing is a question nobody asked.
      */
     @Test fun aGroupOnItsDefaultsOffersNoReset() {
-        val untouched = PluginRegistry.parse(
-            """{"plugins":[{"id":"x","name":"X","settings":[
-               {"key":"a","label":"A","kind":"number","min":0,"max":10,"default":5,"group":"G","tab":"alarms","value":5},
-               {"key":"b","label":"B","kind":"toggle","default":true,"group":"G","tab":"alarms","value":true}]}]}"""
-        )
+        val untouched = PluginRegistry(listOf(PluginFixture.plugin("x", "X", fields = listOf(
+            PluginFixture.number("a", "A", group = "G", tab = "alarms",
+                min = 0.0, max = 10.0, value = 5.0),
+            PluginFixture.toggle("b", "B", group = "G", tab = "alarms", on = true),
+        ))))
         compose.setContent {
             LookoutTheme(dark = false) {
                 Column { PluginGroups(untouched.groups("alarms"), plugins(), first = true) }
@@ -208,11 +234,11 @@ class ConnectionEditorTest {
 
     /** Once something has moved, the way back appears. */
     @Test fun aChangedGroupOffersTheWayBack() {
-        val moved = PluginRegistry.parse(
-            """{"plugins":[{"id":"x","name":"X","settings":[
-               {"key":"a","label":"A","kind":"number","min":0,"max":10,"default":5,"group":"G","tab":"alarms","value":9},
-               {"key":"b","label":"B","kind":"toggle","default":true,"group":"G","tab":"alarms","value":true}]}]}"""
-        )
+        val moved = PluginRegistry(listOf(PluginFixture.plugin("x", "X", fields = listOf(
+            PluginFixture.number("a", "A", group = "G", tab = "alarms",
+                min = 0.0, max = 10.0, value = 9.0, default = 5.0),
+            PluginFixture.toggle("b", "B", group = "G", tab = "alarms", on = true),
+        ))))
         compose.setContent {
             LookoutTheme(dark = false) {
                 Column { PluginGroups(moved.groups("alarms"), plugins(), first = true) }
@@ -223,10 +249,10 @@ class ConnectionEditorTest {
 
     /** A toggle flipped off its default counts as moved too. */
     @Test fun aFlippedToggleAlsoOffersTheWayBack() {
-        val moved = PluginRegistry.parse(
-            """{"plugins":[{"id":"x","name":"X","settings":[
-               {"key":"b","label":"B","kind":"toggle","default":true,"group":"G","tab":"alarms","value":false}]}]}"""
-        )
+        val moved = PluginRegistry(listOf(PluginFixture.plugin("x", "X", fields = listOf(
+            PluginFixture.toggle("b", "B", group = "G", tab = "alarms",
+                on = false, default = true),
+        ))))
         compose.setContent {
             LookoutTheme(dark = false) {
                 Column { PluginGroups(moved.groups("alarms"), plugins(), first = true) }
@@ -315,10 +341,9 @@ class ConnectionEditorTest {
     }
 
     @Test fun aPluginWithNoCapabilitiesSaysSo() {
-        val plain = PluginRegistry.parse(
-            """{"plugins":[{"id":"x","name":"Routes","origin":"installed",
-               "status":"","capabilities":[],"settings":[]}]}"""
-        )
+        val plain = PluginRegistry(listOf(
+            PluginFixture.plugin("x", "Routes", origin = "installed"),
+        ))
         compose.setContent {
             LookoutTheme(dark = false) {
                 Column(Modifier.verticalScroll(rememberScrollState())) {

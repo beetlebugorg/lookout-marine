@@ -2040,3 +2040,373 @@ export fn Java_org_beetlebug_lookout_Lookout_nLicensesJson(env: [*c]j.JNIEnv, cl
     _ = cls;
     return env_(env).NewStringUTF.?(env, lookout_licenses_json(null));
 }
+
+// ---- the plugin registry, read typed ----------------------------------------
+//
+// lookout_plugins_read hands back a snapshot: one arena, every pointer
+// borrowed, alive until nPluginsFree. The shell holds it for the length of one
+// decode and no longer.
+//
+// Every accessor is addressed by index rather than by a handle per object, so
+// the shell holds one long and the snapshot owns everything else. `field`
+// selects which member, and the ordinals are mirrored in Lookout.java.
+
+const c_plugins = opaque {};
+const c_plugin = opaque {};
+const c_cap = opaque {};
+const c_setting = opaque {};
+const c_item = opaque {};
+const c_value = opaque {};
+const c_service = opaque {};
+
+extern fn lookout_plugins_read(h: ?*anyopaque) ?*c_plugins;
+extern fn lookout_plugins_free(p: ?*c_plugins) void;
+extern fn lookout_plugins_all(p: ?*const c_plugins, out_n: *usize) ?[*]const ?*const c_plugin;
+extern fn lookout_plugin_capabilities(p: ?*const c_plugin, out_n: *usize) ?[*]const ?*const c_cap;
+extern fn lookout_plugin_capability_allows(c: ?*const c_cap, out_n: *usize) ?[*]const ?[*:0]const u8;
+extern fn lookout_plugin_settings(p: ?*const c_plugin, out_n: *usize) ?[*]const ?*const c_setting;
+extern fn lookout_plugin_setting_fields(s: ?*const c_setting, out_n: *usize) ?[*]const ?*const c_setting;
+extern fn lookout_plugin_setting_items(s: ?*const c_setting, out_n: *usize) ?[*]const ?*const c_item;
+extern fn lookout_plugin_item_values(it: ?*const c_item, out_n: *usize) ?[*]const ?*const c_value;
+extern fn lookout_plugin_setting_services(s: ?*const c_setting, out_n: *usize) ?[*]const ?*const c_service;
+extern fn lookout_plugin_service_values(svc: ?*const c_service, out_n: *usize) ?[*]const ?*const c_value;
+
+const CPlugin = extern struct {
+    id: ?[*:0]const u8,
+    name: ?[*:0]const u8,
+    version: ?[*:0]const u8,
+    status: ?[*:0]const u8,
+    origin: c_int,
+    live: c_int,
+};
+
+const CCapability = extern struct {
+    name: ?[*:0]const u8,
+    sentence: ?[*:0]const u8,
+    granted: c_int,
+};
+
+const CSetting = extern struct {
+    key: ?[*:0]const u8,
+    label: ?[*:0]const u8,
+    desc: ?[*:0]const u8,
+    group: ?[*:0]const u8,
+    kind: c_int,
+    section: c_int,
+    unit: ?[*:0]const u8,
+    min: f64,
+    max: f64,
+    default_number: f64,
+    default_text: ?[*:0]const u8,
+    placeholder: ?[*:0]const u8,
+    optional: c_int,
+    max_text: usize,
+    footer: ?[*:0]const u8,
+    empty: ?[*:0]const u8,
+    add_label: ?[*:0]const u8,
+    switch_key: ?[*:0]const u8,
+    max_items: usize,
+    value: f64,
+};
+
+const CItem = extern struct { id: ?[*:0]const u8 };
+
+const CValue = extern struct {
+    key: ?[*:0]const u8,
+    kind: c_int,
+    number: f64,
+    text: ?[*:0]const u8,
+};
+
+const CService = extern struct { type: ?[*:0]const u8 };
+
+/// The snapshot behind a jlong, or null. A bit-pattern round-trip, for the
+/// same reason fromLong is one.
+fn readOf(p: j.jlong) ?*c_plugins {
+    if (p == 0) return null;
+    return @ptrFromInt(@as(usize, @bitCast(p)));
+}
+
+/// The i'th plugin, or null when the index is past the end.
+fn pluginAt(p: j.jlong, i: j.jint) ?*const CPlugin {
+    const read = readOf(p) orelse return null;
+    var n: usize = 0;
+    const all = lookout_plugins_all(read, &n) orelse return null;
+    if (i < 0 or @as(usize, @intCast(i)) >= n) return null;
+    return @ptrCast(@alignCast(all[@intCast(i)] orelse return null));
+}
+
+/// The s'th setting of the i'th plugin, and when `field` is 0 or more, that
+/// setting's field'th list field instead.
+fn settingAt(p: j.jlong, i: j.jint, s: j.jint, field: j.jint) ?*const CSetting {
+    const plug = pluginAt(p, i) orelse return null;
+    var n: usize = 0;
+    const list = lookout_plugin_settings(@ptrCast(plug), &n) orelse return null;
+    if (s < 0 or @as(usize, @intCast(s)) >= n) return null;
+    const setting: *const CSetting = @ptrCast(@alignCast(list[@intCast(s)] orelse return null));
+    if (field < 0) return setting;
+    var fn_: usize = 0;
+    const fields = lookout_plugin_setting_fields(@ptrCast(setting), &fn_) orelse return null;
+    if (@as(usize, @intCast(field)) >= fn_) return null;
+    return @ptrCast(@alignCast(fields[@intCast(field)] orelse return null));
+}
+
+/// A borrowed C string as a Java string. A null pointer arrives as "", because
+/// the shell's model has no nullable text.
+fn jstr(env: [*c]j.JNIEnv, s: ?[*:0]const u8) j.jstring {
+    return env_(env).NewStringUTF.?(env, s orelse "");
+}
+
+/// A list of borrowed C strings as a String[].
+fn jstrArray(env: [*c]j.JNIEnv, items: []const ?[*:0]const u8) j.jobjectArray {
+    const cls = env_(env).FindClass.?(env, "java/lang/String") orelse return null;
+    const arr = env_(env).NewObjectArray.?(env, @intCast(items.len), cls, null) orelse return null;
+    for (items, 0..) |it, k| {
+        const js = jstr(env, it) orelse continue;
+        env_(env).SetObjectArrayElement.?(env, arr, @intCast(k), js);
+        // The default local-ref table is small.
+        env_(env).DeleteLocalRef.?(env, js);
+    }
+    return arr;
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nPluginsRead(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) j.jlong {
+    _ = env;
+    _ = cls;
+    const h = fromLong(hl) orelse return 0;
+    const read = lookout_plugins_read(h.l) orelse return 0;
+    return @bitCast(@as(u64, @intFromPtr(read)));
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nPluginsFree(env: [*c]j.JNIEnv, cls: j.jclass, p: j.jlong) void {
+    _ = env;
+    _ = cls;
+    lookout_plugins_free(readOf(p));
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nPluginCount(env: [*c]j.JNIEnv, cls: j.jclass, p: j.jlong) j.jint {
+    _ = env;
+    _ = cls;
+    const read = readOf(p) orelse return 0;
+    var n: usize = 0;
+    _ = lookout_plugins_all(read, &n);
+    return @intCast(n);
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nPluginText(env: [*c]j.JNIEnv, cls: j.jclass, p: j.jlong, i: j.jint, field: j.jint) j.jstring {
+    _ = cls;
+    const plug = pluginAt(p, i) orelse return jstr(env, null);
+    return jstr(env, switch (field) {
+        0 => plug.id,
+        1 => plug.name,
+        2 => plug.version,
+        3 => plug.status,
+        else => null,
+    });
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nPluginInt(env: [*c]j.JNIEnv, cls: j.jclass, p: j.jlong, i: j.jint, field: j.jint) j.jint {
+    _ = env;
+    _ = cls;
+    const plug = pluginAt(p, i) orelse return 0;
+    return switch (field) {
+        0 => plug.origin,
+        1 => plug.live,
+        else => 0,
+    };
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nCapCount(env: [*c]j.JNIEnv, cls: j.jclass, p: j.jlong, i: j.jint) j.jint {
+    _ = env;
+    _ = cls;
+    const plug = pluginAt(p, i) orelse return 0;
+    var n: usize = 0;
+    _ = lookout_plugin_capabilities(@ptrCast(plug), &n);
+    return @intCast(n);
+}
+
+fn capAt(p: j.jlong, i: j.jint, c: j.jint) ?*const CCapability {
+    const plug = pluginAt(p, i) orelse return null;
+    var n: usize = 0;
+    const caps = lookout_plugin_capabilities(@ptrCast(plug), &n) orelse return null;
+    if (c < 0 or @as(usize, @intCast(c)) >= n) return null;
+    return @ptrCast(@alignCast(caps[@intCast(c)] orelse return null));
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nCapText(env: [*c]j.JNIEnv, cls: j.jclass, p: j.jlong, i: j.jint, c: j.jint, field: j.jint) j.jstring {
+    _ = cls;
+    const cap = capAt(p, i, c) orelse return jstr(env, null);
+    return jstr(env, if (field == 0) cap.name else cap.sentence);
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nCapGranted(env: [*c]j.JNIEnv, cls: j.jclass, p: j.jlong, i: j.jint, c: j.jint) j.jint {
+    _ = env;
+    _ = cls;
+    const cap = capAt(p, i, c) orelse return 0;
+    return cap.granted;
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nCapAllows(env: [*c]j.JNIEnv, cls: j.jclass, p: j.jlong, i: j.jint, c: j.jint) j.jobjectArray {
+    _ = cls;
+    const cap = capAt(p, i, c) orelse return jstrArray(env, &.{});
+    var n: usize = 0;
+    const allows = lookout_plugin_capability_allows(@ptrCast(cap), &n) orelse return jstrArray(env, &.{});
+    return jstrArray(env, allows[0..n]);
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nSettingCount(env: [*c]j.JNIEnv, cls: j.jclass, p: j.jlong, i: j.jint) j.jint {
+    _ = env;
+    _ = cls;
+    const plug = pluginAt(p, i) orelse return 0;
+    var n: usize = 0;
+    _ = lookout_plugin_settings(@ptrCast(plug), &n);
+    return @intCast(n);
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nSettingFieldCount(env: [*c]j.JNIEnv, cls: j.jclass, p: j.jlong, i: j.jint, s: j.jint) j.jint {
+    _ = env;
+    _ = cls;
+    const setting = settingAt(p, i, s, -1) orelse return 0;
+    var n: usize = 0;
+    _ = lookout_plugin_setting_fields(@ptrCast(setting), &n);
+    return @intCast(n);
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nSettingText(env: [*c]j.JNIEnv, cls: j.jclass, p: j.jlong, i: j.jint, s: j.jint, fi: j.jint, field: j.jint) j.jstring {
+    _ = cls;
+    const st = settingAt(p, i, s, fi) orelse return jstr(env, null);
+    return jstr(env, switch (field) {
+        0 => st.key,
+        1 => st.label,
+        2 => st.desc,
+        3 => st.group,
+        4 => st.unit,
+        5 => st.default_text,
+        6 => st.placeholder,
+        7 => st.footer,
+        8 => st.empty,
+        9 => st.add_label,
+        10 => st.switch_key,
+        else => null,
+    });
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nSettingNumber(env: [*c]j.JNIEnv, cls: j.jclass, p: j.jlong, i: j.jint, s: j.jint, fi: j.jint, field: j.jint) j.jdouble {
+    _ = env;
+    _ = cls;
+    const st = settingAt(p, i, s, fi) orelse return 0;
+    return switch (field) {
+        0 => st.min,
+        1 => st.max,
+        2 => st.default_number,
+        3 => st.value,
+        else => 0,
+    };
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nSettingInt(env: [*c]j.JNIEnv, cls: j.jclass, p: j.jlong, i: j.jint, s: j.jint, fi: j.jint, field: j.jint) j.jint {
+    _ = env;
+    _ = cls;
+    const st = settingAt(p, i, s, fi) orelse return 0;
+    return switch (field) {
+        0 => st.kind,
+        1 => st.section,
+        2 => st.optional,
+        3 => @intCast(st.max_text),
+        4 => @intCast(st.max_items),
+        else => 0,
+    };
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nItemCount(env: [*c]j.JNIEnv, cls: j.jclass, p: j.jlong, i: j.jint, s: j.jint) j.jint {
+    _ = env;
+    _ = cls;
+    const setting = settingAt(p, i, s, -1) orelse return 0;
+    var n: usize = 0;
+    _ = lookout_plugin_setting_items(@ptrCast(setting), &n);
+    return @intCast(n);
+}
+
+fn itemAt(p: j.jlong, i: j.jint, s: j.jint, it: j.jint) ?*const CItem {
+    const setting = settingAt(p, i, s, -1) orelse return null;
+    var n: usize = 0;
+    const items = lookout_plugin_setting_items(@ptrCast(setting), &n) orelse return null;
+    if (it < 0 or @as(usize, @intCast(it)) >= n) return null;
+    return @ptrCast(@alignCast(items[@intCast(it)] orelse return null));
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nItemId(env: [*c]j.JNIEnv, cls: j.jclass, p: j.jlong, i: j.jint, s: j.jint, it: j.jint) j.jstring {
+    _ = cls;
+    const item = itemAt(p, i, s, it) orelse return jstr(env, null);
+    return jstr(env, item.id);
+}
+
+/// One item's values as {key, text, key, text, ...}. Every cell is text: the
+/// row editor binds text controls, and the core coerces on the way back.
+export fn Java_org_beetlebug_lookout_Lookout_nItemValues(env: [*c]j.JNIEnv, cls: j.jclass, p: j.jlong, i: j.jint, s: j.jint, it: j.jint) j.jobjectArray {
+    _ = cls;
+    const item = itemAt(p, i, s, it) orelse return jstrArray(env, &.{});
+    var n: usize = 0;
+    const values = lookout_plugin_item_values(@ptrCast(item), &n) orelse return jstrArray(env, &.{});
+    return valuePairs(env, values[0..n]);
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nServices(env: [*c]j.JNIEnv, cls: j.jclass, p: j.jlong, i: j.jint, s: j.jint) j.jobjectArray {
+    _ = cls;
+    const setting = settingAt(p, i, s, -1) orelse return jstrArray(env, &.{});
+    var n: usize = 0;
+    const svcs = lookout_plugin_setting_services(@ptrCast(setting), &n) orelse return jstrArray(env, &.{});
+    const cls_s = env_(env).FindClass.?(env, "java/lang/String") orelse return null;
+    const arr = env_(env).NewObjectArray.?(env, @intCast(n), cls_s, null) orelse return null;
+    for (svcs[0..n], 0..) |sv, k| {
+        const svc: *const CService = @ptrCast(@alignCast(sv orelse continue));
+        const js = jstr(env, svc.type) orelse continue;
+        env_(env).SetObjectArrayElement.?(env, arr, @intCast(k), js);
+        env_(env).DeleteLocalRef.?(env, js);
+    }
+    return arr;
+}
+
+/// What a row added from a find has set beyond its name, address and port, as
+/// {key, text, ...}.
+export fn Java_org_beetlebug_lookout_Lookout_nServiceSet(env: [*c]j.JNIEnv, cls: j.jclass, p: j.jlong, i: j.jint, s: j.jint, sv: j.jint) j.jobjectArray {
+    _ = cls;
+    const setting = settingAt(p, i, s, -1) orelse return jstrArray(env, &.{});
+    var n: usize = 0;
+    const svcs = lookout_plugin_setting_services(@ptrCast(setting), &n) orelse return jstrArray(env, &.{});
+    if (sv < 0 or @as(usize, @intCast(sv)) >= n) return jstrArray(env, &.{});
+    const svc: *const CService = @ptrCast(@alignCast(svcs[@intCast(sv)] orelse return jstrArray(env, &.{})));
+    var vn: usize = 0;
+    const values = lookout_plugin_service_values(@ptrCast(svc), &vn) orelse return jstrArray(env, &.{});
+    return valuePairs(env, values[0..vn]);
+}
+
+/// A run of values as {key, text, key, text, ...}. A number is written the way
+/// the shell writes numbers back, and a toggle as "true" or "false".
+fn valuePairs(env: [*c]j.JNIEnv, values: []const ?*const c_value) j.jobjectArray {
+    const cls_s = env_(env).FindClass.?(env, "java/lang/String") orelse return null;
+    const arr = env_(env).NewObjectArray.?(env, @intCast(values.len * 2), cls_s, null) orelse return null;
+    var buf: [64]u8 = undefined;
+    for (values, 0..) |vp, k| {
+        const v: *const CValue = @ptrCast(@alignCast(vp orelse continue));
+        const key = jstr(env, v.key) orelse continue;
+        env_(env).SetObjectArrayElement.?(env, arr, @intCast(k * 2), key);
+        env_(env).DeleteLocalRef.?(env, key);
+
+        const text: j.jstring = switch (v.kind) {
+            // TOGGLE
+            1 => jstr(env, if (v.number != 0) "true" else "false"),
+            // NUMBER
+            0 => blk: {
+                const z = std.fmt.bufPrintZ(&buf, "{d}", .{v.number}) catch break :blk jstr(env, "");
+                break :blk env_(env).NewStringUTF.?(env, z.ptr);
+            },
+            else => jstr(env, v.text),
+        };
+        if (text) |t| {
+            env_(env).SetObjectArrayElement.?(env, arr, @intCast(k * 2 + 1), t);
+            env_(env).DeleteLocalRef.?(env, t);
+        }
+    }
+    return arr;
+}
