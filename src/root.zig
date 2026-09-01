@@ -2444,7 +2444,10 @@ pub const Lookout = struct {
         writeMariner(self.store orelse return, self.mariner);
     }
 
-    fn writeMariner(store: *settings.Store, m: Mariner) void {
+    /// The write half, over a store rather than a handle: settings are settings
+    /// whether or not a chart is open, so a shell with none can still keep them.
+    /// Exported as lookout_store_write_mariner.
+    pub fn writeMariner(store: *settings.Store, m: Mariner) void {
         const g = settings.group_mariner;
         store.setNumber(g, "scheme", @floatFromInt(m.scheme));
         store.setNumber(g, "depth_unit", @floatFromInt(m.depth_unit));
@@ -2480,7 +2483,8 @@ pub const Lookout = struct {
     /// defaults and this device's scale. A key that is not there leaves the
     /// field alone, so a setting this build does not write yet keeps its
     /// default and one it no longer writes is ignored.
-    fn restoreMariner(store: *settings.Store, m: *Mariner) void {
+    /// Exported as lookout_store_read_mariner.
+    pub fn restoreMariner(store: *settings.Store, m: *Mariner) void {
         const g = settings.group_mariner;
         const num = struct {
             fn go(s: *settings.Store, key: []const u8) ?f64 {

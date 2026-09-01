@@ -6,7 +6,9 @@
 const std = @import("std");
 
 const capi = @import("../capi.zig");
+const lk = @import("../root.zig");
 const settings = @import("../settings.zig");
+const cc = @import("../c.zig").c;
 
 const gpa = capi.gpa;
 const capi_io = capi.capi_io;
@@ -35,6 +37,22 @@ export fn lookout_store_close(s: ?*lookout_store) void {
 /// Write anything waiting now, whatever the coalesce window says.
 export fn lookout_store_flush(s: ?*lookout_store) void {
     if (s) |x| x.flush();
+}
+
+// ---- the mariner settings, with no chart open --------------------------------
+
+/// Read the mariner's display settings out of a store. See lookout-shell.h.
+export fn lookout_store_read_mariner(s: ?*lookout_store, out: ?*cc.tile57_mariner) void {
+    const x = s orelse return;
+    const m = out orelse return;
+    lk.Lookout.restoreMariner(x, m);
+}
+
+/// Write the mariner's display settings into a store. See lookout-shell.h.
+export fn lookout_store_write_mariner(s: ?*lookout_store, m: ?*const cc.tile57_mariner) void {
+    const x = s orelse return;
+    const src = m orelse return;
+    lk.Lookout.writeMariner(x, src.*);
 }
 
 // ---- reading ------------------------------------------------------------------

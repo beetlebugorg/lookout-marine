@@ -175,6 +175,24 @@ void lookout_store_set_list(lookout_store *s, const char *group, const char *key
 /* Forget a key. Forgetting the last key of a group forgets the group. */
 void lookout_store_remove(lookout_store *s, const char *group, const char *key);
 
+/* The mariner's display settings, read out of a store and written into one with
+ * NO CHART OPEN. A settings screen is reachable before anything is opened and
+ * after everything is closed, and what it shows and what it saves must be the
+ * mariner's own choices either way.
+ *
+ * The read OVERLAYS: fill *m with lookout_mariner_defaults first, and a key the
+ * store does not hold leaves that field alone. The same fields cross as the
+ * engine's own save, so a setting made with no chart open is there when one is.
+ *
+ * `device_scale`, `ignore_scamin`, `scamin_filter_gate` and the viewing groups
+ * are not among them: the first is the device's, the next two are debug
+ * toggles, and the last is a borrowed pointer.
+ *
+ * With a chart open the ENGINE does this itself, on its own cadence. Use these
+ * only where there is no handle. */
+void lookout_store_read_mariner(lookout_store *s, tile57_mariner *out);
+void lookout_store_write_mariner(lookout_store *s, const tile57_mariner *m);
+
 /* Hand the store to a chart handle and the ENGINE keeps the camera pose and the
  * mariner's display settings in it: they are restored at once, the pose is
  * written down as the mariner moves, and both are written at lookout_close and
