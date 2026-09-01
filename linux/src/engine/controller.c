@@ -191,9 +191,10 @@ lk_chart_controller_tick (GtkWidget     *widget,
   return G_SOURCE_CONTINUE;
 }
 
-/* Back on the frame clock, WITHOUT lookout_frame_kick: a timer firing is not a
- * change the shell made, and clearing the engine's quiet count here would buy
- * three frame-clock ticks for every beat of the slow poll. */
+/* Back on the frame clock, WITHOUT lookout_frame_kick. A timer firing is not a
+ * change the shell made. Kicking here resets the engine's count of ticks since
+ * a change, which costs three frame-clock ticks per beat of the slow poll:
+ * 0.7% idle CPU against 0.2%. */
 static void
 lk_chart_controller_resume (LkChartController *self)
 {
