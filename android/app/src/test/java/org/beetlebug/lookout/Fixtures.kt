@@ -4,7 +4,7 @@ package org.beetlebug.lookout
  * The JSON the core hands the shell, as files.
  *
  * PROVENANCE. These are transcribed from the writers, not captured from a run:
- * `alertsJson` and `tablesJson` at src/plugin/broker.zig. The plugin content is
+ * `tablesJson` at src/plugin/broker.zig. The plugin content is
  * the shipped manifests verbatim (plugins/nmea0183, plugins/signalk,
  * plugins/ais).
  *
@@ -22,9 +22,6 @@ internal object Fixtures {
             "missing test fixture: $name"
         }.use { it.readBytes().toString(Charsets.UTF_8) }
 
-
-    /** Four alerts: two alarms, a warning, an acknowledged notice. */
-    val alerts: String get() = read("plugin-alerts.json")
 
     /** Two declared tables, one locatable and one not. */
     val tables: String get() = read("plugin-tables.json")

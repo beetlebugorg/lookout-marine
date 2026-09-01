@@ -57,7 +57,7 @@ class AlertController(appContext: Context, private val access: EngineAccess) {
      * chart on the press rather than at the next sample.
      */
     fun publish(l: Lookout) {
-        val got = PluginAlertSet.parse(l.pluginAlertsJson())
+        val got = PluginAlertSet.read(l)
         if (got == null) {
             // Nothing came back. The sampling carries on: giving up here would
             // leave the boat deaf for the rest of the session because the core

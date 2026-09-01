@@ -488,7 +488,14 @@ public final class Lookout implements AutoCloseable {
      * moves whenever the set changes, so a caller can leave the list alone
      * while it has not. Null when no plugin layer is up.
      */
-    public String pluginAlertsJson()             { return h == 0 ? null : nPluginAlertsJson(h); }
+
+    /**
+     * Every alert raised and not yet seen off: the seq, then seven strings per
+     * alert (id, plugin, severity, title, body, raised, acknowledged).
+     *
+     * Null is "the core said nothing", which is not "there are no alerts".
+     */
+    public String[] alerts()                     { return h == 0 ? null : nAlerts(h); }
 
     /**
      * Silence ONE alert: it stops sounding and stays listed as acknowledged
@@ -552,7 +559,7 @@ public final class Lookout implements AutoCloseable {
     private static native String[] nServiceSet(long p, int i, int s, int sv);
     private static native String nPluginConfigGet(long h, String id);
     private static native boolean nPluginConfigSet(long h, String id, String json);
-    private static native String nPluginAlertsJson(long h);
+    private static native String[] nAlerts(long h);
     private static native boolean nPluginAlertAck(long h, long id);
     // ---- follow mode and own ship ------------------------------------------
 

@@ -239,13 +239,12 @@ class LivePluginsTest {
 
     // ---- the alerts ---------------------------------------------------------
 
-    /** Nothing is alarming at the dock, but the payload still has to parse:
-     *  null would mean the core said nothing, which is a different state. */
-    @Test fun theAlertPayloadReadsAsAnEmptySetRatherThanAsSilence() {
-        withRegistry { _, _ ->
-            val set = org.beetlebug.lookout.plugins.PluginAlertSet
-                .parse(ChartEngine.get().lookout?.pluginAlertsJson())
-            assertNotNull("the alerts payload would not parse", set)
+    /** Nothing is alarming at the dock, and the read still has to come back:
+     *  null means the core said nothing, which is a different state. */
+    @Test fun theAlertsReadAsAnEmptySetRatherThanAsSilence() {
+        withRegistry { _, l ->
+            val set = org.beetlebug.lookout.plugins.PluginAlertSet.read(l)
+            assertNotNull("the alerts did not read", set)
             assertTrue("something is alarming with no instruments installed", set!!.alerts.isEmpty())
         }
     }

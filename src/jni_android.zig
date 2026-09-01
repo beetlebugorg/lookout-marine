@@ -2410,3 +2410,72 @@ fn valuePairs(env: [*c]j.JNIEnv, values: []const ?*const c_value) j.jobjectArray
     }
     return arr;
 }
+
+// ---- the alerts, read typed -------------------------------------------------
+
+const c_alerts = opaque {};
+const c_alert = opaque {};
+
+extern fn lookout_alerts_read(h: ?*anyopaque) ?*c_alerts;
+extern fn lookout_alerts_free(a: ?*c_alerts) void;
+extern fn lookout_alerts_seq(a: ?*const c_alerts) u64;
+extern fn lookout_alerts_all(a: ?*const c_alerts, out_n: *usize) ?[*]const ?*const c_alert;
+
+const CAlert = extern struct {
+    id: u64,
+    plugin: ?[*:0]const u8,
+    title: ?[*:0]const u8,
+    body: ?[*:0]const u8,
+    severity: c_int,
+    acknowledged: c_int,
+    raised: i64,
+};
+
+/// String[] nAlerts(long h) -- every alert raised and not yet seen off, as
+/// {seq, id, plugin, severity, title, body, raised, acknowledged} with the seq
+/// first and seven strings per alert after it. Null when no plugin layer is up,
+/// which is not the same as no alerts.
+///
+/// A flat array rather than an accessor per field: an alert has seven members
+/// and the set is short, so one crossing is cheaper than seven per row.
+export fn Java_org_beetlebug_lookout_Lookout_nAlerts(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) j.jobjectArray {
+    _ = cls;
+    const h = fromLong(hl) orelse return null;
+    const read = lookout_alerts_read(h.l) orelse return null;
+    defer lookout_alerts_free(read);
+
+    var n: usize = 0;
+    const all = lookout_alerts_all(read, &n) orelse return null;
+
+    const cls_s = env_(env).FindClass.?(env, "java/lang/String") orelse return null;
+    const arr = env_(env).NewObjectArray.?(env, @intCast(1 + n * 7), cls_s, null) orelse return null;
+
+    var buf: [32]u8 = undefined;
+    const put = struct {
+        fn num(e: [*c]j.JNIEnv, a: j.jobjectArray, at: usize, b: []u8, v: i64) void {
+            const z = std.fmt.bufPrintZ(b, "{d}", .{v}) catch return;
+            const s = env_(e).NewStringUTF.?(e, z.ptr) orelse return;
+            env_(e).SetObjectArrayElement.?(e, a, @intCast(at), s);
+            env_(e).DeleteLocalRef.?(e, s);
+        }
+        fn str(e: [*c]j.JNIEnv, a: j.jobjectArray, at: usize, v: ?[*:0]const u8) void {
+            const s = jstr(e, v) orelse return;
+            env_(e).SetObjectArrayElement.?(e, a, @intCast(at), s);
+            env_(e).DeleteLocalRef.?(e, s);
+        }
+    };
+
+    put.num(env, arr, 0, &buf, @bitCast(lookout_alerts_seq(read)));
+    for (all[0..n], 0..) |ap, k| {
+        const a: *const CAlert = @ptrCast(@alignCast(ap orelse continue));
+        const at = 1 + k * 7;
+        put.num(env, arr, at, &buf, @bitCast(a.id));
+        put.str(env, arr, at + 1, a.plugin);
+        put.num(env, arr, at + 2, &buf, a.severity);
+        put.str(env, arr, at + 3, a.title);
+        put.str(env, arr, at + 4, a.body);
+        put.num(env, arr, at + 5, &buf, a.raised);
+        put.num(env, arr, at + 6, &buf, a.acknowledged);
+    }
+    return arr;
+}

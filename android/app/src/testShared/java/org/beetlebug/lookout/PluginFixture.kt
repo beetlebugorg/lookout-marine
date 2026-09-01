@@ -250,6 +250,44 @@ object PluginFixture {
         ),
     )
 
+    // ---- the alerts ---------------------------------------------------------
+
+    /** One alert as the native writes it: seven strings. */
+    fun alert(
+        id: Long,
+        plugin: String,
+        severity: Int,
+        title: String,
+        body: String = "",
+        raised: Long = 0,
+        acknowledged: Boolean = false,
+    ) = listOf(
+        id.toString(), plugin, severity.toString(), title, body,
+        raised.toString(), if (acknowledged) "1" else "0",
+    )
+
+    /** A whole read: the seq, then the alerts. */
+    fun alerts(seq: Long, vararg alerts: List<String>): Array<String> =
+        (listOf(seq.toString()) + alerts.flatMap { it }).toTypedArray()
+
+    /** Two alarms, a warning and an acknowledged notice, in the core's order. */
+    val alertSet: Array<String> get() = alerts(
+        47,
+        alert(9001, "org.beetlebug.ais", SEVERITY_ALARM, "AIS CPA alarm",
+            body = "ANNE: CPA 124 m in 585 s", raised = 1_756_400_000_000L),
+        alert(9002, "org.beetlebug.ais", SEVERITY_ALARM, "AIS CPA alarm",
+            body = "BRAVO: CPA 90 m in 200 s", raised = 1_756_400_012_000L),
+        alert(9003, "org.beetlebug.nmea0183", SEVERITY_WARNING, "Gateway unreachable",
+            body = "nav.local:10111", raised = 1_756_399_000_000L),
+        alert(9004, "org.example.grib", SEVERITY_NOTICE, "Forecast is 9 hours old",
+            raised = 1_756_390_000_000L, acknowledged = true),
+    )
+
+    // lookout_alert_severity
+    const val SEVERITY_NOTICE = 0
+    const val SEVERITY_WARNING = 1
+    const val SEVERITY_ALARM = 2
+
     /** The five plugins, in load order. */
     val shipped: List<PluginInfo> = listOf(nmea0183, signalk, ais, grib, routes)
 }
