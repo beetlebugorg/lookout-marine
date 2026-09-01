@@ -19,6 +19,10 @@ extern "C" {
 
 typedef struct lookout lookout;
 
+/* The shell's settings file. lookout-shell.h has the calls; it is declared here
+ * because both that header and the set list in lookout-library.h need one. */
+typedef struct lookout_store lookout_store;
+
 /* A camera pose. rotation_deg is course-up rotation (0 = north-up). */
 typedef struct { double lon, lat, zoom, rotation_deg; } lookout_view;
 

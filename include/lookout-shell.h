@@ -121,9 +121,10 @@ const lookout_license *lookout_licenses_app(const lookout_licenses *l);
  *
  * No handle: a shell reads its store before it opens anything. */
 
-typedef struct lookout_store lookout_store;
-
-/* The groups. A shell that names its own group here names it for every shell. */
+/* `lookout_store` is declared in lookout.h, because the set list in
+ * lookout-library.h needs one too.
+ *
+ * The groups. A shell that names its own group here names it for every shell. */
 #define LOOKOUT_STORE_VIEW       "view"
 #define LOOKOUT_STORE_RECENTS    "recents"
 #define LOOKOUT_STORE_RASTER     "raster"

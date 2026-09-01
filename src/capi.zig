@@ -4,7 +4,7 @@
 //! hosts need no allocator.
 //!
 //! The rest of the ABI is in capi/: format.zig, frame.zig, library.zig,
-//! pick.zig, plugins.zig and settings.zig.
+//! pick.zig, plugins.zig, sets.zig and settings.zig.
 const std = @import("std");
 const builtin = @import("builtin");
 
@@ -608,6 +608,7 @@ comptime {
     _ = @import("capi/frame.zig");
     _ = @import("capi/library.zig");
     _ = @import("capi/pick.zig");
+    _ = @import("capi/sets.zig");
     _ = @import("capi/settings.zig");
     _ = @import("capi/plugins.zig");
     // The Android Java shell's JNI natives ride in the same archive (they

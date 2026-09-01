@@ -1,9 +1,9 @@
 //! The installed sets: the folders of charts the mariner added, which of them
 //! are drawn, and what each holds.
 //!
-//! A SET is a folder, or one .zip, which is how a chart agency publishes them.
-//! The chart is composed as the UNION of the sets switched on, so switching one
-//! off keeps it installed and takes it out of the chart.
+//! A SET is a folder, or one .zip, as a chart agency publishes them. The chart
+//! is composed as the UNION of the sets switched on, so switching one off keeps
+//! it installed and drops it from the chart.
 //!
 //! Every mutator returns whether anything changed. What a change MEANS is the
 //! shell's: reopen the chart, redraw a settings page. The one thing this
@@ -17,6 +17,7 @@ const std = @import("std");
 const library = @import("library.zig");
 const settings = @import("settings.zig");
 const Lock = @import("lock.zig").Lock;
+const sleepMs = @import("lock.zig").sleepMs;
 
 /// One row of the list, as a settings page or a first-run page draws it.
 pub const Set = extern struct {
@@ -391,3 +392,218 @@ pub const Sets = struct {
         openable.deinit(self.gpa);
     }
 };
+
+// ---- tests ---------------------------------------------------------------------
+
+const t = std.testing;
+
+/// A store and a sets model in a temp directory, with a folder of charts under
+/// it to add.
+const Fixture = struct {
+    tmp: std.testing.TmpDir,
+    dir: []u8,
+    io: std.Io = std.Io.Threaded.global_single_threaded.io(),
+    store: *settings.Store,
+
+    fn init() !Fixture {
+        const tmp = std.testing.tmpDir(.{ .iterate = true });
+        const dir = try std.fmt.allocPrint(t.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+        const io = std.Io.Threaded.global_single_threaded.io();
+        return .{ .tmp = tmp, .dir = dir, .store = try settings.Store.open(t.allocator, io, dir) };
+    }
+
+    fn deinit(self: *Fixture) void {
+        self.store.close();
+        t.allocator.free(self.dir);
+        self.tmp.cleanup();
+    }
+
+    /// A folder holding one baked cell and one picture, under the temp root.
+    fn folder(self: *Fixture, name: []const u8) ![]u8 {
+        try self.tmp.dir.createDirPath(self.io, name);
+        var buf: [256]u8 = undefined;
+        for ([_][]const u8{ "US5MD1MC.pmtiles", "ncds_08.mbtiles" }) |f| {
+            const sub = try std.fmt.bufPrint(&buf, "{s}/{s}", .{ name, f });
+            try self.tmp.dir.writeFile(self.io, .{ .sub_path = sub, .data = "x" });
+        }
+        return std.fmt.allocPrint(t.allocator, "{s}/{s}", .{ self.dir, name });
+    }
+
+    fn open(self: *Fixture) !*Sets {
+        return Sets.open(t.allocator, self.io, self.store);
+    }
+};
+
+/// Wait for every queued scan to land. The worker runs on its own thread.
+fn settle(s: *Sets) void {
+    for (0..2000) |_| {
+        s.mu.lock();
+        const idle = !s.running and s.queue.items.len == 0;
+        s.mu.unlock();
+        if (idle) return;
+        sleepMs(1);
+    }
+}
+
+test "a folder added is listed, scanned and saved" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const dir = try f.folder("Set A");
+    defer t.allocator.free(dir);
+
+    const s = try f.open();
+    defer s.close();
+    try t.expect(s.add(dir));
+    // Adding the same folder twice updates the row rather than making a second.
+    try t.expect(!s.add(dir));
+    settle(s);
+
+    const rows = s.all();
+    try t.expectEqual(@as(usize, 1), rows.len);
+    try t.expectEqualStrings(dir, std.mem.span(rows[0].path));
+    try t.expectEqual(@as(c_int, 1), rows[0].on);
+    try t.expectEqual(@as(c_int, 1), rows[0].scanned);
+    try t.expectEqual(@as(usize, 1), rows[0].charts);
+    try t.expectEqual(@as(usize, 1), rows[0].pictures);
+    try t.expectEqual(@as(c_int, 5), rows[0].band_lo);
+    try t.expectEqual(@as(c_int, 5), rows[0].band_hi);
+
+    // The path is in the store, and the cells are not: a folder changes
+    // underneath the app.
+    const saved = f.store.list(settings.group_chartsets, "paths");
+    try t.expectEqual(@as(usize, 1), saved.len);
+    try t.expectEqualStrings(dir, saved[0]);
+}
+
+test "a set switched off stays listed and drops out of the composition" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const a = try f.folder("Set A");
+    defer t.allocator.free(a);
+
+    const s = try f.open();
+    defer s.close();
+    try t.expect(s.add(a));
+    settle(s);
+    try t.expectEqual(@as(usize, 1), s.compose().len);
+
+    try t.expect(s.setOn(a, false));
+    // Setting the switch it already has changes nothing.
+    try t.expect(!s.setOn(a, false));
+    try t.expectEqual(@as(usize, 1), s.all().len);
+    try t.expect(!s.isOn(a));
+    try t.expectEqual(@as(usize, 0), s.compose().len);
+
+    try t.expect(s.setOn(a, true));
+    try t.expectEqual(@as(usize, 1), s.compose().len);
+}
+
+test "the composition is the union of the sets switched on, deduplicated" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const a = try f.folder("Set A");
+    defer t.allocator.free(a);
+    const b = try f.folder("Set B");
+    defer t.allocator.free(b);
+
+    const s = try f.open();
+    defer s.close();
+    try t.expect(s.add(a));
+    try t.expect(s.add(b));
+    settle(s);
+
+    const paths = s.compose();
+    try t.expectEqual(@as(usize, 2), paths.len);
+    // Sorted, so two shells reading the same library open it the same way.
+    try t.expect(std.mem.lessThan(u8, std.mem.span(paths[0]), std.mem.span(paths[1])));
+    // The picture is not a chart to compose.
+    for (paths) |p| try t.expect(std.mem.endsWith(u8, std.mem.span(p), ".pmtiles"));
+
+    // The same folder under both sets composes once. Adding the parent brings
+    // both cells in, and they are already listed.
+    try t.expect(s.add(f.dir));
+    settle(s);
+    var seen = std.StringHashMap(void).init(t.allocator);
+    defer seen.deinit();
+    for (s.compose()) |p| {
+        const r = try seen.getOrPut(std.mem.span(p));
+        try t.expect(!r.found_existing);
+    }
+}
+
+test "a set removed goes from the list and the store" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const a = try f.folder("Set A");
+    defer t.allocator.free(a);
+
+    const s = try f.open();
+    defer s.close();
+    try t.expect(s.add(a));
+    settle(s);
+    try t.expect(s.remove(a));
+    try t.expect(!s.remove(a));
+    try t.expectEqual(@as(usize, 0), s.all().len);
+    try t.expectEqual(@as(usize, 0), f.store.list(settings.group_chartsets, "paths").len);
+}
+
+test "the saved list and the switches come back on the next launch" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const a = try f.folder("Set A");
+    defer t.allocator.free(a);
+    const b = try f.folder("Set B");
+    defer t.allocator.free(b);
+
+    {
+        const s = try f.open();
+        defer s.close();
+        try t.expect(s.add(a));
+        try t.expect(s.add(b));
+        try t.expect(s.setOn(b, false));
+        settle(s);
+    }
+
+    const s = try f.open();
+    defer s.close();
+    settle(s);
+    const rows = s.all();
+    try t.expectEqual(@as(usize, 2), rows.len);
+    // In the order added.
+    try t.expectEqualStrings(a, std.mem.span(rows[0].path));
+    try t.expectEqualStrings(b, std.mem.span(rows[1].path));
+    try t.expectEqual(@as(c_int, 1), rows[0].on);
+    try t.expectEqual(@as(c_int, 0), rows[1].on);
+}
+
+test "a scan landing raises the changed flag once" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const a = try f.folder("Set A");
+    defer t.allocator.free(a);
+
+    const s = try f.open();
+    defer s.close();
+    _ = s.takeChanged();
+    try t.expect(s.add(a));
+    settle(s);
+    try t.expect(s.takeChanged());
+    try t.expect(!s.takeChanged());
+}
+
+test "a folder that is not there is listed and scans to nothing" {
+    var f = try Fixture.init();
+    defer f.deinit();
+
+    const s = try f.open();
+    defer s.close();
+    // A drive that is not plugged in. The set stays listed, because a folder
+    // that did not answer is not a folder the mariner threw away.
+    try t.expect(s.add("/no/such/folder"));
+    settle(s);
+    const rows = s.all();
+    try t.expectEqual(@as(usize, 1), rows.len);
+    try t.expectEqual(@as(usize, 0), rows[0].charts);
+    try t.expectEqual(@as(usize, 0), s.compose().len);
+    try t.expectEqual(@as(usize, 1), f.store.list(settings.group_chartsets, "paths").len);
+}
