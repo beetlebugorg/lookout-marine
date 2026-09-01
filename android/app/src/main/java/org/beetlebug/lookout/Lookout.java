@@ -69,7 +69,7 @@ public final class Lookout implements AutoCloseable {
      * Add baked charts to the open library; answers how many opened. The
      * heavy per-cell opens run off the engine lock, so a background thread
      * may call this while the chart draws — how the link-first startup
-     * brings the library aboard behind an already-drawing chart link.
+     * brings the library installed behind an already-drawing chart link.
      */
     public int chartsAdd(String[] paths) { return h == 0 ? 0 : nChartsAdd(h, paths); }
 
@@ -465,7 +465,7 @@ public final class Lookout implements AutoCloseable {
     public boolean rasterShown(int i)            { return h != 0 && nRasterShown(h, i); }
     public void rasterSetShown(int i, boolean on){ if (h != 0) nRasterSetShown(h, i, on); }
     public void setChartHidden(boolean hidden)   { if (h != 0) nSetChartHidden(h, hidden); }
-    /** How many survey cells are aboard. 0 means no ENC: a raster set saved
+    /** How many survey cells are installed. 0 means no ENC: a raster set saved
      *  hidden must draw anyway, or the sea is blank. */
     public int chartsCount()                     { return h == 0 ? 0 : nChartsCount(h); }
 

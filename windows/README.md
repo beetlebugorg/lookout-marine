@@ -136,7 +136,7 @@ quietly lost test suite.
 | `src/hud/` | `lk_text` — the scale, the usage band and the position, as the readouts say them |
 | `src/hud/ui/` | The readout capsule and the scale bar, the startup loader phases, the overlay bubbles and the GPS and follow pills, the zoom-to-scale panel, and `lk_format` (the brushes) |
 | `src/library/` | `lk_paths` (chart and raster discovery, the agency name, the set names) and `lk_bake` (the import's order and progress) |
-| `src/library/ui/` | The sets aboard and their switches, charts by link, the raster underlay and its pill, the import panel |
+| `src/library/ui/` | The installed sets and their switches, charts by link, the raster underlay and its pill, the import panel |
 | `src/plugins/` | `lk_plugin_registry` (the settings schema and the config object), `lk_table` (the declarations, the rows and the mariner's units), `lk_alerts` (the severity and audibility rules), `lk_discovery` (DNS-SD) |
 | `src/plugins/ui/` | The plugin settings sections and connection lists, the `.lkplug` consent sheet and install, the table windows, the alert strip and its siren |
 | `src/settings/ui/` | The mariner settings window: the section list, the pages, the debounced apply. No model of its own yet — its pages read the core's mariner struct and the plugin registry direct |

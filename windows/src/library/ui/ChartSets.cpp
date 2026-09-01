@@ -1,6 +1,6 @@
-// Chart sets: the folders of charts the mariner has aboard, each with an
-// on/off switch. Mirrors the macOS model (ChartSets.swift / AppModel "sets
-// aboard"): a set is a folder — the baked library, a folder of .pmtiles, a
+// Chart sets: the folders of charts the mariner has installed, each with an
+// on/off switch. Mirrors the macOS model (ChartSets.swift / AppModel
+// "installed sets"): a set is a folder — the baked library, a folder of .pmtiles, a
 // folder of pictures — and what the engine opens is the UNION of the
 // switched-on sets, deduplicated and sorted. A set whose water is not
 // today's water is switched off, not removed.

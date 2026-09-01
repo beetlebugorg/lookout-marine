@@ -50,9 +50,9 @@ struct _LkAppModel {
   int      fix_state;
   double   fix_lon, fix_lat;
 
-  /* The chart library: the sets aboard, which are switched off, and what the
+  /* The chart library: the installed sets, which are switched off, and what the
    * background metadata scans have learned about each. */
-  LkChartSets *chart_sets; /* the library: what is aboard, and what is on */
+  LkChartSets *chart_sets; /* the library: what is installed, and what is on */
 
   /* The raster charts the mariner installed, and the state the engine reports
    * for them over the water in view. */
@@ -411,8 +411,8 @@ lk_app_model_initial_chart_paths (LkAppModel *self)
     }
 
   /* The library: every set switched on, as one chart. */
-  const char *const *aboard = lk_chart_sets_paths (self->chart_sets);
-  if (aboard != NULL && aboard[0] != NULL)
+  const char *const *installed = lk_chart_sets_paths (self->chart_sets);
+  if (installed != NULL && installed[0] != NULL)
     {
       char **cells = lk_chart_sets_compose (self->chart_sets);
       if (g_strv_length (cells) > 0)
@@ -473,11 +473,11 @@ lk_app_model_open_chart (LkAppModel *self, const char *path)
     }
 
   /* A single cell is a set of one. It joins the library like a folder does,
-   * so it survives a restart and composes with what is already aboard. */
+   * so it survives a restart and composes with what is already installed. */
   lk_app_model_open_prepared (self, path);
 }
 
-/* Open the LIBRARY with `source` aboard: the source goes on the set list,
+/* Open the LIBRARY with `source` added: the source goes on the set list,
  * switched on, and the chart opens as the union of every set switched on —
  * what is ready in each folder, plus anything a bake put in its prepared
  * directory. A second folder composes with the first instead of replacing

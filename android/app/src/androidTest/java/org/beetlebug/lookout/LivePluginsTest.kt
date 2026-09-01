@@ -219,7 +219,7 @@ class LivePluginsTest {
             val set = org.beetlebug.lookout.plugins.PluginAlertSet
                 .parse(ChartEngine.get().lookout?.pluginAlertsJson())
             assertNotNull("the alerts payload would not parse", set)
-            assertTrue("something is alarming with no instruments aboard", set!!.alerts.isEmpty())
+            assertTrue("something is alarming with no instruments installed", set!!.alerts.isEmpty())
         }
     }
 

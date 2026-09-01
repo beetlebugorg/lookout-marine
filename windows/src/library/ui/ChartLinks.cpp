@@ -116,7 +116,7 @@ namespace
     }
 
     // The path a local url names, or an empty string when it names a host.
-    // A mariner's own style.json is a real way to get a chart aboard —
+    // A mariner's own style.json is a real way to install a chart —
     // offline, or one they wrote themselves.
     std::string LocalPath(std::string const &url)
     {

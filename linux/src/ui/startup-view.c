@@ -3,7 +3,7 @@
  * Two pages, both overlays the window hides once the chart draws: the loader
  * with its three steps while a chart opens, and the first-run page that says
  * where charts come from. The list of sets the mariner switched off belongs to
- * the second one, because that is the one case where charts are aboard and the
+ * the second one, because that is the one case where charts are installed and the
  * chart is still blank.
  */
 #include "ui/startup-view.h"
@@ -21,7 +21,7 @@ lk_switched_off_toggled (GtkSwitch *sw, GParamSpec *pspec, gpointer user_data)
     lk_app_model_set_chart_set_on (self->model, path, TRUE);
 }
 
-/* The "Switched off" list on the empty page: the sets aboard when every one is
+/* The "Switched off" list on the empty page: the installed sets when every one is
  * off, each with a switch to bring it back. When any set is on the chart draws
  * and this page is not showing, so the list stays hidden. */
 void
@@ -243,7 +243,7 @@ lk_empty_state_note (GtkWidget *box, const char *icon_name, const char *markup)
   gtk_box_append (GTK_BOX (box), row);
 }
 
-/* The first thing a mariner sees, before any chart is aboard.
+/* The first thing a mariner sees, before any chart is installed.
  *
  * It answers three questions in the order they are asked: what is this
  * program for, why is it empty, what do I do now — and it closes with the one
@@ -298,7 +298,7 @@ lk_window_build_empty_state (void)
   gtk_widget_set_halign (buttons, GTK_ALIGN_START);
   gtk_widget_set_margin_bottom (buttons, 14);
 
-  /* The sets that are aboard but switched off. When every set is off the chart
+  /* The sets that are installed but switched off. When every set is off the chart
      is empty, so this page shows instead — with a switch to bring each back,
      rather than sending the mariner to settings to find them. Filled from the
      model on chart-sets-changed. */

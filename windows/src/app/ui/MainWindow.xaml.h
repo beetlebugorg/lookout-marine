@@ -255,10 +255,10 @@ namespace winrt::LookoutMarine::implementation
         void ApplyTableTheme(Microsoft::UI::Xaml::ElementTheme want);   // plugins/ui/Tables.cpp
         void ThemeSettingsPane(Microsoft::UI::Xaml::ElementTheme want); // settings/ui/Settings.cpp
 
-        // ---- chart sets (the folders of charts aboard) ----------------------
+        // ---- chart sets (the folders of installed charts) ----------------------
         // A set is a folder — the baked library, a folder of .pmtiles, a
         // folder of pictures — with an on/off switch. What opens is the UNION
-        // of the switched-on sets. Mirrors the macOS "sets aboard" model.
+        // of the switched-on sets. Mirrors the macOS "installed sets" model.
         struct ChartSetRow
         {
             std::string path;

@@ -641,7 +641,7 @@ lk_store_free_rasters(char **paths, int *enabled)
 
 /* ---- chart sets ----------------------------------------------------------- */
 
-/* chartsets.list: the folders of charts the mariner has aboard, one per line
+/* chartsets.list: the folders of charts the mariner has installed, one per line
  * "1|path" / "0|path" — the flag is the set's on/off switch (a set is
  * switched off, not removed, when its water is not today's water). The same
  * shape and the same temp-file replace as rasters.list. */
@@ -741,7 +741,7 @@ edit_chartsets(const char *path, int op, int arg)
         if (hit && op == 0) {
             store_unlock();
             lk_store_free_rasters(existing, on);
-            return; /* already aboard, and its switch is the mariner's */
+            return; /* already installed, and its switch is the mariner's */
         }
         paths[n] = existing[i];
         flags[n] = (hit && op == 2) ? (arg ? 1 : 0) : on[i];

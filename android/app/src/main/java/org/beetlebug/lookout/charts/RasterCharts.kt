@@ -91,7 +91,7 @@ class RasterCharts(appContext: Context) {
     /**
      * Record which sets are drawn, from the engine's own answers — the engine
      * owns the election; the shell never tracks it, only remembers it.
-     * Entries for sets not aboard this launch are KEPT (see [hidden]).
+     * Entries for sets not installed this launch are KEPT (see [hidden]).
      */
     fun noteShown(sets: List<Pair<String, Boolean>>) {
         val seen = sets.map { it.first }.toSet()

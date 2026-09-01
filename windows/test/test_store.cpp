@@ -1,7 +1,7 @@
 /* What the shell writes down.
  *
  * The store is where a mariner's own decisions live between launches: where
- * the camera was, which chart sets are aboard, which pictures they switched
+ * the camera was, which chart sets are installed, which pictures they switched
  * off, what the display settings are. Two things matter more than the rest:
  *
  *   - A pose that would strand the camera is REFUSED at load, not saved and
@@ -221,7 +221,7 @@ void TestStore()
         LK_EQ(lk_store_chart_hidden(), 0);
     }
 
-    Suite("lk_store: the chart sets aboard");
+    Suite("lk_store: the installed chart sets");
 
     LK_CASE("a set is switched off, not removed");
     {

@@ -1,6 +1,6 @@
 /* ui/settings/charts.h — the Charts page.
  *
- * The chart by link, the library of sets aboard, and the installed raster
+ * The chart by link, the library of installed sets, and the installed raster
  * charts.
  */
 #pragma once

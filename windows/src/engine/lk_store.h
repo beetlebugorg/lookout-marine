@@ -85,7 +85,7 @@ void   lk_store_save_hidden_sets(const char *const *names, int n);
 int    lk_store_chart_hidden(void);
 void   lk_store_set_chart_hidden(int hidden);
 
-/* Chart sets: the folders of charts the mariner has aboard, each with an
+/* Chart sets: the folders of charts the mariner has installed, each with an
  * on/off switch (switched off, not removed, when its water is not today's).
  * load returns a NULL-terminated array of malloc'd paths freed with
  * lk_store_free_rasters (same shape); *on_out (optional) receives a malloc'd

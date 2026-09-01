@@ -138,7 +138,7 @@ lk_links_read_done (GObject *source_object, GAsyncResult *result, gpointer user_
 }
 
 /* The path a local url names, or NULL when it names a host. A mariner's own
- * style.json is a real way to get a chart aboard — offline, or one they wrote
+ * style.json is a real way to install a chart — offline, or one they wrote
  * themselves. */
 static const char *
 lk_links_local_path (const char *url)

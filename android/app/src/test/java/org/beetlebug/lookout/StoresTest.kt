@@ -235,7 +235,7 @@ class StoresTest {
 
     /**
      * The engine owns the election; the shell only remembers it. An entry for a
-     * set not aboard this launch is KEPT, because an unplugged drive is not a
+     * set not installed this launch is KEPT, because an unplugged drive is not a
      * change of mind.
      */
     @Test fun aHiddenSetSurvivesItsFilesBeingAbsent() {

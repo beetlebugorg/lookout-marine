@@ -1,8 +1,8 @@
-/* library/sets.h — the chart sets aboard.
+/* library/sets.h — the installed chart sets.
  *
  * A SET is a folder the mariner added, or one .zip — how a chart agency
- * publishes them. The list answers what is aboard and what is being sailed
- * on: switching a set off keeps it aboard and takes it out of the chart, and
+ * publishes them. The list answers what is installed and what is being sailed
+ * on: switching a set off keeps it installed and takes it out of the chart, and
  * the chart is composed as the UNION of the sets switched on.
  *
  * Every mutator answers whether anything changed. The owner decides what a
@@ -44,14 +44,14 @@ typedef void (*LkChartSetsChanged) (GObject *owner);
 LkChartSets *lk_chart_sets_new (LkChartSetsChanged on_changed, GObject *owner);
 void lk_chart_sets_free (LkChartSets *self);
 
-/* Every set aboard, in the order added. Transfer full: a GPtrArray of
+/* Every installed set, in the order added. Transfer full: a GPtrArray of
  * LkChartSetRow. Titles and details fill in as the scans land. */
 GPtrArray *lk_chart_sets_rows (LkChartSets *self);
 
-/* The paths aboard, borrowed and NULL-terminated. */
+/* The installed paths, borrowed and NULL-terminated. */
 const char *const *lk_chart_sets_paths (LkChartSets *self);
 
-/* Is this set switched on? A set not aboard reads as on. */
+/* Is this set switched on? A set that is not listed reads as on. */
 gboolean lk_chart_sets_is_on (LkChartSets *self, const char *path);
 
 /* Put a source on the list, switched on. Opening a source is also selecting
@@ -62,7 +62,7 @@ gboolean lk_chart_sets_note (LkChartSets *self, const char *path);
 gboolean lk_chart_sets_set_on (LkChartSets *self, const char *path, gboolean on);
 
 /* Take a set off the list and delete what Lookout prepared from it. The
- * mariner's own folder is never touched. TRUE when the set was aboard. */
+ * mariner's own folder is never touched. TRUE when the set was installed. */
 gboolean lk_chart_sets_remove (LkChartSets *self, const char *path);
 
 /* The UNION of the sets switched on — the library the chart opens as.

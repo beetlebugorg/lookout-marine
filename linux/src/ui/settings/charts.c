@@ -1,7 +1,7 @@
 /* ui/settings/charts.c — the Charts page.
  *
  * Three lists, and what fills each of them: the chart by link that replaces
- * the portrayal, the library of sets aboard, and the raster charts the mariner
+ * the portrayal, the library of installed sets, and the raster charts the mariner
  * installed. All three rebuild off an idle, because a control in a list
  * changes the model and the model signals straight back.
  */
@@ -469,7 +469,7 @@ lk_chart_set_remove_clicked (GtkButton *button, gpointer user_data)
   g_object_unref (dialog);
 }
 
-/* What is aboard, and what is being sailed on: a switch and a title per set,
+/* What is installed, and what is being sailed on: a switch and a title per set,
  * the folder underneath so two sets from the same office are told apart, and
  * what the background scan counted once it has. */
 static void
@@ -617,7 +617,7 @@ lk_build_charts_page (LkSettings *settings)
       gtk_box_append (GTK_BOX (open), label);
     }
 
-  /* The library: the sets aboard, each with its switch. This is what decides
+  /* The library: the installed sets, each with its switch. This is what decides
    * the chart; Open above only reports what is on screen now. */
   GtkWidget *library = lk_section (page, "Chart library");
   lk_deferred_list_bind (&settings->sets, settings,
@@ -628,7 +628,7 @@ lk_build_charts_page (LkSettings *settings)
   lk_footer (library,
              "Each folder or archive added is a set. The chart is every set "
              "switched on, drawn as one seamless library; a set switched off "
-             "stays aboard and out of the chart.");
+             "stays installed and out of the chart.");
 
   GtkWidget *add = lk_section (page, NULL);
   GtkWidget *add_buttons = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);

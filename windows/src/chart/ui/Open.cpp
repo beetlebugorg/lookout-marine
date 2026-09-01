@@ -57,7 +57,7 @@ namespace winrt::LookoutMarine::implementation
             }
         }
 
-        // The sets aboard decide the startup open: the UNION of the
+        // The installed sets decide the startup open: the UNION of the
         // switched-on ones. With none saved (or none answering — a drive not
         // plugged in), fall through to the recents-based walk.
         LoadChartSets([this] {
@@ -138,7 +138,7 @@ namespace winrt::LookoutMarine::implementation
             InstallStoredRasters(); // the open destroyed the handle they rode on
             RestoreRasterShown();   // which sets were drawn, and the ENC-hidden switch
             StartAlertWatch();      // a collision alarm must not need a pane open
-            // A folder the mariner opened is aboard: it joins the set list
+            // A folder the mariner opened joins the set list
             // (an existing entry keeps its switch). A single file or a cell
             // path is not a folder and adopts nothing.
             AdoptChartSet(recent);

@@ -709,12 +709,12 @@ namespace winrt::LookoutMarine::implementation
             open_tb.FontSize(12);
             stack.Children().Append(open_tb);
 
-            // ---- the sets aboard: each folder of charts with its own
+            // ---- the installed sets: each folder of charts with its own
             // switch. What draws is the union of the switched-on ones; a set
             // whose water is not today's water is switched off, not removed.
             if (!chart_sets.empty())
             {
-                header(L"Charts aboard");
+                header(L"Installed charts");
                 for (auto const &set : chart_sets)
                 {
                     Controls::Grid srow;

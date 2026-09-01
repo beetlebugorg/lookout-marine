@@ -1,4 +1,4 @@
-/* library/sets.c — the chart sets aboard.
+/* library/sets.c — the installed chart sets.
  *
  * A SET is a folder the mariner added, or one .zip, which is how a chart
  * agency publishes one. This unit owns the list, which of them are switched
@@ -14,7 +14,7 @@
 #include <string.h>
 
 struct _LkChartSets {
-  GStrv       paths;    /* every set aboard, in the order added */
+  GStrv       paths;    /* every installed set, in the order added */
   GHashTable *off;      /* the paths switched off, as a set */
   GHashTable *meta;     /* path → LkSetMeta, filled by the background scan */
   gboolean    scanning; /* one scan at a time */
@@ -446,11 +446,11 @@ lk_meta_done_idle (gpointer data)
   /* The set can leave the library while its scan is in flight. Keeping the
    * result would pin stale metadata: a later re-add reads the cache and
    * never rescans. */
-  gboolean still_aboard = FALSE;
+  gboolean still_installed = FALSE;
   for (guint i = 0; self->paths != NULL && self->paths[i] != NULL; i++)
-    still_aboard = still_aboard || g_strcmp0 (self->paths[i], job->path) == 0;
+    still_installed = still_installed || g_strcmp0 (self->paths[i], job->path) == 0;
 
-  if (still_aboard)
+  if (still_installed)
     g_hash_table_replace (self->meta, g_strdup (job->path),
                           lk_set_meta_build (job->path, job->source, job->derived));
   self->scanning = FALSE;

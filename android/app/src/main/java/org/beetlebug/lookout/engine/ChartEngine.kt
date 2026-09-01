@@ -159,7 +159,7 @@ class ChartEngine private constructor() {
                 // An active chart link needs no cell library to paint. Open
                 // the engine EMPTY — about a second instead of the ten that
                 // mapping thousands of cells costs — so the link takes the
-                // screen first, and bring the library aboard behind it (the
+                // screen first, and bring the library installed behind it (the
                 // add drops the engine's locks for its file opens, so the
                 // chart keeps drawing). Without a link the library IS the
                 // first picture, and the loader stays honest about it.
@@ -177,7 +177,7 @@ class ChartEngine private constructor() {
                     val engine = l
                     libraryAdd = Thread({
                         val n = engine.chartsAdd(chartPaths)
-                        Log.i(TAG, "library aboard behind the chart link: $n cells")
+                        Log.i(TAG, "library installed behind the chart link: $n cells")
                     }, "lookout-library-add").also { it.start() }
                 }
             }

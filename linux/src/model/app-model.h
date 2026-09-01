@@ -33,14 +33,14 @@ char *lk_app_model_initial_source (LkAppModel *self);
 void lk_app_model_open_chart (LkAppModel *self, const char *path);
 void lk_app_model_open_chart_directory (LkAppModel *self, const char *dir);
 
-/* ---- the chart library: sets aboard -------------------------------------- */
+/* ---- the chart library: installed sets -------------------------------------- */
 
 /* A SET is a folder the mariner added, or one .zip — how a chart agency
- * publishes them. The list answers what is aboard and what is being sailed
- * on: switching a set off keeps it aboard and takes it out of the chart, and
+ * publishes them. The list answers what is installed and what is being sailed
+ * on: switching a set off keeps it installed and takes it out of the chart, and
  * the chart is composed as the UNION of the sets switched on. */
 
-/* Every set aboard, in the order added. Transfer full: a GPtrArray of
+/* Every installed set, in the order added. Transfer full: a GPtrArray of
  * LkChartSetRow. Titles and details fill in as the background scans land;
  * ::chart-sets-changed says when to ask again. */
 GPtrArray *lk_app_model_get_chart_sets (LkAppModel *self);

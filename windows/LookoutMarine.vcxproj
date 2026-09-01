@@ -197,7 +197,7 @@
     </ClCompile>
   </ItemGroup>
 
-  <!-- library: the charts aboard — sets, raster, the bake, charts by link. -->
+  <!-- library: the installed charts — sets, raster, the bake, charts by link. -->
   <ItemGroup>
     <ClCompile Include="src\library\ui\ChartSets.cpp" />
     <ClCompile Include="src\library\ui\ChartLinks.cpp" />

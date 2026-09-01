@@ -46,7 +46,7 @@ void     lk_store_save_raster_all (const char *const *paths,
 gboolean lk_store_load_chart_hidden (void);
 void     lk_store_save_chart_hidden (gboolean hidden);
 
-/* The chart SETS aboard — the folders and archives the mariner added — and
+/* The chart SETS installed — the folders and archives the mariner added — and
  * the ones switched off. Only the path and the switch are stored: the cells
  * are scanned again at launch, because a folder changes underneath the app.
  * Load answers NULL when no library was ever saved (the caller seeds it from
