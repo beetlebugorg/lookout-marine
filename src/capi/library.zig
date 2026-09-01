@@ -6,6 +6,7 @@ const std = @import("std");
 
 const lk = @import("../root.zig");
 const clinks = @import("../chartlinks.zig");
+const craster = @import("../ct/raster.zig");
 const capi = @import("../capi.zig");
 
 const lookout = capi.lookout;
@@ -350,6 +351,17 @@ export fn lookout_raster_available_name(h: ?*lookout, out_len: ?*usize) [*:0]con
     const n = l.rasterAvailableName();
     if (out_len) |o| o.* = n.len;
     return n.ptr;
+}
+
+/// What to call the set a raster file belongs to. See lookout-library.h.
+export fn lookout_raster_set_name_for(path: ?[*:0]const u8, out_len: ?*usize) ?[*]const u8 {
+    const p = path orelse {
+        if (out_len) |n| n.* = 0;
+        return null;
+    };
+    const name = craster.setNameFor(std.mem.span(p));
+    if (out_len) |n| n.* = name.len;
+    return name.ptr;
 }
 
 /// Show or hide the vector chart; the picture beneath it stays. See lookout.h.

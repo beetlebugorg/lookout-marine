@@ -380,6 +380,25 @@ int lookout_raster_enabled(lookout *h, const char *path);
  * set list changes. */
 const char *lookout_raster_available_name(lookout *h, size_t *out_len);
 
+/* What to call the set a raster file belongs to, WITHOUT opening it. A shell
+ * needs this before the file reaches the engine: to group a folder of files
+ * into the switches a mariner picks between, and to name the set an added file
+ * joined.
+ *
+ * Two shapes, because raster charts arrive two ways. A community MBTiles names
+ * its provider, and that is what a mariner chooses between: the same water
+ * ships from ArcGIS, Bing, Google and Navionics side by side. A BAKED sheet
+ * does not: `tile57 bake` writes one directory per sheet under a bake root, and
+ * a bundle holds hundreds, so a sheet at <root>/<stem>/<stem>.pmtiles belongs
+ * to <root>.
+ *
+ * This is the ENGINE'S OWN rule, the one it names the sets it draws by, so a
+ * shell that groups by anything else disagrees with what the pill then shows.
+ *
+ * Static storage: valid for the life of the process. *out_len (NULL to ignore)
+ * receives the length. NULL for a NULL path. */
+const char *lookout_raster_set_name_for(const char *path, size_t *out_len);
+
 /* Hide the vector chart WHERE A PICTURE COVERS IT. The chart stays everywhere
  * else, so the mariner never gives up the chart to look at the picture. The
  * scene stays built, so this is instant and never rebuilds.
