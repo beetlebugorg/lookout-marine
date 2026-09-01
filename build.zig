@@ -540,7 +540,7 @@ pub fn build(b: *std.Build) void {
         "src/shell/format.zig",
         "src/shell/frame.zig",
         "src/settings.zig",
-        "src/sets.zig",
+        "src/chartsets.zig",
         "src/plugins.zig",
         "src/plugin/store.zig",
         "src/plugin/aisstore.zig",

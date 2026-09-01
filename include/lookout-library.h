@@ -104,12 +104,12 @@ const char *lookout_scan_zip(const char *path, size_t *out_len);
  *
  * The metadata scans run in the background, ONE AT A TIME: two scans of a big
  * library compete for the same disk, and the full NOAA library is 7,217
- * archives. A scan landing raises lookout_sets_changed.
+ * archives. A scan landing raises lookout_chart_sets_changed.
  *
  * No chart handle. The sets exist before anything is open, and the first-run
  * page is drawn from them. */
 
-typedef struct lookout_sets lookout_sets;
+typedef struct lookout_chart_sets lookout_chart_sets;
 
 /* One row of the list, as a settings page or a first-run page draws it. */
 typedef struct {
@@ -134,37 +134,37 @@ typedef struct {
     /* The coarsest and finest usage bands present, 1 to 6. 0 when the set
      * holds no cell with a band in its name. */
     int band_lo, band_hi;
-} lookout_set;
+} lookout_chart_set;
 
 /* Load the saved list off `store` and start the background scans. NULL only
  * when the model cannot be allocated. */
-lookout_sets *lookout_sets_open(lookout_store *store);
-void          lookout_sets_close(lookout_sets *s);
+lookout_chart_sets *lookout_chart_sets_open(lookout_store *store);
+void                lookout_chart_sets_close(lookout_chart_sets *s);
 
 /* 1 since the last poll, then clears. A background scan landing raises it, and
  * that is the only change this announces on its own. */
-int lookout_sets_changed(lookout_sets *s);
+int lookout_chart_sets_changed(lookout_chart_sets *s);
 
 /* The list, in the order added. Borrowed until the next call that changes it. */
-const lookout_set *const *lookout_sets_all(lookout_sets *s, size_t *out_n);
+const lookout_chart_set *const *lookout_chart_sets_all(lookout_chart_sets *s, size_t *out_n);
 
 /* Put a folder on the list and scan it. 1 when it joined, 0 when it was
  * already there. The paths and the switches are saved; the CELLS are not,
  * because a folder changes underneath the app and a stored cell list would
  * offer charts that are no longer there. */
-int lookout_sets_add(lookout_sets *s, const char *path);
+int lookout_chart_sets_add(lookout_chart_sets *s, const char *path);
 /* Take a folder off the list. 1 when it was on it. This deletes nothing: what
  * a bake produced is the shell's to remove. */
-int lookout_sets_remove(lookout_sets *s, const char *path);
+int lookout_chart_sets_remove(lookout_chart_sets *s, const char *path);
 /* 1 when the switch moved. */
-int lookout_sets_set_on(lookout_sets *s, const char *path, int on);
-int lookout_sets_is_on(lookout_sets *s, const char *path);
+int lookout_chart_sets_set_on(lookout_chart_sets *s, const char *path, int on);
+int lookout_chart_sets_is_on(lookout_chart_sets *s, const char *path);
 
 /* Every chart the switched-on sets hold, sorted and deduplicated: the UNION,
  * the list lookout_open_charts_in_window reads. Two sets may overlap, and
  * the same cell twice would be composed twice. Borrowed until the next call
  * that changes the list. */
-const char *const *lookout_sets_compose(lookout_sets *s, size_t *out_n);
+const char *const *lookout_chart_sets_compose(lookout_chart_sets *s, size_t *out_n);
 
 /* ---- reading a scan --------------------------------------------------------
  *
