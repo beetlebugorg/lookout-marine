@@ -9,9 +9,9 @@
  *
  * Write:
  *
- *   LK_CASE("a decimal pair, latitude first");
- *   LK_EQ(lk_coord_parse("38.9, -76.4", &lat, &lon), 1);
- *   LK_NEAR(lat, 38.9, 1e-9);
+ *   LK_CASE("a row with no id is dropped");
+ *   LK_EQ(rows.size(), 2u);
+ *   LK_NEAR(rows[0].cog_deg, 38.9, 1e-9);
  */
 #pragma once
 

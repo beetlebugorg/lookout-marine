@@ -1,8 +1,9 @@
 # build-tests.ps1 — build and run the Windows shell's tests.
 #
-# The suite covers the shell's MODEL: the parsers, the formatters, the geometry
-# and the store. Not the WinUI layer — that needs a XAML host — and not the
-# core, which has its own `zig build test`.
+# The suite covers the shell's MODEL: the decoders, the geometry and the store.
+# Not the WinUI layer, which needs a XAML host, and not the core, which has its
+# own `zig build test`. What a mariner types and the strings a mariner reads are
+# the core's format kit and are tested there.
 #
 # It builds with zig rather than MSVC on purpose. zig is already a prerequisite
 # of this shell (build-core.ps1 needs it), so the tests run for anyone who can
@@ -44,7 +45,6 @@ else { Write-Warning "no core headers at $coreInclude; run windows\build-core.ps
 # The shell's own sources under test. A new module goes in one of the first two
 # lists, its suite in the third, and main.cpp names the suite function.
 $cSources = @(
-    'src\util\lk_coord.c',
     'src\engine\lk_store.c'
 )
 $cppSources = @(
@@ -56,12 +56,10 @@ $cppSources = @(
     'src\plugins\lk_plugin_registry.cpp',
     'src\plugins\lk_alerts.cpp',
     'src\plugins\lk_table.cpp',
-    'src\hud\lk_text.cpp',
     'src\library\lk_paths.cpp'
 )
 $suites = @(
     'test\main.cpp',
-    'test\test_coord.cpp',
     'test\test_json.cpp',
     'test\test_utf8.cpp',
     'test\test_pick.cpp',
@@ -70,7 +68,6 @@ $suites = @(
     'test\test_plugin_registry.cpp',
     'test\test_alerts.cpp',
     'test\test_table.cpp',
-    'test\test_text.cpp',
     'test\test_paths.cpp',
     'test\test_store.cpp'
 )

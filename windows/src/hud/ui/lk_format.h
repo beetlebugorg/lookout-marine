@@ -1,7 +1,7 @@
 /* lk_format — the chrome palette, and brushes for chrome built in code.
  *
- * What the readouts SAY is lk_text.h, which is model code and has a test.
- * This is what they are drawn in.
+ * What the readouts SAY is the core's format kit (lookout-shell.h). This is
+ * what they are drawn in.
  */
 #pragma once
 

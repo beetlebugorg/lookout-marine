@@ -1,16 +1,12 @@
 // The zoom-to-scale panel: click the HUD's 1:N readout, type a scale or pick
-// a band preset. The target is applied as a zoom DELTA about the view centre
-// (log2(current/target)), so the engine keeps its zoom limits and easing.
-// Mirrors ScaleEntryPanel (HUDOverlay.swift) and ScaleEntryDialog (GoTo.kt).
+// a band preset. What a mariner may type, the band each scale falls in and the
+// delta that gets there are the core's format kit (lookout-shell.h).
 #include "pch.h"
 #include "MainWindow.xaml.h"
 
-#include <cmath>
 #include <cstring>
 
-#include "lk_coord.h"
 #include "lk_format.h"
-#include "lk_text.h"
 
 using namespace winrt;
 using namespace Microsoft::UI::Xaml;
@@ -75,7 +71,9 @@ namespace winrt::LookoutMarine::implementation
             name.HorizontalAlignment(HorizontalAlignment::Center);
             text.Children().Append(name);
             Controls::TextBlock value;
-            value.Text(to_hstring(lkw::FormatScale(kPresets[i].denom)));
+            char preset[LOOKOUT_SCALE_MAX];
+            lookout_fmt_scale(kPresets[i].denom, preset, sizeof preset);
+            value.Text(to_hstring(preset));
             value.FontSize(11);
             value.Foreground(Brush(Muted(DarkChrome())));
             value.HorizontalAlignment(HorizontalAlignment::Center);
@@ -116,8 +114,10 @@ namespace winrt::LookoutMarine::implementation
     // Refreshed from the readout tick while the panel is up.
     void MainWindow::UpdateScalePanel(lk_readout const &r)
     {
-        ScaleNow().Text(hstring{ L"now " } + to_hstring(lkw::FormatScale(r.scale_denom)));
-        char const *band = lkw::BandForDenom(r.scale_denom);
+        char now[LOOKOUT_SCALE_MAX];
+        lookout_fmt_scale(r.scale_denom, now, sizeof now);
+        ScaleNow().Text(hstring{ L"now " } + to_hstring(now));
+        char const *band = lookout_band_name(r.scale_denom);
         bool dark = DarkChrome();
         uint32_t accent = Accent(dark);
         for (uint32_t i = 0, n = 0; i < ScalePresetRows().Children().Size(); ++i)
@@ -126,7 +126,7 @@ namespace winrt::LookoutMarine::implementation
             for (uint32_t j = 0; j < row.Children().Size() && n < std::size(kPresets); ++j, ++n)
             {
                 auto b = row.Children().GetAt(j).as<Controls::Button>();
-                bool sel = std::strcmp(band, lkw::BandForDenom(kPresets[n].denom)) == 0;
+                bool sel = std::strcmp(band, lookout_band_name(kPresets[n].denom)) == 0;
                 b.Background(Brush(sel ? Alpha(accent, 0x24) : kClear)); // 14 % accent
                 b.BorderBrush(Brush(sel ? Alpha(accent, 0x80) : kClear)); // 50 % accent
                 // The sublabel was inked when the panel was built; re-ink it
@@ -143,7 +143,7 @@ namespace winrt::LookoutMarine::implementation
     {
         std::string text = to_string(ScaleBox().Text());
         double denom;
-        bool ok = lk_scale_parse(text.c_str(), &denom);
+        bool ok = lookout_parse_scale(text.c_str(), &denom) != 0;
         ScaleGo().IsEnabled(ok);
         bool empty = text.empty();
         // Nothing typed yet is a quiet rule, not a black one: at night a
@@ -154,7 +154,7 @@ namespace winrt::LookoutMarine::implementation
         ScaleBox().BorderBrush(Brush(edge));
         if (ok)
         {
-            ScaleHint().Text(to_hstring(lkw::BandForDenom(denom)) +
+            ScaleHint().Text(to_hstring(lookout_band_name(denom)) +
                              L" band. The chart holds the nearest scale it has.");
         }
         else
@@ -167,14 +167,14 @@ namespace winrt::LookoutMarine::implementation
     {
         std::string text = to_string(ScaleBox().Text());
         double denom;
-        if (!lk_scale_parse(text.c_str(), &denom))
+        if (!lookout_parse_scale(text.c_str(), &denom))
             return;
         ApplyScale(denom);
         ScalePanel().Visibility(Visibility::Collapsed);
     }
 
-    // The denominator at a latitude is C·cos(lat)/2^zoom, so a target scale
-    // is purely a zoom delta from the current one.
+    // A target scale is a zoom delta about the view centre, so the engine keeps
+    // its zoom limits and its easing.
     void MainWindow::ApplyScale(double denom)
     {
         if (!(denom > 0) || !lk_controller_is_open(controller))
@@ -183,7 +183,7 @@ namespace winrt::LookoutMarine::implementation
         lk_controller_readout(controller, &r);
         if (!(r.scale_denom > 0))
             return;
-        double dz = std::log2(r.scale_denom / denom);
+        double dz = lookout_zoom_delta_for_scale(r.scale_denom, denom);
         lk_controller_zoom_centered(controller, dz,
                                     (unsigned)std::max(1.0, Root().ActualWidth()),
                                     (unsigned)std::max(1.0, Root().ActualHeight()));

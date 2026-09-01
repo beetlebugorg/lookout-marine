@@ -133,7 +133,6 @@ quietly lost test suite.
 | `src/app/ui/` | The two XAML types (`App`, `MainWindow`), the window shell and the render thread, the menu bubble, the transparent backdrop, and the glue that compiles the XAML-generated TUs a command-line build does not auto-register |
 | `src/chart/` | `lk_pick` — the pick report envelope decoder |
 | `src/chart/ui/` | The open flow and the chart panel, gestures and commands, the mariner's markers, the pick report card and the files a pick points at |
-| `src/hud/` | `lk_text` — the scale, the usage band and the position, as the readouts say them |
 | `src/hud/ui/` | The readout capsule and the scale bar, the startup loader phases, the overlay bubbles and the GPS and follow pills, the zoom-to-scale panel, and `lk_format` (the brushes) |
 | `src/library/` | `lk_paths` (chart and raster discovery, the agency name, the set names) and `lk_bake` (the import's order and progress) |
 | `src/library/ui/` | The installed sets and their switches, charts by link, the raster underlay and its pill, the import panel |
@@ -143,7 +142,7 @@ quietly lost test suite.
 | `src/about/` | `lk_licenses` — the manifest model |
 | `src/about/ui/` | About and the licences screen |
 | `src/engine/` | The seams to what is not XAML: `lk_controller` (the one `lookout*` handle and every `lookout_*` call) and `lk_store` (`%APPDATA%\lookout-marine`), both plain C ports of the Linux shell's own |
-| `src/util/` | What every area uses and none of them owns: `lk_json`, `lk_utf8`, `lk_coord` |
+| `src/util/` | What every area uses and none of them owns: `lk_json`, `lk_utf8` |
 | `test/` | The model layer's tests and the check harness they are written against |
 
 Two model files are not in the test build because they call the core rather
@@ -163,10 +162,11 @@ are the app icon as a Win32 ICON resource.
 pwsh windows/build-tests.ps1
 ```
 
-The suite covers the shell's **model**: the coordinate and scale parsers, the
-JSON reader every seam with the core goes through, the pick report decoder, the
-licence manifest, the plugin registry and the config object that goes back, and
-the alert rules. Not the WinUI layer, which needs a XAML host.
+The suite covers the shell's **model**: the JSON reader every seam with the core
+goes through, the pick report decoder, the licence manifest, the plugin registry
+and the config object that goes back, and the alert rules. Not the WinUI layer,
+which needs a XAML host, and not what a mariner types or the strings a mariner
+reads, which are the core's format kit and are tested there.
 
 It builds with `zig`, not MSVC, on purpose: `zig` is already a prerequisite of
 this shell, so the tests run for anyone who can build the app — including on a
