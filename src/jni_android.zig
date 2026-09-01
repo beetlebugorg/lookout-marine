@@ -1932,6 +1932,28 @@ export fn Java_org_beetlebug_lookout_Lookout_nOpenFile(env: [*c]j.JNIEnv, cls: j
 // ---- licenses ---------------------------------------------------------------
 
 extern fn lookout_licenses_json(out_len: ?*usize) [*:0]const u8;
+extern fn lookout_raster_set_name_for(path: [*:0]const u8, out_len: ?*usize) ?[*]const u8;
+
+/// String nRasterSetNameFor(String path) -- what to call the set a raster file
+/// belongs to, WITHOUT opening it. The engine's own rule, the one it names the
+/// sets it draws by, so a shell grouping by anything else disagrees with what
+/// the pill then shows.
+export fn Java_org_beetlebug_lookout_Lookout_nRasterSetNameFor(env: [*c]j.JNIEnv, cls: j.jclass, path: j.jstring) j.jstring {
+    _ = cls;
+    const c = env_(env).GetStringUTFChars.?(env, path, null) orelse
+        return env_(env).NewStringUTF.?(env, "");
+    defer env_(env).ReleaseStringUTFChars.?(env, path, c);
+    var n: usize = 0;
+    const name = lookout_raster_set_name_for(@ptrCast(c), &n) orelse
+        return env_(env).NewStringUTF.?(env, "");
+    // The engine hands out ptr+len over static storage; NewStringUTF needs a
+    // NUL terminator.
+    var buf: [128]u8 = undefined;
+    if (n >= buf.len) return env_(env).NewStringUTF.?(env, "");
+    @memcpy(buf[0..n], name[0..n]);
+    buf[n] = 0;
+    return env_(env).NewStringUTF.?(env, &buf);
+}
 
 /// String nLicensesJson() -- this app's terms and every component it is built
 /// from, as the JSON the licenses screen decodes. Baked into the binary, so it

@@ -6,6 +6,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import java.io.File
+import org.beetlebug.lookout.Lookout
 
 /**
  * The raster charts the mariner has installed, and which of them are switched
@@ -135,22 +136,12 @@ class RasterCharts(appContext: Context) {
         private const val KEY_CHART_HIDDEN = "chart.hidden"
 
         /**
-         * Providers seen in community charts, longest first so "ArcGIS.Imagery"
-         * is not matched as "ArcGIS". The engine does the same thing when it
-         * groups files into sets; this only has to AGREE with it well enough to
-         * label the settings rows.
+         * The name of the set this file belongs to, from the engine. The
+         * engine groups the files it draws by this name and the pill shows it,
+         * so a settings row grouped by any other rule disagrees with the pill.
+         * Needs no chart open.
          */
-        private val PROVIDERS = listOf(
-            "ArcGIS.Imagery", "GoogleSatellite", "BingSatellite",
-            "OpenSeaMap", "Navionics", "ArcGIS", "Google", "Bing",
-            "CMap", "C-Map", "Esri", "Sentinel", "Landsat",
-        )
-
-        fun providerLabel(path: String): String {
-            val name = File(path).name
-            PROVIDERS.firstOrNull { name.contains(it, ignoreCase = true) }?.let { return it }
-            return File(path).nameWithoutExtension.substringBefore('.')
-        }
+        fun providerLabel(path: String): String = Lookout.rasterSetNameFor(path)
 
         /**
          * Every raster chart under [dir]. `.mbtiles` today; the extension is a

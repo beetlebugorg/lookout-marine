@@ -259,28 +259,4 @@ class StoresTest {
         r.setChartHidden(true)
         assertTrue(RasterCharts(ctx).chartHidden)
     }
-
-    /** Longest first, so "ArcGIS.Imagery" is not matched as "ArcGIS". */
-    @Test fun aProviderIsNamedByTheLongestMatch() {
-        assertEquals("ArcGIS.Imagery", RasterCharts.providerLabel("/x/ArcGIS.Imagery.z12.mbtiles"))
-        assertEquals("ArcGIS", RasterCharts.providerLabel("/x/ArcGIS.z12.mbtiles"))
-        assertEquals("Navionics", RasterCharts.providerLabel("/x/navionics-chesapeake.mbtiles"))
-        assertEquals("OpenSeaMap", RasterCharts.providerLabel("/x/OpenSeaMap.mbtiles"))
-    }
-
-    /** A file from a provider nobody has heard of still gets a label. */
-    @Test fun anUnknownProviderFallsBackToTheFileStem() {
-        assertEquals("chesapeake", RasterCharts.providerLabel("/x/chesapeake.z14.mbtiles"))
-    }
-
-    /** One switch per provider, one per file: a provider is what the mariner
-     *  chooses between and a file is what they downloaded. */
-    @Test fun theChartsGroupByProvider() {
-        val r = RasterCharts(ctx)
-        r.add(listOf("/x/Navionics.a.mbtiles", "/x/Navionics.b.mbtiles", "/x/OpenSeaMap.mbtiles"))
-        assertEquals(
-            listOf("Navionics" to 2, "OpenSeaMap" to 1),
-            r.groups.map { it.first to it.second.size },
-        )
-    }
 }

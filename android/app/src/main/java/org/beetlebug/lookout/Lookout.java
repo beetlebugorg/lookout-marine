@@ -187,6 +187,11 @@ public final class Lookout implements AutoCloseable {
      *  binary, so it needs no chart open. */
     public static String licensesJson()           { return nLicensesJson(); }
 
+    /** What to call the set a raster file belongs to. The engine's own rule,
+     *  the one it names the sets it draws by, so grouping by anything else
+     *  disagrees with what the pill then shows. Needs no chart open. */
+    public static String rasterSetNameFor(String path) { return nRasterSetNameFor(path); }
+
     // ---- mariner (all S-52 display settings) -------------------------------
 
     /**
@@ -261,6 +266,7 @@ public final class Lookout implements AutoCloseable {
     private static native boolean nAtlasCacheReady();
     private static native int nOpenFile(long h, String path);
     private static native String nLicensesJson();
+    private static native String nRasterSetNameFor(String path);
     private static native String[] nMarinerKeys();
     private static native void nGetMariner(long h, double[] out);
     private static native String nGetMarinerDate(long h);
