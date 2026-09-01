@@ -110,7 +110,7 @@ lk_plugin_scalar_row (GtkWidget           *section,
 {
   double value = lk_plugins_value (settings->plugins, plugin_id, field->key);
 
-  if (field->kind == LK_PLUGIN_FIELD_TOGGLE)
+  if (field->kind == LOOKOUT_PLUGIN_SETTING_TOGGLE)
     {
       GtkWidget *check = gtk_check_button_new ();
 
@@ -172,7 +172,7 @@ lk_plugin_reset_clicked (GtkButton *button, gpointer user_data)
 
       if (widget == NULL)
         continue;
-      if (field->kind == LK_PLUGIN_FIELD_TOGGLE)
+      if (field->kind == LOOKOUT_PLUGIN_SETTING_TOGGLE)
         gtk_check_button_set_active (GTK_CHECK_BUTTON (widget), field->fallback != 0);
       else
         gtk_spin_button_set_value (GTK_SPIN_BUTTON (widget), field->fallback);
@@ -458,7 +458,7 @@ lk_plugin_fill_row (LkSettings *settings, GtkWidget *box,
 
       switch (field->kind)
         {
-        case LK_PLUGIN_FIELD_TEXT:
+        case LOOKOUT_PLUGIN_SETTING_TEXT:
           control = gtk_entry_new ();
           gtk_editable_set_text (GTK_EDITABLE (control),
                                  lk_plugins_row_text (settings->plugins, list, row_id, field->key));
@@ -479,7 +479,7 @@ lk_plugin_fill_row (LkSettings *settings, GtkWidget *box,
           }
           break;
 
-        case LK_PLUGIN_FIELD_NUMBER:
+        case LOOKOUT_PLUGIN_SETTING_NUMBER:
           {
             control = lk_plugin_spin_new (field);
             gtk_spin_button_set_value (GTK_SPIN_BUTTON (control),
@@ -492,7 +492,7 @@ lk_plugin_fill_row (LkSettings *settings, GtkWidget *box,
           }
           break;
 
-        case LK_PLUGIN_FIELD_TOGGLE:
+        case LOOKOUT_PLUGIN_SETTING_TOGGLE:
         default:
           control = gtk_switch_new ();
           gtk_switch_set_active (GTK_SWITCH (control),

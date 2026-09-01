@@ -1,7 +1,7 @@
 /* plugins/registry.h — the mariner's controls over the wasm plugins.
  *
  * A plugin declares a settings schema in its manifest; the core hands the whole
- * registry over as JSON through lookout_plugins_json, and this turns that into
+ * registry over through lookout_plugins_read, and this turns that into
  * something the settings window can draw controls from. The shell knows nothing
  * about what any plugin does — a number field with a unit and a range, a toggle,
  * a text box, and a list the mariner adds rows to, is the whole vocabulary.
@@ -22,35 +22,29 @@
  * "Connected · 44 msg/s" finds its way to the right line on screen.
  *
  * Every string a caller gets back from a field, group or list belongs to the
- * registry the model last parsed and is valid until the next reload.
+ * read the model last took and is valid until the next reload.
  */
 #pragma once
 
 #include <glib.h>
 
 #include "engine/controller.h"
-#include "util/json.h"
 
 G_BEGIN_DECLS
 
-typedef enum {
-  LK_PLUGIN_FIELD_NUMBER,
-  LK_PLUGIN_FIELD_TOGGLE,
-  LK_PLUGIN_FIELD_TEXT,
-} LkPluginFieldKind;
-
-/* One control, as the manifest declared it. */
+/* One control, as the manifest declared it. The kind is the core's; a LIST is
+ * a list rather than a field, so it never reaches one of these. */
 typedef struct {
-  const char       *key;
-  const char       *label;
-  const char       *desc;          /* what it does for the person at the helm; "" when none */
-  const char       *unit;          /* "m", "kn", "min"; "" when none */
-  LkPluginFieldKind kind;
-  double            min, max;
-  double            fallback;      /* the manifest default; a toggle is 0 or 1 */
-  const char       *fallback_text; /* a text field's default; only inside a row */
-  gboolean          optional;      /* a text field that may be left empty */
-  const char       *placeholder;   /* ghost text for an empty text control; "" when none */
+  const char                 *key;
+  const char                 *label;
+  const char                 *desc;          /* what it does for the person at the helm; "" when none */
+  const char                 *unit;          /* "m", "kn", "min"; "" when none */
+  lookout_plugin_setting_kind kind;
+  double                      min, max;
+  double                      fallback;      /* the manifest default; a toggle is 0 or 1 */
+  const char                 *fallback_text; /* a text field's default; only inside a row */
+  gboolean                    optional;      /* a text field that may be left empty */
+  const char                 *placeholder;   /* ghost text for an empty text control; "" when none */
 } LkPluginField;
 
 /* One heading's worth of controls inside one settings section — the unit the
@@ -65,13 +59,13 @@ typedef struct {
 
 /* One DNS-SD service a connection list is browsed for.
  *
- * `set` is the columns a discovered row takes beyond its name, address and
+ * `values` is the columns a discovered row takes beyond its name, address and
  * port, as the manifest wrote them: a Signal K server announces its websocket,
- * so a row added from one arrives with that column on. It belongs to the
- * registry the model last parsed, like every other string here. */
+ * so a row added from one arrives with that column on. It belongs to the read
+ * the model last took, like every other string here. */
 typedef struct {
-  const char   *service; /* "_signalk-ws._tcp" */
-  const LkJson *set;     /* NULL when the address is all a row needs */
+  const char                   *service; /* "_signalk-ws._tcp" */
+  const lookout_plugin_service *values;  /* what a row of this list takes besides the address */
 } LkPluginDiscover;
 
 /* A repeating group the mariner adds rows to. */
@@ -96,7 +90,7 @@ typedef struct {
  * The broker checks every mediated call, so a revoked capability answers the
  * plugin -1 and the plugin keeps running. */
 typedef struct {
-  const char *cap;      /* "ais.read", "net.http", … */
+  const char *name;     /* "ais.read", "net.http", … */
   const char *sentence; /* what it lets the plugin do, for a person to read */
   char       *hosts;    /* where it talks to, for net.http and net.ws; NULL else */
   gboolean    granted;

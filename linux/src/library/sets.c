@@ -401,7 +401,9 @@ lk_set_meta_build (const char *path, const LkChartSet *source, const LkChartSet 
     }
 
   /* Whichever half holds the charts knows who made them. */
-  const char *producer = source != NULL && source->producer != NULL
+  /* The read writes an empty producer when the charts disagree, so the test is
+     for a name rather than for a pointer. */
+  const char *producer = source != NULL && source->producer[0] != '\0'
                              ? source->producer
                              : (derived != NULL ? derived->producer : NULL);
   const char *agency = lk_chart_set_agency (producer);

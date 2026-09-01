@@ -3,6 +3,7 @@
 #include "library/scan.h"
 #include "library/sets.h"
 #include "model/store.h"
+#include "ui/chart/pick-report.h"
 
 #include <string.h>
 
@@ -298,7 +299,7 @@ lk_app_model_init (LkAppModel *self)
    * says so through this callback. */
   self->chart_sets = lk_chart_sets_new (lk_app_model_sets_changed, G_OBJECT (self));
   self->overscale = 1.0;
-  self->pick_results = g_ptr_array_new_with_free_func ((GDestroyNotify) lk_pick_feature_free);
+  self->pick_results = g_ptr_array_new_with_free_func ((GDestroyNotify) lk_pick_decoded_free);
 
   self->raster_charts = lk_raster_charts_new ();
   self->raster_state = lk_raster_state_new ();
@@ -1301,7 +1302,7 @@ lk_app_model_clear_pick (LkAppModel *self)
     return;
 
   g_clear_pointer (&self->pick_results, g_ptr_array_unref);
-  self->pick_results = g_ptr_array_new_with_free_func ((GDestroyNotify) lk_pick_feature_free);
+  self->pick_results = g_ptr_array_new_with_free_func ((GDestroyNotify) lk_pick_decoded_free);
   self->pick_valid = FALSE;
   self->pick_index = 0;
   g_signal_emit (self, signals[SIGNAL_PICK_RESULTS], 0);

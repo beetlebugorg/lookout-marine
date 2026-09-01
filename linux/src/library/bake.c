@@ -276,9 +276,9 @@ lk_chart_bake_sweep_trash (void)
 static LkPrepare
 lk_prepare_for (const LkScannedCell *cell)
 {
-  if (g_strcmp0 (cell->kind, "source") == 0)
+  if (cell->kind == LOOKOUT_FILE_SOURCE)
     return LK_PREPARE_CELL;
-  if (g_strcmp0 (cell->kind, "raster_source") == 0)
+  if (cell->kind == LOOKOUT_FILE_RASTER_SOURCE)
     return LK_PREPARE_SHEET;
   return LK_PREPARE_LIFT;
 }

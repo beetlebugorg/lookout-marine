@@ -1,6 +1,7 @@
 #include "ui/chart/view.h"
 
 #include "model/app-model.h"
+#include "ui/chart/pick-report.h"
 #include "ui/hud/hud.h"
 #include "util/json.h"
 
@@ -446,10 +447,13 @@ lk_chart_menu_pick (GtkButton *button, gpointer user_data)
   LkChartView *self = user_data;
 
   lk_chart_view_close_menu (self);
-  lk_app_model_set_pick (self->model,
-                         lk_chart_controller_pick (self->controller,
-                                                   self->menu_lon, self->menu_lat),
+
+  lookout_picks *picks = lk_chart_controller_pick (self->controller,
+                                                   self->menu_lon, self->menu_lat);
+
+  lk_app_model_set_pick (self->model, lk_pick_decoded_list (picks),
                          self->menu_x, self->menu_y, self->menu_lon, self->menu_lat);
+  lookout_picks_free (picks);
 }
 
 /* THE DROP NEVER WAITS FOR TYPING. The core places the mark and names it in one

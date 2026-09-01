@@ -2,9 +2,9 @@
  *
  * A plugin declares a table in its manifest: a key, a title, the menu it opens
  * from, and TYPED columns. The core hands the declaration over through
- * lookout_plugin_tables_json and the rows through lookout_plugin_table_rows,
- * already in the order they are to be shown. This builds the window and the
- * table, and knows nothing about what any plugin does.
+ * lookout_tables_read and the rows through lookout_table_rows_read, already in
+ * the order they are to be shown. This builds the window and the table, and
+ * knows nothing about what any plugin does.
  *
  * UNITS ARE THE SHELL'S. The column type says what a number means: distance is
  * metres, speed metres per second, bearing degrees true, duration seconds. Each

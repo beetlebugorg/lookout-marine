@@ -20,15 +20,6 @@ G_DECLARE_FINAL_TYPE (LkChartController, lk_chart_controller, LK, CHART_CONTROLL
 
 typedef struct _LkAppModel LkAppModel;
 
-/* One S-57 feature returned by a cursor pick (mirrors PickFeature). */
-typedef struct {
-  char *cls;   /* S-57 object-class acronym, e.g. "LIGHTS", "DEPARE" */
-  char *chart; /* source cell name */
-  char *s57;   /* the full S-57 attribute JSON */
-} LkPickFeature;
-
-void lk_pick_feature_free (LkPickFeature *feature);
-
 LkChartController *lk_chart_controller_new (void);
 
 /* The model live readouts are pushed to. Not owned. */
@@ -176,12 +167,12 @@ char *lk_chart_controller_chart_links_changed_json (LkChartController *self);
  * traffic. */
 gboolean lk_chart_controller_plugins_active (LkChartController *self);
 
-/* Every loaded plugin with its settings schema and the values in force, as the
- * JSON lookout_plugins_json documents. NULL when no plugin layer is up, which
- * is NOT the same as a layer holding no plugins (that answers
- * {"plugins":[]}) — a caller with a registry already on screen must keep it
- * rather than empty the window. Transfer full. */
-char *lk_chart_controller_plugins_json (LkChartController *self);
+/* Every loaded plugin with its settings schema and the values in force, as
+ * lookout_plugins_read documents. NULL when no plugin layer is up, which is NOT
+ * the same as a layer holding no plugins (that answers a read with no rows) — a
+ * caller with a registry already on screen must keep it rather than empty the
+ * window. Transfer full; free it with lookout_plugins_free. */
+lookout_plugins *lk_chart_controller_plugins_read (LkChartController *self);
 
 /* Push one plugin's settings, applied live. `json` is an object of the keys its
  * schema declares. TRUE when the plugin took them. */
@@ -189,24 +180,26 @@ gboolean lk_chart_controller_set_plugin_config (LkChartController *self,
                                                 const char        *id,
                                                 const char        *json);
 
-/* Plugin alerts, as the JSON lookout_plugin_alerts_json documents. NULL when
- * the read failed, which is NOT "no alerts": a caller clears its strip and
- * silences its siren, then keeps watching. Transfer full. */
-char *lk_chart_controller_alerts_json (LkChartController *self);
+/* Every alert the plugins have raised and the mariner has not seen off, in the
+ * order lookout_alerts_read documents. NULL when the read failed, which is NOT
+ * "no alerts": a caller clears its strip and silences its siren, then keeps
+ * watching. Transfer full; free it with lookout_alerts_free. */
+lookout_alerts *lk_chart_controller_alerts_read (LkChartController *self);
 
 /* Acknowledge one alert. It stops sounding and stays listed until the condition
  * clears. It silences THAT alert only. */
 gboolean lk_chart_controller_alert_ack (LkChartController *self, guint64 id);
 
-/* The tables the plugins declare, and one table's rows already in order, as the
- * JSON lookout_plugin_tables_json and lookout_plugin_table_rows document.
- * `sort_key` NULL takes the declared sort. Transfer full. */
-char *lk_chart_controller_tables_json (LkChartController *self);
-char *lk_chart_controller_table_rows (LkChartController *self,
-                                      const char        *plugin,
-                                      const char        *key,
-                                      const char        *sort_key,
-                                      gboolean           ascending);
+/* The tables the plugins declare, and one table's rows already in order, as
+ * lookout_tables_read and lookout_table_rows_read document. `sort_key` NULL
+ * uses the declared sort. NULL when no plugin layer is up, or when the plugin
+ * or the table is unknown. Transfer full; free each with its own call. */
+lookout_tables *lk_chart_controller_tables_read (LkChartController *self);
+lookout_table_rows *lk_chart_controller_table_rows_read (LkChartController *self,
+                                                         const char        *plugin,
+                                                         const char        *key,
+                                                         const char        *sort_key,
+                                                         gboolean           ascending);
 
 /* Tell the plugin its table is on screen, or is not. A plugin builds rows only
  * while a table is open, so a dialog nobody opened costs nothing. Call it with
@@ -348,10 +341,11 @@ gboolean lk_chart_controller_marker_remove (LkChartController *self, guint64 id)
 
 /* ---- pick --------------------------------------------------------------- */
 
-/* The features a chartplotter should SHOW under a geo point, best first — the
- * engine's ranked pick, not its draw-order list. Transfer full: a GPtrArray of
- * LkPickFeature. */
-GPtrArray *lk_chart_controller_pick (LkChartController *self, double lon, double lat);
+/* The features under a geographic point, best first: the page the engine
+ * composed and the source fold beside it. This is the engine's RANKED pick,
+ * not its draw-order list. Transfer full; free it with lookout_picks_free.
+ * NULL when no chart is open. */
+lookout_picks *lk_chart_controller_pick (LkChartController *self, double lon, double lat);
 
 /* A file a picked feature points at rather than carries: a caution note
  * (TXTDSC, NTXTDS) or a chart picture (PICREP), stored beside the chart at

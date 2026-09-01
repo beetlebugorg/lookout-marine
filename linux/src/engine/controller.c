@@ -31,16 +31,6 @@ struct _LkChartController {
 
 G_DEFINE_FINAL_TYPE (LkChartController, lk_chart_controller, G_TYPE_OBJECT)
 
-void
-lk_pick_feature_free (LkPickFeature *feature)
-{
-  if (feature == NULL)
-    return;
-  g_free (feature->cls);
-  g_free (feature->chart);
-  g_free (feature->s57);
-  g_free (feature);
-}
 
 static void
 lk_chart_controller_dispose (GObject *object)
@@ -367,19 +357,14 @@ lk_chart_controller_plugins_active (LkChartController *self)
   return self->handle != NULL && lookout_plugins_active (self->handle) != 0;
 }
 
-char *
-lk_chart_controller_plugins_json (LkChartController *self)
+lookout_plugins *
+lk_chart_controller_plugins_read (LkChartController *self)
 {
   g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), NULL);
 
   if (self->handle == NULL)
     return NULL;
-
-  gsize length = 0;
-  const char *json = lookout_plugins_json (self->handle, &length);
-
-  /* Borrowed until the next plugin query, so it is copied out here. */
-  return json == NULL || length == 0 ? NULL : g_strndup (json, length);
+  return lookout_plugins_read (self->handle);
 }
 
 gboolean
@@ -412,18 +397,14 @@ lk_chart_controller_copy_borrowed (const char *text, gsize length)
   return text == NULL || length == 0 ? NULL : g_strndup (text, length);
 }
 
-char *
-lk_chart_controller_alerts_json (LkChartController *self)
+lookout_alerts *
+lk_chart_controller_alerts_read (LkChartController *self)
 {
   g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), NULL);
 
   if (self->handle == NULL)
     return NULL;
-
-  gsize length = 0;
-  const char *json = lookout_plugin_alerts_json (self->handle, &length);
-
-  return lk_chart_controller_copy_borrowed (json, length);
+  return lookout_alerts_read (self->handle);
 }
 
 gboolean
@@ -436,37 +417,29 @@ lk_chart_controller_alert_ack (LkChartController *self, guint64 id)
   return lookout_plugin_alert_ack (self->handle, id) == 0;
 }
 
-char *
-lk_chart_controller_tables_json (LkChartController *self)
+lookout_tables *
+lk_chart_controller_tables_read (LkChartController *self)
 {
   g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), NULL);
 
   if (self->handle == NULL)
     return NULL;
-
-  gsize length = 0;
-  const char *json = lookout_plugin_tables_json (self->handle, &length);
-
-  return lk_chart_controller_copy_borrowed (json, length);
+  return lookout_tables_read (self->handle);
 }
 
-char *
-lk_chart_controller_table_rows (LkChartController *self,
-                                const char        *plugin,
-                                const char        *key,
-                                const char        *sort_key,
-                                gboolean           ascending)
+lookout_table_rows *
+lk_chart_controller_table_rows_read (LkChartController *self,
+                                     const char        *plugin,
+                                     const char        *key,
+                                     const char        *sort_key,
+                                     gboolean           ascending)
 {
   g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), NULL);
 
   if (self->handle == NULL || plugin == NULL || key == NULL)
     return NULL;
-
-  gsize length = 0;
-  const char *json = lookout_plugin_table_rows (self->handle, plugin, key,
-                                                sort_key, ascending ? 1 : 0, &length);
-
-  return lk_chart_controller_copy_borrowed (json, length);
+  return lookout_table_rows_read (self->handle, plugin, key, sort_key,
+                                  ascending ? 1 : 0);
 }
 
 void
@@ -1473,39 +1446,20 @@ lk_chart_controller_chart_hidden (LkChartController *self)
 
 /* ---- pick --------------------------------------------------------------- */
 
-static void
-lk_pick_feature_cb (void       *ctx,
-                    const char *cls, size_t cls_len,
-                    const char *s57, size_t s57_len,
-                    const char *chart, size_t chart_len)
-{
-  GPtrArray *results = ctx;
-  LkPickFeature *feature = g_new0 (LkPickFeature, 1);
-
-  feature->cls = g_strndup (cls != NULL ? cls : "", cls_len);
-  feature->s57 = g_strndup (s57 != NULL ? s57 : "", s57_len);
-  feature->chart = g_strndup (chart != NULL ? chart : "", chart_len);
-  g_ptr_array_add (results, feature);
-}
-
-GPtrArray *
+lookout_picks *
 lk_chart_controller_pick (LkChartController *self, double lon, double lat)
 {
-  GPtrArray *results = g_ptr_array_new_with_free_func ((GDestroyNotify) lk_pick_feature_free);
-
-  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), results);
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), NULL);
 
   if (self->handle == NULL)
-    return results;
+    return NULL;
 
-  tile57_query_cb cb = { .ctx = results, .feature = lk_pick_feature_cb };
   /* The ranked pick, not the raw one: the engine's own list is in draw order,
    * which puts the land area before the light that was tapped. The core drops
    * the meta objects that say nothing, demotes a feature the cell gave no
    * attributes, and states depths in the mariner's unit — once, for every
    * shell. */
-  lookout_pick_ranked (self->handle, lon, lat, &cb);
-  return results;
+  return lookout_picks_read (self->handle, lon, lat);
 }
 
 void

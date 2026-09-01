@@ -1,20 +1,22 @@
 /* Looking through a folder or an archive for charts.
  *
- * The engine answers in JSON (lookout_scan_charts, lookout_scan_zip); this
- * turns that into something the shell can hold, so the Charts panel and the
- * bake both read one shape. A folder and a .zip come back the same, with one
- * difference the caller must respect: inside an archive `path` is the ENTRY
- * NAME, not a file, so nothing can open it until the bake has taken it out.
+ * The engine reads a folder or an archive (lookout_scan_read,
+ * lookout_scan_zip_read); this copies that into something the shell can hold
+ * past the read, so the Charts panel and the bake both read one shape. A folder
+ * and a .zip come back the same, with one difference the caller must respect:
+ * inside an archive `path` is the ENTRY NAME, not a file, so nothing can open
+ * it until the bake has taken it out.
  */
 #ifndef LK_CHART_SCAN_H
 #define LK_CHART_SCAN_H
 
 #include <glib.h>
+#include <lookout.h>
 
 typedef struct {
   char   *path; /* a file, or an entry name when the set is an archive */
   char   *name; /* the dataset name, such as US5MD1MC */
-  char   *kind; /* "baked" | "source" | "raster" | "raster_source" */
+  lookout_file_kind kind;
   int     band; /* 1 to 6; 0 when the name carries no usage band */
   char   *band_name;
   gint64  bytes;
@@ -35,8 +37,8 @@ typedef struct {
 /* True when `path` names an archive rather than a folder. */
 gboolean lk_chart_scan_is_archive (const char *path);
 
-/* Look through `path`. NULL when it cannot be read. NOT REENTRANT: the engine
- * hands back one shared buffer, so callers off the main thread must serialize. */
+/* Look through `path`. NULL when it cannot be read. Each read is the caller's
+ * own copy, so two threads may scan at once. */
 LkChartSet *lk_chart_scan (const char *path);
 
 void lk_chart_set_free (LkChartSet *set);

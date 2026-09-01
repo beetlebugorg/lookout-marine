@@ -8,7 +8,7 @@
 #include "lk-test.h"
 
 #include "model/app-model.h"
-#include "ui/chart/pick-report.h"
+#include "pick-fixture.h"
 
 static LkAppModel *model;
 static GtkWidget  *window;
@@ -21,30 +21,26 @@ match_label_prefix (GtkWidget *widget, gconstpointer data)
          g_str_has_prefix (gtk_label_get_text (GTK_LABEL (widget)), data);
 }
 
-static LkPickFeature
-feature (const char *cls, const char *chart, const char *s57)
-{
-  return (LkPickFeature) { .cls = (char *) cls, .chart = (char *) chart,
-                           .s57 = (char *) s57 };
-}
-
 static void
 set_two_object_pick (void)
 {
-  LkPickFeature a = feature ("LIGHTS", "US5MD1MC",
-      "{\"report\":{\"title\":\"Fl(2) 10s\",\"subtitle\":\"Light\",\"chip\":\"Light\","
-      "\"footnote\":\"US5MD1MC ed 27\","
-      "\"rows\":[{\"label\":\"Colour\",\"value\":\"red\"}]},"
-      "\"s57\":{\"OBJL\":\"LIGHTS\",\"COLOUR\":\"3\"}}");
-  LkPickFeature b = feature ("WRECKS", "US5MD1MC",
-      "{\"report\":{\"title\":\"Wreck\",\"subtitle\":\"Dangerous\",\"chip\":\"Wreck\","
-      "\"footnote\":\"US5MD1MC ed 27\","
-      "\"rows\":[{\"label\":\"Depth\",\"value\":\"3 m\"}]},"
-      "\"s57\":{\"OBJL\":\"WRECKS\",\"CATWRK\":\"2\",\"WATLEV\":\"3\"}}");
+  LkPickDecoded *a = lk_fixture_feature ("LIGHTS", "US5MD1MC", "Fl(2) 10s",
+                                         "Light", "Light", "US5MD1MC ed 27");
+  LkPickDecoded *b = lk_fixture_feature ("WRECKS", "US5MD1MC", "Wreck",
+                                         "Dangerous", "Wreck", "US5MD1MC ed 27");
   GPtrArray *results = g_ptr_array_new_with_free_func ((GDestroyNotify) lk_pick_decoded_free);
 
-  g_ptr_array_add (results, lk_pick_decoded_new (&a));
-  g_ptr_array_add (results, lk_pick_decoded_new (&b));
+  g_ptr_array_add (a->rows, lk_fixture_row ("Colour", "red", 0));
+  g_ptr_array_add (a->source, lk_fixture_row ("OBJL", "LIGHTS", 0));
+  g_ptr_array_add (a->source, lk_fixture_row ("COLOUR", "3", 0));
+
+  g_ptr_array_add (b->rows, lk_fixture_row ("Depth", "3 m", 0));
+  g_ptr_array_add (b->source, lk_fixture_row ("OBJL", "WRECKS", 0));
+  g_ptr_array_add (b->source, lk_fixture_row ("CATWRK", "2", 0));
+  g_ptr_array_add (b->source, lk_fixture_row ("WATLEV", "3", 0));
+
+  g_ptr_array_add (results, a);
+  g_ptr_array_add (results, b);
   lk_app_model_set_pick (model, results, 640, 400, -76.48, 38.98);
   lk_test_drain ();
 }
