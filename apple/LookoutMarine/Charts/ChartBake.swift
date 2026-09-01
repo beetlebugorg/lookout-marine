@@ -6,10 +6,9 @@
 //  runs it off the main thread, reports where it has got to, and stops when the
 //  mariner says stop.
 //
-//  ORDER IS THE POINT. The list goes coarse band first: Overview, General,
-//  Coastal, then the harbor detail. A mariner who cancels half way then has
-//  charts that cover the whole passage at a usable scale. The other order
-//  gives them every berth in one river and nothing between rivers.
+//  THE ORDER AND THE PATHS ARE THE CORE'S: lookout_bake_order and
+//  lookout_bake_output_path. Four shells had four copies of both, and the
+//  output layout is the one with teeth in it (see lookout-library.h).
 //
 //  THE CHART OPENS ONCE, AT THE END. Handing each batch to the open library as
 //  it finished put a chart on screen sooner, and cost about half the machine:
@@ -69,165 +68,67 @@ struct BakeProgress: Equatable {
     }
 }
 
-/// One bake, running on a background queue.
+/// One bake, as the shell sees it.
 ///
-/// The callbacks run on tile57's worker threads, out of order, so everything
-/// they touch is behind the lock. `cancelled` is read by the progress callback,
-/// which returns false to stop; tile57 stops at the next chart boundary, so a
-/// cancel lands within roughly one cell's bake time, not instantly.
+/// The core runs the phases on a thread of its own and this polls a snapshot
+/// off the display link's readout tick. No callback crosses back out.
 final class ChartBakeJob {
-    private let lock = NSLock()
-    private var _cancelled = false
-    private var _progress = BakeProgress()
+    private var handle: OpaquePointer?
     private let started = Date()
-    /// When the last progress went to the main queue. A 7,000 cell import
-    /// would otherwise post 7,000 times and lay out the panel 7,000 times,
-    /// against a machine with nothing spare.
-    private var _lastPost = Date.distantPast
-
-    /// Where the phase now running starts in the job, and how many charts the
-    /// whole job has. The engine is called once per kind and counts from zero
-    /// each time; the mariner is watching one job.
-    private var _offset = 0
-    private var _jobTotal = 0
-
-    fileprivate func beginPhase(offset: Int, jobTotal: Int) {
-        lock.lock(); _offset = offset; _jobTotal = jobTotal; lock.unlock()
-    }
+    private var name = ""
+    private var poll: Timer?
 
     /// Called on the main queue whenever the count moves.
     var onProgress: ((BakeProgress) -> Void)?
 
-    var cancelled: Bool {
-        lock.lock(); defer { lock.unlock() }
-        return _cancelled
-    }
+    var cancelled: Bool { handle == nil ? false : cancelledFlag }
+    private var cancelledFlag = false
 
     func cancel() {
-        lock.lock(); _cancelled = true; lock.unlock()
+        cancelledFlag = true
+        if let handle { lookout_bake_cancel(handle) }
     }
 
-    fileprivate func report(done: Int, total: Int) {
-        lock.lock()
-        let now = Date()
-        _progress.done = done + _offset
-        _progress.total = _jobTotal > 0 ? _jobTotal : total
-        _progress.elapsed = now.timeIntervalSince(started)
-        let p = _progress
-        // The last one always lands, whatever the rate.
-        let post = done == total || now.timeIntervalSince(_lastPost) >= 0.2
-        if post { _lastPost = now }
-        lock.unlock()
-        guard post else { return }
-        DispatchQueue.main.async { [weak self] in self?.onProgress?(p) }
-    }
+    fileprivate func setName(_ n: String) { name = n }
 
-    fileprivate func setName(_ n: String) {
-        lock.lock(); _progress.name = n; lock.unlock()
-    }
-}
-
-/// What has to happen to one chart before the app can draw it.
-private enum Prepare {
-    /// An S-57 or S-101 cell: parse the survey and portray it.
-    case cell
-    /// A BSB/KAP sheet: decode the picture and warp it.
-    case sheet
-    /// Already a chart, and only has to come out of the archive.
-    case lift
-
-    init(_ c: ScannedCell) {
-        if c.kind == .source { self = .cell } else if c.kind == .rasterSource {
-            self = .sheet
-        } else {
-            self = .lift
+    /// Take the core's job and start reporting. The job is freed when it ends.
+    fileprivate func adopt(_ h: OpaquePointer, completion: @escaping (Bool) -> Void) {
+        handle = h
+        // The core coalesces no reports, so the rate is set here. A 7,000
+        // cell import would otherwise lay out the panel 7,000 times.
+        poll = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] timer in
+            MainActor.assumeIsolated {
+                guard let self, let h = self.handle else { timer.invalidate(); return }
+                var p = lookout_bake_progress()
+                lookout_bake_poll(h, &p)
+                self.onProgress?(BakeProgress(
+                    kind: .importing,
+                    done: Int(p.done),
+                    total: Int(p.total),
+                    name: self.name,
+                    elapsed: Date().timeIntervalSince(self.started)))
+                guard p.running == 0 else { return }
+                timer.invalidate()
+                self.poll = nil
+                self.handle = nil
+                let ok = p.ok != 0
+                // Freeing joins the worker, which has already finished.
+                lookout_bake_free(h)
+                completion(ok)
+            }
         }
     }
 }
 
-/// Run each kind of work through the engine call that does it, and report the
-/// lot as one job.
-///
-/// The calls are separate because the work is: a cell is parsed and portrayed
-/// from the survey, a sheet is decoded and warped from a picture, and imagery
-/// that is already a chart is only lifted out of the archive. The mariner
-/// picked one thing, so they see one count.
-///
-/// `source` is the folder or the archive. From an archive each `in` is an
-/// ENTRY NAME and the engine reads it where it lies — nothing is unzipped, so
-/// importing NOAA's 788 MB All_ENCs.zip never costs the 2.0 GiB of source it
-/// holds.
-private func bakeSplit(
-    _ ins: UnsafePointer<UnsafePointer<CChar>?>?,
-    _ outs: UnsafePointer<UnsafePointer<CChar>?>?,
-    _ ordered: [ScannedCell],
-    _ source: String,
-    _ workers: UInt32,
-    _ progress: tile57_bake_progress?,
-    _ label: tile57_bake_label?,
-    _ ctx: UnsafeMutableRawPointer?,
-    _ baked: UnsafeMutablePointer<UInt32>?,
-    _ err: UnsafeMutablePointer<tile57_error>?
-) -> tile57_status {
-    // Sorted by kind, so each is one contiguous run.
-    let cellCount = ordered.prefix { Prepare($0) == .cell }.count
-    let sheetCount = ordered[cellCount...].prefix { Prepare($0) == .sheet }.count
-    let liftCount = ordered.count - cellCount - sheetCount
-    var total: UInt32 = 0
-
-    let job = ctx.map { Unmanaged<ChartBakeJob>.fromOpaque($0).takeUnretainedValue() }
-    let zip: [CChar]? = ChartScan.isArchive(source) ? source.cString(using: .utf8) : nil
-
-    func run(_ offset: Int, _ count: Int, _ call: (UnsafePointer<UnsafePointer<CChar>?>?,
-                                                   UnsafePointer<UnsafePointer<CChar>?>?,
-                                                   UnsafeMutablePointer<UInt32>?) -> tile57_status)
-        -> tile57_status
-    {
-        guard count > 0 else { return TILE57_OK }
-        // The engine names and counts from zero for each call; the job puts
-        // them back on the mariner's scale.
-        job?.beginPhase(offset: offset, jobTotal: ordered.count)
-        var n: UInt32 = 0
-        let st = call(ins?.advanced(by: offset), outs?.advanced(by: offset), &n)
-        total += n
-        return st
+/// What has to happen to one file, as `lookout_prepare` names it: a cell is
+/// parsed and portrayed, a sheet is decoded and warped, and a lift only comes
+/// out of the archive.
+private func bakeItem(_ c: ScannedCell) -> lookout_prepare {
+    switch c.kind {
+    case .source:       return LOOKOUT_PREPARE_CELL
+    case .rasterSource: return LOOKOUT_PREPARE_SHEET
+    default:            return LOOKOUT_PREPARE_LIFT
     }
-
-    var st = run(0, cellCount) { i, o, n in
-        if let zip {
-            return zip.withUnsafeBufferPointer {
-                tile57_bake_zip_charts($0.baseAddress, i, o, cellCount, workers,
-                                       progress, label, ctx, n, err)
-            }
-        }
-        return tile57_bake_files(i, o, cellCount, workers, progress, label, ctx, n, err)
-    }
-    if st != TILE57_OK { baked?.pointee = total; return st }
-
-    st = run(cellCount, sheetCount) { i, o, n in
-        if let zip {
-            return zip.withUnsafeBufferPointer {
-                tile57_bake_zip_rasters($0.baseAddress, i, o, sheetCount, workers,
-                                        progress, label, ctx, n, err)
-            }
-        }
-        return tile57_bake_rasters(i, o, sheetCount, workers, progress, label, ctx, n, err)
-    }
-    if st != TILE57_OK { baked?.pointee = total; return st }
-
-    // Only an archive has anything to lift: in a folder these files are
-    // already where the engine can read them.
-    if let zip {
-        st = run(cellCount + sheetCount, liftCount) { i, o, n in
-            zip.withUnsafeBufferPointer {
-                tile57_zip_extract($0.baseAddress, i, o, liftCount, progress, ctx, n, err)
-            }
-        }
-        if st != TILE57_OK { baked?.pointee = total; return st }
-    }
-
-    baked?.pointee = total
-    return TILE57_OK
 }
 
 enum ChartBake {
@@ -388,109 +289,73 @@ enum ChartBake {
             completion(nil)
             return false
         }
-        // Coarse first, then by name so a run is repeatable. Sheets after the
-        // survey — that is what a mariner needs to sail, and a picture is what
-        // they compare it against — and anything only being lifted out of an
-        // archive last, because it is the cheapest and the least urgent.
-        let rank = { (c: ScannedCell) -> Int in
-            switch Prepare(c) {
-            case .cell: return 0
-            case .sheet: return 1
-            case .lift: return 2
-            }
-        }
-        let ordered = cells.filter(\.needsPrepare).sorted {
-            if rank($0) != rank($1) { return rank($0) < rank($1) }
-            return $0.band == $1.band ? $0.name < $1.name : $0.band < $1.band
-        }
-        guard !ordered.isEmpty else {
+        let todo = cells.filter(\.needsPrepare)
+        guard !todo.isEmpty else {
             completion(outDir)
             return false
         }
 
-        let inPaths = ordered.map(\.path)
-        // Every prepared chart goes in a directory of its own name, which is
-        // the layout tile57's own bake writes and the layout an exchange set
-        // uses. Two things depend on it. The raster layer reads a provider
-        // from the directory ABOVE, so a folder of 900 sheets written flat
-        // becomes 900 providers and 900 switches instead of one. And a cell
-        // carries the text and pictures it references beside it, which the
-        // engine only writes when the chart has a directory to hold them:
-        // those files are named per exchange set, not per chart, so charts
-        // written flat would share one manifest and overwrite each other's.
-        //
-        // From an archive the output MIRRORS the entry's own path, so what
-        // comes out is laid out like what went in and a cell's referenced
-        // text lands beside the right chart. Imagery keeps its own name: an
-        // .mbtiles is a chart already, and renaming it to .pmtiles would be a
-        // lie about what is in the file.
-        let outPaths = ordered.map { c -> String in
-            let stem = (c.name as NSString).deletingPathExtension
-            let base = ChartScan.isArchive(sourceDir)
-                ? (outDir as NSString).appendingPathComponent((c.path as NSString).deletingLastPathComponent)
-                : outDir
-            // The chart's own directory — unless the mirrored path IS one
-            // already, which it is for every exchange set, since they put each
-            // cell in a directory of its name. Appending it again would give
-            // US1EEZ3M/US1EEZ3M/US1EEZ3M.pmtiles.
-            let dir = Prepare(c) == .lift || (base as NSString).lastPathComponent == stem
-                ? base
-                : (base as NSString).appendingPathComponent(stem)
+        // Every string the core reads has to outlive the call, so they are
+        // copied once here and freed at the end of it.
+        var cs: [UnsafeMutablePointer<CChar>] = []
+        defer { cs.forEach { free($0) } }
+        func dup(_ s: String) -> UnsafePointer<CChar> {
+            let p = strdup(s)!
+            cs.append(p)
+            return UnsafePointer(p)
+        }
+
+        // The CORE decides the order: coarse band first, sheets after the
+        // survey, a lift last.
+        var items = todo.map {
+            lookout_bake_item(path: dup($0.path), name: dup($0.name),
+                              band: Int32($0.band), work: bakeItem($0))
+        }
+        items.withUnsafeMutableBufferPointer { lookout_bake_order($0.baseAddress, $0.count) }
+
+        // And where each one lands. The layout has teeth in it, so it is the
+        // core's rule rather than four copies of it.
+        var ins: [UnsafePointer<CChar>?] = []
+        var outs: [UnsafePointer<CChar>?] = []
+        for item in items {
+            var buf = [CChar](repeating: 0, count: 4096)
+            var one = item
+            let n = buf.withUnsafeMutableBufferPointer { b in
+                lookout_bake_output_path(outDir, sourceDir, &one, b.baseAddress, b.count)
+            }
+            guard n > 0 else { continue }
+            let path = String(cString: buf)
             try? FileManager.default.createDirectory(
-                at: URL(fileURLWithPath: dir), withIntermediateDirectories: true)
-            let name = Prepare(c) == .lift
-                ? (c.path as NSString).lastPathComponent
-                : "\(stem).pmtiles"
-            return (dir as NSString).appendingPathComponent(name)
+                at: URL(fileURLWithPath: (path as NSString).deletingLastPathComponent),
+                withIntermediateDirectories: true)
+            ins.append(item.path)
+            outs.append(dup(path))
         }
+        guard ins.count == items.count else {
+            completion(nil)
+            return false
+        }
+
+        // Kind-contiguous after the order, the shape the phases take.
+        let cellCount = items.prefix { $0.work == LOOKOUT_PREPARE_CELL }.count
+        let sheetCount = items[cellCount...].prefix { $0.work == LOOKOUT_PREPARE_SHEET }.count
+        let liftCount = items.count - cellCount - sheetCount
+
         job.setName((sourceDir as NSString).lastPathComponent)
-        let workers = UInt32(max(1, min(8, ProcessInfo.processInfo.activeProcessorCount)))
-
-        DispatchQueue.global(qos: .userInitiated).async {
-            let ctx = Unmanaged.passRetained(job).toOpaque()
-            defer { Unmanaged<ChartBakeJob>.fromOpaque(ctx).release() }
-
-            var cIn = inPaths.map { strdup($0) }
-            var cOut = outPaths.map { strdup($0) }
-            defer {
-                cIn.forEach { free($0) }
-                cOut.forEach { free($0) }
-            }
-
-            var baked: UInt32 = 0
-            var err = tile57_error()
-            // One engine call per kind of work: a cell is parsed and portrayed,
-            // a BSB sheet is decoded and warped. The list is sorted so each
-            // kind is one contiguous run.
-            let status = cIn.withUnsafeMutableBufferPointer { inBuf in
-                cOut.withUnsafeMutableBufferPointer { outBuf in
-                    inBuf.withMemoryRebound(to: UnsafePointer<CChar>?.self) { ins in
-                        outBuf.withMemoryRebound(to: UnsafePointer<CChar>?.self) { outs in
-                            bakeSplit(
-                                ins.baseAddress, outs.baseAddress, ordered, sourceDir, workers,
-                                { ctx, done, total in
-                                    guard let ctx else { return true }
-                                    let j = Unmanaged<ChartBakeJob>.fromOpaque(ctx).takeUnretainedValue()
-                                    j.report(done: Int(done), total: Int(total))
-                                    return !j.cancelled   // false CANCELS the bake
-                                },
-                                // No label callback: nothing reads which
-                                // chart finished. The whole library opens at
-                                // the end, from a fresh scan of the folder.
-                                nil,
-                                ctx, &baked, &err)
-                        }
-                    }
-                }
-            }
-
-            DispatchQueue.main.async {
-                // A cancelled bake is not a failure. Whatever landed is a
-                // usable library, so the caller still gets the directory
-                // (tile57 answers TILE57_OK for a cancel).
-                completion(status == TILE57_OK ? outDir : nil)
+        let started = ins.withUnsafeBufferPointer { i in
+            outs.withUnsafeBufferPointer { o in
+                lookout_bake_start(sourceDir, i.baseAddress, o.baseAddress,
+                                   cellCount, sheetCount, liftCount,
+                                   ChartScan.isArchive(sourceDir) ? 1 : 0)
             }
         }
+        guard let started else {
+            completion(nil)
+            return false
+        }
+        // A cancelled bake is not a failure. Whatever landed is a usable
+        // library, so the caller still gets the directory.
+        job.adopt(started) { ok in completion(ok ? outDir : nil) }
         return true
     }
 }

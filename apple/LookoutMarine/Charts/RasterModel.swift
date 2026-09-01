@@ -238,27 +238,14 @@ final class RasterModel {
         return true
     }
 
-    /// What to call the set a file belongs to — mirrors the engine's rule.
-    ///
-    /// A community MBTiles names its provider, and that is what a mariner
-    /// chooses between. A baked sheet does not: `tile57 bake` writes one
-    /// directory per sheet under a bake root, and a bundle holds hundreds, so
-    /// they belong to the bake they came from.
+    /// What to call the set a file belongs to. The ENGINE's rule: it names the
+    /// sets it draws by this, so grouping by anything else disagrees with what
+    /// the pill then shows.
     nonisolated static func providerLabel(_ path: String) -> String {
-        let ns = path as NSString
-        let base = ns.lastPathComponent
-        for k in ["ArcGIS", "Bing", "Google", "Navionics", "ESRI", "Esri",
-                  "CMap", "C-Map", "Sentinel", "NAIP", "OSM", "Imagery"] {
-            if base.range(of: k, options: .caseInsensitive) != nil { return k }
+        path.withCString { p in
+            var n = 0
+            guard let name = lookout_raster_set_name_for(p, &n), n > 0 else { return "" }
+            return String(decoding: UnsafeRawBufferPointer(start: name, count: n), as: UTF8.self)
         }
-        let stem = (base as NSString).deletingPathExtension
-        if base.lowercased().hasSuffix(".pmtiles") {
-            let dir = ns.deletingLastPathComponent
-            if (dir as NSString).lastPathComponent == stem {
-                let root = ((dir as NSString).deletingLastPathComponent as NSString).lastPathComponent
-                if !root.isEmpty { return root }
-            }
-        }
-        return stem.isEmpty ? base : stem
     }
 }
