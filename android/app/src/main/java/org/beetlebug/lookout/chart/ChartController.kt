@@ -8,6 +8,7 @@ import org.beetlebug.lookout.plugins.rowsJson
 import org.beetlebug.lookout.Lookout
 import org.beetlebug.lookout.LookoutActivity
 import org.beetlebug.lookout.charts.ChartLinkController
+import org.beetlebug.lookout.charts.ChartSets
 import org.beetlebug.lookout.charts.RasterController
 import org.beetlebug.lookout.charts.RasterCharts
 import org.beetlebug.lookout.charts.RasterSet
@@ -69,6 +70,10 @@ class ChartController(private val appContext: Context) {
      * is being broken into can each take it and keep the same threading rule.
      */
     val access = EngineAccess()
+
+    /** Set by the Activity: a background set scan landed, so the charts panel
+     *  has counts it did not have. MAIN THREAD. */
+    var onSetsScanned: (() -> Unit)? = null
 
     /** Set by the engine: wakes its idled frame loop after a mutation lands. */
     var onMutated: (() -> Unit)?
@@ -467,6 +472,9 @@ class ChartController(private val appContext: Context) {
         lastWatchNs = frameTimeNanos
         alertsController.publish(l)
         updateService(plugins.connections(l))
+        // The set scans run on the core's own worker, one folder at a time, and
+        // a scan landing is the only change the sets announce on their own.
+        if (ChartSets.changed()) access.onMain { onSetsScanned?.invoke() }
     }
 
     private var lastWatchNs = 0L

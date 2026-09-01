@@ -88,7 +88,7 @@ class LookoutActivity : ComponentActivity() {
         }
 
         // The bundled cell is the last resort, extracted once; the model prefers
-        // a chosen library, then anything pushed into our external files dir.
+        // the installed sets, then anything pushed into our external files dir.
         charts = ChartsModel(applicationContext, extractAsset(CHART_ASSET, CHART_NAME))
         if (charts.chartPaths.isEmpty()) {
             Log.e(TAG, "no charts: none chosen, none pushed, asset extraction failed")
@@ -96,6 +96,9 @@ class LookoutActivity : ComponentActivity() {
             return
         }
         controller = ChartController(applicationContext)
+        // The set scans run on the core's own worker; this is what tells the
+        // panel a folder's counts have arrived.
+        controller.onSetsScanned = { charts.pullSets() }
         // The plugin set rides in the APK as assets, which have no filesystem
         // path — the host loads a DIRECTORY, so extract it to one first. Done
         // here rather than on the render thread: it is half a megabyte of wasm,

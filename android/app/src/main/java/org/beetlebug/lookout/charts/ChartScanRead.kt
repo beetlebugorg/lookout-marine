@@ -66,11 +66,34 @@ data class ChartScanRead(
             if (flat == null || flat.size < HEADER) return null
             val cellCount = flat[7].toIntOrNull() ?: 0
             val rasterCount = flat[8].toIntOrNull() ?: 0
-            val files = ArrayList<ChartFile>(cellCount + rasterCount)
-            var k = HEADER
-            while (k + FIELDS <= flat.size && files.size < cellCount + rasterCount) {
+            val files = decodeFiles(flat, HEADER, cellCount + rasterCount)
+            return ChartScanRead(
+                root = flat[0],
+                updates = flat[1].toIntOrNull() ?: 0,
+                other = flat[2].toIntOrNull() ?: 0,
+                refused = flat[3].toIntOrNull() ?: 0,
+                sources = flat[4].toIntOrNull() ?: 0,
+                bytes = flat[5].toLongOrNull() ?: 0L,
+                producer = flat[6],
+                files = files,
+            )
+        }
+
+        /**
+         * A run of files, twelve strings each. The set list hands back the same
+         * shape, so both reads walk it here.
+         */
+        internal fun decodeFiles(
+            flat: Array<String>?,
+            from: Int = 0,
+            limit: Int = Int.MAX_VALUE,
+        ): List<ChartFile> {
+            if (flat == null) return emptyList()
+            val out = ArrayList<ChartFile>()
+            var k = from
+            while (k + FIELDS <= flat.size && out.size < limit) {
                 val located = flat[k + 7] != "0"
-                files.add(
+                out.add(
                     ChartFile(
                         path = flat[k],
                         name = flat[k + 1],
@@ -87,16 +110,7 @@ data class ChartScanRead(
                 )
                 k += FIELDS
             }
-            return ChartScanRead(
-                root = flat[0],
-                updates = flat[1].toIntOrNull() ?: 0,
-                other = flat[2].toIntOrNull() ?: 0,
-                refused = flat[3].toIntOrNull() ?: 0,
-                sources = flat[4].toIntOrNull() ?: 0,
-                bytes = flat[5].toLongOrNull() ?: 0L,
-                producer = flat[6],
-                files = files,
-            )
+            return out
         }
 
         private const val HEADER = 9

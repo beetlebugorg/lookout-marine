@@ -118,10 +118,8 @@ class ChartImport(private val appContext: Context) {
      * walk never swallows them.
      */
     private fun plan(scan: Array<String>, source: File, zip: Boolean): Plan {
-        val srcName = source.nameWithoutExtension.ifEmpty { source.name }
-        val base = appContext.getExternalFilesDir(null) ?: appContext.filesDir
-        val chartsOut = File(base, "Charts/$srcName")
-        val rasterOut = File(base, "Rasters/$srcName")
+        val chartsOut = ChartBake.preparedDirectory(appContext, source)
+        val rasterOut = ChartBake.preparedDirectory(appContext, source, raster = true)
 
         val read = ChartScanRead.decode(scan)
         val needs = read?.files.orEmpty()

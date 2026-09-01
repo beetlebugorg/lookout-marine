@@ -259,6 +259,46 @@ public final class Lookout implements AutoCloseable {
         if (s != 0) nStoreRemove(s, group, key);
     }
 
+    // ---- the installed sets ----
+    //
+    // The folders of charts the mariner added, which of them are drawn, and
+    // what each holds. The chart is the UNION of the sets switched on. No chart
+    // handle: the sets exist before anything is open. See ChartSets.kt.
+
+    public static long chartSetsOpen(long store, String preparedRoot) {
+        return nChartSetsOpen(store, preparedRoot);
+    }
+    public static void chartSetsClose(long s)     { if (s != 0) nChartSetsClose(s); }
+    /** True since the last poll, then clears. A background scan landing raises
+     *  it, and that is the only change the sets announce on their own. */
+    public static boolean chartSetsChanged(long s) {
+        return s != 0 && nChartSetsChanged(s);
+    }
+    /** The list, in the order added: eleven strings per set. */
+    public static String[] chartSetsAll(long s)   {
+        return s == 0 ? new String[0] : nChartSetsAll(s);
+    }
+    /** Every file one set holds, in the scan read's own row shape. */
+    public static String[] chartSetFiles(long s, String path) {
+        return s == 0 ? new String[0] : nChartSetFiles(s, path);
+    }
+    public static boolean chartSetsAdd(long s, String path) {
+        return s != 0 && nChartSetsAdd(s, path);
+    }
+    public static boolean chartSetsRemove(long s, String path) {
+        return s != 0 && nChartSetsRemove(s, path);
+    }
+    public static boolean chartSetsSetOn(long s, String path, boolean on) {
+        return s != 0 && nChartSetsSetOn(s, path, on);
+    }
+    public static boolean chartSetsIsOn(long s, String path) {
+        return s != 0 && nChartSetsIsOn(s, path);
+    }
+    /** Every chart the switched-on sets hold, sorted and deduplicated. */
+    public static String[] chartSetsCompose(long s) {
+        return s == 0 ? new String[0] : nChartSetsCompose(s);
+    }
+
     /**
      * Hand the store to this chart handle. The engine then restores the camera
      * pose and the mariner's display settings out of it, writes the pose down
@@ -394,6 +434,16 @@ public final class Lookout implements AutoCloseable {
     private static native void nStoreSetList(long s, String group, String key, String[] items);
     private static native void nStoreRemove(long s, String group, String key);
     private static native void nSetStore(long h, long store);
+    private static native long nChartSetsOpen(long store, String preparedRoot);
+    private static native void nChartSetsClose(long s);
+    private static native boolean nChartSetsChanged(long s);
+    private static native String[] nChartSetsAll(long s);
+    private static native String[] nChartSetFiles(long s, String path);
+    private static native boolean nChartSetsAdd(long s, String path);
+    private static native boolean nChartSetsRemove(long s, String path);
+    private static native boolean nChartSetsSetOn(long s, String path, boolean on);
+    private static native boolean nChartSetsIsOn(long s, String path);
+    private static native String[] nChartSetsCompose(long s);
     private static native String nFmtPosition(double lat, double lon);
     private static native String nFmtCoordDm(double value, boolean isLat);
     private static native String nFmtScale(double denominator);
@@ -736,6 +786,21 @@ public final class Lookout implements AutoCloseable {
         return nBakeOutputPath(outDir, source, path, name, band, work);
     }
 
+    /** The directory name a source is prepared into, under the charts root.
+     *  An archive names it without the .zip. */
+    public static String bakePreparedName(String source) { return nBakePreparedName(source); }
+
+    /** True when path is under the directory this app prepares into. What is
+     *  outside is the mariner's own and is never touched. */
+    public static boolean bakeIsDerived(String root, String path) {
+        return nBakeIsDerived(root, path);
+    }
+
+    /** What a removal renames to before deleting behind itself. */
+    public static String bakeTrashPrefix()        { return nBakeTrashPrefix(); }
+    /** The test a launch sweep uses. */
+    public static boolean bakeIsTrash(String name) { return nBakeIsTrash(name); }
+
     // ---- portrayal quick toggles -------------------------------------------
 
     public void toggleText()                     { if (h != 0) nToggleText(h); }
@@ -761,6 +826,10 @@ public final class Lookout implements AutoCloseable {
     private static native int[] nBakeOrder(String[] names, int[] bands, int[] works);
     private static native String nBakeOutputPath(String outDir, String source, String path,
                                                  String name, int band, int work);
+    private static native String nBakePreparedName(String source);
+    private static native boolean nBakeIsDerived(String root, String path);
+    private static native String nBakeTrashPrefix();
+    private static native boolean nBakeIsTrash(String name);
     private static native void nToggleText(long h);
     private static native void nToggleSoundings(long h);
     private static native void nToggleOtherCategory(long h);

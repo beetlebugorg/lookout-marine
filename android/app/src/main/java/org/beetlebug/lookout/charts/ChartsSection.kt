@@ -51,6 +51,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.Locale
 
 /**
  * The Charts tab: point the app at a baked library anywhere on the device.
@@ -73,8 +74,7 @@ fun ChartsSection(
     // works without storage access — links come off the network.
     ChartLinksSection(links)
 
-    SectionHeader("Lookout chart library")
-    Footer(charts.activeLabel)
+    SectionHeader("Charts")
 
     if (!charts.storageAccess) {
         Footer(
@@ -103,10 +103,16 @@ fun ChartsSection(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        TextButton(onClick = { browsing = true }) { Text("Choose library folder…") }
-        if (charts.selected != null) {
-            TextButton(onClick = charts::clearSelection) { Text("Use pushed / bundled charts") }
-        }
+        TextButton(onClick = { browsing = true }) { Text("Add charts…") }
+    }
+
+    // The installed sets. A switch off keeps the set and takes it out of the
+    // chart, so an entry is never lost by turning it off.
+    if (charts.sets.isEmpty()) {
+        Footer(charts.activeLabel)
+    } else {
+        for (set in charts.sets) ChartSetRow(set, charts)
+        Footer(charts.activeLabel)
     }
 
     charts.lastEmptyPick?.let {
@@ -363,6 +369,102 @@ private fun storageRootsRemembered(): List<File> {
     return remember { storageRoots(ctx) }
 }
 
+/**
+ * One installed set: the switch, what it holds, and the way to remove it.
+ *
+ * A set switched off stays installed and leaves the chart, so nothing here
+ * loses a folder. Removing takes it off the list; what a bake produced under
+ * the app's own directory goes with it, and the mariner's own files are never
+ * touched.
+ */
+@Composable
+private fun ChartSetRow(set: ChartSets.Set, charts: ChartsModel) {
+    var confirming by remember(set.path) { mutableStateOf(false) }
+
+    SwitchRow(
+        label = set.title,
+        checked = set.on,
+        onCheckedChange = { charts.setOn(set.path, it) },
+        onRemove = { confirming = true },
+    )
+    Text(
+        text = summary(set),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(start = 40.dp, end = 20.dp, bottom = 4.dp),
+    )
+
+    if (confirming) {
+        AlertDialog(
+            onDismissRequest = { confirming = false },
+            title = { Text("Remove ${set.title}?") },
+            text = {
+                Text(
+                    "The charts Lookout prepared from this folder are deleted. " +
+                        "Your own files are not touched, and you can add the " +
+                        "folder again.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirming = false
+                    charts.remove(set.path)
+                }) { Text("Remove") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirming = false }) { Text("Cancel") }
+            },
+        )
+    }
+}
+
+/**
+ * What a set holds, in one line: the folder it came from, the counts, and the
+ * bands. Until the core's background scan has read the folder there are no
+ * counts to state, and saying "0 charts" of a set that has thousands is worse
+ * than saying nothing yet.
+ */
+private fun summary(set: ChartSets.Set): String {
+    val parts = mutableListOf<String>()
+    // The folder it came from, unless that is what the title already says.
+    if (set.name != set.title) parts.add(set.name)
+    if (!set.scanned) {
+        parts.add("reading…")
+        return parts.joinToString(" · ")
+    }
+    val counts = mutableListOf<String>()
+    if (set.charts > 0) counts.add(plural(set.charts, "chart"))
+    if (set.pictures > 0) counts.add(plural(set.pictures, "picture"))
+    if (set.unprepared > 0) counts.add("${set.unprepared} to prepare")
+    if (counts.isEmpty()) counts.add("no charts")
+    if (set.bytes > 0) counts.add(bytes(set.bytes))
+    parts.add(counts.joinToString(", "))
+    if (set.bandLo > 0) parts.add(bandRange(set.bandLo, set.bandHi))
+    return parts.joinToString(" · ")
+}
+
+private fun plural(n: Int, one: String): String = if (n == 1) "$n $one" else "$n ${one}s"
+
+/** The bands present, in the words the readouts use. */
+private fun bandRange(lo: Int, hi: Int): String =
+    if (lo == hi) bandName(lo) else "${bandName(lo)} to ${bandName(hi)}"
+
+private fun bandName(band: Int): String = when (band) {
+    1 -> "Overview"
+    2 -> "General"
+    3 -> "Coastal"
+    4 -> "Approach"
+    5 -> "Harbor"
+    6 -> "Berthing"
+    else -> "—"
+}
+
+private fun bytes(n: Long): String = when {
+    n >= 1_000_000_000 -> String.format(Locale.US, "%.1f GB", n / 1e9)
+    n >= 1_000_000 -> String.format(Locale.US, "%.0f MB", n / 1e6)
+    else -> String.format(Locale.US, "%.0f kB", n / 1e3)
+}
+
 /** One switch row, with an optional Remove. */
 @Composable
 private fun SwitchRow(
@@ -468,11 +570,11 @@ private fun FolderBrowser(charts: ChartsModel, onOpened: () -> Unit = {}) {
                 // The dialog closes once the library is open — the pick was
                 // the errand it opened for.
                 scope.launch {
-                    charts.select(dir)
+                    charts.add(dir)
                     onOpened()
                 }
             },
-        ) { Text(if (charts.scanning) "Scanning…" else "Open this folder") }
+        ) { Text(if (charts.scanning) "Scanning…" else "Add this folder") }
         // The import: bake what stands here — raw ENC cells, BSB/KAP sheets,
         // an agency archive — into the app's own library, and open THAT.
         OutlinedButton(
@@ -480,7 +582,7 @@ private fun FolderBrowser(charts: ChartsModel, onOpened: () -> Unit = {}) {
             onClick = {
                 val dir = cur ?: return@OutlinedButton
                 charts.importer.start(dir) { out ->
-                    if (out != null) scope.launch { charts.select(out) }
+                    if (out != null) scope.launch { charts.add(out) }
                 }
             },
         ) { Text("Import") }

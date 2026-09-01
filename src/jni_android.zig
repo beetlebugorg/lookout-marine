@@ -3279,3 +3279,194 @@ export fn Java_org_beetlebug_lookout_Lookout_nFrameKick(env: [*c]j.JNIEnv, cls: 
     const h = fromLong(hl) orelse return;
     lookout_frame_kick(h.l);
 }
+
+// ---- the installed sets -----------------------------------------------------
+//
+// The folders of charts the mariner added, which of them are drawn, and what
+// each holds. The chart is the UNION of the sets switched on.
+
+const c_sets = opaque {};
+
+extern fn lookout_chart_sets_open(store: ?*c_store, prepared_root: ?[*:0]const u8) ?*c_sets;
+extern fn lookout_chart_sets_close(s: ?*c_sets) void;
+extern fn lookout_chart_sets_changed(s: ?*c_sets) c_int;
+extern fn lookout_chart_sets_all(s: ?*c_sets, out_n: *usize) ?[*]const ?*const CChartSet;
+extern fn lookout_chart_set_files(s: ?*c_sets, path: ?[*:0]const u8, out_n: *usize) ?[*]const ?*const CChartFile;
+extern fn lookout_chart_sets_add(s: ?*c_sets, path: ?[*:0]const u8) c_int;
+extern fn lookout_chart_sets_remove(s: ?*c_sets, path: ?[*:0]const u8) c_int;
+extern fn lookout_chart_sets_set_on(s: ?*c_sets, path: ?[*:0]const u8, on: c_int) c_int;
+extern fn lookout_chart_sets_is_on(s: ?*c_sets, path: ?[*:0]const u8) c_int;
+extern fn lookout_chart_sets_compose(s: ?*c_sets, out_n: *usize) ?[*]const ?[*:0]const u8;
+
+const CChartSet = extern struct {
+    path: ?[*:0]const u8,
+    title: ?[*:0]const u8,
+    producer: ?[*:0]const u8,
+    on: c_int,
+    scanned: c_int,
+    charts: usize,
+    pictures: usize,
+    unprepared: usize,
+    bytes: u64,
+    band_lo: c_int,
+    band_hi: c_int,
+};
+
+fn setsOf(s: j.jlong) ?*c_sets {
+    if (s == 0) return null;
+    return @ptrFromInt(@as(usize, @bitCast(s)));
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nChartSetsOpen(env: [*c]j.JNIEnv, cls: j.jclass, store: j.jlong, prepared: j.jstring) j.jlong {
+    _ = cls;
+    const p = Borrowed.get(env, prepared) orelse return 0;
+    defer p.release(env);
+    const s = lookout_chart_sets_open(storeOf(store), p.ptr()) orelse return 0;
+    return @bitCast(@as(u64, @intFromPtr(s)));
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nChartSetsClose(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong) void {
+    _ = env;
+    _ = cls;
+    lookout_chart_sets_close(setsOf(s));
+}
+
+/// A background scan landing raises this, and that is the only change the sets
+/// announce on their own.
+export fn Java_org_beetlebug_lookout_Lookout_nChartSetsChanged(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong) j.jboolean {
+    _ = env;
+    _ = cls;
+    return if (lookout_chart_sets_changed(setsOf(s)) != 0) 1 else 0;
+}
+
+/// String[] nChartSetsAll(long s) -- the list, in the order added. Eleven
+/// strings per set:
+///
+///   path, title, producer, on, scanned, charts, pictures, unprepared,
+///   bytes, bandLo, bandHi
+export fn Java_org_beetlebug_lookout_Lookout_nChartSetsAll(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong) j.jobjectArray {
+    _ = cls;
+    var n: usize = 0;
+    const all = lookout_chart_sets_all(setsOf(s), &n) orelse return jstrArray(env, &.{});
+
+    var out = Strings.init();
+    defer out.deinit();
+
+    for (all[0..n]) |sp| {
+        const set: *const CChartSet = @ptrCast(@alignCast(sp orelse continue));
+        out.str(set.path);
+        out.str(set.title);
+        out.str(set.producer);
+        out.print("{d}", .{set.on});
+        out.print("{d}", .{set.scanned});
+        out.print("{d}", .{set.charts});
+        out.print("{d}", .{set.pictures});
+        out.print("{d}", .{set.unprepared});
+        out.print("{d}", .{set.bytes});
+        out.print("{d}", .{set.band_lo});
+        out.print("{d}", .{set.band_hi});
+    }
+    return out.toArray(env);
+}
+
+/// String[] nChartSetFiles(long s, String path) -- every file one set holds, as
+/// the background scan found it. The scan read's own row shape, so a bake reads
+/// this rather than walking the folder again.
+export fn Java_org_beetlebug_lookout_Lookout_nChartSetFiles(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong, path: j.jstring) j.jobjectArray {
+    _ = cls;
+    const p = Borrowed.get(env, path) orelse return jstrArray(env, &.{});
+    defer p.release(env);
+    var n: usize = 0;
+    const files = lookout_chart_set_files(setsOf(s), p.ptr(), &n) orelse return jstrArray(env, &.{});
+
+    var out = Strings.init();
+    defer out.deinit();
+    scanFiles(&out, files[0..n]);
+    return out.toArray(env);
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nChartSetsAdd(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong, path: j.jstring) j.jboolean {
+    _ = cls;
+    const p = Borrowed.get(env, path) orelse return 0;
+    defer p.release(env);
+    return if (lookout_chart_sets_add(setsOf(s), p.ptr()) != 0) 1 else 0;
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nChartSetsRemove(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong, path: j.jstring) j.jboolean {
+    _ = cls;
+    const p = Borrowed.get(env, path) orelse return 0;
+    defer p.release(env);
+    return if (lookout_chart_sets_remove(setsOf(s), p.ptr()) != 0) 1 else 0;
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nChartSetsSetOn(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong, path: j.jstring, on: j.jboolean) j.jboolean {
+    _ = cls;
+    const p = Borrowed.get(env, path) orelse return 0;
+    defer p.release(env);
+    return if (lookout_chart_sets_set_on(setsOf(s), p.ptr(), if (on != 0) 1 else 0) != 0) 1 else 0;
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nChartSetsIsOn(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong, path: j.jstring) j.jboolean {
+    _ = cls;
+    const p = Borrowed.get(env, path) orelse return 0;
+    defer p.release(env);
+    return if (lookout_chart_sets_is_on(setsOf(s), p.ptr()) != 0) 1 else 0;
+}
+
+/// String[] nChartSetsCompose(long s) -- every chart the switched-on sets hold,
+/// sorted and deduplicated. Two sets may overlap, and the same cell twice would
+/// be composed twice.
+export fn Java_org_beetlebug_lookout_Lookout_nChartSetsCompose(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong) j.jobjectArray {
+    _ = cls;
+    var n: usize = 0;
+    const paths = lookout_chart_sets_compose(setsOf(s), &n) orelse return jstrArray(env, &.{});
+    return jstrArray(env, paths[0..n]);
+}
+
+// ---- what a bake prepared, and removing it ----------------------------------
+
+extern fn lookout_bake_prepared_name(source: ?[*:0]const u8, out: [*]u8, cap: usize) usize;
+extern fn lookout_bake_is_derived(root: ?[*:0]const u8, path: ?[*:0]const u8) c_int;
+extern fn lookout_bake_trash_prefix() [*:0]const u8;
+extern fn lookout_bake_is_trash(name: ?[*:0]const u8) c_int;
+
+/// String nBakePreparedName(String source) -- the directory name `source` is
+/// prepared into, under the shell's charts root. An archive names it without
+/// the .zip.
+export fn Java_org_beetlebug_lookout_Lookout_nBakePreparedName(env: [*c]j.JNIEnv, cls: j.jclass, source: j.jstring) j.jstring {
+    _ = cls;
+    const s = Borrowed.get(env, source) orelse return jstr(env, null);
+    defer s.release(env);
+    var buf: [1024]u8 = undefined;
+    const n = lookout_bake_prepared_name(s.ptr(), &buf, buf.len);
+    if (n == 0 or n >= buf.len) return jstr(env, null);
+    buf[n] = 0;
+    return env_(env).NewStringUTF.?(env, &buf);
+}
+
+/// boolean nBakeIsDerived(String root, String path) -- true when `path` is
+/// under the directory this app prepares into. Removing a set may delete what
+/// is under it; what is outside is the mariner's own.
+export fn Java_org_beetlebug_lookout_Lookout_nBakeIsDerived(env: [*c]j.JNIEnv, cls: j.jclass, root: j.jstring, path: j.jstring) j.jboolean {
+    _ = cls;
+    const r = Borrowed.get(env, root) orelse return 0;
+    defer r.release(env);
+    const p = Borrowed.get(env, path) orelse return 0;
+    defer p.release(env);
+    return if (lookout_bake_is_derived(r.ptr(), p.ptr()) != 0) 1 else 0;
+}
+
+/// String nBakeTrashPrefix() -- what a removal renames to before deleting
+/// behind itself.
+export fn Java_org_beetlebug_lookout_Lookout_nBakeTrashPrefix(env: [*c]j.JNIEnv, cls: j.jclass) j.jstring {
+    _ = cls;
+    return env_(env).NewStringUTF.?(env, lookout_bake_trash_prefix());
+}
+
+/// boolean nBakeIsTrash(String name) -- the test a launch sweep uses.
+export fn Java_org_beetlebug_lookout_Lookout_nBakeIsTrash(env: [*c]j.JNIEnv, cls: j.jclass, name: j.jstring) j.jboolean {
+    _ = cls;
+    const n = Borrowed.get(env, name) orelse return 0;
+    defer n.release(env);
+    return if (lookout_bake_is_trash(n.ptr()) != 0) 1 else 0;
+}

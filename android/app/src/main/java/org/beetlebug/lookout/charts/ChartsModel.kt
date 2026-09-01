@@ -34,17 +34,21 @@ data class Library(val dir: File, val cells: List<String>) {
  * document-picker import, minus the import: a 3 GB library is pointed at, never
  * copied.
  *
- * Selection is a plain absolute path in prefs, so it survives a relaunch and
- * needs no permission of its own to remember (reading it back does; see
- * [storageAccess]). [chartPaths] is what [LookoutView] opens, and it falls
- * back — chosen library, then anything pushed into the app's own external files
- * dir (no permission needed, see the adb recipe in [LookoutActivity]), then the
- * cell bundled in the APK — so the app always has something to draw.
+ * The list is the CORE's ([ChartSets]). A folder the mariner added is a SET,
+ * and the chart is the union of the sets switched on, so two agencies' charts
+ * draw as one. Only the paths and the switches are saved: a folder changes
+ * underneath the app.
+ *
+ * [chartPaths] is what [LookoutView] opens, and it falls back — the union,
+ * then anything pushed into the app's own external files dir (no permission
+ * needed, see the adb recipe in [LookoutActivity]), then the cell bundled in
+ * the APK — so the app always has something to draw.
  */
 class ChartsModel(private val appContext: Context, private val bundled: String?) {
 
-    /** The chosen library, or null when falling back. */
-    var selected by mutableStateOf<Library?>(null)
+    /** The installed sets, in the order added. Re-read when the core's
+     *  background scan lands. */
+    var sets by mutableStateOf<List<ChartSets.Set>>(emptyList())
         private set
 
     /** Set while a directory scan is running (a big tree takes a moment). */
@@ -74,21 +78,29 @@ class ChartsModel(private val appContext: Context, private val bundled: String?)
 
     init {
         refreshAccess()
-        val saved = Store.text(Store.Group.RECENTS, KEY_SELECTED)
-        if (saved != null) {
-            // Synchronous, on the main thread, before the first frame: the first
-            // open needs its paths immediately (surfaceChanged follows onCreate),
-            // and restoring the library is the whole point of having saved it.
-            // Walking a 7k-cell tree costs a few hundred ms of launch, once.
-            val dir = File(saved)
-            val t = System.currentTimeMillis()
-            if (dir.isDirectory) selected = scan(dir)
-            if (selected == null) {
-                Log.w(TAG, "saved library gone or unreadable: $saved")
-            } else {
-                Log.i(TAG, "library $saved: ${selected?.cells?.size} cells in ${System.currentTimeMillis() - t} ms")
-            }
-        }
+        ChartBake.sweepTrash(appContext)
+        ChartSets.open(ChartBake.chartsRoot(appContext).absolutePath)
+        pullSets()
+        seedFromTheChosenLibrary()
+    }
+
+    /**
+     * The one library a mariner chose before there was a list becomes their
+     * first set. Without it their charts are simply gone at the next launch,
+     * with the folder still on disk and the app on the first-run page.
+     *
+     * Once, and only into an empty list: a mariner who then removed that set
+     * must not have it back at the next launch.
+     */
+    private fun seedFromTheChosenLibrary() {
+        val saved = Store.text(Store.Group.RECENTS, KEY_SELECTED) ?: return
+        Store.remove(Store.Group.RECENTS, KEY_SELECTED)
+        if (sets.isNotEmpty()) return
+        // Not filtered: the core's scan decides what is a chart, so a folder
+        // that was never one drops out on its own.
+        ChartSets.add(saved)
+        pullSets()
+        Log.i(TAG, "the chosen library is now a set: $saved")
     }
 
     /** Re-read the storage permission (call from the Activity's onResume). */
@@ -107,7 +119,7 @@ class ChartsModel(private val appContext: Context, private val bundled: String?)
      */
     val chartPaths: Array<String>
         get() {
-            val want = selected?.cells?.takeIf { it.isNotEmpty() }
+            val want = composed.takeIf { it.isNotEmpty() }
                 ?: pushed
                 ?: return bundled?.let { arrayOf(it) } ?: emptyArray()
             // Held, not rebuilt. This is read from composition, and a real
@@ -119,49 +131,86 @@ class ChartsModel(private val appContext: Context, private val bundled: String?)
             return array
         }
 
+    private fun cells(n: Int) = if (n == 1) "1 cell" else "$n cells"
+
+    /** The union of the switched-on sets, held between changes for the same
+     *  reason [chartPaths] is. */
+    private var composed: List<String> = emptyList()
+
     private var pathsCache: Pair<List<String>, Array<String>>? = null
 
     /** A label for the HUD/settings: what's actually open right now. */
     val activeLabel: String
         get() {
-            selected?.let { if (it.cells.isNotEmpty()) return "${it.name} (${it.cells.size} cells)" }
-            pushed?.let { return "pushed (${it.size} cells)" }
+            val on = sets.filter { it.on }
+            if (composed.isNotEmpty()) {
+                val cells = cells(composed.size)
+                return if (on.size == 1) "${on[0].title} ($cells)" else "${on.size} sets ($cells)"
+            }
+            pushed?.let { return "pushed (${cells(it.size)})" }
             return "bundled demo cell"
         }
 
     /**
-     * Adopt [dir] as the library. Rejects a directory with no cells under it
-     * (surfaced via [lastEmptyPick]) rather than blanking the chart, since the
-     * usual mistake is picking the ENC source tree — *.000 files, not a bake.
+     * Put [dir] on the list. Rejects a folder the core found no charts in
+     * (surfaced via [lastEmptyPick]) rather than listing a set that opens
+     * nothing, since the usual mistake is picking the ENC source tree.
      */
-    suspend fun select(dir: File): Boolean {
+    suspend fun add(dir: File): Boolean {
         scanning = true
         try {
             // Off the main thread: a full ENC library is thousands of files.
-            val lib = withContext(Dispatchers.IO) { scan(dir) }
-            if (lib == null || lib.cells.isEmpty()) {
+            val found = withContext(Dispatchers.IO) {
+                ChartScanRead.read(dir.absolutePath, zip = isArchive(dir))
+            }
+            val charts = found?.files.orEmpty().count { it.kind != ChartScanRead.OTHER }
+            if (charts == 0) {
                 lastEmptyPick = dir.absolutePath
-                Log.w(TAG, "no *.pmtiles under $dir — not a baked library?")
+                Log.w(TAG, "no charts under $dir")
                 return false
             }
-            selected = lib
+            ChartSets.add(dir.absolutePath)
             lastEmptyPick = null
-            Store.setText(Store.Group.RECENTS, KEY_SELECTED, lib.path)
-            generation++
-            Log.i(TAG, "library -> ${lib.path} (${lib.cells.size} cells)")
+            pullSets()
+            Log.i(TAG, "set added: ${dir.absolutePath} ($charts charts)")
             return true
         } finally {
             scanning = false
         }
     }
 
-    /** Back to the fallback chain (pushed charts, else the bundled cell). */
-    fun clearSelection() {
-        selected = null
-        lastEmptyPick = null
-        Store.remove(Store.Group.RECENTS, KEY_SELECTED)
+    /** The switch. A set switched off stays installed and leaves the chart. */
+    fun setOn(path: String, on: Boolean) {
+        if (ChartSets.setOn(path, on)) pullSets()
+    }
+
+    /**
+     * Take a set off the list, and delete what this app prepared from it. The
+     * mariner's own files are never touched: ChartBake refuses any path it did
+     * not make.
+     */
+    fun remove(path: String) {
+        if (!ChartSets.remove(path)) return
+        ChartBake.deletePrepared(appContext, File(path))
+        pullSets()
+    }
+
+    /**
+     * Re-read the list and the union. Called after every change the shell made,
+     * and from the frame loop when the core's background scan lands.
+     */
+    fun pullSets() {
+        sets = ChartSets.all()
+        composed = ChartSets.compose()
         generation++
     }
+
+    /** True when the core's background scan has landed since the last look. */
+    fun scanLanded(): Boolean = ChartSets.changed()
+
+    /** One .zip is a set, as a chart agency publishes them. */
+    private fun isArchive(dir: File): Boolean =
+        dir.isFile && dir.name.endsWith(".zip", ignoreCase = true)
 
     /**
      * Charts pushed into the app's own external files dir, or null if none.
@@ -173,11 +222,6 @@ class ChartsModel(private val appContext: Context, private val bundled: String?)
         val dir = File(appContext.getExternalFilesDir(null) ?: return@lazy null, PUSH_DIR)
         if (!dir.isDirectory && !dir.mkdirs()) return@lazy null
         cellsUnder(dir).ifEmpty { null }
-    }
-
-    private fun scan(dir: File): Library? {
-        if (!dir.isDirectory || !dir.canRead()) return null
-        return Library(dir, cellsUnder(dir))
     }
 
     private companion object {
