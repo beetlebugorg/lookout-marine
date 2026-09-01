@@ -2,8 +2,9 @@
  *
  * Every lookout_* call funnels through here, on the main thread only (the
  * engine wants one thread, GTK wants the main one). Drives the on-demand render
- * loop: a frame-clock tick that runs only while animating or dirty and removes
- * itself once static; mutating calls re-arm it via lk_chart_controller_kick.
+ * loop: a frame-clock tick that asks lookout_frame_next what to do and takes
+ * itself off the clock when the answer is idle. Mutating calls re-arm it via
+ * lk_chart_controller_kick.
  *
  * All geometry is in LOGICAL POINTS, matching include/lookout.h; lookout
  * applies pixel density itself.

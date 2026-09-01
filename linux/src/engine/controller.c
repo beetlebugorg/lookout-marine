@@ -17,14 +17,10 @@ struct _LkChartController {
   LkAppModel *model; /* pushed live readouts; not owned */
 
   guint    tick_id;
-  gint64   last_frame_us;
-  int      idle_ticks;
-
-  /* Kicks the tick loop back awake for the plugins (see the idle poll below). */
-  guint    plugin_poll_id;
+  /* The one-shot the core asked for with LOOKOUT_FRAME_WAIT. */
+  guint    wake_id;
 
   gint64 last_readouts_us;
-  gint64 last_store_flush_us;
 };
 
 G_DEFINE_FINAL_TYPE (LkChartController, lk_chart_controller, G_TYPE_OBJECT)
@@ -107,16 +103,6 @@ lk_chart_controller_push_readouts (LkChartController *self)
    * the pill is fed from the frame like every other readout. */
   lk_app_model_refresh_raster_state (self->model);
 
-  /* The store coalesces its writes, so something has to ask it whether the
-   * window has passed. The engine's own frame loop does that; this shell still
-   * drives its own, so the pose the engine writes every three seconds would sit
-   * dirty until close. It goes when the loop is lookout_frame_next's. */
-  if (now - self->last_store_flush_us >= G_USEC_PER_SEC)
-    {
-      self->last_store_flush_us = now;
-      lookout_store_flush (lk_store_handle ());
-    }
-
   /* Under follow the CORE moves the camera without the shell; the pick's
    * mark must ride its water, not its pixels. Only the mark moves — the
    * report's frame is fixed for the report's life. */
@@ -132,12 +118,25 @@ lk_chart_controller_push_readouts (LkChartController *self)
 
 /* ---- the on-demand render loop ------------------------------------------ */
 
+/* The loop is the CORE's: lookout_frame_next measures its own gap, advances the
+ * fling, adopts the chart-link answers waiting, asks the store whether its
+ * coalesce window has passed, and says whether to draw. What is left here is
+ * the platform timer, on or off.
+ *
+ * Three verdicts. RENDER draws. WAIT keeps the frame clock, or takes the loop
+ * off it and sets a one-shot when a rate comes with it — that is the slow beat
+ * a plugin layer needs, because traffic arrives with no gesture behind it.
+ * IDLE stops the loop until something kicks it. */
+
+static void lk_chart_controller_schedule_wake (LkChartController *self, int ms);
+
 static gboolean
 lk_chart_controller_tick (GtkWidget     *widget,
                           GdkFrameClock *clock,
                           gpointer       user_data)
 {
   LkChartController *self = user_data;
+  lookout_frame frame;
 
   if (self->handle == NULL)
     {
@@ -145,27 +144,18 @@ lk_chart_controller_tick (GtkWidget     *widget,
       return G_SOURCE_REMOVE;
     }
 
-  gint64 now = gdk_frame_clock_get_frame_time (clock);
-  double dt = self->last_frame_us == 0 ? 0.0 : (now - self->last_frame_us) / (double) G_USEC_PER_SEC;
-  self->last_frame_us = now;
-  if (dt > 0.05)
-    dt = 0.05; /* cap after an idle gap, so a resumed fling doesn't teleport */
+  lookout_frame_next (self->handle, &frame);
 
-  gboolean animating = lookout_animating (self->handle) != 0;
-  if (animating)
-    lookout_tick_anim (self->handle, dt);
-
-  gboolean building = lookout_is_building (self->handle) != 0;
   if (self->model != NULL)
     {
-      lk_app_model_set_building (self->model, building);
+      lk_app_model_set_building (self->model, frame.building != 0);
       /* The chart-link list, the credit and the error, from the core. A
        * landing answer raises needs-redraw, so a resolve keeps this ticking
        * until it is done. */
       lk_app_model_poll_chart_links (self->model);
     }
 
-  if (animating || lookout_needs_redraw (self->handle) != 0)
+  if (frame.verdict == LOOKOUT_FRAME_RENDER)
     {
       if (lookout_render (self->handle))
         {
@@ -178,26 +168,57 @@ lk_chart_controller_tick (GtkWidget     *widget,
             lk_app_model_set_first_build_done (self->model, TRUE);
         }
       lk_chart_controller_push_readouts (self);
-      self->idle_ticks = 0;
+      return G_SOURCE_CONTINUE;
     }
-  else if (building)
-    {
-      self->idle_ticks = 0; /* keep ticking while a background tessellation fills in */
-    }
-  else
-    {
-      /* Static — the first scene has rendered, which retires the spinner. */
-      if (self->model != NULL)
-        lk_app_model_set_first_build_done (self->model, TRUE);
 
-      if (++self->idle_ticks > 2)
-        {
-          self->tick_id = 0;
-          return G_SOURCE_REMOVE; /* idle costs nothing until something kicks us */
-        }
+  /* Not a frame, so one has already gone out: retire the spinner. */
+  if (self->model != NULL)
+    lk_app_model_set_first_build_done (self->model, TRUE);
+
+  if (frame.verdict == LOOKOUT_FRAME_IDLE)
+    {
+      self->tick_id = 0;
+      return G_SOURCE_REMOVE; /* idle costs nothing until something kicks us */
+    }
+
+  if (frame.wait_ms > 0)
+    {
+      lk_chart_controller_schedule_wake (self, frame.wait_ms);
+      self->tick_id = 0;
+      return G_SOURCE_REMOVE;
     }
 
   return G_SOURCE_CONTINUE;
+}
+
+/* Back on the frame clock, WITHOUT lookout_frame_kick: a timer firing is not a
+ * change the shell made, and clearing the engine's quiet count here would buy
+ * three frame-clock ticks for every beat of the slow poll. */
+static void
+lk_chart_controller_resume (LkChartController *self)
+{
+  if (self->tick_id != 0 || self->view == NULL || self->handle == NULL)
+    return;
+  self->tick_id = gtk_widget_add_tick_callback (self->view, lk_chart_controller_tick,
+                                                self, NULL);
+}
+
+static gboolean
+lk_chart_controller_wake (gpointer user_data)
+{
+  LkChartController *self = user_data;
+
+  self->wake_id = 0;
+  lk_chart_controller_resume (self);
+  return G_SOURCE_REMOVE;
+}
+
+/* Ask again in `ms`. The core sets the rate and the shell runs the timer. */
+static void
+lk_chart_controller_schedule_wake (LkChartController *self, int ms)
+{
+  g_clear_handle_id (&self->wake_id, g_source_remove);
+  self->wake_id = g_timeout_add ((guint) ms, lk_chart_controller_wake, self);
 }
 
 void
@@ -205,67 +226,19 @@ lk_chart_controller_kick (LkChartController *self)
 {
   g_return_if_fail (LK_IS_CHART_CONTROLLER (self));
 
-  self->idle_ticks = 0;
-  if (self->tick_id != 0 || self->view == NULL || self->handle == NULL)
-    return;
-
-  self->last_frame_us = 0;
-  self->tick_id = gtk_widget_add_tick_callback (self->view, lk_chart_controller_tick,
-                                                self, NULL);
+  g_clear_handle_id (&self->wake_id, g_source_remove);
+  if (self->handle != NULL)
+    lookout_frame_kick (self->handle);
+  lk_chart_controller_resume (self);
 }
 
 static void
 lk_chart_controller_stop_tick (LkChartController *self)
 {
+  g_clear_handle_id (&self->wake_id, g_source_remove);
   if (self->tick_id != 0 && self->view != NULL)
     gtk_widget_remove_tick_callback (self->view, self->tick_id);
   self->tick_id = 0;
-}
-
-/* ---- the plugin idle poll ----------------------------------------------- */
-
-/* The tick loop takes itself off the frame clock once the chart is static, and
- * only input puts it back. A plugin posts geometry from its own thread with no
- * gesture behind it, so while plugins are loaded a timer asks whether anything
- * moved and re-arms the loop when it did. Without it AIS traffic freezes until
- * the mariner touches the trackpad.
- *
- * 4 Hz: the AIS store coalesces to 2 Hz, and this is twice that. It costs one
- * cheap call per beat while nothing is happening. */
-#define LK_PLUGIN_POLL_MS 250
-
-static gboolean
-lk_chart_controller_plugin_poll (gpointer user_data)
-{
-  LkChartController *self = user_data;
-
-  if (self->handle == NULL)
-    {
-      self->plugin_poll_id = 0;
-      return G_SOURCE_REMOVE;
-    }
-
-  if (lookout_needs_redraw (self->handle) != 0)
-    lk_chart_controller_kick (self);
-  return G_SOURCE_CONTINUE;
-}
-
-static void
-lk_chart_controller_start_plugin_poll (LkChartController *self)
-{
-  if (self->plugin_poll_id != 0 || self->handle == NULL)
-    return;
-  if (lookout_plugins_active (self->handle) == 0)
-    return;
-
-  self->plugin_poll_id = g_timeout_add (LK_PLUGIN_POLL_MS,
-                                        lk_chart_controller_plugin_poll, self);
-}
-
-static void
-lk_chart_controller_stop_plugin_poll (LkChartController *self)
-{
-  g_clear_handle_id (&self->plugin_poll_id, g_source_remove);
 }
 
 /* ---- the plugin set ------------------------------------------------------ */
@@ -483,7 +456,6 @@ lk_chart_controller_plugin_install (LkChartController *self, const char *path)
     return g_strdup (problem);
 
   /* It loaded hot, so it may already be drawing. */
-  lk_chart_controller_start_plugin_poll (self);
   lk_chart_controller_kick (self);
   if (self->model != NULL)
     lk_app_model_notify_plugins_changed (self->model);
@@ -904,7 +876,6 @@ lk_chart_controller_open (LkChartController *self,
    * per open and the poll that keeps their geometry moving starts with them. */
   lk_chart_controller_load_plugins (self);
   lk_plugins_apply_saved (self);
-  lk_chart_controller_start_plugin_poll (self);
 
   lk_chart_controller_kick (self);
   self->last_readouts_us = 0;
@@ -932,7 +903,6 @@ lk_chart_controller_close (LkChartController *self)
   g_return_if_fail (LK_IS_CHART_CONTROLLER (self));
 
   lk_chart_controller_stop_tick (self);
-  lk_chart_controller_stop_plugin_poll (self);
 
   if (self->handle == NULL)
     return;
