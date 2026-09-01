@@ -92,6 +92,60 @@ const char *lookout_scan_charts(const char *path, size_t *out_len);
  * same reason. */
 const char *lookout_scan_zip(const char *path, size_t *out_len);
 
+/* ---- the bake --------------------------------------------------------------
+ *
+ * A cell as a hydrographic office publishes it is an S-57 dataset: the survey,
+ * rather than a picture of it. The app draws baked archives, so a folder of
+ * .000 cells is baked once on the way in.
+ *
+ * THE SHELL POLLS. No callback crosses back out: a bake worker is not a thread
+ * the shell owns, and a callback into its language from a tile57 worker needs
+ * care that a poll does not. lookout_bake_poll is one atomic read.
+ *
+ * `ins` and `outs` are KIND-CONTIGUOUS: the cells, then the sheets, then the
+ * lifts, with `cells`, `sheets` and `lifts` naming how many of each. That is
+ * the order lookout_bake_order puts them in. A cell is parsed and portrayed
+ * from the survey, a sheet is decoded and warped from a picture, and imagery
+ * that is already a chart is only lifted out of the archive.
+ *
+ * From an ARCHIVE each `in` is an ENTRY NAME and the engine reads it where it
+ * lies, so importing NOAA's 788 MB All_ENCs.zip never costs the 2.0 GiB of
+ * source it holds. */
+
+typedef struct lookout_bake lookout_bake;
+
+/* How far a bake has got. A snapshot: every field is read in one call. */
+typedef struct {
+    uint32_t done;
+    uint32_t total;
+    /* How many charts landed. Less than `done` when one was refused. */
+    uint32_t baked;
+    /* 1 when every phase returned OK. A CANCEL leaves this 1: whatever landed
+     * is a usable library. */
+    int ok;
+    /* 1 while the worker is still going. */
+    int running;
+} lookout_bake_progress;
+
+/* Start a bake on a thread of its own. NULL when it does not start. The
+ * strings are copied. */
+lookout_bake *lookout_bake_start(const char *source,
+                                 const char *const *ins, const char *const *outs,
+                                 size_t cells, size_t sheets, size_t lifts,
+                                 int archive);
+/* Stop at the next chart boundary. tile57 checks between charts, so this lands
+ * within about one cell's bake time. */
+void lookout_bake_cancel(lookout_bake *b);
+/* Safe from any thread while the bake runs. */
+void lookout_bake_poll(const lookout_bake *b, lookout_bake_progress *out);
+/* Join the worker and free the bake. CANCEL FIRST, or this blocks for about
+ * one chart's bake time. */
+void lookout_bake_free(lookout_bake *b);
+
+/* How many workers a bake runs, given the cores available. A MEMORY bound
+ * rather than a speed dial: each worker holds a whole cell's working set. */
+uint32_t lookout_bake_workers(uint32_t cores);
+
 /* ---- the installed sets ----------------------------------------------------
  *
  * The folders of charts the mariner added, which of them are drawn, and what

@@ -990,6 +990,9 @@ pub fn build(b: *std.Build) void {
         "src/root.zig",
         "src/licenses.zig",
         "src/pick.zig",
+        // The bake job @cImports tile57, so it cannot be a root of its own:
+        // only a compilation with the engine's include path analyses it.
+        "src/bakejob.zig",
         "src/ct/host.zig",
         "src/ct/style.zig",
         "src/ct/tiles.zig",
