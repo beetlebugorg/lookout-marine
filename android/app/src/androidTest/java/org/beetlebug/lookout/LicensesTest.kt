@@ -30,7 +30,7 @@ import org.junit.runner.RunWith
 /**
  * The licenses screen, on a device.
  *
- * It reads the REAL baked list ([Lookout.licensesJson]), not a fixture: what
+ * It reads the REAL baked list ([Lookout.licenses]), not a fixture: what
  * this screen has to get right is which components this build actually carries
  * and what each row says about one, and a fixture would agree with itself
  * while the binary shipped something else.

@@ -185,7 +185,12 @@ public final class Lookout implements AutoCloseable {
     public int openFile(String path)              { return h == 0 ? 0 : nOpenFile(h, path); }
     /** This app's terms and every component it ships, as JSON. Baked into the
      *  binary, so it needs no chart open. */
-    public static String licensesJson()           { return nLicensesJson(); }
+    /**
+     * This app's terms, then every component this shell ships with: fourteen
+     * strings each, the app's entry first. The core filters by shell, so this
+     * is this build's list and no other's. Needs no chart open.
+     */
+    public static String[] licenses()             { return nLicenses(); }
 
     // ---- the format kit ----
     //
@@ -297,7 +302,7 @@ public final class Lookout implements AutoCloseable {
     private static native void nMemoryWarning(long h);
     private static native boolean nAtlasCacheReady();
     private static native int nOpenFile(long h, String path);
-    private static native String nLicensesJson();
+    private static native String[] nLicenses();
     private static native String nFmtPosition(double lat, double lon);
     private static native String nFmtCoordDm(double value, boolean isLat);
     private static native String nFmtScale(double denominator);

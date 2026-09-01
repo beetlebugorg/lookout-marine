@@ -14,64 +14,22 @@ import org.robolectric.RobolectricTestRunner
  *
  * The device suite (`LicensesTest`) checks the REAL baked list against what this
  * build actually ships, which is the thing that matters and the thing a fixture
- * cannot do. This checks the parsing rules around it: which entries this shell
- * carries, what each row reads, and that a list which will not decode answers
- * null rather than an empty screen. An empty licences screen reads as "no
- * obligation", which is the one wrong answer here.
+ * cannot do. This checks the walk around it: what each row reads, how the rows
+ * group, and that a read short of this app's own terms answers null rather than
+ * an empty screen. An empty licences screen reads as "no obligation", which is
+ * the one wrong answer here.
  */
 @RunWith(RobolectricTestRunner::class)
 class LicenseManifestTest {
 
-    private val json = """
-    {"app":{"name":"Lookout Marine","summary":"A chartplotter.","license":"MIT",
-            "copyright":"© 2026 Jeremy Collins","url":"https://beetlebug.org/",
-            "text":"MIT License\n\nPermission is hereby granted"},
-     "components":[
-      {"id":"tile57","name":"tile57","group":"Chart and rendering",
-       "summary":"The S-57, S-101 and raster chart engine.",
-       "license":"MIT","license_short":"MIT","commit":"edcac13f00d",
-       "pinned_in":"build.zig.zon","copyright":"© 2026 Jeremy Collins",
-       "url":"https://github.com/beetlebugorg/tile57","text":"Permission is hereby granted",
-       "shells":["macos","android","linux","windows"]},
-      {"id":"wamr","name":"WebAssembly Micro Runtime","group":"Plugins",
-       "summary":"The runtime the plugins execute in.",
-       "license":"Apache 2.0 with the LLVM exception","license_short":"Apache-2.0",
-       "version":"WAMR-2.4.5","pinned_in":"scripts/build-wamr.sh",
-       "url":"https://github.com/bytecodealliance/wasm-micro-runtime",
-       "text":"Apache License","notice":"This product includes software developed at",
-       "shells":["macos","android","linux","windows"]},
-      {"id":"s101","name":"IHO S-101 Portrayal Catalogue","group":"Images and data",
-       "summary":"The portrayal rules.","license":"","license_note":"Upstream states no licence.",
-       "commit":"62f7773aaaa","pinned_in":"tile57's build.zig.zon",
-       "url":"https://github.com/iho-ohi/S-101_Portrayal-Catalogue","text":"",
-       "shells":["macos","android","linux","windows"]},
-      {"id":"gtk4","name":"GTK 4","group":"Platform","summary":"The Linux shell's toolkit.",
-       "license":"LGPL-2.1","version":"4.14","pinned_in":"linux/meson.build",
-       "url":"https://gitlab.gnome.org/GNOME/gtk","text":"GNU LESSER",
-       "shells":["linux"]}]}
-    """.trimIndent()
+    private val manifest = requireNotNull(LicenseManifest.decode(LicenseFixture.manifest))
 
-    private val manifest = requireNotNull(LicenseManifest.parse(json))
+    // ---- the entries --------------------------------------------------------
 
-    // ---- which entries this shell carries -----------------------------------
-
-    /** An entry belonging to another shell must not ride along: the list is a
-     *  statement about what THIS binary is made of. */
-    @Test fun onlyTheEntriesNamingThisShellAreKept() {
+    /** The core filters by shell, so a read holds this build's components and
+     *  no other's, in the order the manifest lists them. */
+    @Test fun everyComponentIsReadInManifestOrder() {
         assertEquals(listOf("tile57", "wamr", "s101"), manifest.components.map { it.id })
-        assertTrue("gtk4 is a Linux entry", manifest.components.none { it.id == "gtk4" })
-    }
-
-    @Test fun theShellIsNamedOnceAndIsThisOne() {
-        assertEquals("android", LicenseManifest.SHELL)
-    }
-
-    /** An entry naming no shells at all is carried by none. */
-    @Test fun anEntryWithNoShellsIsDropped() {
-        val m = LicenseManifest.parse(
-            """{"app":{"name":"A"},"components":[{"id":"x","name":"X"}]}"""
-        )!!
-        assertTrue(m.components.isEmpty())
     }
 
     // ---- what a row reads ---------------------------------------------------
@@ -113,9 +71,9 @@ class LicenseManifestTest {
     }
 
     @Test fun aComponentWithNeitherVersionNorCommitHasNoPin() {
-        val m = LicenseManifest.parse(
-            """{"app":{"name":"A"},"components":[{"id":"x","name":"X","shells":["android"]}]}"""
-        )!!
+        val m = LicenseManifest.decode(LicenseFixture.read(
+            LicenseFixture.app, LicenseFixture.entry(id = "x", name = "X"),
+        ))!!
         assertEquals("", m.components.single().pinLabel)
     }
 
@@ -156,11 +114,26 @@ class LicenseManifestTest {
 
     // ---- what it refuses ----------------------------------------------------
 
-    @Test fun aListThatWillNotDecodeIsNull() {
-        assertNull(LicenseManifest.parse(null))
-        assertNull(LicenseManifest.parse(""))
-        assertNull(LicenseManifest.parse("{"))
-        assertNull(LicenseManifest.parse("""{"components":[]}"""))
-        assertNull(LicenseManifest.parse("""{"app":{"name":"A"}}"""))
+    /** A read short of this app's own entry is null rather than an empty
+     *  screen, which reads as "no obligation". */
+    @Test fun aReadWithoutTheAppsOwnTermsIsNull() {
+        assertNull(LicenseManifest.decode(null))
+        assertNull(LicenseManifest.decode(emptyArray()))
+        assertNull(LicenseManifest.decode(arrayOf("short")))
+    }
+
+    /** This app's terms alone is a list with no components, which is a real
+     *  answer: the core returns it for a shell the manifest never names. */
+    @Test fun theAppsTermsAloneIsAListWithNoComponents() {
+        val m = LicenseManifest.decode(LicenseFixture.read(LicenseFixture.app))!!
+        assertEquals("Lookout Marine", m.app.name)
+        assertTrue(m.components.isEmpty())
+    }
+
+    /** An entry cut short is dropped rather than read with the wrong fields. */
+    @Test fun aTruncatedEntryIsDropped() {
+        val flat = LicenseFixture.manifest
+        val m = LicenseManifest.decode(flat.copyOfRange(0, 20))!!
+        assertTrue(m.components.isEmpty())
     }
 }

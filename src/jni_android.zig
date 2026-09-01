@@ -2769,3 +2769,71 @@ export fn Java_org_beetlebug_lookout_Lookout_nPickRead(env: [*c]j.JNIEnv, cls: j
     }
     return out.toArray(env);
 }
+
+// ---- the license manifest, read typed ---------------------------------------
+
+const c_licenses = opaque {};
+const c_license = opaque {};
+
+extern fn lookout_licenses_read(shell: ?[*:0]const u8) ?*c_licenses;
+extern fn lookout_licenses_free(l: ?*c_licenses) void;
+extern fn lookout_licenses_all(l: ?*const c_licenses, out_n: *usize) ?[*]const ?*const c_license;
+extern fn lookout_licenses_app(l: ?*const c_licenses) ?*const c_license;
+
+const CLicense = extern struct {
+    id: ?[*:0]const u8,
+    name: ?[*:0]const u8,
+    group: ?[*:0]const u8,
+    summary: ?[*:0]const u8,
+    license: ?[*:0]const u8,
+    license_short: ?[*:0]const u8,
+    license_note: ?[*:0]const u8,
+    version: ?[*:0]const u8,
+    commit: ?[*:0]const u8,
+    pinned_in: ?[*:0]const u8,
+    copyright: ?[*:0]const u8,
+    url: ?[*:0]const u8,
+    text: ?[*:0]const u8,
+    notice: ?[*:0]const u8,
+};
+
+fn licenseFields(out: *Strings, l: *const CLicense) void {
+    out.str(l.id);
+    out.str(l.name);
+    out.str(l.group);
+    out.str(l.summary);
+    out.str(l.license);
+    out.str(l.license_short);
+    out.str(l.license_note);
+    out.str(l.version);
+    out.str(l.commit);
+    out.str(l.pinned_in);
+    out.str(l.copyright);
+    out.str(l.url);
+    out.str(l.text);
+    out.str(l.notice);
+}
+
+/// String[] nLicenses() -- this app's terms, then every component this shell
+/// ships with. Fourteen strings each, the app's entry first. The core filters
+/// by shell, so what comes back is this build's list and no other's. Baked
+/// into the binary, so it needs no chart open and no handle.
+export fn Java_org_beetlebug_lookout_Lookout_nLicenses(env: [*c]j.JNIEnv, cls: j.jclass) j.jobjectArray {
+    _ = cls;
+    const read = lookout_licenses_read("android") orelse return null;
+    defer lookout_licenses_free(read);
+
+    var n: usize = 0;
+    const all = lookout_licenses_all(read, &n) orelse return null;
+
+    var out = Strings.init();
+    defer out.deinit();
+
+    const app: *const CLicense = @ptrCast(@alignCast(lookout_licenses_app(read) orelse return null));
+    licenseFields(&out, app);
+    for (all[0..n]) |lp| {
+        const l: *const CLicense = @ptrCast(@alignCast(lp orelse continue));
+        licenseFields(&out, l);
+    }
+    return out.toArray(env);
+}
