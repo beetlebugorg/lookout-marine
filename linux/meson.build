@@ -133,7 +133,6 @@ sources = files(
   'src/library/scan.c',
   'src/library/sets.c',
   'src/model/app-model.c',
-  'src/model/coord.c',
   'src/model/mariner.c',
   'src/model/store.c',
   'src/plugins/discovery.c',

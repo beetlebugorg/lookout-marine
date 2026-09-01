@@ -2,10 +2,8 @@
 
 #include "library/scan.h"
 #include "library/sets.h"
-#include "model/coord.h"
 #include "model/store.h"
 
-#include <math.h>
 #include <string.h>
 
 struct _LkAppModel {
@@ -683,10 +681,8 @@ lk_app_model_north_up (LkAppModel *self)
   lk_chart_controller_reset_rotation (self->controller);
 }
 
-/* Zoom to a 1:N scale. At one latitude the denominator is C·cos(lat)/2^zoom,
- * so a wanted scale is a zoom delta: the engine's own zoom does the work and
- * keeps its limits and its easing. It agrees with zoomDeltaForScale (Android)
- * and AppModel.zoomToScale (macOS, iOS). */
+/* Zoom to a 1:N scale. A wanted scale is a zoom delta, so the engine's own zoom
+ * does the work and keeps its limits and its easing. */
 void
 lk_app_model_zoom_to_scale (LkAppModel *self, double denominator)
 {
@@ -695,8 +691,9 @@ lk_app_model_zoom_to_scale (LkAppModel *self, double denominator)
   if (denominator <= 0 || self->scale_denominator <= 0)
     return;
 
-  lk_chart_controller_zoom_centered (self->controller,
-                                     log2 (self->scale_denominator / denominator));
+  lk_chart_controller_zoom_centered (
+      self->controller,
+      lookout_zoom_delta_for_scale (self->scale_denominator, denominator));
 }
 
 /* A menu scheme change must persist just like one from the settings form.
@@ -1026,7 +1023,7 @@ lk_app_model_go_to_coordinate (LkAppModel *self, const char *text)
   g_return_val_if_fail (LK_IS_APP_MODEL (self), FALSE);
 
   double lat, lon;
-  if (!lk_coordinate_parse (text, &lat, &lon))
+  if (!lookout_parse_position (text, &lat, &lon))
     return FALSE;
 
   lookout_view current = lk_chart_controller_get_view (self->controller);

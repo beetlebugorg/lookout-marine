@@ -482,10 +482,9 @@ static void
 lk_chart_menu_copy_position (GtkButton *button, gpointer user_data)
 {
   LkChartView *self = user_data;
-  g_autofree char *lat = lk_coord_format_dm (self->menu_lat, TRUE);
-  g_autofree char *lon = lk_coord_format_dm (self->menu_lon, FALSE);
-  g_autofree char *text = g_strdup_printf ("%s %s", lat, lon);
+  char text[LOOKOUT_POSITION_MAX];
 
+  lookout_fmt_position (self->menu_lat, self->menu_lon, text, sizeof text);
   lk_chart_view_close_menu (self);
   gdk_clipboard_set_text (gtk_widget_get_clipboard (GTK_WIDGET (self)), text);
 }
@@ -550,8 +549,11 @@ lk_chart_view_open_menu (LkChartView *self, double x, double y)
       gtk_label_set_xalign (GTK_LABEL (title), 0.0);
       gtk_box_append (GTK_BOX (box), title);
     }
-  g_autofree char *hlat = lk_coord_format_dm (lat, TRUE);
-  g_autofree char *hlon = lk_coord_format_dm (lon, FALSE);
+  /* Two spaces, not the kit's one: the header sets the pair wider than the
+     clipboard line does. */
+  char hlat[LOOKOUT_COORD_MAX], hlon[LOOKOUT_COORD_MAX];
+  lookout_fmt_coord_dm (lat, TRUE, hlat, sizeof hlat);
+  lookout_fmt_coord_dm (lon, FALSE, hlon, sizeof hlon);
   g_autofree char *coord = g_strdup_printf ("%s  %s", hlat, hlon);
   GtkWidget *header = gtk_label_new (coord);
   gtk_widget_add_css_class (header, "dim-label");

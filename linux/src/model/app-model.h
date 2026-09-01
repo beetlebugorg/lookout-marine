@@ -166,7 +166,7 @@ gboolean    lk_app_model_get_chart_hidden (LkAppModel *self);
 /* ---- search: coordinate go-to ------------------------------------------- */
 
 /* Parse `text` as a coordinate and recentre. TRUE if it was recognisable. The
- * parsers themselves are in model/coord.h. */
+ * parser itself is the core's lookout_parse_position. */
 gboolean lk_app_model_go_to_coordinate (LkAppModel *self, const char *text);
 
 /* ---- readouts pushed by the controller ---------------------------------- */
