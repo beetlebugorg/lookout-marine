@@ -214,7 +214,7 @@ public final class Lookout implements AutoCloseable {
 
     // ---- the settings store ----
     //
-    // One ini file under the app's own directory, replacing four
+    // One JSON file under the app's own directory, replacing four
     // SharedPreferences files. See Store.kt.
 
     public static long storeOpen(String dir)      { return nStoreOpen(dir); }

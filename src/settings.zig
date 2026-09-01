@@ -5,11 +5,11 @@
 //! stores over four platform preference systems, and every one of them had to
 //! be taught the same key names.
 //!
-//! THE FILE IS AN INI, in the shape linux/src/model/store.c already writes:
-//! `[group]` lines, `key=value` under them, a list as its items separated and
-//! terminated by semicolons. Backslash, newline, tab, carriage return and (in a
-//! list item) the semicolon are escaped. A key holds text. What a value MEANS
-//! is the accessor's business.
+//! THE FILE IS JSON: one object of groups, each an object of keys. A value
+//! keeps the type it was written with, so a number is a JSON number, a flag is
+//! true or false and a list is an array of strings. What a value MEANS is
+//! still the accessor's business, and every accessor coerces: a number read as
+//! text is its shortest form, and text read as a number is parsed.
 //!
 //! WRITES COALESCE. A pose saved every three seconds must not fsync a file
 //! every three seconds, so a write marks the store dirty and the file is
@@ -41,15 +41,30 @@ pub const group_chartlinks = "chartlinks";
 pub const group_chartsets = "chartsets";
 
 /// The file, under the directory a shell hands over.
-pub const file_name = "settings.ini";
+pub const file_name = "settings.json";
 
 /// How long an unwritten change may wait. The engine writes a pose every three
 /// seconds while the mariner is moving, and one file write a second is plenty.
 pub const coalesce_ms: i64 = 1000;
 
+/// What a value was written as. A scalar is held as the text it stands for and
+/// the kind says how it is written and read back, so a number comes back a
+/// number rather than a quoted string. A list holds its items.
+const Kind = enum { text, number, flag, list };
+
 const Entry = struct {
     key: [:0]u8,
     value: [:0]u8,
+    kind: Kind = .text,
+    /// The items of a `.list`, and empty for every other kind.
+    items: [][:0]u8 = &.{},
+
+    fn free(self: Entry, gpa: std.mem.Allocator) void {
+        gpa.free(self.key);
+        gpa.free(self.value);
+        for (self.items) |item| gpa.free(item);
+        gpa.free(self.items);
+    }
 };
 
 const Group = struct {
@@ -109,10 +124,7 @@ pub const Store = struct {
 
     fn clearGroups(self: *Store) void {
         for (self.groups.items) |*g| {
-            for (g.entries.items) |e| {
-                self.gpa.free(e.key);
-                self.gpa.free(e.value);
-            }
+            for (g.entries.items) |e| e.free(self.gpa);
             g.entries.deinit(self.gpa);
             self.gpa.free(g.name);
         }
@@ -130,13 +142,11 @@ pub const Store = struct {
 
     /// The value as text, or null when the key is not set. Borrowed until the
     /// next write.
-    ///
-    /// The file holds the value escaped, so this is the text it stands for.
     pub fn text(self: *Store, group: []const u8, key: []const u8) ?[:0]const u8 {
         self.mu.lock();
         defer self.mu.unlock();
         const e = self.findLocked(group, key) orelse return null;
-        return unescape(self.reads.allocator(), e.value) catch null;
+        return e.value;
     }
 
     /// The value as a number, or `fallback` when the key is not set or does
@@ -161,7 +171,7 @@ pub const Store = struct {
         self.mu.lock();
         defer self.mu.unlock();
         const e = self.findLocked(group, key) orelse return &.{};
-        return splitList(self.reads.allocator(), e.value) catch &.{};
+        return e.items;
     }
 
     /// The same items as an array of NUL-terminated pointers, the shape the C
@@ -170,9 +180,7 @@ pub const Store = struct {
         self.mu.lock();
         defer self.mu.unlock();
         const e = self.findLocked(group, key) orelse return &.{};
-        const a = self.reads.allocator();
-        const items = splitList(a, e.value) catch return &.{};
-        return asPtrs(a, items);
+        return asPtrs(self.reads.allocator(), e.items);
     }
 
     /// The keys of a group, as pointers. Borrowed until the next write.
@@ -203,7 +211,7 @@ pub const Store = struct {
     /// Set a key to text. The store is written at the next flush, at close, or
     /// once the oldest unwritten change reaches `coalesce_ms`.
     pub fn setText(self: *Store, group: []const u8, key: []const u8, value: []const u8) void {
-        self.setLocked(group, key, value);
+        self.setLocked(group, key, value, .text);
     }
 
     /// A number is written in its shortest form, so an integral value writes
@@ -211,11 +219,11 @@ pub const Store = struct {
     pub fn setNumber(self: *Store, group: []const u8, key: []const u8, value: f64) void {
         var buf: [40]u8 = undefined;
         const s = std.fmt.bufPrint(&buf, "{d}", .{value}) catch return;
-        self.setLocked(group, key, s);
+        self.setLocked(group, key, s, .number);
     }
 
     pub fn setFlag(self: *Store, group: []const u8, key: []const u8, value: bool) void {
-        self.setLocked(group, key, if (value) "true" else "false");
+        self.setLocked(group, key, if (value) "true" else "false", .flag);
     }
 
     /// Set a key to a list. An EMPTY list clears the key, so a read of it
@@ -225,13 +233,33 @@ pub const Store = struct {
             self.remove(group, key);
             return;
         }
-        var out: std.ArrayList(u8) = .empty;
-        defer out.deinit(self.gpa);
-        for (items) |item| {
-            escapeInto(self.gpa, &out, item, true) catch return;
-            out.append(self.gpa, ';') catch return;
+        self.mu.lock();
+        defer self.mu.unlock();
+        const owned = self.gpa.alloc([:0]u8, items.len) catch return;
+        var made: usize = 0;
+        errdefer {
+            for (owned[0..made]) |o| self.gpa.free(o);
+            self.gpa.free(owned);
         }
-        self.setRawLocked(group, key, out.items);
+        for (items, owned) |src, *dst| {
+            dst.* = self.gpa.dupeZ(u8, src) catch {
+                for (owned[0..made]) |o| self.gpa.free(o);
+                self.gpa.free(owned);
+                return;
+            };
+            made += 1;
+        }
+        const g = self.addGroupLocked(group) catch {
+            for (owned) |o| self.gpa.free(o);
+            self.gpa.free(owned);
+            return;
+        };
+        self.putListLocked(g, key, owned) catch {
+            for (owned) |o| self.gpa.free(o);
+            self.gpa.free(owned);
+            return;
+        };
+        self.markDirtyLocked();
     }
 
     /// Forget a key. Forgetting the last key of a group forgets the group.
@@ -241,8 +269,7 @@ pub const Store = struct {
         const g = self.groupLocked(group) orelse return;
         for (g.entries.items, 0..) |e, i| {
             if (!std.mem.eql(u8, e.key, key)) continue;
-            self.gpa.free(e.key);
-            self.gpa.free(e.value);
+            e.free(self.gpa);
             _ = g.entries.orderedRemove(i);
             self.markDirtyLocked();
             return;
@@ -278,7 +305,7 @@ pub const Store = struct {
             return;
         };
         defer self.gpa.free(bytes);
-        self.parse(bytes) catch {
+        self.parseJson(bytes) catch {
             self.mu.lock();
             self.clearGroups();
             self.mu.unlock();
@@ -295,27 +322,70 @@ pub const Store = struct {
         cwd.rename(self.path, cwd, broken, self.io) catch return;
     }
 
-    fn parse(self: *Store, bytes: []const u8) !void {
+    /// One object of groups, each an object of keys.
+    fn parseJson(self: *Store, bytes: []const u8) !void {
+        const parsed = try std.json.parseFromSlice(std.json.Value, self.gpa, bytes, .{});
+        defer parsed.deinit();
+        const root = switch (parsed.value) {
+            .object => |o| o,
+            else => return error.BadRoot,
+        };
+
         self.mu.lock();
         defer self.mu.unlock();
-        // The index. A later group appends to the list, which moves the
-        // one being filled out, so a pointer to it goes stale.
-        var group: ?usize = null;
-        var it = std.mem.splitScalar(u8, bytes, '\n');
-        while (it.next()) |raw| {
-            const line = std.mem.trim(u8, raw, " \t\r");
-            if (line.len == 0 or line[0] == '#') continue;
-            if (line[0] == '[') {
-                const end = std.mem.indexOfScalar(u8, line, ']') orelse return error.BadLine;
-                _ = try self.addGroupLocked(line[1..end]);
-                group = self.groups.items.len - 1;
-                continue;
+
+        var groups = root.iterator();
+        while (groups.next()) |entry| {
+            const members = switch (entry.value_ptr.*) {
+                .object => |o| o,
+                // A group that is not an object is not a group.
+                else => continue,
+            };
+            _ = try self.addGroupLocked(entry.key_ptr.*);
+            // A later group appends to the list, which moves the one being
+            // filled out, so a pointer to it goes stale.
+            const at = self.groups.items.len - 1;
+            var keys_it = members.iterator();
+            while (keys_it.next()) |kv| {
+                try self.putJsonLocked(&self.groups.items[at], kv.key_ptr.*, kv.value_ptr.*);
             }
-            const eq = std.mem.indexOfScalar(u8, line, '=') orelse return error.BadLine;
-            const at = group orelse return error.BadLine;
-            const key = std.mem.trim(u8, line[0..eq], " \t");
-            if (key.len == 0) return error.BadLine;
-            try self.putLocked(&self.groups.items[at], key, line[eq + 1 ..]);
+        }
+    }
+
+    /// One JSON value as the text the accessors read, with the kind it keeps.
+    fn putJsonLocked(self: *Store, g: *Group, key: []const u8, value: std.json.Value) !void {
+        var buf: [40]u8 = undefined;
+        switch (value) {
+            .string => |v| try self.putLocked(g, key, v, .text),
+            .bool => |v| try self.putLocked(g, key, if (v) "true" else "false", .flag),
+            .integer => |v| try self.putLocked(g, key, try std.fmt.bufPrint(&buf, "{d}", .{v}), .number),
+            .float => |v| try self.putLocked(g, key, try std.fmt.bufPrint(&buf, "{d}", .{v}), .number),
+            .number_string => |v| try self.putLocked(g, key, v, .number),
+            .array => |items| {
+                var owned: std.ArrayList([:0]u8) = .empty;
+                errdefer {
+                    for (owned.items) |o| self.gpa.free(o);
+                    owned.deinit(self.gpa);
+                }
+                for (items.items) |item| {
+                    // A list is a list of strings. Anything else in one is not
+                    // an item this store ever wrote.
+                    const text_item = switch (item) {
+                        .string => |v| v,
+                        else => continue,
+                    };
+                    try owned.append(self.gpa, try self.gpa.dupeZ(u8, text_item));
+                }
+                // An empty array is a key with no items, which is how an unset
+                // key reads anyway.
+                if (owned.items.len == 0) {
+                    owned.deinit(self.gpa);
+                    return;
+                }
+                try self.putListLocked(g, key, try owned.toOwnedSlice(self.gpa));
+            },
+            // A null is a key nobody set, and this store nests no objects.
+            .null, .object => {},
         }
     }
 
@@ -325,14 +395,7 @@ pub const Store = struct {
 
         var out: std.ArrayList(u8) = .empty;
         defer out.deinit(self.gpa);
-        for (self.groups.items, 0..) |g, i| {
-            if (g.entries.items.len == 0) continue;
-            if (i > 0) out.append(self.gpa, '\n') catch return;
-            out.print(self.gpa, "[{s}]\n", .{g.name}) catch return;
-            for (g.entries.items) |e| {
-                out.print(self.gpa, "{s}={s}\n", .{ e.key, e.value }) catch return;
-            }
-        }
+        self.writeJson(&out) catch return;
 
         const dir = std.fs.path.dirname(self.path) orelse return;
         std.Io.Dir.cwd().createDirPath(self.io, dir) catch {};
@@ -381,36 +444,97 @@ pub const Store = struct {
     }
 
     /// Store one already-escaped value.
-    fn putLocked(self: *Store, g: *Group, key: []const u8, value: []const u8) !void {
+    fn putLocked(self: *Store, g: *Group, key: []const u8, value: []const u8, kind: Kind) !void {
+        const owned = try self.gpa.dupeZ(u8, value);
+        errdefer self.gpa.free(owned);
+        try self.replaceLocked(g, key, owned, kind, &.{});
+    }
+
+    /// Store an already-owned list under `key`.
+    fn putListLocked(self: *Store, g: *Group, key: []const u8, items: [][:0]u8) !void {
+        const empty = try self.gpa.dupeZ(u8, "");
+        errdefer self.gpa.free(empty);
+        try self.replaceLocked(g, key, empty, .list, items);
+    }
+
+    /// Put an owned value and its items in place, freeing whatever was there.
+    fn replaceLocked(self: *Store, g: *Group, key: []const u8, value: [:0]u8, kind: Kind, items: [][:0]u8) !void {
         for (g.entries.items) |*e| {
             if (!std.mem.eql(u8, e.key, key)) continue;
-            const owned = try self.gpa.dupeZ(u8, value);
             self.gpa.free(e.value);
-            e.value = owned;
+            for (e.items) |item| self.gpa.free(item);
+            self.gpa.free(e.items);
+            e.value = value;
+            e.kind = kind;
+            e.items = items;
             return;
         }
         const k = try self.gpa.dupeZ(u8, key);
         errdefer self.gpa.free(k);
-        const v = try self.gpa.dupeZ(u8, value);
-        errdefer self.gpa.free(v);
-        try g.entries.append(self.gpa, .{ .key = k, .value = v });
+        try g.entries.append(self.gpa, .{ .key = k, .value = value, .kind = kind, .items = items });
     }
 
-    /// Escape `value` and store it.
-    fn setLocked(self: *Store, group: []const u8, key: []const u8, value: []const u8) void {
-        var out: std.ArrayList(u8) = .empty;
-        defer out.deinit(self.gpa);
-        escapeInto(self.gpa, &out, value, false) catch return;
-        self.setRawLocked(group, key, out.items);
-    }
-
-    /// Store an already-escaped value and start the coalesce window.
-    fn setRawLocked(self: *Store, group: []const u8, key: []const u8, escaped: []const u8) void {
+    /// Store a scalar and start the coalesce window.
+    fn setLocked(self: *Store, group: []const u8, key: []const u8, value: []const u8, kind: Kind) void {
         self.mu.lock();
         defer self.mu.unlock();
         const g = self.addGroupLocked(group) catch return;
-        self.putLocked(g, key, escaped) catch return;
+        self.putLocked(g, key, value, kind) catch return;
         self.markDirtyLocked();
+    }
+
+    /// The file: one object of groups, each an object of keys. Indented, so a
+    /// mariner reporting a problem can read the file they are asked for.
+    fn writeJson(self: *Store, out: *std.ArrayList(u8)) !void {
+        const a = self.gpa;
+        try out.appendSlice(a, "{\n");
+        var first_group = true;
+        for (self.groups.items) |g| {
+            if (g.entries.items.len == 0) continue;
+            if (!first_group) try out.appendSlice(a, ",\n");
+            first_group = false;
+            try out.appendSlice(a, "  ");
+            try jsonString(a, out, g.name);
+            try out.appendSlice(a, ": {\n");
+            for (g.entries.items, 0..) |e, i| {
+                if (i > 0) try out.appendSlice(a, ",\n");
+                try out.appendSlice(a, "    ");
+                try jsonString(a, out, e.key);
+                try out.appendSlice(a, ": ");
+                try self.writeValue(out, e);
+            }
+            try out.appendSlice(a, "\n  }");
+        }
+        try out.appendSlice(a, "\n}\n");
+    }
+
+    fn writeValue(self: *Store, out: *std.ArrayList(u8), e: Entry) !void {
+        const a = self.gpa;
+        switch (e.kind) {
+            .flag => try out.appendSlice(a, if (std.mem.eql(u8, e.value, "true")) "true" else "false"),
+            .number => {
+                // A value that is not finite has no JSON number, so it goes
+                // over as the text it is and reads back on the fallback.
+                const n = std.fmt.parseFloat(f64, e.value) catch {
+                    try jsonString(a, out, e.value);
+                    return;
+                };
+                if (!std.math.isFinite(n)) {
+                    try jsonString(a, out, e.value);
+                    return;
+                }
+                try out.appendSlice(a, e.value);
+            },
+            .list => {
+                try out.appendSlice(a, "[");
+                for (e.items, 0..) |item, i| {
+                    if (i > 0) try out.appendSlice(a, ", ");
+                    try jsonString(a, out, item);
+                }
+                try out.appendSlice(a, "]");
+            },
+            .text => try jsonString(a, out, e.value),
+        }
     }
 
     /// A write invalidates every borrowed read, so the read arena goes back
@@ -430,36 +554,24 @@ pub const Store = struct {
 
 /// Escape into `out`. A list item also escapes the separator, so a path with a
 /// semicolon in it is one item and not two.
-fn escapeInto(gpa: std.mem.Allocator, out: *std.ArrayList(u8), s: []const u8, in_list: bool) !void {
+/// One JSON string. A local copy, like the four other writers in this repo:
+/// this module is rooted on its own so its tests can run without the engine.
+fn jsonString(alloc: std.mem.Allocator, out: *std.ArrayList(u8), s: []const u8) !void {
+    const hex = "0123456789abcdef";
+    try out.append(alloc, '"');
     for (s) |c| switch (c) {
-        '\\' => try out.appendSlice(gpa, "\\\\"),
-        '\n' => try out.appendSlice(gpa, "\\n"),
-        '\t' => try out.appendSlice(gpa, "\\t"),
-        '\r' => try out.appendSlice(gpa, "\\r"),
-        ';' => if (in_list) try out.appendSlice(gpa, "\\;") else try out.append(gpa, c),
-        else => try out.append(gpa, c),
+        '"' => try out.appendSlice(alloc, "\\\""),
+        '\\' => try out.appendSlice(alloc, "\\\\"),
+        '\n' => try out.appendSlice(alloc, "\\n"),
+        '\r' => try out.appendSlice(alloc, "\\r"),
+        '\t' => try out.appendSlice(alloc, "\\t"),
+        else => if (c < 0x20) {
+            try out.appendSlice(alloc, "\\u00");
+            try out.append(alloc, hex[(c >> 4) & 0xf]);
+            try out.append(alloc, hex[c & 0xf]);
+        } else try out.append(alloc, c),
     };
-}
-
-/// The text a value stands for, allocated in `a`.
-pub fn unescape(a: std.mem.Allocator, s: []const u8) ![:0]const u8 {
-    var out: std.ArrayList(u8) = .empty;
-    errdefer out.deinit(a);
-    var i: usize = 0;
-    while (i < s.len) : (i += 1) {
-        if (s[i] != '\\' or i + 1 >= s.len) {
-            try out.append(a, s[i]);
-            continue;
-        }
-        i += 1;
-        try out.append(a, switch (s[i]) {
-            'n' => '\n',
-            't' => '\t',
-            'r' => '\r',
-            else => s[i],
-        });
-    }
-    return out.toOwnedSliceSentinel(a, 0);
+    try out.append(alloc, '"');
 }
 
 /// A slice of slices as a slice of pointers. A `[:0]const u8` is a slice of
@@ -468,33 +580,6 @@ fn asPtrs(a: std.mem.Allocator, items: []const [:0]const u8) []const [*:0]const 
     const out = a.alloc([*:0]const u8, items.len) catch return &.{};
     for (items, out) |s, *dst| dst.* = s.ptr;
     return out;
-}
-
-/// One list value as its items. The separator ends every item, so a trailing
-/// one closes the last item rather than opening an empty one.
-fn splitList(a: std.mem.Allocator, value: []const u8) ![]const [:0]const u8 {
-    var out: std.ArrayList([:0]const u8) = .empty;
-    errdefer out.deinit(a);
-    var item: std.ArrayList(u8) = .empty;
-    defer item.deinit(a);
-    var i: usize = 0;
-    while (i < value.len) : (i += 1) {
-        if (value[i] == '\\' and i + 1 < value.len) {
-            try item.append(a, value[i]);
-            i += 1;
-            try item.append(a, value[i]);
-            continue;
-        }
-        if (value[i] == ';') {
-            try out.append(a, try unescape(a, item.items));
-            item.clearRetainingCapacity();
-            continue;
-        }
-        try item.append(a, value[i]);
-    }
-    // A value with no trailing separator still ends an item.
-    if (item.items.len > 0) try out.append(a, try unescape(a, item.items));
-    return out.items;
 }
 
 // ---- tests ---------------------------------------------------------------------
@@ -576,7 +661,7 @@ test "an unset key answers with the fallback" {
     try t.expectEqual(@as(usize, 0), s.keys(group_plugins).len);
 }
 
-test "the file is the ini shape, group by group" {
+test "the file is JSON, a group to an object" {
     var f = try Fixture.init();
     defer f.deinit();
     const s = try f.open();
@@ -589,9 +674,39 @@ test "the file is the ini shape, group by group" {
     const text = try f.read();
     defer t.allocator.free(text);
     try t.expectEqualStrings(
-        "[view]\nzoom=15\n\n[chartlinks]\nactive=https://h/style.json\n",
-        text,
-    );
+        \\{
+        \\  "view": {
+        \\    "zoom": 15
+        \\  },
+        \\  "chartlinks": {
+        \\    "active": "https://h/style.json"
+        \\  }
+        \\}
+        \\
+    , text);
+}
+
+test "a value keeps the type it was written with" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const s = try f.open();
+    defer s.close();
+
+    s.setNumber(group_view, "zoom", 15.5);
+    s.setFlag(group_raster, "chart_hidden", true);
+    s.setText(group_mariner, "date_view", "20260901");
+    s.setList(group_recents, "paths", &.{ "/a", "/b" });
+    s.flush();
+
+    const text = try f.read();
+    defer t.allocator.free(text);
+    // A number is a number and a flag is a flag, so the file reads as what it
+    // holds rather than as strings of it.
+    try t.expect(std.mem.indexOf(u8, text, "\"zoom\": 15.5") != null);
+    try t.expect(std.mem.indexOf(u8, text, "\"chart_hidden\": true") != null);
+    try t.expect(std.mem.indexOf(u8, text, "\"paths\": [\"/a\", \"/b\"]") != null);
+    // A date is text the mariner typed, and stays text.
+    try t.expect(std.mem.indexOf(u8, text, "\"date_view\": \"20260901\"") != null);
 }
 
 test "a value with a newline or a separator in it comes back whole" {
@@ -659,7 +774,14 @@ test "setting a key twice replaces it rather than writing it twice" {
 
     const text = try f.read();
     defer t.allocator.free(text);
-    try t.expectEqualStrings("[chartlinks]\nactive=https://b/style.json\n", text);
+    try t.expectEqualStrings(
+        \\{
+        \\  "chartlinks": {
+        \\    "active": "https://b/style.json"
+        \\  }
+        \\}
+        \\
+    , text);
 }
 
 test "removing the last key of a group leaves the group out of the file" {
@@ -675,13 +797,20 @@ test "removing the last key of a group leaves the group out of the file" {
 
     const text = try f.read();
     defer t.allocator.free(text);
-    try t.expectEqualStrings("[view]\nzoom=15\n", text);
+    try t.expectEqualStrings(
+        \\{
+        \\  "view": {
+        \\    "zoom": 15
+        \\  }
+        \\}
+        \\
+    , text);
 }
 
 test "a file that will not parse is set aside and the store starts empty" {
     var f = try Fixture.init();
     defer f.deinit();
-    try f.write(file_name, "this is not an ini file at all\n");
+    try f.write(file_name, "this is not a settings file at all\n");
 
     {
         const s = try f.open();
@@ -693,11 +822,18 @@ test "a file that will not parse is set aside and the store starts empty" {
 
     const broken = try f.tmp.dir.readFileAlloc(f.io, file_name ++ ".broken", t.allocator, .limited(1 << 20));
     defer t.allocator.free(broken);
-    try t.expectEqualStrings("this is not an ini file at all\n", broken);
+    try t.expectEqualStrings("this is not a settings file at all\n", broken);
 
     const text = try f.read();
     defer t.allocator.free(text);
-    try t.expectEqualStrings("[view]\nzoom=15\n", text);
+    try t.expectEqualStrings(
+        \\{
+        \\  "view": {
+        \\    "zoom": 15
+        \\  }
+        \\}
+        \\
+    , text);
 }
 
 test "a store with nothing written leaves no file" {
@@ -711,32 +847,15 @@ test "a store with nothing written leaves no file" {
     try t.expectError(error.FileNotFound, f.read());
 }
 
-test "a comment and a blank line are not settings" {
-    var f = try Fixture.init();
-    defer f.deinit();
-    try f.write(file_name,
-        \\# what the mariner keeps
-        \\
-        \\[view]
-        \\zoom=15
-        \\
-    );
-    const s = try f.open();
-    defer s.close();
-    try t.expectEqual(@as(f64, 15), s.number(group_view, "zoom", 0));
-    try t.expectEqual(@as(usize, 1), s.keys(group_view).len);
-}
-
 test "a flag reads the words and the digits, and nothing else" {
     var f = try Fixture.init();
     defer f.deinit();
     try f.write(file_name,
-        \\[raster]
-        \\a=true
-        \\b=false
-        \\c=1
-        \\d=0
-        \\e=yes
+        \\{"raster": {
+        \\  "a": true, "b": false,
+        \\  "c": 1, "d": 0,
+        \\  "e": "yes"
+        \\}}
         \\
     );
     const s = try f.open();
@@ -789,7 +908,7 @@ test "a write coalesces, and the file lands at the flush" {
     s.flush();
     const text = try f.read();
     defer t.allocator.free(text);
-    try t.expectEqualStrings("[view]\nzoom=15\n", text);
+    try t.expect(std.mem.indexOf(u8, text, "\"zoom\": 15") != null);
 
     // A flush with nothing waiting does not rewrite the file.
     s.flush();
@@ -815,7 +934,7 @@ test "a store written once still reaches the disk" {
     s.tick();
     const text = try f.read();
     defer t.allocator.free(text);
-    try t.expectEqualStrings("[view]\nzoom=15\n", text);
+    try t.expect(std.mem.indexOf(u8, text, "\"zoom\": 15") != null);
 
     // And a tick with nothing waiting does nothing.
     s.tick();

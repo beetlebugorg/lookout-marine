@@ -104,10 +104,12 @@ const lookout_license *lookout_licenses_app(const lookout_licenses *l);
  * preference systems, and every one of them had to be taught the same key
  * names.
  *
- * THE FILE IS AN INI at <dir>/settings.ini: `[group]` lines, `key=value` under
- * them, a list as its items separated and terminated by semicolons. Backslash,
- * newline, tab, carriage return and (in a list item) the semicolon are escaped.
- * A key holds text; what a value MEANS is the accessor's business.
+ * THE FILE IS JSON at <dir>/settings.json: one object of groups, each an object
+ * of keys. A value keeps the type it was written with, so a number is a JSON
+ * number, a flag is true or false and a list is an array of strings. What a
+ * value MEANS is still the accessor's business, and every accessor coerces: a
+ * number read as text is its shortest form, and text read as a number is
+ * parsed.
  *
  * WRITES COALESCE. A pose saved every three seconds does not fsync a file
  * every three seconds: a write marks the store dirty and the file is written at
@@ -116,7 +118,7 @@ const lookout_license *lookout_licenses_app(const lookout_licenses *l);
  *
  * ONE LOCK over the file, so two writers cannot interleave and lose a group.
  *
- * A FILE THAT WILL NOT PARSE is set aside as settings.ini.broken before an
+ * A FILE THAT WILL NOT PARSE is set aside as settings.json.broken before an
  * empty store replaces it, so a mariner's library stays recoverable.
  *
  * No handle: a shell reads its store before it opens anything. */
@@ -133,7 +135,7 @@ const lookout_license *lookout_licenses_app(const lookout_licenses *l);
 #define LOOKOUT_STORE_CHARTLINKS "chartlinks"
 #define LOOKOUT_STORE_CHARTSETS  "chartsets"
 
-/* Open the store under `dir`, reading settings.ini if it is there. The
+/* Open the store under `dir`, reading settings.json if it is there. The
  * directory is made at the first write, so a shell that only reads leaves no
  * trace. NULL only when the store cannot be allocated. */
 lookout_store *lookout_store_open(const char *dir);
