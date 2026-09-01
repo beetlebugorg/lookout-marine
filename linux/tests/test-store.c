@@ -85,25 +85,6 @@ test_raster_all_roundtrip (void)
 }
 
 static void
-test_chart_sets_empty_vs_absent (void)
-{
-  /* Never saved answers NULL, so the caller seeds from the recents once. An
-   * emptied library answers an empty list and never re-seeds. */
-  g_assert_null (lk_store_load_chart_sets ());
-
-  const char *none[] = { NULL };
-  lk_store_save_chart_sets (none);
-  g_auto (GStrv) emptied = lk_store_load_chart_sets ();
-  g_assert_nonnull (emptied);
-  g_assert_null (emptied[0]);
-
-  const char *sets[] = { "/charts/noaa", "/charts/archive.zip", NULL };
-  lk_store_save_chart_sets (sets);
-  g_auto (GStrv) loaded = lk_store_load_chart_sets ();
-  g_assert_cmpuint (g_strv_length (loaded), ==, 2);
-}
-
-static void
 test_plugin_config_roundtrip (void)
 {
   g_assert_null (lk_store_load_plugin_config ("org.example.none"));
@@ -150,7 +131,6 @@ main (int argc, char *argv[])
   g_test_add_func ("/store/recents", test_recents_order_and_cap);
   g_test_add_func ("/store/raster", test_raster_roundtrip);
   g_test_add_func ("/store/raster-all", test_raster_all_roundtrip);
-  g_test_add_func ("/store/chart-sets", test_chart_sets_empty_vs_absent);
   g_test_add_func ("/store/plugin-config", test_plugin_config_roundtrip);
   g_test_add_func ("/store/chart-links", test_chart_links_roundtrip);
 

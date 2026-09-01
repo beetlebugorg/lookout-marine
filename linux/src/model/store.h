@@ -6,10 +6,11 @@
  * lookout-shell.h). The group and key names are the core's, so a setting means
  * the same thing on every shell.
  *
- * THE CAMERA POSE AND THE MARINER SETTINGS ARE NOT HERE. The engine keeps both
- * in the same store, on its own cadence, once lk_store_handle() is passed to
- * lookout_set_store. This holds what the SHELL alone knows about: the recents,
- * the chart sets, the raster charts, the chart links and the plugin configs.
+ * THE CAMERA POSE, THE MARINER SETTINGS AND THE CHART SETS ARE NOT HERE. The
+ * engine keeps the first two in the same store once lk_store_handle() is passed
+ * to lookout_set_store, and lookout_chart_sets keeps the third. This holds what
+ * the SHELL alone knows about: the recents, the raster charts, the chart links
+ * and the plugin configs.
  *
  * A mariner arriving from a build that wrote settings.ini keeps their settings:
  * the ini is read once, into the same groups and keys, and left on disk.
@@ -65,16 +66,6 @@ void     lk_store_save_raster_all (const char *const *paths,
 
 gboolean lk_store_load_chart_hidden (void);
 void     lk_store_save_chart_hidden (gboolean hidden);
-
-/* The chart SETS installed — the folders and archives the mariner added — and
- * the ones switched off. Only the path and the switch are stored: the cells
- * are scanned again at launch, because a folder changes underneath the app.
- * Load answers NULL when no library was ever saved (the caller seeds it from
- * the recents, once), and an empty strv for a library emptied on purpose. */
-char **lk_store_load_chart_sets (void);
-void   lk_store_save_chart_sets (const char *const *paths);
-char **lk_store_load_chart_sets_off (void);
-void   lk_store_save_chart_sets_off (const char *const *paths);
 
 /* The chart links the mariner added, as one JSON array text — the same
  * document every shell stores ([{url,name,doc},…]), so what a link means is

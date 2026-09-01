@@ -23,6 +23,9 @@ struct _LkAppModel {
   LkChartBake   *bake;
   char          *pending_open_source;
   LkBakeProgress bake_progress;
+  /* The set name the progress borrows. Owned here, for the pill to keep
+   * reading between posts. */
+  char          *bake_name;
   gboolean       baking;
   GStrv    recents;
 
@@ -166,8 +169,7 @@ lk_app_model_dispose (GObject *object)
   g_clear_pointer (&self->chart_path, g_free);
   g_clear_pointer (&self->open_error, g_free);
   g_clear_pointer (&self->pending_open_source, g_free);
-  g_clear_pointer (&self->bake_progress.name, g_free);
-  g_clear_pointer (&self->bake_progress.cell, g_free);
+  g_clear_pointer (&self->bake_name, g_free);
   g_clear_pointer (&self->recents, g_strfreev);
   g_clear_pointer (&self->overlay_pin, g_free);
   g_clear_pointer (&self->pick_results, g_ptr_array_unref);
@@ -502,11 +504,10 @@ lk_app_model_bake_progress (const LkBakeProgress *progress, gpointer user_data)
 {
   LkAppModel *self = user_data;
 
-  g_free (self->bake_progress.name);
-  g_free (self->bake_progress.cell);
+  g_free (self->bake_name);
+  self->bake_name = g_strdup (progress->name);
   self->bake_progress = *progress;
-  self->bake_progress.name = g_strdup (progress->name);
-  self->bake_progress.cell = g_strdup (progress->cell);
+  self->bake_progress.name = self->bake_name;
   g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_BAKING]);
 }
 

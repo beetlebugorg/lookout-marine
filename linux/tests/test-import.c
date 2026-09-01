@@ -60,13 +60,19 @@ test_the_shell_values_cross (void)
   g_assert_cmpstr (hidden[0], ==, "harbor");
   g_assert_true (lk_store_load_chart_hidden ());
 
-  /* A library that was saved stays saved: absent and empty are different
-   * answers, and this one is neither. */
-  g_auto (GStrv) sets = lk_store_load_chart_sets ();
-  g_assert_nonnull (sets);
+  /* The chart sets cross into the keys lookout_chart_sets reads, and the
+   * library is marked seeded so the recents are not added on top of it. */
+  size_t count = 0;
+  const char *const *sets = lookout_store_list (lk_store_handle (),
+                                                LOOKOUT_STORE_CHARTSETS, "paths", &count);
+  g_assert_cmpuint (count, ==, 1);
   g_assert_cmpstr (sets[0], ==, "/charts/noaa");
-  g_auto (GStrv) sets_off = lk_store_load_chart_sets_off ();
+  const char *const *sets_off = lookout_store_list (lk_store_handle (),
+                                                    LOOKOUT_STORE_CHARTSETS, "off", &count);
+  g_assert_cmpuint (count, ==, 1);
   g_assert_cmpstr (sets_off[0], ==, "/charts/old");
+  g_assert_true (lookout_store_flag (lk_store_handle (), LOOKOUT_STORE_CHARTSETS,
+                                     "seeded", 0));
 
   g_autofree char *links = lk_store_load_chart_links ();
   g_autofree char *active = lk_store_load_chart_link_active ();

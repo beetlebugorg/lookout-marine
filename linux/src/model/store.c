@@ -4,11 +4,6 @@
 
 #define LK_MAX_RECENTS 10
 
-/* Whether a library has ever been saved. The core's list setter clears a key
- * given an empty list, so an emptied library and one that was never saved read
- * the same without this. It goes when lookout_chart_sets owns the list. */
-#define LK_KEY_SETS_SAVED "saved"
-
 static lookout_store *lk_store;
 
 static char *
@@ -133,10 +128,13 @@ lk_store_import_ini (const char *dir)
     lk_import_list (ini, LOOKOUT_STORE_RASTER, raster_lists[i]);
   lk_import_flag (ini, LOOKOUT_STORE_RASTER, "chart_hidden");
 
+  /* The core reads these two back as its own list. `seeded` says the library
+   * decision was already made, so the recents are not turned into sets on top
+   * of what the mariner already had. */
   if (g_key_file_has_key (ini, LOOKOUT_STORE_CHARTSETS, "paths", NULL))
     {
       lk_import_list (ini, LOOKOUT_STORE_CHARTSETS, "paths");
-      lookout_store_set_flag (lk_store, LOOKOUT_STORE_CHARTSETS, LK_KEY_SETS_SAVED, 1);
+      lookout_store_set_flag (lk_store, LOOKOUT_STORE_CHARTSETS, "seeded", 1);
     }
   lk_import_list (ini, LOOKOUT_STORE_CHARTSETS, "off");
 
@@ -317,41 +315,6 @@ void
 lk_store_save_chart_hidden (gboolean hidden)
 {
   lookout_store_set_flag (lk_store_handle (), LOOKOUT_STORE_RASTER, "chart_hidden", hidden);
-  lk_store_wrote ();
-}
-
-/* ---- chart sets ---------------------------------------------------------- */
-
-char **
-lk_store_load_chart_sets (void)
-{
-  /* Absent and empty are different answers: absent means this build has never
-   * saved a library here, and the caller seeds it from the recents once. */
-  if (!lookout_store_flag (lk_store_handle (), LOOKOUT_STORE_CHARTSETS, LK_KEY_SETS_SAVED, 0))
-    return NULL;
-  return lk_store_load_list (LOOKOUT_STORE_CHARTSETS, "paths");
-}
-
-void
-lk_store_save_chart_sets (const char *const *paths)
-{
-  /* Never back to "absent": an emptied library must stay empty rather than
-   * re-seeding from the recents at the next launch. */
-  lk_store_save_list (LOOKOUT_STORE_CHARTSETS, "paths", paths);
-  lookout_store_set_flag (lk_store_handle (), LOOKOUT_STORE_CHARTSETS, LK_KEY_SETS_SAVED, 1);
-  lk_store_wrote ();
-}
-
-char **
-lk_store_load_chart_sets_off (void)
-{
-  return lk_store_load_list (LOOKOUT_STORE_CHARTSETS, "off");
-}
-
-void
-lk_store_save_chart_sets_off (const char *const *paths)
-{
-  lk_store_save_list (LOOKOUT_STORE_CHARTSETS, "off", paths);
   lk_store_wrote ();
 }
 
