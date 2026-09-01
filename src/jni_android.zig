@@ -1932,6 +1932,13 @@ export fn Java_org_beetlebug_lookout_Lookout_nOpenFile(env: [*c]j.JNIEnv, cls: j
 // ---- licenses ---------------------------------------------------------------
 
 extern fn lookout_licenses_json(out_len: ?*usize) [*:0]const u8;
+extern fn lookout_fmt_coord_dm(value: f64, is_lat: c_int, out: [*]u8, cap: usize) usize;
+extern fn lookout_fmt_position(lat: f64, lon: f64, out: [*]u8, cap: usize) usize;
+extern fn lookout_fmt_scale(denominator: f64, out: [*]u8, cap: usize) usize;
+extern fn lookout_band_name(denominator: f64) [*:0]const u8;
+extern fn lookout_parse_position(text: [*:0]const u8, out_lat: ?*f64, out_lon: ?*f64) c_int;
+extern fn lookout_parse_scale(text: [*:0]const u8, out_denominator: ?*f64) c_int;
+extern fn lookout_zoom_delta_for_scale(current: f64, wanted: f64) f64;
 extern fn lookout_raster_set_name_for(path: [*:0]const u8, out_len: ?*usize) ?[*]const u8;
 
 /// String nRasterSetNameFor(String path) -- what to call the set a raster file
@@ -1953,6 +1960,77 @@ export fn Java_org_beetlebug_lookout_Lookout_nRasterSetNameFor(env: [*c]j.JNIEnv
     @memcpy(buf[0..n], name[0..n]);
     buf[n] = 0;
     return env_(env).NewStringUTF.?(env, &buf);
+}
+
+
+// ---- the format kit ---------------------------------------------------------
+//
+// The strings a mariner reads and the text a mariner types. None of it needs a
+// handle, so all of it is static and safe from any thread.
+
+/// String nFmtPosition(double lat, double lon) -- "38<degrees>58.578'N 076<degrees>28.920'W".
+export fn Java_org_beetlebug_lookout_Lookout_nFmtPosition(env: [*c]j.JNIEnv, cls: j.jclass, lat: j.jdouble, lon: j.jdouble) j.jstring {
+    _ = cls;
+    var buf: [72]u8 = undefined;
+    _ = lookout_fmt_position(lat, lon, &buf, buf.len);
+    return env_(env).NewStringUTF.?(env, &buf);
+}
+
+/// String nFmtCoordDm(double value, boolean isLat) -- one half of a position.
+export fn Java_org_beetlebug_lookout_Lookout_nFmtCoordDm(env: [*c]j.JNIEnv, cls: j.jclass, value: j.jdouble, is_lat: j.jboolean) j.jstring {
+    _ = cls;
+    var buf: [32]u8 = undefined;
+    _ = lookout_fmt_coord_dm(value, if (is_lat != 0) 1 else 0, &buf, buf.len);
+    return env_(env).NewStringUTF.?(env, &buf);
+}
+
+/// String nFmtScale(double denominator) -- "1:13,267".
+export fn Java_org_beetlebug_lookout_Lookout_nFmtScale(env: [*c]j.JNIEnv, cls: j.jclass, denominator: j.jdouble) j.jstring {
+    _ = cls;
+    var buf: [32]u8 = undefined;
+    _ = lookout_fmt_scale(denominator, &buf, buf.len);
+    return env_(env).NewStringUTF.?(env, &buf);
+}
+
+/// String nBandName(double denominator) -- the S-52 navigational purpose band.
+export fn Java_org_beetlebug_lookout_Lookout_nBandName(env: [*c]j.JNIEnv, cls: j.jclass, denominator: j.jdouble) j.jstring {
+    _ = cls;
+    return env_(env).NewStringUTF.?(env, lookout_band_name(denominator));
+}
+
+/// double[] nParsePosition(String text) -- {lat, lon}, or null when the text is
+/// not a position.
+export fn Java_org_beetlebug_lookout_Lookout_nParsePosition(env: [*c]j.JNIEnv, cls: j.jclass, text: j.jstring) j.jdoubleArray {
+    _ = cls;
+    const c = env_(env).GetStringUTFChars.?(env, text, null) orelse return null;
+    defer env_(env).ReleaseStringUTFChars.?(env, text, c);
+    var lat: f64 = 0;
+    var lon: f64 = 0;
+    if (lookout_parse_position(@ptrCast(c), &lat, &lon) == 0) return null;
+    const arr = env_(env).NewDoubleArray.?(env, 2) orelse return null;
+    var pair = [2]j.jdouble{ lat, lon };
+    env_(env).SetDoubleArrayRegion.?(env, arr, 0, 2, &pair);
+    return arr;
+}
+
+/// double nParseScale(String text) -- the denominator, or 0 when the text is
+/// not a scale. A parsed denominator is never 0: the engine refuses anything
+/// below 100.
+export fn Java_org_beetlebug_lookout_Lookout_nParseScale(env: [*c]j.JNIEnv, cls: j.jclass, text: j.jstring) j.jdouble {
+    _ = cls;
+    const c = env_(env).GetStringUTFChars.?(env, text, null) orelse return 0;
+    defer env_(env).ReleaseStringUTFChars.?(env, text, c);
+    var d: f64 = 0;
+    if (lookout_parse_scale(@ptrCast(c), &d) == 0) return 0;
+    return d;
+}
+
+/// double nZoomDeltaForScale(double current, double wanted) -- a wanted scale as
+/// a zoom delta, to hand to nZoomAt.
+export fn Java_org_beetlebug_lookout_Lookout_nZoomDeltaForScale(env: [*c]j.JNIEnv, cls: j.jclass, current: j.jdouble, wanted: j.jdouble) j.jdouble {
+    _ = env;
+    _ = cls;
+    return lookout_zoom_delta_for_scale(current, wanted);
 }
 
 /// String nLicensesJson() -- this app's terms and every component it is built

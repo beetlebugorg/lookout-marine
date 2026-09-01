@@ -3,6 +3,7 @@ package org.beetlebug.lookout
 import org.beetlebug.lookout.chart.CoordinateParser
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Test
@@ -101,18 +102,25 @@ class CoordinateParserTest {
     }
 
     /**
-     * Out of range is refused rather than clamped. A clamp would send the chart
-     * somewhere plausible instead of saying the number is wrong.
+     * The poles are the ends of the latitude axis, so there is no 91 degrees
+     * north to go to. It is refused rather than clamped: a clamp sends the
+     * chart somewhere plausible instead of reporting the number is wrong.
      */
     @Test fun aLatitudePastThePoleIsRefused() {
         assertNull(CoordinateParser.parse("91, 0"))
         assertNull(CoordinateParser.parse("-91, 0"))
         assertNull(CoordinateParser.parse("91°N 0°E"))
+        assertNotNull(CoordinateParser.parse("90°N 0°E"))
     }
 
-    @Test fun aLongitudePastTheAntimeridianIsRefused() {
-        assertNull(CoordinateParser.parse("0, 181"))
-        assertNull(CoordinateParser.parse("0, -181"))
+    /**
+     * Longitude repeats every 360 degrees, so 181 east is 179 west. A plotter
+     * counting past the antimeridian writes it that way.
+     */
+    @Test fun aLongitudePastTheAntimeridianWraps() {
+        assertEquals(-179.0, CoordinateParser.parse("0, 181")!!.second, 1e-9)
+        assertEquals(179.0, CoordinateParser.parse("0, -181")!!.second, 1e-9)
+        assertEquals(-179.0, CoordinateParser.parse("0°N 181°E")!!.second, 1e-9)
     }
 
     /** A hemisphere on one axis only leaves the other unknown. */

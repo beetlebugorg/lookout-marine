@@ -187,6 +187,35 @@ public final class Lookout implements AutoCloseable {
      *  binary, so it needs no chart open. */
     public static String licensesJson()           { return nLicensesJson(); }
 
+    // ---- the format kit ----
+    //
+    // The strings a mariner reads and the text a mariner types, from the
+    // engine, so every shell prints and accepts the same thing. None of it
+    // needs a chart open.
+
+    /** A full position, latitude first: "38\u00B058.578'N 076\u00B028.920'W". */
+    public static String fmtPosition(double lat, double lon) { return nFmtPosition(lat, lon); }
+
+    /** One half of a position, in degrees and decimal minutes. */
+    public static String fmtCoordDm(double value, boolean isLat) { return nFmtCoordDm(value, isLat); }
+
+    /** The 1:N display scale with group separators: "1:13,267". */
+    public static String fmtScale(double denominator)  { return nFmtScale(denominator); }
+
+    /** The S-52 navigational purpose band for a display scale. */
+    public static String bandName(double denominator)  { return nBandName(denominator); }
+
+    /** {lat, lon} for a position the mariner typed, or null. */
+    public static double[] parsePosition(String text)  { return nParsePosition(text); }
+
+    /** The denominator for a scale the mariner typed, or 0. */
+    public static double parseScale(String text)       { return nParseScale(text); }
+
+    /** A wanted display scale as a zoom delta, to hand to zoomAt. */
+    public static double zoomDeltaForScale(double current, double wanted) {
+        return nZoomDeltaForScale(current, wanted);
+    }
+
     /** What to call the set a raster file belongs to. The engine's own rule,
      *  the one it names the sets it draws by, so grouping by anything else
      *  disagrees with what the pill then shows. Needs no chart open. */
@@ -266,6 +295,13 @@ public final class Lookout implements AutoCloseable {
     private static native boolean nAtlasCacheReady();
     private static native int nOpenFile(long h, String path);
     private static native String nLicensesJson();
+    private static native String nFmtPosition(double lat, double lon);
+    private static native String nFmtCoordDm(double value, boolean isLat);
+    private static native String nFmtScale(double denominator);
+    private static native String nBandName(double denominator);
+    private static native double[] nParsePosition(String text);
+    private static native double nParseScale(String text);
+    private static native double nZoomDeltaForScale(double current, double wanted);
     private static native String nRasterSetNameFor(String path);
     private static native String[] nMarinerKeys();
     private static native void nGetMariner(long h, double[] out);
