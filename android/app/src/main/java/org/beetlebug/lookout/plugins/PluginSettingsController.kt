@@ -126,7 +126,7 @@ class PluginSettingsController(
         lastRegistry = reg
         // The declared tables ride the same refresh: they follow the loaded
         // set, so a plugin that unloads takes its table with it.
-        val specs = parseTableSpecs(l.pluginTables())
+        val specs = readTableSpecs(l)
         access.onMain {
             pluginRegistry = reg
             onTables(specs)

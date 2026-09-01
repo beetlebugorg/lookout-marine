@@ -675,11 +675,18 @@ public final class Lookout implements AutoCloseable {
         return h == 0 ? "The plugin layer could not start." : nPluginInstall(h, path);
     }
     public boolean pluginUninstall(String id)    { return h != 0 && nPluginUninstall(h, id); }
-    /** Every table the loaded plugins declare, as JSON; null when none is up. */
-    public String pluginTables()                 { return h == 0 ? null : nPluginTables(h); }
-    /** One table's rows in shown order; null for an unknown plugin or table. */
-    public String pluginTableRows(String id, String key, String sortKey, boolean ascending) {
-        return h == 0 ? null : nPluginTableRows(h, id, key, sortKey, ascending);
+    /**
+     * Every table the loaded plugins declare: eight strings per table, then
+     * three per column. Null when no plugin layer is up.
+     */
+    public String[] tables()                     { return h == 0 ? null : nTables(h); }
+
+    /**
+     * One table's rows, already in order: the seq, then six strings per row and
+     * two per cell. Null for an unknown plugin or table.
+     */
+    public String[] tableRows(String id, String key, String sortKey, boolean ascending) {
+        return h == 0 ? null : nTableRows(h, id, key, sortKey, ascending);
     }
     /** Tell the plugin its table is on screen: it builds no rows until then. */
     public boolean pluginTableOpen(String id, String key, boolean open) {
@@ -738,8 +745,8 @@ public final class Lookout implements AutoCloseable {
     private static native String nChartLinksJson(long h);
     private static native boolean nChartLinksChanged(long h);
     private static native void nChartLinksImport(long h, String json);
-    private static native String nPluginTables(long h);
-    private static native String nPluginTableRows(long h, String id, String key, String sortKey, boolean ascending);
+    private static native String[] nTables(long h);
+    private static native String[] nTableRows(long h, String id, String key, String sortKey, boolean ascending);
     private static native boolean nPluginTableOpen(long h, String id, String key, boolean open);
     private static native boolean nPluginGrantSet(long h, String id, String cap, boolean on);
 }

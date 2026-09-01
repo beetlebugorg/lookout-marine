@@ -4,7 +4,7 @@ import org.beetlebug.lookout.engine.ChartEngine
 import org.beetlebug.lookout.plugins.PluginField
 import org.beetlebug.lookout.plugins.PluginRegistry
 import org.beetlebug.lookout.plugins.SettingsSection
-import org.beetlebug.lookout.plugins.parseTableSpecs
+import org.beetlebug.lookout.plugins.readTableSpecs
 
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -227,8 +227,8 @@ class LivePluginsTest {
     /** AIS declares the Vessels table, and it has to be locatable or a row's
      *  tap reveals nothing. */
     @Test fun theAisTableIsDeclaredAndLocatable() {
-        withRegistry { _, _ ->
-            val specs = parseTableSpecs(ChartEngine.get().lookout?.pluginTables())
+        withRegistry { _, l ->
+            val specs = readTableSpecs(l)
             val ais = specs.firstOrNull { it.plugin == "org.beetlebug.ais" }
             assertNotNull("AIS declares no table: ${specs.map { it.id }}", ais)
             assertTrue("the AIS table has no position", ais!!.locatable)

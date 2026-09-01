@@ -288,6 +288,109 @@ object PluginFixture {
     const val SEVERITY_WARNING = 1
     const val SEVERITY_ALARM = 2
 
+    // ---- the tables ---------------------------------------------------------
+
+    // lookout_column_type
+    const val COLUMN_DISTANCE = 0
+    const val COLUMN_SPEED = 1
+    const val COLUMN_BEARING = 2
+    const val COLUMN_DURATION = 3
+    const val COLUMN_NUMBER = 4
+    const val COLUMN_TEXT = 5
+    const val COLUMN_FLAG = 6
+
+    /** One declared table as the native writes it: eight strings, then three
+     *  per column. */
+    fun table(
+        plugin: String,
+        key: String,
+        title: String,
+        menu: String,
+        sortKey: String,
+        sortAscending: Boolean = true,
+        locatable: Boolean = false,
+        columns: List<Triple<String, String, Int>>,
+    ): List<String> = listOf(
+        plugin, key, title, menu, sortKey,
+        if (sortAscending) "1" else "0",
+        if (locatable) "1" else "0",
+        columns.size.toString(),
+    ) + columns.flatMap { listOf(it.first, it.second, it.third.toString()) }
+
+    fun tables(vararg tables: List<String>): Array<String> =
+        tables.flatMap { it }.toTypedArray()
+
+    /** A locatable AIS table and a route table that is not. */
+    val tableSpecs: Array<String> get() = tables(
+        table(
+            "org.beetlebug.ais", "targets", "AIS Targets", "Vessels",
+            sortKey = "cpa", locatable = true,
+            columns = listOf(
+                Triple("name", "Vessel", COLUMN_TEXT),
+                Triple("mmsi", "MMSI", COLUMN_TEXT),
+                Triple("range", "Range", COLUMN_DISTANCE),
+                Triple("brg", "Bearing", COLUMN_BEARING),
+                Triple("sog", "SOG", COLUMN_SPEED),
+                Triple("cpa", "CPA", COLUMN_DISTANCE),
+                Triple("tcpa", "TCPA", COLUMN_DURATION),
+                Triple("state", "", COLUMN_FLAG),
+            ),
+        ),
+        table(
+            "org.example.routes", "legs", "Route Legs", "advanced",
+            sortKey = "leg",
+            columns = listOf(
+                Triple("leg", "Leg", COLUMN_TEXT),
+                Triple("dist", "Distance", COLUMN_DISTANCE),
+            ),
+        ),
+    )
+
+    /** A cell the plugin did not send. It reads as a dash, never as a zero. */
+    val absentCell: List<String> = listOf("0", "")
+
+    fun numberCell(v: Double): List<String> = listOf("1", v.toString())
+
+    fun textCell(v: String): List<String> = listOf("2", v)
+
+    /** One row as the native writes it: six strings, then two per cell. */
+    fun tableRow(
+        id: String,
+        band: Int = 0,
+        lon: Double? = null,
+        lat: Double? = null,
+        cells: List<List<String>>,
+    ): List<String> = listOf(
+        id, band.toString(),
+        if (lon != null && lat != null) "1" else "0",
+        (lon ?: 0.0).toString(), (lat ?: 0.0).toString(),
+        cells.size.toString(),
+    ) + cells.flatMap { it }
+
+    fun tableRows(seq: Int, vararg rows: List<String>): Array<String> =
+        (listOf(seq.toString()) + rows.flatMap { it }).toTypedArray()
+
+    /** One batch for the AIS table, with absent cells and a short row. */
+    val aisRows: Array<String> get() = tableRows(
+        312,
+        tableRow("899000101", band = 0, lon = -76.481, lat = 38.974, cells = listOf(
+            textCell("ANNE"), textCell("899000101"), numberCell(1240.0), numberCell(275.0),
+            numberCell(3.6), numberCell(124.0), numberCell(585.0), textCell("alarm"),
+        )),
+        tableRow("899000102", band = 1, lon = -76.462, lat = 38.981, cells = listOf(
+            textCell("BRAVO"), textCell("899000102"), numberCell(2100.0), numberCell(90.0),
+            numberCell(5.1), numberCell(900.0), numberCell(1800.0), textCell("warning"),
+        )),
+        tableRow("366123456", band = 1, lon = -76.44, lat = 38.99, cells = listOf(
+            textCell("CHARLIE"), textCell("366123456"), numberCell(5400.0), numberCell(12.0),
+            numberCell(0.0), absentCell, absentCell, absentCell,
+        )),
+        // A row the plugin sent short, and with no position.
+        tableRow("noposition", band = 1, cells = listOf(
+            textCell("ZULU"), textCell("244000001"),
+        )),
+    )
+
     /** The five plugins, in load order. */
     val shipped: List<PluginInfo> = listOf(nmea0183, signalk, ais, grib, routes)
 }

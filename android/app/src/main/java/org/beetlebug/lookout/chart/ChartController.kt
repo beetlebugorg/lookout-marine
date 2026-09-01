@@ -28,11 +28,11 @@ import org.beetlebug.lookout.plugins.PluginListSchema
 import org.beetlebug.lookout.plugins.PluginPrefs
 import org.beetlebug.lookout.plugins.PluginRegistry
 import org.beetlebug.lookout.plugins.PluginRow
-import org.beetlebug.lookout.plugins.parseTableRows
+import org.beetlebug.lookout.plugins.readTableRows
 import org.beetlebug.lookout.plugins.TableBatch
 import org.beetlebug.lookout.plugins.TableController
 import org.beetlebug.lookout.plugins.TableSpec
-import org.beetlebug.lookout.plugins.parseTableSpecs
+import org.beetlebug.lookout.plugins.readTableSpecs
 import org.beetlebug.lookout.plugins.trimmed
 import org.beetlebug.lookout.settings.MarinerState
 import org.beetlebug.lookout.settings.Scheme

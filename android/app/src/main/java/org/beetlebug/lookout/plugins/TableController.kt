@@ -113,15 +113,14 @@ fun pollTable() = access.onEngine { l -> refreshTableRows(l, force = false) }
 
 private fun refreshTableRows(l: Lookout, force: Boolean) {
     val spec = openTable ?: return
-    val json = l.pluginTableRows(spec.plugin, spec.key, tableSortKey, tableSortAscending)
-    if (json == null) {
+    val batch = readTableRows(l, spec, tableSortKey, tableSortAscending)
+    if (batch == null) {
         // The plugin has gone, and the table with it. Better an empty
         // dialog than a picture nobody is keeping up to date.
         tableSeq = -1
         access.onMain { if (openTable?.id == spec.id) tableBatch = TableBatch(0, emptyList()) }
         return
     }
-    val batch = parseTableRows(json, spec.columns.size) ?: return
     if (!force && batch.seq == tableSeq) return
     tableSeq = batch.seq
     access.onMain { if (openTable?.id == spec.id) tableBatch = batch }

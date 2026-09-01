@@ -1,8 +1,8 @@
 package org.beetlebug.lookout
 
 import org.beetlebug.lookout.plugins.PluginTableFormat
-import org.beetlebug.lookout.plugins.parseTableRows
-import org.beetlebug.lookout.plugins.parseTableSpecs
+import org.beetlebug.lookout.plugins.decodeTableRows
+import org.beetlebug.lookout.plugins.decodeTableSpecs
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -25,7 +25,7 @@ import org.robolectric.RobolectricTestRunner
 @RunWith(RobolectricTestRunner::class)
 class PluginTableTest {
 
-    private val specs = parseTableSpecs(Fixtures.tables)
+    private val specs = decodeTableSpecs(PluginFixture.tableSpecs)
     private val ais = specs.first { it.key == "targets" }
 
     // ---- the declarations ---------------------------------------------------
@@ -85,21 +85,29 @@ class PluginTableTest {
     }
 
     @Test fun aTableWithNoColumnsIsSkippedWhole() {
-        val out = parseTableSpecs("""{"tables":[
-            {"plugin":"p","key":"k","title":"T","columns":[]},
-            {"plugin":"p","key":"ok","title":"T","columns":[{"key":"c","label":"C","type":"text"}]}]}""")
+        val out = decodeTableSpecs(PluginFixture.tables(
+            PluginFixture.table("p", "k", "T", "Vessels", sortKey = "", columns = emptyList()),
+            PluginFixture.table("p", "ok", "T", "Vessels", sortKey = "",
+                columns = listOf(Triple("c", "C", PluginFixture.COLUMN_TEXT))),
+        ))
         assertEquals(listOf("ok"), out.map { it.key })
     }
 
-    @Test fun aMalformedDeclarationIsNoTables() {
-        assertTrue(parseTableSpecs(null).isEmpty())
-        assertTrue(parseTableSpecs("{").isEmpty())
-        assertTrue(parseTableSpecs("""{"tables":"nope"}""").isEmpty())
+    /** A read that said nothing is no tables. */
+    @Test fun anAbsentDeclarationIsNoTables() {
+        assertTrue(decodeTableSpecs(null).isEmpty())
+        assertTrue(decodeTableSpecs(emptyArray()).isEmpty())
+    }
+
+    /** A declaration cut short is dropped rather than read across the next. */
+    @Test fun aTruncatedDeclarationIsDropped() {
+        val flat = PluginFixture.tableSpecs
+        assertTrue(decodeTableSpecs(flat.copyOfRange(0, 12)).isEmpty())
     }
 
     // ---- the rows -----------------------------------------------------------
 
-    private val batch = requireNotNull(parseTableRows(Fixtures.tableRows, ais.columns.size))
+    private val batch = requireNotNull(decodeTableRows(PluginFixture.aisRows, ais.columns.size))
 
     @Test fun theBatchCarriesItsSeqAndEveryRow() {
         assertEquals(312, batch.seq)
@@ -142,8 +150,8 @@ class PluginTableTest {
         assertNull("everything past what was sent is missing, not zero", zulu.cells[2])
     }
 
-    /** A JSON null is a cell the plugin did not send, and stays null. */
-    @Test fun anExplicitNullStaysNull() {
+    /** An absent cell is one the plugin did not send, and stays null. */
+    @Test fun anAbsentCellStaysNull() {
         val charlie = batch.rows[2]
         assertNull(charlie.cells[5])
         assertNull(charlie.cells[6])
@@ -151,13 +159,27 @@ class PluginTableTest {
     }
 
     @Test fun aRowWithNoIdIsSkipped() {
-        val b = parseTableRows("""{"seq":1,"rows":[{"band":0,"cells":[]},{"id":"a","cells":[]}]}""", 1)!!
+        val b = decodeTableRows(PluginFixture.tableRows(
+            1,
+            PluginFixture.tableRow("", cells = emptyList()),
+            PluginFixture.tableRow("a", cells = emptyList()),
+        ), 1)!!
         assertEquals(listOf("a"), b.rows.map { it.id })
     }
 
-    @Test fun aMalformedBatchIsNull() {
-        assertNull(parseTableRows("{", 3))
-        assertNull(parseTableRows("""{"seq":1}""", 3))
+    /** A read that said nothing is null, which the caller keeps the last batch
+     *  for rather than emptying the dialog. */
+    @Test fun anAbsentBatchIsNull() {
+        assertNull(decodeTableRows(null, 3))
+        assertNull(decodeTableRows(emptyArray(), 3))
+        assertNull(decodeTableRows(arrayOf("not a seq"), 3))
+    }
+
+    /** A batch cut short is dropped rather than read across the next row. */
+    @Test fun aTruncatedBatchDropsTheShortRow() {
+        val flat = PluginFixture.aisRows
+        val b = decodeTableRows(flat.copyOfRange(0, 14), ais.columns.size)!!
+        assertTrue(b.rows.isEmpty())
     }
 
     // ---- what a cell reads --------------------------------------------------

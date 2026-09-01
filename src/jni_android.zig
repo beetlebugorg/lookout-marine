@@ -2479,3 +2479,198 @@ export fn Java_org_beetlebug_lookout_Lookout_nAlerts(env: [*c]j.JNIEnv, cls: j.j
     }
     return arr;
 }
+
+// ---- the tables, read typed -------------------------------------------------
+
+const c_tables = opaque {};
+const c_table = opaque {};
+const c_column = opaque {};
+const c_rows = opaque {};
+const c_row = opaque {};
+const c_cell = opaque {};
+
+extern fn lookout_tables_read(h: ?*anyopaque) ?*c_tables;
+extern fn lookout_tables_free(t: ?*c_tables) void;
+extern fn lookout_tables_all(t: ?*const c_tables, out_n: *usize) ?[*]const ?*const c_table;
+extern fn lookout_table_columns(t: ?*const c_table, out_n: *usize) ?[*]const ?*const c_column;
+extern fn lookout_table_rows_read(h: ?*anyopaque, id: ?[*:0]const u8, key: ?[*:0]const u8, sort_key: ?[*:0]const u8, ascending: c_int) ?*c_rows;
+extern fn lookout_table_rows_free(r: ?*c_rows) void;
+extern fn lookout_table_rows_seq(r: ?*const c_rows) u64;
+extern fn lookout_table_rows_all(r: ?*const c_rows, out_n: *usize) ?[*]const ?*const c_row;
+extern fn lookout_table_row_cells(row: ?*const c_row, out_n: *usize) ?[*]const ?*const c_cell;
+
+const CColumn = extern struct {
+    key: ?[*:0]const u8,
+    label: ?[*:0]const u8,
+    type: c_int,
+};
+
+const CTable = extern struct {
+    plugin: ?[*:0]const u8,
+    key: ?[*:0]const u8,
+    title: ?[*:0]const u8,
+    menu: ?[*:0]const u8,
+    sort_key: ?[*:0]const u8,
+    sort_ascending: c_int,
+    at_lat: ?[*:0]const u8,
+    at_lon: ?[*:0]const u8,
+    open: c_int,
+    rows: usize,
+    seq: u64,
+};
+
+const CRow = extern struct {
+    id: ?[*:0]const u8,
+    band: i32,
+    located: c_int,
+    lon: f64,
+    lat: f64,
+};
+
+const CCell = extern struct {
+    type: c_int,
+    kind: c_int,
+    number: f64,
+    text: ?[*:0]const u8,
+};
+
+/// A growing String[] the writers below append to. JNI has no array append, so
+/// the strings are gathered first and the array is built once at the end.
+const Strings = struct {
+    list: std.ArrayList([]u8),
+
+    fn init() Strings {
+        return .{ .list = .empty };
+    }
+
+    fn deinit(self: *Strings) void {
+        for (self.list.items) |s| gpa.free(s);
+        self.list.deinit(gpa);
+    }
+
+    fn str(self: *Strings, s: ?[*:0]const u8) void {
+        const src = if (s) |p| std.mem.span(p) else "";
+        const copy = gpa.alloc(u8, src.len) catch return;
+        @memcpy(copy, src);
+        self.list.append(gpa, copy) catch gpa.free(copy);
+    }
+
+    fn print(self: *Strings, comptime fmt: []const u8, args: anytype) void {
+        const s = std.fmt.allocPrint(gpa, fmt, args) catch return;
+        self.list.append(gpa, s) catch gpa.free(s);
+    }
+
+    fn toArray(self: *Strings, env: [*c]j.JNIEnv) j.jobjectArray {
+        const cls = env_(env).FindClass.?(env, "java/lang/String") orelse return null;
+        const arr = env_(env).NewObjectArray.?(env, @intCast(self.list.items.len), cls, null) orelse return null;
+        for (self.list.items, 0..) |s, k| {
+            const z = gpa.allocSentinel(u8, s.len, 0) catch continue;
+            defer gpa.free(z);
+            @memcpy(z, s);
+            const js = env_(env).NewStringUTF.?(env, z.ptr) orelse continue;
+            env_(env).SetObjectArrayElement.?(env, arr, @intCast(k), js);
+            // The default local-ref table is small; a long table would exhaust it.
+            env_(env).DeleteLocalRef.?(env, js);
+        }
+        return arr;
+    }
+};
+
+/// String[] nTables(long h) -- every table the loaded plugins declare. Eight
+/// strings per table, then three per column:
+///
+///   plugin, key, title, menu, sortKey, sortAscending, locatable, columnCount
+///   then columnCount times: key, label, type
+///
+/// Null when no plugin layer is up.
+export fn Java_org_beetlebug_lookout_Lookout_nTables(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) j.jobjectArray {
+    _ = cls;
+    const h = fromLong(hl) orelse return null;
+    const read = lookout_tables_read(h.l) orelse return null;
+    defer lookout_tables_free(read);
+
+    var n: usize = 0;
+    const all = lookout_tables_all(read, &n) orelse return null;
+
+    var out = Strings.init();
+    defer out.deinit();
+
+    for (all[0..n]) |tp| {
+        const t: *const CTable = @ptrCast(@alignCast(tp orelse continue));
+        var cn: usize = 0;
+        const cols = lookout_table_columns(@ptrCast(t), &cn) orelse continue;
+        out.str(t.plugin);
+        out.str(t.key);
+        out.str(t.title);
+        out.str(t.menu);
+        out.str(t.sort_key);
+        out.print("{d}", .{t.sort_ascending});
+        // Both `at` keys are set together, so either one answers it.
+        const lat = if (t.at_lat) |p| std.mem.span(p) else "";
+        out.print("{d}", .{@intFromBool(lat.len > 0)});
+        out.print("{d}", .{cn});
+        for (cols[0..cn]) |cp| {
+            const c: *const CColumn = @ptrCast(@alignCast(cp orelse continue));
+            out.str(c.key);
+            out.str(c.label);
+            out.print("{d}", .{c.type});
+        }
+    }
+    return out.toArray(env);
+}
+
+/// String[] nTableRows(long h, String id, String key, String sortKey,
+/// boolean ascending) -- one table's rows, already in order. The seq, then six
+/// strings per row and two per cell:
+///
+///   seq
+///   then per row: id, band, located, lon, lat, cellCount
+///   then cellCount times: kind, value
+///
+/// A kind of 0 is a cell the plugin did not send, which is not a zero.
+export fn Java_org_beetlebug_lookout_Lookout_nTableRows(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, id: j.jstring, key: j.jstring, sort_key: j.jstring, ascending: j.jboolean) j.jobjectArray {
+    _ = cls;
+    const h = fromLong(hl) orelse return null;
+    const c_id = env_(env).GetStringUTFChars.?(env, id, null) orelse return null;
+    defer env_(env).ReleaseStringUTFChars.?(env, id, c_id);
+    const c_key = env_(env).GetStringUTFChars.?(env, key, null) orelse return null;
+    defer env_(env).ReleaseStringUTFChars.?(env, key, c_key);
+    const c_sort = env_(env).GetStringUTFChars.?(env, sort_key, null) orelse return null;
+    defer env_(env).ReleaseStringUTFChars.?(env, sort_key, c_sort);
+
+    const read = lookout_table_rows_read(h.l, @ptrCast(c_id), @ptrCast(c_key), @ptrCast(c_sort), if (ascending != 0) 1 else 0) orelse return null;
+    defer lookout_table_rows_free(read);
+
+    var n: usize = 0;
+    const all = lookout_table_rows_all(read, &n) orelse return null;
+
+    var out = Strings.init();
+    defer out.deinit();
+
+    out.print("{d}", .{lookout_table_rows_seq(read)});
+    for (all[0..n]) |rp| {
+        const r: *const CRow = @ptrCast(@alignCast(rp orelse continue));
+        var cn: usize = 0;
+        const cells = lookout_table_row_cells(@ptrCast(r), &cn) orelse {
+            continue;
+        };
+        out.str(r.id);
+        out.print("{d}", .{r.band});
+        out.print("{d}", .{r.located});
+        out.print("{d}", .{r.lon});
+        out.print("{d}", .{r.lat});
+        out.print("{d}", .{cn});
+        for (cells[0..cn]) |cp| {
+            const c: *const CCell = @ptrCast(@alignCast(cp orelse continue));
+            out.print("{d}", .{c.kind});
+            switch (c.kind) {
+                // NUMBER
+                1 => out.print("{d}", .{c.number}),
+                // TEXT
+                2 => out.str(c.text),
+                else => out.str(null),
+            }
+        }
+    }
+    return out.toArray(env);
+}
