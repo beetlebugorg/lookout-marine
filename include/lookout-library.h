@@ -146,6 +146,72 @@ void lookout_bake_free(lookout_bake *b);
  * rather than a speed dial: each worker holds a whole cell's working set. */
 uint32_t lookout_bake_workers(uint32_t cores);
 
+/* ---- what a bake prepares, and where it goes ----
+ *
+ * The rules a shell needs before it starts one. */
+
+/* What has to happen to one file before it can be drawn. */
+typedef enum {
+    /* An S-57 or S-101 cell: parse the survey and portray it. */
+    LOOKOUT_PREPARE_CELL  = 0,
+    /* A BSB/KAP sheet: decode the picture and warp it. */
+    LOOKOUT_PREPARE_SHEET = 1,
+    /* Already a chart, and only has to come out of the archive. */
+    LOOKOUT_PREPARE_LIFT  = 2
+} lookout_prepare;
+
+typedef struct {
+    /* The absolute path, or the entry name inside an archive. */
+    const char *path;
+    /* The dataset name, such as US5MD1MC.000. */
+    const char *name;
+    /* 1 to 6, or 0 when the name has no usage band. */
+    int band;
+    lookout_prepare work;
+} lookout_bake_item;
+
+/* Sort the items into the order a bake runs them in, in place.
+ *
+ * COARSE BAND FIRST: Overview, General, Coastal, then the harbor detail. A
+ * mariner who cancels half way then has charts that cover the whole passage at
+ * a usable scale; the other order gives them every berth in one river and
+ * nothing between rivers. Sheets after the survey, and a lift last because it
+ * is the cheapest. By name within that, so a run is repeatable.
+ *
+ * The order is also what makes `ins` and `outs` kind-contiguous for
+ * lookout_bake_start. */
+void lookout_bake_order(lookout_bake_item *items, size_t n);
+
+/* Where one prepared chart is written under `out_dir`. Writes at most `cap`
+ * bytes including the NUL and returns the length, or 0 when it does not fit.
+ *
+ * Every prepared chart goes in a directory of its own name. That is the layout
+ * tile57's own bake writes and an exchange set uses. The raster layer reads a
+ * provider from the directory ABOVE, so a folder of 900 sheets written flat
+ * becomes 900 switches; and a cell's referenced text and pictures are written
+ * beside it only when the chart has a directory to hold them.
+ *
+ * From an ARCHIVE the output mirrors the entry's own path. A LIFT keeps the
+ * name the file already has: an .mbtiles is a chart already. */
+size_t lookout_bake_output_path(const char *out_dir, const char *source,
+                                const lookout_bake_item *item,
+                                char *out, size_t cap);
+
+/* The directory name `source` is prepared into, under the shell's charts root.
+ * An archive names it without the .zip. */
+size_t lookout_bake_prepared_name(const char *source, char *out, size_t cap);
+
+/* True when `path` is under `root`, the directory this app prepares into.
+ * Removing a set may delete what is under it; what is outside is the mariner's
+ * own and is never touched. */
+int lookout_bake_is_derived(const char *root, const char *path);
+
+/* Removing a set renames first and deletes behind: a 7,224-chart library is
+ * 36,000 files, measured at 3.7 seconds of disk work. This is the prefix to
+ * rename to, and the test a launch sweep uses. Static storage. */
+const char *lookout_bake_trash_prefix(void);
+int         lookout_bake_is_trash(const char *name);
+
 /* ---- the installed sets ----------------------------------------------------
  *
  * The folders of charts the mariner added, which of them are drawn, and what

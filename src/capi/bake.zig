@@ -83,3 +83,92 @@ export fn lookout_bake_free(b: ?*lookout_bake) void {
 export fn lookout_bake_workers(cores: u32) u32 {
     return rules.workers(cores);
 }
+
+// ---- the rules ----------------------------------------------------------------
+
+pub const lookout_prepare = rules.Prepare;
+
+/// One file to prepare. See lookout-library.h.
+pub const lookout_bake_item = extern struct {
+    path: [*:0]const u8,
+    name: [*:0]const u8,
+    band: c_int,
+    work: lookout_prepare,
+};
+
+fn ruleItem(i: lookout_bake_item) rules.Item {
+    return .{
+        .path = std.mem.span(i.path),
+        .name = std.mem.span(i.name),
+        .band = @intCast(@max(0, @min(255, i.band))),
+        .work = i.work,
+    };
+}
+
+/// Sort the items into the order a bake runs them in, in place.
+export fn lookout_bake_order(items: ?[*]lookout_bake_item, n: usize) void {
+    const list = (items orelse return)[0..n];
+    std.mem.sort(lookout_bake_item, list, {}, struct {
+        fn lt(_: void, a: lookout_bake_item, b: lookout_bake_item) bool {
+            return rules.before(ruleItem(a), ruleItem(b));
+        }
+    }.lt);
+}
+
+/// Copy `s` and its NUL into the caller's buffer. Returns the length, or 0
+/// when the buffer is absent or too small.
+fn copyOut(out: ?[*]u8, cap: usize, s: []const u8) usize {
+    const dst = out orelse return 0;
+    if (cap == 0) return 0;
+    if (s.len + 1 > cap) {
+        dst[0] = 0;
+        return 0;
+    }
+    @memcpy(dst[0..s.len], s);
+    dst[s.len] = 0;
+    return s.len;
+}
+
+/// Where one prepared chart is written under `out_dir`. See lookout-library.h.
+export fn lookout_bake_output_path(
+    out_dir: ?[*:0]const u8,
+    source: ?[*:0]const u8,
+    item: ?*const lookout_bake_item,
+    out: ?[*]u8,
+    cap: usize,
+) usize {
+    const it = item orelse return 0;
+    var buf: [4096]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&buf);
+    const p = rules.outputPath(
+        fba.allocator(),
+        if (out_dir) |d| std.mem.span(d) else "",
+        if (source) |s| std.mem.span(s) else "",
+        ruleItem(it.*),
+    ) catch return 0;
+    return copyOut(out, cap, p);
+}
+
+/// The directory name a source is prepared into. See lookout-library.h.
+export fn lookout_bake_prepared_name(source: ?[*:0]const u8, out: ?[*]u8, cap: usize) usize {
+    const s = source orelse return 0;
+    return copyOut(out, cap, rules.preparedName(std.mem.span(s)));
+}
+
+/// True when `path` is under the directory this app prepares into.
+export fn lookout_bake_is_derived(root: ?[*:0]const u8, path: ?[*:0]const u8) c_int {
+    const r = if (root) |x| std.mem.span(x) else "";
+    const p = if (path) |x| std.mem.span(x) else "";
+    return @intFromBool(rules.isDerived(r, p));
+}
+
+/// The prefix a directory being deleted is renamed to. Static storage.
+export fn lookout_bake_trash_prefix() [*:0]const u8 {
+    return rules.trash_prefix;
+}
+
+/// True when a directory name is one a removal left behind.
+export fn lookout_bake_is_trash(name: ?[*:0]const u8) c_int {
+    const n = name orelse return 0;
+    return @intFromBool(rules.isTrash(std.mem.span(n)));
+}

@@ -538,6 +538,14 @@ pub fn build(b: *std.Build) void {
     bake_core_mod.addImport("owned", owned_mod);
     cfg.apply(bake_core_mod, is_apple);
     bake_host_mod.addImport("lookout", bake_core_mod);
+    // The cells travel with the test rather than by path: a test binary's
+    // working directory is the build runner's business, and CI's is not the
+    // repository root.
+    for ([_][]const u8{ "US3CU1EF", "US4TE3W0", "US5OR2XF" }) |cell| {
+        bake_host_mod.addAnonymousImport(b.fmt("cell_{s}", .{cell}), .{
+            .root_source_file = b.path(b.fmt("test/cells/{s}.000", .{cell})),
+        });
+    }
     const bake_host_run = b.addRunArtifact(b.addTest(.{ .root_module = bake_host_mod }));
     b.step("bake-host", "Bake a few cells out of $LOOKOUT_BAKE_ARCHIVE").dependOn(&bake_host_run.step);
 
@@ -1054,6 +1062,9 @@ pub fn build(b: *std.Build) void {
         "test/host_isolation.zig",
         "test/host_restart.zig",
         "test/ais_alarm.zig",
+        // Rooted by the bake-host step. It needs an exchange set, so it skips
+        // without $LOOKOUT_BAKE_ARCHIVE rather than running as part of `test`.
+        "test/bake_host.zig",
     };
     checkTestCoverage(b, test_step, &pure_test_roots, &reached_test_files);
 }
