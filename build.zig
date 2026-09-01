@@ -517,6 +517,30 @@ pub fn build(b: *std.Build) void {
             "plugin-dev: the harness drives the wasm plugin host, so it cannot be built with -Dplugins=false.").step);
     }
 
+    // ---- the bake, over a real archive ----
+    // A raw S-57 cell is 300 KB of survey and the repository holds none, so
+    // this bakes an exchange set the mariner already has, named by
+    // $LOOKOUT_BAKE_ARCHIVE, and skips without it. A step of its own so that
+    // `zig build test` on a machine with no archive still runs clean.
+    const bake_host_mod = b.createModule(.{
+        .root_source_file = b.path("test/bake_host.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    const bake_core_mod = b.createModule(.{
+        .root_source_file = b.path("src/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    bake_core_mod.addImport("plugins", plugins_mod);
+    bake_core_mod.addImport("owned", owned_mod);
+    cfg.apply(bake_core_mod, is_apple);
+    bake_host_mod.addImport("lookout", bake_core_mod);
+    const bake_host_run = b.addRunArtifact(b.addTest(.{ .root_module = bake_host_mod }));
+    b.step("bake-host", "Bake a few cells out of $LOOKOUT_BAKE_ARCHIVE").dependOn(&bake_host_run.step);
+
     // ---- unit tests ----
     const test_mod = b.createModule(.{
         .root_source_file = b.path("src/root.zig"),

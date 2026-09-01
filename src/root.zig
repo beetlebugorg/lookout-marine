@@ -44,6 +44,9 @@ const plugin_read = @import("plugins");
 const phost = if (plugins_on) @import("plugin/host.zig") else struct {};
 const clock = @import("clock.zig");
 const settings = @import("settings.zig");
+/// The bake, for the host test that drives it over a real archive.
+pub const bakejob = @import("bakejob.zig");
+pub const bake_rules = @import("shell/bake.zig");
 const frame_rules = @import("shell/frame.zig"); // when the next frame is
 
 const MAX_SCHEMES = 3; // day / dusk / night
@@ -3527,7 +3530,7 @@ test {
     _ = @import("licenses.zig");
     // The bake job, which needs the engine's headers and so cannot be a test
     // root of its own.
-    _ = @import("bakejob.zig");
+    _ = bakejob;
 }
 
 test "camera roundtrip" {
