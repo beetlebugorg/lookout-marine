@@ -140,6 +140,26 @@ public final class Lookout implements AutoCloseable {
     /** True while a zoom ease / fling is running (drive tickAnim). */
     public boolean animating()                   { return h != 0 && nAnimating(h); }
     public void tickAnim(double dtSeconds)       { if (h != 0) nTickAnim(h, dtSeconds); }
+
+    // ---- the frame loop ----
+
+    /** Nothing to advance and something to draw. */
+    public static final int FRAME_RENDER = 0;
+    /** Nothing to draw yet, and something is coming: ask again in waitMs. */
+    public static final int FRAME_WAIT = 1;
+    /** Nothing is moving. Stop the loop; frameKick starts it again. */
+    public static final int FRAME_IDLE = 2;
+
+    /**
+     * One tick, into {verdict, waitMs, building}. The gap since the last tick
+     * is measured in the core and capped there, and the fling and the queued
+     * chart-link answers are advanced with it.
+     */
+    public void frameNext(int[] out)             { if (h != 0) nFrameNext(h, out); }
+
+    /** Start the loop again after a change the shell made itself: a gesture,
+     *  an opened chart, a setting. */
+    public void frameKick()                      { if (h != 0) nFrameKick(h); }
     /** Cycle the S-52 colour scheme: day -> dusk -> night. */
     public void cycleScheme()                    { if (h != 0) nCycleScheme(h); }
 
@@ -346,6 +366,8 @@ public final class Lookout implements AutoCloseable {
     private static native boolean nNeedsRedraw(long h);
     private static native boolean nAnimating(long h);
     private static native void nTickAnim(long h, double dt);
+    private static native void nFrameNext(long h, int[] out);
+    private static native void nFrameKick(long h);
     private static native void nCycleScheme(long h);
     private static native void nReadouts(long h, double[] out);
     private static native void nSetView(long h, double lon, double lat, double zoom, double rotationDeg);

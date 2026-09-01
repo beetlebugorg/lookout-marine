@@ -3249,3 +3249,33 @@ export fn Java_org_beetlebug_lookout_Lookout_nSetStore(env: [*c]j.JNIEnv, cls: j
     const h = fromLong(hl) orelse return;
     lookout_set_store(h.l, storeOf(s));
 }
+
+// ---- the frame loop ---------------------------------------------------------
+
+const CFrame = extern struct {
+    verdict: c_int,
+    wait_ms: c_int,
+    building: c_int,
+};
+
+extern fn lookout_frame_next(h: ?*anyopaque, out: *CFrame) void;
+extern fn lookout_frame_kick(h: ?*anyopaque) void;
+
+/// void nFrameNext(long h, int[] out) -- one tick, into
+/// {verdict, waitMs, building}. The gap since the last tick is measured in the
+/// core and capped there, so an app that was in the background for a minute
+/// does not advance a fling by a minute.
+export fn Java_org_beetlebug_lookout_Lookout_nFrameNext(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, out: j.jintArray) void {
+    _ = cls;
+    var f = CFrame{ .verdict = 2, .wait_ms = 0, .building = 0 };
+    if (fromLong(hl)) |h| lookout_frame_next(h.l, &f);
+    var buf = [3]j.jint{ f.verdict, f.wait_ms, f.building };
+    env_(env).SetIntArrayRegion.?(env, out, 0, 3, &buf);
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nFrameKick(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) void {
+    _ = env;
+    _ = cls;
+    const h = fromLong(hl) orelse return;
+    lookout_frame_kick(h.l);
+}

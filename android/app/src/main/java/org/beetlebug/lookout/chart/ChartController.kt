@@ -319,7 +319,6 @@ class ChartController(private val appContext: Context) {
 
     @Volatile private var lastPushed: Readouts? = null
     private var lastPushNs = 0L
-    private var lastSaveNs = 0L
 
     /**
      * Sample the engine for the HUD. Throttled and change-gated: the frame loop
@@ -381,13 +380,6 @@ class ChartController(private val appContext: Context) {
         access.onMain {
             readouts = r
             rendering = true
-        }
-        // The engine writes the pose down as the mariner moves, and the store
-        // coalesces. This puts it on disk periodically as well: a swipe-away or
-        // a low-memory kill never reaches detach().
-        if (frameTimeNanos - lastSaveNs >= SAVE_INTERVAL_NS) {
-            lastSaveNs = frameTimeNanos
-            Store.flush()
         }
     }
 
@@ -885,6 +877,5 @@ class ChartController(private val appContext: Context) {
         const val SERVICE_RETRY_MS = 30_000L
 
         /** Cheap (an async prefs write), but there is no point doing it often. */
-        const val SAVE_INTERVAL_NS = 3_000_000_000L
     }
 }

@@ -68,7 +68,6 @@ class ChartEngine private constructor() {
      *  close: the add runs with the api lock dropped for its file opens, so
      *  the handle has to outlive it. */
     private var libraryAdd: Thread? = null
-    private var lastFrameNs = 0L
     private var ticking = false
 
     /**
@@ -195,9 +194,7 @@ class ChartEngine private constructor() {
                 return@post
             }
             stopBackgroundTick()
-            lastFrameNs = 0 // a new surface is not a continuation of the old
-            idleFrames = 0
-            idlePolling = false
+            waiting = false
             frameLoopLive = true
             Choreographer.getInstance().removeFrameCallback(frameCallback)
             Choreographer.getInstance().postFrameCallback(frameCallback)
@@ -226,7 +223,8 @@ class ChartEngine private constructor() {
         val done = CountDownLatch(1)
         h.post {
             Choreographer.getInstance().removeFrameCallback(frameCallback)
-            idlePolling = false
+            queue?.removeCallbacks(waitTick)
+            waiting = false
             frameHook = null
             controller?.onSurfaceDetached()
             l.detachSurface()
@@ -259,9 +257,8 @@ class ChartEngine private constructor() {
 
     private val frameCallback = Choreographer.FrameCallback { t -> doFrame(t) }
 
-    /** Quiet frames before the loop stands down. Two, like the Mac shell. */
-    private var idleFrames = 0
-    private var idlePolling = false
+    /** True while a WAIT verdict's delay is posted rather than a frame. */
+    private var waiting = false
 
     /** True while the frame callback is posted. A kick on a LIVE loop only
      *  resets the idle counter: re-posting the callback per gesture event
@@ -278,58 +275,45 @@ class ChartEngine private constructor() {
             frameLoopLive = false
             return
         }
-        var dt = if (lastFrameNs == 0L) 0.0 else (frameTimeNanos - lastFrameNs) / 1e9
-        lastFrameNs = frameTimeNanos
-        if (dt > 0.05) dt = 0.05 // resumed from pause: don't lurch the ease (the reference's cap)
         // Before anything reads the camera: the view's share of this frame.
         frameHook?.onFrame(l, frameTimeNanos)
-        val animating = l.animating()
-        if (animating && dt > 0) l.tickAnim(dt)
-        val busy = animating || l.needsRedraw()
-        if (busy) l.render()
+
+        // THE CORE DECIDES. It measures the gap and caps it, advances the
+        // fling and the queued chart-link answers, writes the pose down as the
+        // mariner moves, and says whether there is a frame to draw. Four
+        // shells had four copies of that.
+        l.frameNext(frame)
+        val verdict = frame[0]
+        if (verdict == Lookout.FRAME_RENDER) l.render()
         // Sample the HUD here rather than on a timer: the readouts describe the
         // frame that was just presented. The controller throttles the push.
         controller?.onFrameRendered(frameTimeNanos)
-        // Idle means idle, and this is the platform it matters most on: a
-        // plotter left on the chart screen used to pace with vsync forever.
-        // After two quiet frames the loop stands down; kick() resumes it on
-        // input, and the idle poll watches for what the engine does on its
-        // own — a plugin drawing — at 4 Hz, only while plugins are up.
-        idleFrames = if (busy || gestureActive) 0 else idleFrames + 1
-        if (idleFrames > 2) {
+
+        // A gesture holds the loop open whatever the core says: the pan stream
+        // is consumed BY the frame loop, and the loop standing down mid-drag
+        // landed the whole drag at the lift.
+        if (verdict == Lookout.FRAME_IDLE && !gestureActive) {
             frameLoopLive = false
-            lastFrameNs = 0L
-            startIdlePoll(l)
+            return
+        }
+        val waitMs = if (gestureActive) 0 else frame[1]
+        if (waitMs > 0) {
+            // Plugin traffic has no gesture behind it, so the core asks for a
+            // slow poll rather than a display tick.
+            waiting = true
+            queue?.postDelayed(waitTick, waitMs.toLong())
             return
         }
         Choreographer.getInstance().postFrameCallback(frameCallback)
     }
 
-    private val idlePoll = object : Runnable {
-        override fun run() {
-            if (!idlePolling) return
-            val l = lookout ?: return
-            if (!l.isAttached) {
-                idlePolling = false
-                return
-            }
-            if (l.animating() || l.needsRedraw()) {
-                idlePolling = false
-                resumeFrames()
-                return
-            }
-            queue?.postDelayed(this, IDLE_POLL_MS)
-        }
+    private val waitTick = Runnable {
+        waiting = false
+        if (frameLoopLive) Choreographer.getInstance().postFrameCallback(frameCallback)
     }
 
-    private fun startIdlePoll(l: Lookout) {
-        // With no plugins there is nothing that draws behind the shell's
-        // back, and every shell mutation kicks — so nothing to poll for.
-        if (!l.pluginsActive()) return
-        if (idlePolling) return
-        idlePolling = true
-        queue?.postDelayed(idlePoll, IDLE_POLL_MS)
-    }
+    /** {verdict, waitMs, building}. Render thread only. */
+    private val frame = IntArray(3)
 
     /** True while a pointer is on the glass. The pan stream is consumed BY
      *  the frame loop (the view's resampler hook), so the loop must not
@@ -347,7 +331,7 @@ class ChartEngine private constructor() {
     fun kick() {
         val h = queue ?: return
         h.post {
-            idlePolling = false
+            lookout?.frameKick()
             resumeFrames()
         }
     }
@@ -357,11 +341,13 @@ class ChartEngine private constructor() {
     private fun resumeFrames() {
         val l = lookout ?: return
         if (!l.isAttached) return
-        idleFrames = 0
-        if (frameLoopLive) return
+        if (frameLoopLive) {
+            // A wait is already posted; letting it fire keeps one callback in
+            // flight rather than two.
+            return
+        }
         frameLoopLive = true
-        lastFrameNs = 0L
-        Choreographer.getInstance().postFrameCallback(frameCallback)
+        if (!waiting) Choreographer.getInstance().postFrameCallback(frameCallback)
     }
 
     // ---- the background visit (render thread, no surface) -------------------
@@ -455,7 +441,6 @@ class ChartEngine private constructor() {
         private const val TAG = "lookout"
         /* The idle watch for plugin-driven redraws: the AIS store coalesces
          * at 2 Hz, so 4 Hz sees every change with one frame of slack. */
-        private const val IDLE_POLL_MS = 250L
 
         /**
          * One engine for the process. Not tied to the Activity: the point of
