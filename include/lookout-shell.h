@@ -264,8 +264,12 @@ const char *lookout_band_name(double denominator);
 /* Parse a position the mariner typed: a decimal pair ("38.98, -76.48") or
  * degrees with hemispheres ("38°58.8'N 076°29.0'W", "38 58 30 N, 76 29 W").
  * Either half may lead in the hemisphere form. Returns 1 and fills *out_lat and
- * *out_lon (either may be NULL), or 0 when the text is not a position. A
- * decimal pair outside ±90 / ±180 is refused. */
+ * *out_lon (either may be NULL), or 0 when the text is not a position.
+ *
+ * The two axes differ, in both forms. A latitude past 90 is refused: the poles
+ * are the ends of the axis. A longitude past 180 is wrapped: it names a real
+ * place, so 181 East arrives as 179 West. A value already at either end of the
+ * longitude range keeps its sign. */
 int lookout_parse_position(const char *text, double *out_lat, double *out_lon);
 
 /* Parse a scale the mariner typed: "25000", "25,000", "1:25000", "25k",

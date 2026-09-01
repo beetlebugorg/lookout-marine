@@ -45,11 +45,21 @@ final class CoordinateParserTests: XCTestCase {
         XCTAssertNil(CoordinateParser.parse("38.98"))
     }
 
-    func testOutOfRangeIsRefused() {
+    /// The poles are the ends of the latitude axis, so there is no 91 degrees
+    /// north to go to.
+    func testALatitudePastThePoleIsRefused() {
         XCTAssertNil(CoordinateParser.parse("91, 0"))
         XCTAssertNil(CoordinateParser.parse("-91, 0"))
-        XCTAssertNil(CoordinateParser.parse("0, 181"))
-        XCTAssertNil(CoordinateParser.parse("0, -181"))
+        XCTAssertNil(CoordinateParser.parse("91°N 0°E"))
+        XCTAssertNotNil(CoordinateParser.parse("90°N 0°E"))
+    }
+
+    /// Longitude repeats every 360 degrees, so 181 east is 179 west. A plotter
+    /// counting past the antimeridian writes it that way.
+    func testALongitudePastTheAntimeridianWraps() {
+        XCTAssertEqual(CoordinateParser.parse("0, 181")?.lon ?? 0, -179, accuracy: 1e-9)
+        XCTAssertEqual(CoordinateParser.parse("0, -181")?.lon ?? 0, 179, accuracy: 1e-9)
+        XCTAssertEqual(CoordinateParser.parse("0°N 181°E")?.lon ?? 0, -179, accuracy: 1e-9)
     }
 
     func testWhatIsNotAPosition() {

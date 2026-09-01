@@ -138,9 +138,28 @@ fn parseDecimalPair(s: []const u8) ?Position {
     const second = fields.next() orelse return null;
     const lat = std.fmt.parseFloat(f64, first) catch return null;
     const lon = std.fmt.parseFloat(f64, second) catch return null;
+    return inRange(lat, lon);
+}
+
+/// A parsed pair as a position, or null when it is not one.
+///
+/// The two axes differ. Latitude ends at the poles, so 91 is not a place and
+/// there is nothing to do with it but refuse it. Longitude is an angle about
+/// the spin axis and repeats every 360 degrees, so 181 East is a place: it is
+/// 179 West, and it arrives from a plotter that counts past the antimeridian.
+/// It is wrapped rather than refused.
+fn inRange(lat: f64, lon: f64) ?Position {
     if (!(lat >= -90 and lat <= 90)) return null;
-    if (!(lon >= -180 and lon <= 180)) return null;
-    return .{ .lat = lat, .lon = lon };
+    if (!std.math.isFinite(lon)) return null;
+    return .{ .lat = lat, .lon = wrapLon(lon) };
+}
+
+/// A longitude into [-180, 180]. Both ends name the antimeridian, so a value
+/// already at either end keeps the sign the mariner typed.
+fn wrapLon(lon: f64) f64 {
+    if (lon >= -180 and lon <= 180) return lon;
+    const shifted = @mod(lon + 180, 360);
+    return if (shifted <= 0) shifted + 180 else shifted - 180;
 }
 
 // The marks that end each part of a hemisphere position. Whitespace also ends
@@ -165,8 +184,9 @@ fn parseHemispheres(s: []const u8) ?Position {
         if (m.hemi == 'N' or m.hemi == 'S') lat = value else lon = value;
         i = m.end;
     }
-    if (lat != null and lon != null) return .{ .lat = lat.?, .lon = lon.? };
-    return null;
+    const la = lat orelse return null;
+    const lo = lon orelse return null;
+    return inRange(la, lo);
 }
 
 const Part = struct { deg: f64, min: f64, sec: f64, hemi: u8, end: usize };
@@ -446,11 +466,22 @@ test "one half of a position is not a position" {
     try t.expect(parsePosition("38.98") == null);
 }
 
-test "an out of range pair is refused" {
+test "a latitude past the pole is refused" {
     try t.expect(parsePosition("91, 0") == null);
     try t.expect(parsePosition("-91, 0") == null);
-    try t.expect(parsePosition("0, 181") == null);
-    try t.expect(parsePosition("0, -181") == null);
+    // The hemisphere form has the same rule.
+    try t.expect(parsePosition("91\u{00B0}N 0\u{00B0}E") == null);
+    try t.expect(parsePosition("90\u{00B0}N 0\u{00B0}E") != null);
+}
+
+test "a longitude past the antimeridian wraps" {
+    // 181 East is 179 West. Longitude repeats every 360 degrees.
+    try t.expectApproxEqAbs(@as(f64, -179), parsePosition("0, 181").?.lon, 1e-9);
+    try t.expectApproxEqAbs(@as(f64, 179), parsePosition("0, -181").?.lon, 1e-9);
+    try t.expectApproxEqAbs(@as(f64, -179), parsePosition("0\u{00B0}N 181\u{00B0}E").?.lon, 1e-9);
+    // The antimeridian itself keeps its sign.
+    try t.expectApproxEqAbs(@as(f64, 180), parsePosition("0, 180").?.lon, 1e-9);
+    try t.expectApproxEqAbs(@as(f64, -180), parsePosition("0, -180").?.lon, 1e-9);
 }
 
 test "what is not a position" {
