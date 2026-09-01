@@ -18,7 +18,7 @@ import org.beetlebug.lookout.engine.LookoutView
 import org.beetlebug.lookout.pick.AuxFile
 import org.beetlebug.lookout.pick.OverlayInfo
 import org.beetlebug.lookout.pick.OverlayPin
-import org.beetlebug.lookout.pick.PickFeature
+import org.beetlebug.lookout.pick.PickDecoded
 import org.beetlebug.lookout.plugins.AlertController
 import org.beetlebug.lookout.plugins.PluginSettingsController
 import org.beetlebug.lookout.plugins.PluginAlert
@@ -108,7 +108,7 @@ class ChartController(private val appContext: Context) {
     }
 
     /** Result of the last tap-to-identify; empty hides the report. */
-    var identify by mutableStateOf<List<PickFeature>>(emptyList())
+    var identify by mutableStateOf<List<PickDecoded>>(emptyList())
         private set
 
     /**
@@ -760,18 +760,7 @@ class ChartController(private val appContext: Context) {
         postedPin = null
         postedPoint = null
         l.screenToGeo(xPts, yPts, geoBuf)
-        val flat = l.pick(geoBuf[0], geoBuf[1])
-        val found = if (flat == null || flat.isEmpty()) {
-            emptyList()
-        } else {
-            (flat.indices step 3).map { i ->
-                PickFeature(
-                    cls = flat[i],
-                    s57 = flat.getOrElse(i + 1) { "" },
-                    chart = flat.getOrElse(i + 2) { "" },
-                )
-            }
-        }
+        val found = PickDecoded.read(l, geoBuf[0], geoBuf[1])
         val pose = lastPushed
         access.onMain {
             pinned = null

@@ -257,10 +257,13 @@ public final class Lookout implements AutoCloseable {
     // ---- pick --------------------------------------------------------------
 
     /**
-     * S-52 cursor pick at a geographic point. Returns flat (class, s57, chart)
-     * triples — one per feature under the point — or null on failure.
+     * S-52 cursor pick at a geographic point: the features under it, best
+     * first, each as the page the engine composed. Eleven strings per feature,
+     * then its notes, its report rows and its source rows. Null on failure.
      */
-    public String[] pick(double lon, double lat) { return h == 0 ? null : nPick(h, lon, lat); }
+    public String[] pickRead(double lon, double lat) {
+        return h == 0 ? null : nPickRead(h, lon, lat);
+    }
 
     private static native long nOpen(String chartPath, Surface surface,
                                      int widthPx, int heightPx,
@@ -307,7 +310,7 @@ public final class Lookout implements AutoCloseable {
     private static native void nGetMariner(long h, double[] out);
     private static native String nGetMarinerDate(long h);
     private static native void nSetMariner(long h, double[] vals, String dateView);
-    private static native String[] nPick(long h, double lon, double lat);
+    private static native String[] nPickRead(long h, double lon, double lat);
 
     // ---- raster charts ---------------------------------------------------
     //

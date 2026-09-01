@@ -1,136 +1,127 @@
 package org.beetlebug.lookout.pick
 
-
-import org.json.JSONArray
-import org.json.JSONObject
+import org.beetlebug.lookout.Lookout
 
 /**
  * What one pick result shows.
  *
- * The ENGINE composes the report. The core emits {"report":…,"s57":…} per
- * feature, which is the decoded page beside the raw payload, and this parses
- * it. Nothing here decides what a mariner reads. tile57_s57_report does that
- * once, for every shell.
+ * The ENGINE composes the report. lookout_picks_read hands the composed page
+ * over beside the payload the cell states, and this walks it. Nothing here
+ * decides what a mariner reads: tile57_s57_report does that once, for every
+ * shell.
  */
-class PickDecoded(feature: PickFeature) {
-
-    /** One row of the engine's report. */
+data class PickDecoded(
+    /** The S-57 class and the cell, as the engine reported them. */
+    val cls: String,
+    val chart: String,
+    val title: String,
+    val subtitle: String?,
+    val chip: String,
+    val notes: List<String>,
+    val reportRows: List<ReportRow>,
+    val footnote: String,
+    val empty: EmptyKind?,
+    /** The payload as the cell states it, for the fold and the clipboard. */
+    val rawRows: List<ReportRow>,
+    /** The same payload in metres, for the clipboard. */
+    val raw: String,
+) {
+    /** One row of the engine's report, or one of the source fold. */
     data class ReportRow(
         val label: String,
         val value: String,
         val depth: Int,
-        val file: Boolean,
-        val picture: Boolean,
+        val file: Boolean = false,
+        val picture: Boolean = false,
     )
 
     /** Why the body has nothing to read, when it does not. */
     enum class EmptyKind { NO_ATTRIBUTES, SOURCE_ONLY }
 
-    val title: String
-    val subtitle: String?
-    val chip: String
-    val notes: List<String>
-    val reportRows: List<ReportRow>
-    val footnote: String
-    val empty: EmptyKind?
+    /**
+     * The report as plain text for the clipboard. It uses the source fold, so a
+     * chart problem is reported in the cell's own words.
+     */
+    val plainText: String
+        get() {
+            val sb = StringBuilder("$cls  $chart\n")
+            for (row in rawRows) {
+                val indent = "  ".repeat(row.depth)
+                if (row.value.isEmpty()) sb.append("$indent${row.label}:\n")
+                else sb.append("$indent${row.label}: ${row.value}\n")
+            }
+            return sb.toString()
+        }
 
-    /** The payload as the cell states it, for the fold and the clipboard. */
-    val rawRows: List<S57.Row>
+    companion object {
+        /** The features under a point, best first. */
+        fun read(l: Lookout, lon: Double, lat: Double): List<PickDecoded> =
+            decode(l.pickRead(lon, lat))
 
-    init {
-        val root = parseObject(feature.s57)
-        val report = root?.optJSONObject("report")
-        // A payload without the envelope is a raw object. That is the core's
-        // fallback when a compose fails. The fold still shows everything.
-        val raw: Any? = if (report != null) root.opt("s57") else root
+        /**
+         * The flat array the native hands back. `internal` so the suite drives
+         * the same walk with no chart open.
+         */
+        internal fun decode(flat: Array<String>?): List<PickDecoded> {
+            if (flat == null) return emptyList()
+            val out = ArrayList<PickDecoded>()
+            var k = 0
+            while (k + HEADER <= flat.size) {
+                val noteCount = flat[k + 8].toIntOrNull() ?: 0
+                val rowCount = flat[k + 9].toIntOrNull() ?: 0
+                val sourceCount = flat[k + 10].toIntOrNull() ?: 0
+                var at = k + HEADER
+                val body = noteCount + (rowCount + sourceCount) * ROW
+                if (at + body > flat.size) break
 
-        title = report?.optStringOrNull("title") ?: feature.cls
-        subtitle = report?.optStringOrNull("subtitle")
-        chip = report?.optStringOrNull("chip") ?: feature.cls
-        notes = report?.optJSONArray("notes")?.let { arr ->
-            (0 until arr.length()).mapNotNull { arr.optString(it).ifEmpty { null } }
-        } ?: emptyList()
-        reportRows = report?.optJSONArray("rows")?.let { arr ->
-            (0 until arr.length()).mapNotNull { i ->
-                val r = arr.optJSONObject(i) ?: return@mapNotNull null
+                val notes = ArrayList<String>(noteCount)
+                for (n in 0 until noteCount) notes.add(flat[at + n])
+                at += noteCount
+
+                val rows = rowsAt(flat, at, rowCount)
+                at += rowCount * ROW
+                val source = rowsAt(flat, at, sourceCount)
+                at += sourceCount * ROW
+
+                val cls = flat[k]
+                out.add(PickDecoded(
+                    cls = cls,
+                    chart = flat[k + 1],
+                    title = flat[k + 2].ifEmpty { cls },
+                    subtitle = flat[k + 3].ifEmpty { null },
+                    chip = flat[k + 4].ifEmpty { cls },
+                    notes = notes,
+                    reportRows = rows,
+                    footnote = flat[k + 5].ifEmpty { flat[k + 1] },
+                    empty = emptyKind(flat[k + 6].toIntOrNull() ?: 0),
+                    rawRows = source,
+                    raw = flat[k + 7],
+                ))
+                k = at
+            }
+            return out
+        }
+
+        private fun rowsAt(flat: Array<String>, at: Int, count: Int): List<ReportRow> =
+            (0 until count).map { r ->
+                val i = at + r * ROW
                 ReportRow(
-                    label = r.optString("label"),
-                    value = r.optString("value"),
-                    depth = r.optInt("depth", 0),
-                    file = r.optBoolean("file", false),
-                    picture = r.optBoolean("picture", false),
+                    label = flat[i],
+                    value = flat[i + 1],
+                    depth = flat[i + 2].toIntOrNull() ?: 0,
+                    file = flat[i + 3] != "0",
+                    picture = flat[i + 4] != "0",
                 )
             }
-        } ?: emptyList()
-        footnote = report?.optStringOrNull("footnote") ?: feature.chart
-        empty = when (report?.optStringOrNull("empty")) {
-            "none" -> EmptyKind.NO_ATTRIBUTES
-            "source" -> EmptyKind.SOURCE_ONLY
+
+        /** lookout_pick_empty. 0 is a body with something to read. */
+        private fun emptyKind(empty: Int): EmptyKind? = when (empty) {
+            1 -> EmptyKind.NO_ATTRIBUTES
+            2 -> EmptyKind.SOURCE_ONLY
             else -> null
         }
-        rawRows = S57.rows(raw)
-    }
 
-    private companion object {
-        fun parseObject(json: String): JSONObject? =
-            if (json.isEmpty()) null else runCatching { JSONObject(json) }.getOrNull()
-
-        /** optString returns "" for a missing key; a caller wants null. */
-        fun JSONObject.optStringOrNull(key: String): String? =
-            if (isNull(key)) null else optString(key).ifEmpty { null }
-    }
-}
-
-/** The raw S-57 payload, flattened for the fold and the clipboard. */
-object S57 {
-
-    data class Row(val name: String, val value: String, val depth: Int)
-
-    /** Rows from an already-parsed payload, which is the envelope's raw half. */
-    fun rows(any: Any?): List<Row> {
-        if (any == null || any === JSONObject.NULL) return emptyList()
-        val out = mutableListOf<Row>()
-        append(any, null, 0, out)
-        return out
-    }
-
-    private fun append(node: Any?, name: String?, depth: Int, out: MutableList<Row>) {
-        when (node) {
-            is JSONObject -> {
-                if (name != null) out.add(Row(name, "", depth))
-                for (key in node.keys().asSequence().sorted()) {
-                    append(node.opt(key), key, if (name == null) depth else depth + 1, out)
-                }
-            }
-            is JSONArray -> {
-                if (name != null) out.add(Row(name, "", depth))
-                for (i in 0 until node.length()) append(node.opt(i), null, depth + 1, out)
-            }
-            else -> out.add(Row(name ?: "", text(node), depth))
-        }
-    }
-
-    private fun text(node: Any?): String = when (node) {
-        null, JSONObject.NULL -> ""
-        is String -> node
-        is Double -> if (node == node.toLong().toDouble()) node.toLong().toString() else node.toString()
-        else -> node.toString()
-    }
-
-    /**
-     * The report as plain text for the clipboard. It uses the raw payload, out
-     * of the envelope when there is one, so a chart problem is reported in the
-     * cell's own words.
-     */
-    fun plainText(feature: PickFeature): String {
-        val root = runCatching { JSONObject(feature.s57) }.getOrNull()
-        val raw: Any? = if (root?.opt("report") != null) root.opt("s57") else root
-        val sb = StringBuilder("${feature.cls}  ${feature.chart}\n")
-        for (row in rows(raw)) {
-            val indent = "  ".repeat(row.depth)
-            if (row.value.isEmpty()) sb.append("$indent${row.name}:\n")
-            else sb.append("$indent${row.name}: ${row.value}\n")
-        }
-        return sb.toString()
+        private const val HEADER = 11
+        private const val ROW = 5
     }
 }

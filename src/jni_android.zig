@@ -2674,3 +2674,98 @@ export fn Java_org_beetlebug_lookout_Lookout_nTableRows(env: [*c]j.JNIEnv, cls: 
     }
     return out.toArray(env);
 }
+
+// ---- the pick report, read typed --------------------------------------------
+
+const c_picks = opaque {};
+const c_feature = opaque {};
+const c_pick_row = opaque {};
+
+extern fn lookout_picks_read(h: ?*anyopaque, lon: f64, lat: f64) ?*c_picks;
+extern fn lookout_picks_free(p: ?*c_picks) void;
+extern fn lookout_picks_all(p: ?*const c_picks, out_n: *usize) ?[*]const ?*const c_feature;
+extern fn lookout_pick_notes(f: ?*const c_feature, out_n: *usize) ?[*]const ?[*:0]const u8;
+extern fn lookout_pick_rows(f: ?*const c_feature, out_n: *usize) ?[*]const ?*const c_pick_row;
+extern fn lookout_pick_source(f: ?*const c_feature, out_n: *usize) ?[*]const ?*const c_pick_row;
+
+const CPickRow = extern struct {
+    label: ?[*:0]const u8,
+    value: ?[*:0]const u8,
+    depth: c_int,
+    file: c_int,
+    picture: c_int,
+};
+
+const CFeature = extern struct {
+    cls: ?[*:0]const u8,
+    chart: ?[*:0]const u8,
+    title: ?[*:0]const u8,
+    subtitle: ?[*:0]const u8,
+    chip: ?[*:0]const u8,
+    footnote: ?[*:0]const u8,
+    empty: c_int,
+    raw: ?[*:0]const u8,
+};
+
+fn pickRows(out: *Strings, rows: []const ?*const c_pick_row) void {
+    for (rows) |rp| {
+        const r: *const CPickRow = @ptrCast(@alignCast(rp orelse continue));
+        out.str(r.label);
+        out.str(r.value);
+        out.print("{d}", .{r.depth});
+        out.print("{d}", .{r.file});
+        out.print("{d}", .{r.picture});
+    }
+}
+
+/// String[] nPickRead(long h, double lon, double lat) -- the features under a
+/// point, best first, each as the page the engine composed. Eleven strings per
+/// feature, then its notes, its report rows and its source rows:
+///
+///   cls, chart, title, subtitle, chip, footnote, empty, raw,
+///   noteCount, rowCount, sourceCount
+///   then noteCount strings
+///   then rowCount times:   label, value, depth, file, picture
+///   then sourceCount times: the same five
+export fn Java_org_beetlebug_lookout_Lookout_nPickRead(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, lon: j.jdouble, lat: j.jdouble) j.jobjectArray {
+    _ = cls;
+    const h = fromLong(hl) orelse return null;
+    const read = lookout_picks_read(h.l, lon, lat) orelse return null;
+    defer lookout_picks_free(read);
+
+    var n: usize = 0;
+    const all = lookout_picks_all(read, &n) orelse return null;
+
+    var out = Strings.init();
+    defer out.deinit();
+
+    for (all[0..n]) |fp| {
+        const f: *const CFeature = @ptrCast(@alignCast(fp orelse continue));
+        var notes_n: usize = 0;
+        var rows_n: usize = 0;
+        var src_n: usize = 0;
+        const notes = lookout_pick_notes(@ptrCast(f), &notes_n);
+        const rows = lookout_pick_rows(@ptrCast(f), &rows_n);
+        const src = lookout_pick_source(@ptrCast(f), &src_n);
+        if (notes == null) notes_n = 0;
+        if (rows == null) rows_n = 0;
+        if (src == null) src_n = 0;
+
+        out.str(f.cls);
+        out.str(f.chart);
+        out.str(f.title);
+        out.str(f.subtitle);
+        out.str(f.chip);
+        out.str(f.footnote);
+        out.print("{d}", .{f.empty});
+        out.str(f.raw);
+        out.print("{d}", .{notes_n});
+        out.print("{d}", .{rows_n});
+        out.print("{d}", .{src_n});
+
+        if (notes) |p| for (p[0..notes_n]) |note| out.str(note);
+        if (rows) |p| pickRows(&out, p[0..rows_n]);
+        if (src) |p| pickRows(&out, p[0..src_n]);
+    }
+    return out.toArray(env);
+}
