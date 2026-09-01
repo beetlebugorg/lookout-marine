@@ -13,8 +13,9 @@
 //!
 //! WRITES COALESCE. A pose saved every three seconds must not fsync a file
 //! every three seconds, so a write marks the store dirty and the file is
-//! written at the next flush, at close, or when the oldest unwritten change
-//! reaches `coalesce_ms`.
+//! written at the next flush, at close, or once `tick` finds the oldest
+//! unwritten change older than `coalesce_ms`. The engine's frame loop ticks
+//! it, so a store written once at startup still lands.
 //!
 //! ONE LOCK over the file. Windows documents the interleave two writers
 //! produce: both read the file, both write it, and the second write loses the
@@ -246,6 +247,17 @@ pub const Store = struct {
             self.markDirtyLocked();
             return;
         }
+    }
+
+    /// Write the file if the oldest unwritten change has waited long enough.
+    /// A store written once and never again would otherwise sit dirty for the
+    /// life of the process, so something has to ask.
+    pub fn tick(self: *Store) void {
+        self.mu.lock();
+        defer self.mu.unlock();
+        const since = self.dirty_at orelse return;
+        if (clock.wallMs() - since < coalesce_ms) return;
+        self.flushLocked();
     }
 
     /// Write the file now, whatever the coalesce window says. Does nothing
@@ -781,4 +793,30 @@ test "a write coalesces, and the file lands at the flush" {
 
     // A flush with nothing waiting does not rewrite the file.
     s.flush();
+}
+
+test "a store written once still reaches the disk" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const s = try f.open();
+    defer s.close();
+
+    s.setNumber(group_view, "zoom", 15);
+    // Nothing else is written, so without a tick the change waits forever.
+    try t.expectError(error.FileNotFound, f.read());
+    s.tick();
+    // The window has not passed yet.
+    try t.expectError(error.FileNotFound, f.read());
+
+    // Once it has, the tick lands it.
+    s.mu.lock();
+    s.dirty_at = clock.wallMs() - coalesce_ms - 1;
+    s.mu.unlock();
+    s.tick();
+    const text = try f.read();
+    defer t.allocator.free(text);
+    try t.expectEqualStrings("[view]\nzoom=15\n", text);
+
+    // And a tick with nothing waiting does nothing.
+    s.tick();
 }

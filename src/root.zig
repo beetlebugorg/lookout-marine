@@ -2326,6 +2326,10 @@ pub const Lookout = struct {
         }
         // A resolve's answer stalls on the first one without this.
         self.links.adopt();
+        // The store coalesces its writes, so something has to ask it whether
+        // the window has passed. A settings file written once at startup and
+        // never again would otherwise never reach the disk.
+        if (self.store) |s| s.tick();
 
         const step = frame_rules.decide(.{
             .animating = self.cam.animating(),
@@ -3521,6 +3525,9 @@ test {
     _ = craster;
     // The baked license manifest, whose tests check what the shells decode.
     _ = @import("licenses.zig");
+    // The bake job, which needs the engine's headers and so cannot be a test
+    // root of its own.
+    _ = @import("bakejob.zig");
 }
 
 test "camera roundtrip" {
