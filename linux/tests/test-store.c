@@ -1,30 +1,12 @@
-/* test-store.c — the settings keyfile behind every persisted choice.
+/* test-store.c — what the shell keeps across launches.
  *
- * The store writes $XDG_CONFIG_HOME/lookout-marine/settings.ini, so the suite
- * points XDG_CONFIG_HOME at a fresh directory before GLib caches the path.
- * Each test then reads back what it wrote, the way a relaunch would.
+ * The core owns the file and its format; what is checked here is the shell's
+ * own reading of it, and the one-time read of a settings.ini a mariner already
+ * has. The store lands under $XDG_CONFIG_HOME, so the suite points that at a
+ * fresh directory before GLib caches the path.
  */
 
 #include "model/store.h"
-
-static void
-test_view_roundtrip (void)
-{
-  lookout_view missing;
-  /* Nothing saved yet reads as nothing, not as a zeroed pose. */
-  g_assert_false (lk_store_load_view (&missing));
-
-  lookout_view pose = { .lon = -76.4767, .lat = 38.9763, .zoom = 14.5,
-                        .rotation_deg = 30.0 };
-  lk_store_save_view (&pose);
-
-  lookout_view loaded;
-  g_assert_true (lk_store_load_view (&loaded));
-  g_assert_cmpfloat (loaded.lon, ==, pose.lon);
-  g_assert_cmpfloat (loaded.lat, ==, pose.lat);
-  g_assert_cmpfloat (loaded.zoom, ==, pose.zoom);
-  g_assert_cmpfloat (loaded.rotation_deg, ==, pose.rotation_deg);
-}
 
 static void
 test_recents_order_and_cap (void)
@@ -165,7 +147,6 @@ main (int argc, char *argv[])
 
   g_test_init (&argc, &argv, NULL);
 
-  g_test_add_func ("/store/view-roundtrip", test_view_roundtrip);
   g_test_add_func ("/store/recents", test_recents_order_and_cap);
   g_test_add_func ("/store/raster", test_raster_roundtrip);
   g_test_add_func ("/store/raster-all", test_raster_all_roundtrip);

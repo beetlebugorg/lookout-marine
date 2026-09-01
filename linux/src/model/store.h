@@ -1,7 +1,19 @@
-/* model/store.h — persisted preferences (camera pose, recents, mariner settings)
- * in one GKeyFile at $XDG_CONFIG_HOME/lookout-marine/settings.ini. Mariner
- * state is stored field by field, not raw struct bytes (the layout is an engine
- * ABI detail); missing keys leave engine defaults in place. */
+/* model/store.h — what the shell keeps across launches.
+ *
+ * The core owns the file: one JSON object of groups at
+ * $XDG_CONFIG_HOME/lookout-marine/settings.json, with coalesced writes, one
+ * lock over the file, and a set-aside copy when a file will not parse (see
+ * lookout-shell.h). The group and key names are the core's, so a setting means
+ * the same thing on every shell.
+ *
+ * THE CAMERA POSE AND THE MARINER SETTINGS ARE NOT HERE. The engine keeps both
+ * in the same store, on its own cadence, once lk_store_handle() is passed to
+ * lookout_set_store. This holds what the SHELL alone knows about: the recents,
+ * the chart sets, the raster charts, the chart links and the plugin configs.
+ *
+ * A mariner arriving from a build that wrote settings.ini keeps their settings:
+ * the ini is read once, into the same groups and keys, and left on disk.
+ */
 #pragma once
 
 #include <glib.h>
@@ -9,9 +21,16 @@
 
 G_BEGIN_DECLS
 
-/* Camera pose. TRUE when a pose had been saved. */
-gboolean lk_store_load_view (lookout_view *out);
-void     lk_store_save_view (const lookout_view *view);
+/* The store itself, for lookout_set_store. Opened on the first call and kept
+ * for the process. Never NULL. */
+lookout_store *lk_store_handle (void);
+
+/* Write anything waiting and close. Call it once, as the app shuts down. */
+void lk_store_shutdown (void);
+
+/* TRUE when a camera pose has been saved. The ENGINE restores it; the shell
+ * asks only because the answer decides whether it wants an opening view. */
+gboolean lk_store_has_saved_view (void);
 
 /* Recents, most recent first, capped. What the USER opened (folder or cell). */
 char **lk_store_load_recents (void);
@@ -37,8 +56,9 @@ void   lk_store_save_raster_off (const char *const *paths);
 char   **lk_store_load_raster_hidden (void);
 void     lk_store_save_raster_hidden (const char *const *names);
 
-/* Write the installed list, the off list, and the hidden list in one pass, so
- * a single raster change rewrites and fsyncs the file once, not three times. */
+/* Write the installed list, the off list, and the hidden list in one pass. The
+ * store coalesces writes, so this is one call rather than one file pass, and it
+ * stays because the three belong to one change. */
 void     lk_store_save_raster_all (const char *const *paths,
                                    const char *const *off,
                                    const char *const *hidden);
@@ -65,11 +85,6 @@ char *lk_store_load_chart_links (void);
 void  lk_store_save_chart_links (const char *json);
 char *lk_store_load_chart_link_active (void);
 void  lk_store_save_chart_link_active (const char *url);
-
-/* Mariner settings. Load overlays onto a struct already holding engine
- * defaults, so unknown/engine-only fields are left untouched. */
-void lk_store_save_mariner (const tile57_mariner *mariner);
-void lk_store_apply_saved_mariner (tile57_mariner *mariner);
 
 /* Plugin settings, kept as the config object each plugin was last handed —
  * `{"cpa_limit":926,"cpa_alarm":true,"connections":[…]}` — one string per

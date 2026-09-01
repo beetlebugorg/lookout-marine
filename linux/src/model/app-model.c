@@ -709,8 +709,6 @@ lk_app_model_cycle_scheme (LkAppModel *self)
     return;
 
   lk_chart_controller_cycle_scheme (self->controller);
-  tile57_mariner mariner = lk_chart_controller_get_mariner (self->controller);
-  lk_store_save_mariner (&mariner);
 }
 
 void
@@ -724,7 +722,6 @@ lk_app_model_set_scheme (LkAppModel *self, int scheme)
   tile57_mariner mariner = lk_chart_controller_get_mariner (self->controller);
   mariner.scheme = (tile57_scheme) scheme;
   lk_chart_controller_set_mariner (self->controller, mariner);
-  lk_store_save_mariner (&mariner);
 }
 
 void

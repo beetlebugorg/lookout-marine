@@ -1,98 +1,230 @@
 #include "model/store.h"
 
-#include <errno.h>
-#include <stdio.h>
 #include <string.h>
-
-#define LK_GROUP_VIEW    "view"
-#define LK_GROUP_RECENTS "recents"
-#define LK_GROUP_RASTER  "raster"
-#define LK_GROUP_MARINER "mariner.v1"
-#define LK_GROUP_PLUGINS "plugins.v1"
-#define LK_GROUP_CHARTLINKS "chartlinks"
-#define LK_GROUP_CHARTSETS "chartsets"
 
 #define LK_MAX_RECENTS 10
 
+/* Whether a library has ever been saved. The core's list setter clears a key
+ * given an empty list, so an emptied library and one that was never saved read
+ * the same without this. It goes when lookout_chart_sets owns the list. */
+#define LK_KEY_SETS_SAVED "saved"
+
+static lookout_store *lk_store;
+
 static char *
-lk_store_path (void)
+lk_store_dir (void)
 {
-  return g_build_filename (g_get_user_config_dir (), "lookout-marine", "settings.ini", NULL);
+  return g_build_filename (g_get_user_config_dir (), "lookout-marine", NULL);
 }
 
-/* The whole file, or an empty keyfile when there isn't one yet. Never NULL.
- *
- * A file that EXISTS and will not parse is set aside as settings.ini.broken
- * before the empty keyfile takes its place. The next flush overwrites the
- * live file either way; the copy is what keeps a mariner's library and
- * settings recoverable after the damage, and the warning says where it is. */
-static GKeyFile *
-lk_store_load (void)
-{
-  GKeyFile *keyfile = g_key_file_new ();
-  g_autofree char *path = lk_store_path ();
-  g_autoptr (GError) error = NULL;
+static void lk_store_import_ini (const char *dir);
 
-  if (!g_key_file_load_from_file (keyfile, path, G_KEY_FILE_KEEP_COMMENTS, &error) &&
-      !g_error_matches (error, G_FILE_ERROR, G_FILE_ERROR_NOENT))
+lookout_store *
+lk_store_handle (void)
+{
+  if (lk_store == NULL)
     {
-      g_autofree char *broken = g_strconcat (path, ".broken", NULL);
-      if (rename (path, broken) == 0)
-        g_warning ("settings.ini would not parse (%s); set aside as %s",
-                   error->message, broken);
-      else
-        g_warning ("settings.ini would not parse (%s) and could not be set aside: %s",
-                   error->message, g_strerror (errno));
+      g_autofree char *dir = lk_store_dir ();
+
+      lk_store = lookout_store_open (dir);
+      if (lk_store == NULL)
+        g_error ("the settings store could not be opened");
+      lk_store_import_ini (dir);
     }
-  return keyfile;
-}
-
-static void
-lk_store_flush (GKeyFile *keyfile)
-{
-  g_autofree char *path = lk_store_path ();
-  g_autofree char *dir = g_path_get_dirname (path);
-  g_autoptr (GError) error = NULL;
-
-  if (g_mkdir_with_parents (dir, 0700) != 0)
-    {
-      g_warning ("couldn't create %s: %s", dir, g_strerror (errno));
-      return;
-    }
-
-  if (!g_key_file_save_to_file (keyfile, path, &error))
-    g_warning ("couldn't save %s: %s", path, error->message);
-}
-
-/* ---- camera pose -------------------------------------------------------- */
-
-gboolean
-lk_store_load_view (lookout_view *out)
-{
-  g_return_val_if_fail (out != NULL, FALSE);
-
-  g_autoptr (GKeyFile) keyfile = lk_store_load ();
-  if (!g_key_file_has_key (keyfile, LK_GROUP_VIEW, "lon", NULL))
-    return FALSE;
-
-  out->lon = g_key_file_get_double (keyfile, LK_GROUP_VIEW, "lon", NULL);
-  out->lat = g_key_file_get_double (keyfile, LK_GROUP_VIEW, "lat", NULL);
-  out->zoom = g_key_file_get_double (keyfile, LK_GROUP_VIEW, "zoom", NULL);
-  out->rotation_deg = g_key_file_get_double (keyfile, LK_GROUP_VIEW, "rotation_deg", NULL);
-  return TRUE;
+  return lk_store;
 }
 
 void
-lk_store_save_view (const lookout_view *view)
+lk_store_shutdown (void)
 {
-  g_return_if_fail (view != NULL);
+  if (lk_store != NULL)
+    lookout_store_close (lk_store);
+  lk_store = NULL;
+}
 
-  g_autoptr (GKeyFile) keyfile = lk_store_load ();
-  g_key_file_set_double (keyfile, LK_GROUP_VIEW, "lon", view->lon);
-  g_key_file_set_double (keyfile, LK_GROUP_VIEW, "lat", view->lat);
-  g_key_file_set_double (keyfile, LK_GROUP_VIEW, "zoom", view->zoom);
-  g_key_file_set_double (keyfile, LK_GROUP_VIEW, "rotation_deg", view->rotation_deg);
-  lk_store_flush (keyfile);
+/* ---- the one-time read of settings.ini ----------------------------------- */
+
+/* Builds before the core owned the file wrote a GKeyFile at settings.ini, in
+ * these same groups and under these same key names. It is read once, into the
+ * store, and left on disk: a mariner who moves back to such a build finds their
+ * settings where that build left them.
+ *
+ * `view/imported` marks it done. The engine writes the rest of that group, and
+ * the apple shell stamps its own one-time copy the same way. */
+static void
+lk_import_list (GKeyFile *ini, const char *group, const char *key)
+{
+  g_auto (GStrv) list = g_key_file_get_string_list (ini, group, key, NULL, NULL);
+
+  if (list == NULL)
+    return;
+  lookout_store_set_list (lk_store, group, key, (const char *const *) list,
+                          g_strv_length (list));
+}
+
+static void
+lk_import_text (GKeyFile *ini, const char *group, const char *key)
+{
+  g_autofree char *value = g_key_file_get_string (ini, group, key, NULL);
+
+  if (value != NULL && value[0] != '\0')
+    lookout_store_set_text (lk_store, group, key, value);
+}
+
+static void
+lk_import_number (GKeyFile *ini, const char *group, const char *key)
+{
+  g_autoptr (GError) error = NULL;
+  double value = g_key_file_get_double (ini, group, key, &error);
+
+  if (error == NULL)
+    lookout_store_set_number (lk_store, group, key, value);
+}
+
+static void
+lk_import_flag (GKeyFile *ini, const char *group, const char *key)
+{
+  g_autoptr (GError) error = NULL;
+  gboolean value = g_key_file_get_boolean (ini, group, key, &error);
+
+  if (error == NULL)
+    lookout_store_set_flag (lk_store, group, key, value);
+}
+
+/* Every key of a group, as text. This is how the plugin configs cross: one
+ * config object per plugin id, under whatever ids that build had saved. */
+static void
+lk_import_group_text (GKeyFile *ini, const char *group)
+{
+  g_auto (GStrv) keys = g_key_file_get_keys (ini, group, NULL, NULL);
+
+  for (guint i = 0; keys != NULL && keys[i] != NULL; i++)
+    lk_import_text (ini, group, keys[i]);
+}
+
+static void
+lk_store_import_ini (const char *dir)
+{
+  if (lookout_store_flag (lk_store, LOOKOUT_STORE_VIEW, "imported", 0))
+    return;
+
+  g_autofree char *path = g_build_filename (dir, "settings.ini", NULL);
+  g_autoptr (GKeyFile) ini = g_key_file_new ();
+  g_autoptr (GError) error = NULL;
+
+  if (!g_key_file_load_from_file (ini, path, G_KEY_FILE_NONE, &error))
+    {
+      /* No ini is the ordinary case: a new install, or one that has already
+       * been read. One that will not parse says so and is left alone. */
+      if (!g_error_matches (error, G_FILE_ERROR, G_FILE_ERROR_NOENT))
+        g_warning ("settings.ini would not parse (%s); starting fresh", error->message);
+      lookout_store_set_flag (lk_store, LOOKOUT_STORE_VIEW, "imported", 1);
+      return;
+    }
+
+  static const char *const view_keys[] = { "lon", "lat", "zoom", "rotation_deg" };
+  for (gsize i = 0; i < G_N_ELEMENTS (view_keys); i++)
+    lk_import_number (ini, LOOKOUT_STORE_VIEW, view_keys[i]);
+
+  lk_import_list (ini, LOOKOUT_STORE_RECENTS, "paths");
+
+  static const char *const raster_lists[] = { "paths", "off", "hidden" };
+  for (gsize i = 0; i < G_N_ELEMENTS (raster_lists); i++)
+    lk_import_list (ini, LOOKOUT_STORE_RASTER, raster_lists[i]);
+  lk_import_flag (ini, LOOKOUT_STORE_RASTER, "chart_hidden");
+
+  if (g_key_file_has_key (ini, LOOKOUT_STORE_CHARTSETS, "paths", NULL))
+    {
+      lk_import_list (ini, LOOKOUT_STORE_CHARTSETS, "paths");
+      lookout_store_set_flag (lk_store, LOOKOUT_STORE_CHARTSETS, LK_KEY_SETS_SAVED, 1);
+    }
+  lk_import_list (ini, LOOKOUT_STORE_CHARTSETS, "off");
+
+  lk_import_text (ini, LOOKOUT_STORE_CHARTLINKS, "links");
+  lk_import_text (ini, LOOKOUT_STORE_CHARTLINKS, "active");
+
+  /* The mariner settings and the plugin configs cross as they were written:
+   * the engine reads the first group back field by field, and a plugin config
+   * is one object per id whatever keys that build had in it. */
+  static const char *const mariner_flags[] = {
+    "four_shade_water", "display_base", "display_standard", "display_other",
+    "text_names", "show_light_descriptions", "text_other", "simplified_points",
+    "show_full_sector_lines", "data_quality", "show_isolated_dangers_shallow",
+    "show_inform_callouts", "show_meta_bounds", "show_overscale",
+    "date_dependent", "highlight_date_dependent",
+  };
+  static const char *const mariner_numbers[] = {
+    "scheme", "depth_unit", "shallow_contour", "safety_contour", "deep_contour",
+    "safety_depth", "soundings", "boundary_style", "size_scale",
+    "text_size_scale", "sounding_size_scale",
+  };
+  for (gsize i = 0; i < G_N_ELEMENTS (mariner_flags); i++)
+    lk_import_flag (ini, LOOKOUT_STORE_MARINER, mariner_flags[i]);
+  for (gsize i = 0; i < G_N_ELEMENTS (mariner_numbers); i++)
+    lk_import_number (ini, LOOKOUT_STORE_MARINER, mariner_numbers[i]);
+  lk_import_text (ini, LOOKOUT_STORE_MARINER, "date_view");
+
+  lk_import_group_text (ini, LOOKOUT_STORE_PLUGINS);
+
+  lookout_store_set_flag (lk_store, LOOKOUT_STORE_VIEW, "imported", 1);
+  lookout_store_flush (lk_store);
+  g_message ("read the settings from %s once; it is left where it is", path);
+}
+
+/* ---- lists and strings --------------------------------------------------- */
+
+/* A borrowed list as a strv the caller owns. Never NULL. */
+static char **
+lk_store_load_list (const char *group, const char *key)
+{
+  size_t count = 0;
+  const char *const *items = lookout_store_list (lk_store_handle (), group, key, &count);
+  char **out = g_new0 (char *, count + 1);
+
+  for (size_t i = 0; i < count; i++)
+    out[i] = g_strdup (items[i]);
+  return out;
+}
+
+static void
+lk_store_save_list (const char *group, const char *key, const char *const *paths)
+{
+  gsize n = paths == NULL ? 0 : g_strv_length ((char **) paths);
+
+  lookout_store_set_list (lk_store_handle (), group, key, paths, n);
+}
+
+/* A choice the mariner made by hand reaches the disk at once, which is what the
+ * keyfile store did. The engine's own writes ride the coalesce window. */
+static void
+lk_store_wrote (void)
+{
+  lookout_store_flush (lk_store_handle ());
+}
+
+static char *
+lk_store_load_string (const char *group, const char *key)
+{
+  const char *value = lookout_store_text (lk_store_handle (), group, key);
+
+  return value != NULL && value[0] != '\0' ? g_strdup (value) : NULL;
+}
+
+static void
+lk_store_save_string (const char *group, const char *key, const char *value)
+{
+  if (value == NULL || value[0] == '\0')
+    lookout_store_remove (lk_store_handle (), group, key);
+  else
+    lookout_store_set_text (lk_store_handle (), group, key, value);
+}
+
+/* ---- the camera pose ----------------------------------------------------- */
+
+gboolean
+lk_store_has_saved_view (void)
+{
+  return lookout_store_has (lk_store_handle (), LOOKOUT_STORE_VIEW, "lon");
 }
 
 /* ---- recents ------------------------------------------------------------ */
@@ -100,10 +232,7 @@ lk_store_save_view (const lookout_view *view)
 char **
 lk_store_load_recents (void)
 {
-  g_autoptr (GKeyFile) keyfile = lk_store_load ();
-  char **recents = g_key_file_get_string_list (keyfile, LK_GROUP_RECENTS, "paths", NULL, NULL);
-
-  return recents != NULL ? recents : g_new0 (char *, 1);
+  return lk_store_load_list (LOOKOUT_STORE_RECENTS, "paths");
 }
 
 void
@@ -121,127 +250,74 @@ lk_store_note_recent (const char *path)
         g_ptr_array_add (merged, g_strdup (existing[i]));
     }
 
-  g_autoptr (GKeyFile) keyfile = lk_store_load ();
-  g_key_file_set_string_list (keyfile, LK_GROUP_RECENTS, "paths",
-                              (const char *const *) merged->pdata, merged->len);
-  lk_store_flush (keyfile);
+  lookout_store_set_list (lk_store_handle (), LOOKOUT_STORE_RECENTS, "paths",
+                          (const char *const *) merged->pdata, merged->len);
+  lk_store_wrote ();
 }
 
 /* ---- raster charts ------------------------------------------------------ */
 
-static char **
-lk_store_load_group_list (const char *group, const char *key)
-{
-  g_autoptr (GKeyFile) keyfile = lk_store_load ();
-  char **list = g_key_file_get_string_list (keyfile, group, key, NULL, NULL);
-
-  return list != NULL ? list : g_new0 (char *, 1);
-}
-
-/* Set or clear one list key on an already-loaded keyfile. The caller flushes,
-   so several keys can be written in one pass. An empty list clears the key. */
-static void
-lk_store_set_group_list (GKeyFile *keyfile, const char *group, const char *key,
-                         const char *const *paths)
-{
-  gsize n = paths == NULL ? 0 : g_strv_length ((char **) paths);
-
-  if (n == 0)
-    g_key_file_remove_key (keyfile, group, key, NULL);
-  else
-    g_key_file_set_string_list (keyfile, group, key, paths, n);
-}
-
-static void
-lk_store_save_group_list (const char *group, const char *key, const char *const *paths)
-{
-  g_autoptr (GKeyFile) keyfile = lk_store_load ();
-
-  lk_store_set_group_list (keyfile, group, key, paths);
-  lk_store_flush (keyfile);
-}
-
-static char **
-lk_store_load_list (const char *key)
-{
-  return lk_store_load_group_list (LK_GROUP_RASTER, key);
-}
-
-static void
-lk_store_save_list (const char *key, const char *const *paths)
-{
-  lk_store_save_group_list (LK_GROUP_RASTER, key, paths);
-}
-
 char **
 lk_store_load_raster_paths (void)
 {
-  return lk_store_load_list ("paths");
+  return lk_store_load_list (LOOKOUT_STORE_RASTER, "paths");
 }
 
 void
 lk_store_save_raster_paths (const char *const *paths)
 {
-  lk_store_save_list ("paths", paths);
+  lk_store_save_list (LOOKOUT_STORE_RASTER, "paths", paths);
+  lk_store_wrote ();
 }
 
 char **
 lk_store_load_raster_off (void)
 {
-  return lk_store_load_list ("off");
+  return lk_store_load_list (LOOKOUT_STORE_RASTER, "off");
 }
 
 void
 lk_store_save_raster_off (const char *const *paths)
 {
-  lk_store_save_list ("off", paths);
+  lk_store_save_list (LOOKOUT_STORE_RASTER, "off", paths);
+  lk_store_wrote ();
 }
 
 char **
 lk_store_load_raster_hidden (void)
 {
-  return lk_store_load_list ("hidden");
+  return lk_store_load_list (LOOKOUT_STORE_RASTER, "hidden");
 }
 
 void
 lk_store_save_raster_hidden (const char *const *names)
 {
-  lk_store_save_list ("hidden", names);
+  lk_store_save_list (LOOKOUT_STORE_RASTER, "hidden", names);
+  lk_store_wrote ();
 }
 
-/* The whole raster state in one pass. One raster change touches all three
-   lists, so a per-key save rewrote and fsync'd the file three times; adding a
-   folder of twenty multiplied that. This writes and flushes once. */
 void
 lk_store_save_raster_all (const char *const *paths,
                           const char *const *off,
                           const char *const *hidden)
 {
-  g_autoptr (GKeyFile) keyfile = lk_store_load ();
-
-  lk_store_set_group_list (keyfile, LK_GROUP_RASTER, "paths", paths);
-  lk_store_set_group_list (keyfile, LK_GROUP_RASTER, "off", off);
-  lk_store_set_group_list (keyfile, LK_GROUP_RASTER, "hidden", hidden);
-  lk_store_flush (keyfile);
+  lk_store_save_list (LOOKOUT_STORE_RASTER, "paths", paths);
+  lk_store_save_list (LOOKOUT_STORE_RASTER, "off", off);
+  lk_store_save_list (LOOKOUT_STORE_RASTER, "hidden", hidden);
+  lk_store_wrote ();
 }
 
 gboolean
 lk_store_load_chart_hidden (void)
 {
-  g_autoptr (GKeyFile) keyfile = lk_store_load ();
-  g_autoptr (GError) error = NULL;
-  gboolean hidden = g_key_file_get_boolean (keyfile, LK_GROUP_RASTER, "chart_hidden", &error);
-
-  return error == NULL && hidden;
+  return lookout_store_flag (lk_store_handle (), LOOKOUT_STORE_RASTER, "chart_hidden", 0) != 0;
 }
 
 void
 lk_store_save_chart_hidden (gboolean hidden)
 {
-  g_autoptr (GKeyFile) keyfile = lk_store_load ();
-
-  g_key_file_set_boolean (keyfile, LK_GROUP_RASTER, "chart_hidden", hidden);
-  lk_store_flush (keyfile);
+  lookout_store_set_flag (lk_store_handle (), LOOKOUT_STORE_RASTER, "chart_hidden", hidden);
+  lk_store_wrote ();
 }
 
 /* ---- chart sets ---------------------------------------------------------- */
@@ -249,15 +325,11 @@ lk_store_save_chart_hidden (gboolean hidden)
 char **
 lk_store_load_chart_sets (void)
 {
-  g_autoptr (GKeyFile) keyfile = lk_store_load ();
-
   /* Absent and empty are different answers: absent means this build has never
    * saved a library here, and the caller seeds it from the recents once. */
-  if (!g_key_file_has_key (keyfile, LK_GROUP_CHARTSETS, "paths", NULL))
+  if (!lookout_store_flag (lk_store_handle (), LOOKOUT_STORE_CHARTSETS, LK_KEY_SETS_SAVED, 0))
     return NULL;
-
-  char **list = g_key_file_get_string_list (keyfile, LK_GROUP_CHARTSETS, "paths", NULL, NULL);
-  return list != NULL ? list : g_new0 (char *, 1);
+  return lk_store_load_list (LOOKOUT_STORE_CHARTSETS, "paths");
 }
 
 void
@@ -265,209 +337,50 @@ lk_store_save_chart_sets (const char *const *paths)
 {
   /* Never back to "absent": an emptied library must stay empty rather than
    * re-seeding from the recents at the next launch. */
-  g_autoptr (GKeyFile) keyfile = lk_store_load ();
-  gsize n = paths == NULL ? 0 : g_strv_length ((char **) paths);
-
-  g_key_file_set_string_list (keyfile, LK_GROUP_CHARTSETS, "paths",
-                              n == 0 ? (const char *const []) { NULL } : paths, n);
-  lk_store_flush (keyfile);
+  lk_store_save_list (LOOKOUT_STORE_CHARTSETS, "paths", paths);
+  lookout_store_set_flag (lk_store_handle (), LOOKOUT_STORE_CHARTSETS, LK_KEY_SETS_SAVED, 1);
+  lk_store_wrote ();
 }
 
 char **
 lk_store_load_chart_sets_off (void)
 {
-  return lk_store_load_group_list (LK_GROUP_CHARTSETS, "off");
+  return lk_store_load_list (LOOKOUT_STORE_CHARTSETS, "off");
 }
 
 void
 lk_store_save_chart_sets_off (const char *const *paths)
 {
-  lk_store_save_group_list (LK_GROUP_CHARTSETS, "off", paths);
+  lk_store_save_list (LOOKOUT_STORE_CHARTSETS, "off", paths);
+  lk_store_wrote ();
 }
 
 /* ---- chart links --------------------------------------------------------- */
 
-static char *
-lk_store_load_string (const char *group, const char *key)
-{
-  g_autoptr (GKeyFile) keyfile = lk_store_load ();
-  char *value = g_key_file_get_string (keyfile, group, key, NULL);
-
-  if (value != NULL && value[0] == '\0')
-    g_clear_pointer (&value, g_free);
-  return value;
-}
-
-static void
-lk_store_save_string (const char *group, const char *key, const char *value)
-{
-  g_autoptr (GKeyFile) keyfile = lk_store_load ();
-
-  if (value == NULL || value[0] == '\0')
-    g_key_file_remove_key (keyfile, group, key, NULL);
-  else
-    g_key_file_set_string (keyfile, group, key, value);
-  lk_store_flush (keyfile);
-}
-
 char *
 lk_store_load_chart_links (void)
 {
-  return lk_store_load_string (LK_GROUP_CHARTLINKS, "links");
+  return lk_store_load_string (LOOKOUT_STORE_CHARTLINKS, "links");
 }
 
 void
 lk_store_save_chart_links (const char *json)
 {
-  lk_store_save_string (LK_GROUP_CHARTLINKS, "links", json);
+  lk_store_save_string (LOOKOUT_STORE_CHARTLINKS, "links", json);
+  lk_store_wrote ();
 }
 
 char *
 lk_store_load_chart_link_active (void)
 {
-  return lk_store_load_string (LK_GROUP_CHARTLINKS, "active");
+  return lk_store_load_string (LOOKOUT_STORE_CHARTLINKS, "active");
 }
 
 void
 lk_store_save_chart_link_active (const char *url)
 {
-  lk_store_save_string (LK_GROUP_CHARTLINKS, "active", url);
-}
-
-/* ---- mariner ------------------------------------------------------------ */
-
-void
-lk_store_save_mariner (const tile57_mariner *m)
-{
-  g_return_if_fail (m != NULL);
-
-  g_autoptr (GKeyFile) keyfile = lk_store_load ();
-
-#define SET_INT(key, value)  g_key_file_set_integer (keyfile, LK_GROUP_MARINER, key, (int) (value))
-#define SET_BOOL(key, value) g_key_file_set_boolean (keyfile, LK_GROUP_MARINER, key, (value))
-#define SET_DBL(key, value)  g_key_file_set_double (keyfile, LK_GROUP_MARINER, key, (value))
-
-  SET_INT ("scheme", m->scheme);
-  SET_INT ("depth_unit", m->depth_unit);
-  SET_DBL ("shallow_contour", m->shallow_contour);
-  SET_DBL ("safety_contour", m->safety_contour);
-  SET_DBL ("deep_contour", m->deep_contour);
-  SET_DBL ("safety_depth", m->safety_depth);
-  SET_BOOL ("four_shade_water", m->four_shade_water);
-  SET_BOOL ("display_base", m->display_base);
-  SET_BOOL ("display_standard", m->display_standard);
-  SET_BOOL ("display_other", m->display_other);
-  SET_INT ("soundings", m->soundings);
-  SET_BOOL ("text_names", m->text_names);
-  SET_BOOL ("show_light_descriptions", m->show_light_descriptions);
-  SET_BOOL ("text_other", m->text_other);
-  SET_BOOL ("simplified_points", m->simplified_points);
-  SET_INT ("boundary_style", m->boundary_style);
-  SET_BOOL ("show_full_sector_lines", m->show_full_sector_lines);
-  SET_BOOL ("data_quality", m->data_quality);
-  SET_BOOL ("show_isolated_dangers_shallow", m->show_isolated_dangers_shallow);
-  SET_BOOL ("show_inform_callouts", m->show_inform_callouts);
-  SET_BOOL ("show_meta_bounds", m->show_meta_bounds);
-  SET_BOOL ("show_overscale", m->show_overscale);
-  SET_DBL ("size_scale", m->size_scale);
-  SET_DBL ("text_size_scale", m->text_size_scale);
-  SET_DBL ("sounding_size_scale", m->sounding_size_scale);
-  SET_BOOL ("date_dependent", m->date_dependent);
-  SET_BOOL ("highlight_date_dependent", m->highlight_date_dependent);
-  g_key_file_set_string (keyfile, LK_GROUP_MARINER, "date_view", m->date_view);
-
-#undef SET_INT
-#undef SET_BOOL
-#undef SET_DBL
-
-  lk_store_flush (keyfile);
-}
-
-void
-lk_store_apply_saved_mariner (tile57_mariner *m)
-{
-  g_return_if_fail (m != NULL);
-
-  g_autoptr (GKeyFile) keyfile = lk_store_load ();
-  if (!g_key_file_has_group (keyfile, LK_GROUP_MARINER))
-    return;
-
-  /* Apply each field only when the key is present, so older settings files
-   * leave newer fields at engine defaults instead of zeroing them. */
-  /* Every integer key is an enum, and the engine indexes tables by it: a
-   * value outside the enum's range is damage and keeps the default. */
-#define GET_ENUM(key, field, hi)                                                   \
-  G_STMT_START {                                                                    \
-    g_autoptr (GError) e = NULL;                                                    \
-    int v = g_key_file_get_integer (keyfile, LK_GROUP_MARINER, key, &e);             \
-    if (e == NULL && v >= 0 && v <= (hi))                                           \
-      field = v;                                                                    \
-  } G_STMT_END
-
-#define GET_BOOL(key, field)                                                       \
-  G_STMT_START {                                                                    \
-    g_autoptr (GError) e = NULL;                                                    \
-    gboolean v = g_key_file_get_boolean (keyfile, LK_GROUP_MARINER, key, &e);        \
-    if (e == NULL)                                                                  \
-      field = v;                                                                    \
-  } G_STMT_END
-
-#define GET_DBL(key, field)                                                        \
-  G_STMT_START {                                                                    \
-    g_autoptr (GError) e = NULL;                                                    \
-    double v = g_key_file_get_double (keyfile, LK_GROUP_MARINER, key, &e);           \
-    if (e == NULL)                                                                  \
-      field = v;                                                                    \
-  } G_STMT_END
-
-  /* Positive-only: a stored 0 for a size scale would black out every symbol. */
-#define GET_SCALE(key, field)                                                      \
-  G_STMT_START {                                                                    \
-    g_autoptr (GError) e = NULL;                                                    \
-    double v = g_key_file_get_double (keyfile, LK_GROUP_MARINER, key, &e);           \
-    if (e == NULL && v > 0)                                                         \
-      field = v;                                                                    \
-  } G_STMT_END
-
-  GET_ENUM ("scheme", m->scheme, TILE57_SCHEME_NIGHT);
-  GET_ENUM ("depth_unit", m->depth_unit, TILE57_DEPTH_FEET);
-  GET_DBL ("shallow_contour", m->shallow_contour);
-  GET_DBL ("safety_contour", m->safety_contour);
-  GET_DBL ("deep_contour", m->deep_contour);
-  GET_DBL ("safety_depth", m->safety_depth);
-  GET_BOOL ("four_shade_water", m->four_shade_water);
-  GET_BOOL ("display_base", m->display_base);
-  GET_BOOL ("display_standard", m->display_standard);
-  GET_BOOL ("display_other", m->display_other);
-  GET_ENUM ("soundings", m->soundings, 2);
-  GET_BOOL ("text_names", m->text_names);
-  GET_BOOL ("show_light_descriptions", m->show_light_descriptions);
-  GET_BOOL ("text_other", m->text_other);
-  GET_BOOL ("simplified_points", m->simplified_points);
-  GET_ENUM ("boundary_style", m->boundary_style, TILE57_BOUNDARY_PLAIN);
-  GET_BOOL ("show_full_sector_lines", m->show_full_sector_lines);
-  GET_BOOL ("data_quality", m->data_quality);
-  GET_BOOL ("show_isolated_dangers_shallow", m->show_isolated_dangers_shallow);
-  GET_BOOL ("show_inform_callouts", m->show_inform_callouts);
-  GET_BOOL ("show_meta_bounds", m->show_meta_bounds);
-  GET_BOOL ("show_overscale", m->show_overscale);
-  GET_SCALE ("size_scale", m->size_scale);
-  GET_SCALE ("text_size_scale", m->text_size_scale);
-  GET_SCALE ("sounding_size_scale", m->sounding_size_scale);
-  GET_BOOL ("date_dependent", m->date_dependent);
-  GET_BOOL ("highlight_date_dependent", m->highlight_date_dependent);
-
-#undef GET_ENUM
-#undef GET_BOOL
-#undef GET_DBL
-#undef GET_SCALE
-
-  g_autofree char *date = g_key_file_get_string (keyfile, LK_GROUP_MARINER, "date_view", NULL);
-  if (date != NULL)
-    {
-      memset (m->date_view, 0, sizeof m->date_view);
-      g_strlcpy (m->date_view, date, sizeof m->date_view);
-    }
+  lk_store_save_string (LOOKOUT_STORE_CHARTLINKS, "active", url);
+  lk_store_wrote ();
 }
 
 /* ---- plugin settings ----------------------------------------------------- */
@@ -475,31 +388,27 @@ lk_store_apply_saved_mariner (tile57_mariner *m)
 char **
 lk_store_load_plugin_ids (void)
 {
-  g_autoptr (GKeyFile) keyfile = lk_store_load ();
-  char **ids = g_key_file_get_keys (keyfile, LK_GROUP_PLUGINS, NULL, NULL);
+  size_t count = 0;
+  const char *const *keys =
+      lookout_store_keys (lk_store_handle (), LOOKOUT_STORE_PLUGINS, &count);
+  char **out = g_new0 (char *, count + 1);
 
-  return ids != NULL ? ids : g_new0 (char *, 1);
+  for (size_t i = 0; i < count; i++)
+    out[i] = g_strdup (keys[i]);
+  return out;
 }
 
 char *
 lk_store_load_plugin_config (const char *plugin_id)
 {
   g_return_val_if_fail (plugin_id != NULL, NULL);
-
-  g_autoptr (GKeyFile) keyfile = lk_store_load ();
-  return g_key_file_get_string (keyfile, LK_GROUP_PLUGINS, plugin_id, NULL);
+  return lk_store_load_string (LOOKOUT_STORE_PLUGINS, plugin_id);
 }
 
 void
 lk_store_save_plugin_config (const char *plugin_id, const char *json)
 {
   g_return_if_fail (plugin_id != NULL);
-
-  g_autoptr (GKeyFile) keyfile = lk_store_load ();
-
-  if (json == NULL)
-    g_key_file_remove_key (keyfile, LK_GROUP_PLUGINS, plugin_id, NULL);
-  else
-    g_key_file_set_string (keyfile, LK_GROUP_PLUGINS, plugin_id, json);
-  lk_store_flush (keyfile);
+  lk_store_save_string (LOOKOUT_STORE_PLUGINS, plugin_id, json);
+  lk_store_wrote ();
 }

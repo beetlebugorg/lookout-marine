@@ -24,9 +24,7 @@ struct _LkChartController {
   guint    plugin_poll_id;
 
   gint64 last_readouts_us;
-  gint64 last_view_saved_us;
-  /* The pose as last written, so an unchanged one is not re-written. */
-  lookout_view last_saved_view;
+  gint64 last_store_flush_us;
 };
 
 G_DEFINE_FINAL_TYPE (LkChartController, lk_chart_controller, G_TYPE_OBJECT)
@@ -109,6 +107,16 @@ lk_chart_controller_push_readouts (LkChartController *self)
    * the pill is fed from the frame like every other readout. */
   lk_app_model_refresh_raster_state (self->model);
 
+  /* The store coalesces its writes, so something has to ask it whether the
+   * window has passed. The engine's own frame loop does that; this shell still
+   * drives its own, so the pose the engine writes every three seconds would sit
+   * dirty until close. It goes when the loop is lookout_frame_next's. */
+  if (now - self->last_store_flush_us >= G_USEC_PER_SEC)
+    {
+      self->last_store_flush_us = now;
+      lookout_store_flush (lk_store_handle ());
+    }
+
   /* Under follow the CORE moves the camera without the shell; the pick's
    * mark must ride its water, not its pixels. Only the mark moves — the
    * report's frame is fixed for the report's life. */
@@ -120,16 +128,6 @@ lk_chart_controller_push_readouts (LkChartController *self)
         lk_app_model_move_pick (self->model, sx, sy);
     }
 
-  /* Persist periodically — but only a pose that moved: AIS-driven redraws
-   * with a stationary camera were writing the disk every three seconds for
-   * nothing, and a boat computer's flash pays for that. */
-  if (now - self->last_view_saved_us >= 3 * G_USEC_PER_SEC &&
-      memcmp (&view, &self->last_saved_view, sizeof view) != 0)
-    {
-      self->last_view_saved_us = now;
-      self->last_saved_view = view;
-      lk_store_save_view (&view);
-    }
 }
 
 /* ---- the on-demand render loop ------------------------------------------ */
@@ -854,11 +852,18 @@ lk_chart_controller_open (LkChartController *self,
   lookout_set_pixel_density (handle, (float) gtk_widget_get_scale_factor (view));
   lookout_resize (handle, width, height);
 
-  /* Reopen where we left off, or the engine's default view when nothing is saved. */
-  lookout_view view_pose;
-  if (!lk_store_load_view (&view_pose))
-    lookout_default_view (handle, &view_pose);
-  lookout_set_view (handle, &view_pose);
+  /* The engine keeps the pose and the mariner settings in the store from here:
+   * it restores both now, writes the pose down as the mariner moves, and
+   * writes both again at close. With nothing saved it holds the view it opened
+   * on, so the shell asks for the opening one. */
+  lookout_set_store (handle, lk_store_handle ());
+  if (!lk_store_has_saved_view ())
+    {
+      lookout_view opening;
+
+      lookout_default_view (handle, &opening);
+      lookout_set_view (handle, &opening);
+    }
 
   /* $LOOKOUT_VIEW="lon,lat,zoom[,rot]" pins the opening camera (screenshots). */
   const char *spec = g_getenv ("LOOKOUT_VIEW");
@@ -890,13 +895,10 @@ lk_chart_controller_open (LkChartController *self,
         }
     }
 
-  /* device_scale (physical symbol/text size) is the host's to state. */
+  /* device_scale (physical symbol/text size) is the host's to state. It is set
+   * after the restore above, because it is the device's and not the
+   * mariner's. */
   lk_chart_controller_sync_device_scale (self);
-
-  /* Saved settings overlay the defaults, so the chart reopens as left. */
-  tile57_mariner mariner = lk_chart_controller_get_mariner (self);
-  lk_store_apply_saved_mariner (&mariner);
-  lk_chart_controller_set_mariner (self, mariner);
 
   /* The plugins belong to the handle the open just made, so they are loaded
    * per open and the poll that keeps their geometry moving starts with them. */
@@ -941,10 +943,8 @@ lk_chart_controller_close (LkChartController *self)
    * can ask for anything — a new handle reuses the old one's request ids. */
   lookout_set_http_provider (self->handle, NULL, NULL, NULL);
 
-  lookout_view view;
-  lookout_get_view (self->handle, &view); /* the pose to reopen on, before the handle dies */
-  lk_store_save_view (&view);
-
+  /* lookout_close writes the pose and the mariner settings down on its way
+   * out, so the chart reopens where it was left. */
   lookout_close (self->handle);
   self->handle = NULL;
 
@@ -1233,12 +1233,11 @@ lk_chart_controller_get_mariner (LkChartController *self)
     lookout_get_mariner (self->handle, &mariner);
   else
     {
-      /* No handle: the defaults with the mariner's saved choices on top. A
-       * chartless read must never answer values the mariner did not set —
-       * callers save what they read back, and bare defaults here would wipe
-       * the saved settings. */
+      /* No handle: the defaults with the mariner's saved choices on top. The
+       * settings form is reachable before a chart is open, and it must show
+       * what the mariner set rather than what the engine ships with. */
       lookout_mariner_defaults (&mariner);
-      lk_store_apply_saved_mariner (&mariner);
+      lookout_store_read_mariner (lk_store_handle (), &mariner);
     }
 
   return mariner;
