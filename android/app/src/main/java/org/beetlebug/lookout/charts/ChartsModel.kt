@@ -1,6 +1,7 @@
 package org.beetlebug.lookout.charts
 
 import org.beetlebug.lookout.engine.LookoutView
+import org.beetlebug.lookout.store.Store
 
 import android.content.Context
 import android.os.Build
@@ -65,8 +66,6 @@ class ChartsModel(private val appContext: Context, private val bundled: String?)
     var storageAccess by mutableStateOf(false)
         private set
 
-    private val prefs = appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-
     /** The import pipeline: scan, bake what is raw, open the result. */
     val importer = ChartImport(appContext)
 
@@ -75,7 +74,7 @@ class ChartsModel(private val appContext: Context, private val bundled: String?)
 
     init {
         refreshAccess()
-        val saved = prefs.getString(KEY_SELECTED, null)
+        val saved = Store.text(Store.Group.RECENTS, KEY_SELECTED)
         if (saved != null) {
             // Synchronous, on the main thread, before the first frame: the first
             // open needs its paths immediately (surfaceChanged follows onCreate),
@@ -147,7 +146,7 @@ class ChartsModel(private val appContext: Context, private val bundled: String?)
             }
             selected = lib
             lastEmptyPick = null
-            prefs.edit().putString(KEY_SELECTED, lib.path).apply()
+            Store.setText(Store.Group.RECENTS, KEY_SELECTED, lib.path)
             generation++
             Log.i(TAG, "library -> ${lib.path} (${lib.cells.size} cells)")
             return true
@@ -160,7 +159,7 @@ class ChartsModel(private val appContext: Context, private val bundled: String?)
     fun clearSelection() {
         selected = null
         lastEmptyPick = null
-        prefs.edit().remove(KEY_SELECTED).apply()
+        Store.remove(Store.Group.RECENTS, KEY_SELECTED)
         generation++
     }
 
@@ -183,7 +182,6 @@ class ChartsModel(private val appContext: Context, private val bundled: String?)
 
     private companion object {
         const val TAG = "lookout"
-        const val PREFS = "charts.v1"
         const val KEY_SELECTED = "library"
         /** Push target under the app's external files dir. */
         const val PUSH_DIR = "charts"

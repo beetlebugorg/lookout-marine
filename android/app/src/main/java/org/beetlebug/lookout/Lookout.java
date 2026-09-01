@@ -192,6 +192,60 @@ public final class Lookout implements AutoCloseable {
      */
     public static String[] licenses()             { return nLicenses(); }
 
+    // ---- the settings store ----
+    //
+    // One ini file under the app's own directory, replacing four
+    // SharedPreferences files. See Store.kt.
+
+    public static long storeOpen(String dir)      { return nStoreOpen(dir); }
+    public static void storeClose(long s)         { if (s != 0) nStoreClose(s); }
+    public static void storeFlush(long s)         { if (s != 0) nStoreFlush(s); }
+
+    public static boolean storeHas(long s, String group, String key) {
+        return s != 0 && nStoreHas(s, group, key);
+    }
+    /** Null when the key is not set, which is not an empty value. */
+    public static String storeText(long s, String group, String key) {
+        return s == 0 ? null : nStoreText(s, group, key);
+    }
+    public static double storeNumber(long s, String group, String key, double fallback) {
+        return s == 0 ? fallback : nStoreNumber(s, group, key, fallback);
+    }
+    public static boolean storeFlag(long s, String group, String key, boolean fallback) {
+        return s == 0 ? fallback : nStoreFlag(s, group, key, fallback);
+    }
+    public static String[] storeList(long s, String group, String key) {
+        return s == 0 ? new String[0] : nStoreList(s, group, key);
+    }
+    /** The keys set under a group, in the order they were written. */
+    public static String[] storeKeys(long s, String group) {
+        return s == 0 ? new String[0] : nStoreKeys(s, group);
+    }
+
+    public static void storeSetText(long s, String group, String key, String value) {
+        if (s != 0) nStoreSetText(s, group, key, value);
+    }
+    public static void storeSetNumber(long s, String group, String key, double value) {
+        if (s != 0) nStoreSetNumber(s, group, key, value);
+    }
+    public static void storeSetFlag(long s, String group, String key, boolean value) {
+        if (s != 0) nStoreSetFlag(s, group, key, value);
+    }
+    /** An empty list clears the key. */
+    public static void storeSetList(long s, String group, String key, String[] items) {
+        if (s != 0) nStoreSetList(s, group, key, items);
+    }
+    public static void storeRemove(long s, String group, String key) {
+        if (s != 0) nStoreRemove(s, group, key);
+    }
+
+    /**
+     * Hand the store to this chart handle. The engine then restores the camera
+     * pose and the mariner's display settings out of it, writes the pose down
+     * as the mariner moves, and writes both at close and at detach.
+     */
+    public void setStore(long store)              { if (h != 0) nSetStore(h, store); }
+
     // ---- the format kit ----
     //
     // The strings a mariner reads and the text a mariner types, from the
@@ -303,6 +357,21 @@ public final class Lookout implements AutoCloseable {
     private static native boolean nAtlasCacheReady();
     private static native int nOpenFile(long h, String path);
     private static native String[] nLicenses();
+    private static native long nStoreOpen(String dir);
+    private static native void nStoreClose(long s);
+    private static native void nStoreFlush(long s);
+    private static native boolean nStoreHas(long s, String group, String key);
+    private static native String nStoreText(long s, String group, String key);
+    private static native double nStoreNumber(long s, String group, String key, double fallback);
+    private static native boolean nStoreFlag(long s, String group, String key, boolean fallback);
+    private static native String[] nStoreList(long s, String group, String key);
+    private static native String[] nStoreKeys(long s, String group);
+    private static native void nStoreSetText(long s, String group, String key, String value);
+    private static native void nStoreSetNumber(long s, String group, String key, double value);
+    private static native void nStoreSetFlag(long s, String group, String key, boolean value);
+    private static native void nStoreSetList(long s, String group, String key, String[] items);
+    private static native void nStoreRemove(long s, String group, String key);
+    private static native void nSetStore(long h, long store);
     private static native String nFmtPosition(double lat, double lon);
     private static native String nFmtCoordDm(double value, boolean isLat);
     private static native String nFmtScale(double denominator);

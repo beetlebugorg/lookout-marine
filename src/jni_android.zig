@@ -3028,3 +3028,224 @@ export fn Java_org_beetlebug_lookout_Lookout_nBakeOutputPath(env: [*c]j.JNIEnv, 
     buf[n] = 0;
     return env_(env).NewStringUTF.?(env, &buf);
 }
+
+// ---- the settings store -----------------------------------------------------
+//
+// One ini file under the app's own directory, replacing four SharedPreferences
+// files. The engine takes the same store (nSetStore) and keeps the camera pose
+// and the mariner's display settings in it.
+
+const c_store = opaque {};
+
+extern fn lookout_store_open(dir: ?[*:0]const u8) ?*c_store;
+extern fn lookout_store_close(s: ?*c_store) void;
+extern fn lookout_store_flush(s: ?*c_store) void;
+extern fn lookout_store_has(s: ?*c_store, group: ?[*:0]const u8, key: ?[*:0]const u8) c_int;
+extern fn lookout_store_text(s: ?*c_store, group: ?[*:0]const u8, key: ?[*:0]const u8) ?[*:0]const u8;
+extern fn lookout_store_number(s: ?*c_store, group: ?[*:0]const u8, key: ?[*:0]const u8, fallback: f64) f64;
+extern fn lookout_store_flag(s: ?*c_store, group: ?[*:0]const u8, key: ?[*:0]const u8, fallback: c_int) c_int;
+extern fn lookout_store_list(s: ?*c_store, group: ?[*:0]const u8, key: ?[*:0]const u8, out_n: *usize) ?[*]const ?[*:0]const u8;
+extern fn lookout_store_keys(s: ?*c_store, group: ?[*:0]const u8, out_n: *usize) ?[*]const ?[*:0]const u8;
+extern fn lookout_store_set_text(s: ?*c_store, group: ?[*:0]const u8, key: ?[*:0]const u8, value: ?[*:0]const u8) void;
+extern fn lookout_store_set_number(s: ?*c_store, group: ?[*:0]const u8, key: ?[*:0]const u8, value: f64) void;
+extern fn lookout_store_set_flag(s: ?*c_store, group: ?[*:0]const u8, key: ?[*:0]const u8, value: c_int) void;
+extern fn lookout_store_set_list(s: ?*c_store, group: ?[*:0]const u8, key: ?[*:0]const u8, items: ?[*]const ?[*:0]const u8, n: usize) void;
+extern fn lookout_store_remove(s: ?*c_store, group: ?[*:0]const u8, key: ?[*:0]const u8) void;
+extern fn lookout_set_store(h: ?*anyopaque, s: ?*c_store) void;
+
+fn storeOf(s: j.jlong) ?*c_store {
+    if (s == 0) return null;
+    return @ptrFromInt(@as(usize, @bitCast(s)));
+}
+
+/// A borrowed jstring as a NUL-terminated slice, plus the handle to release it
+/// with. The caller releases; there is no other way to hold a JNI string.
+const Borrowed = struct {
+    js: j.jstring,
+    c: [*c]const u8,
+
+    fn get(env: [*c]j.JNIEnv, js: j.jstring) ?Borrowed {
+        const c = env_(env).GetStringUTFChars.?(env, js, null) orelse return null;
+        return .{ .js = js, .c = c };
+    }
+
+    fn ptr(self: Borrowed) [*:0]const u8 {
+        return @ptrCast(self.c);
+    }
+
+    fn release(self: Borrowed, env: [*c]j.JNIEnv) void {
+        env_(env).ReleaseStringUTFChars.?(env, self.js, self.c);
+    }
+};
+
+export fn Java_org_beetlebug_lookout_Lookout_nStoreOpen(env: [*c]j.JNIEnv, cls: j.jclass, dir: j.jstring) j.jlong {
+    _ = cls;
+    const d = Borrowed.get(env, dir) orelse return 0;
+    defer d.release(env);
+    const s = lookout_store_open(d.ptr()) orelse return 0;
+    return @bitCast(@as(u64, @intFromPtr(s)));
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nStoreClose(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong) void {
+    _ = env;
+    _ = cls;
+    lookout_store_close(storeOf(s));
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nStoreFlush(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong) void {
+    _ = env;
+    _ = cls;
+    lookout_store_flush(storeOf(s));
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nStoreHas(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong, group: j.jstring, key: j.jstring) j.jboolean {
+    _ = cls;
+    const g = Borrowed.get(env, group) orelse return 0;
+    defer g.release(env);
+    const k = Borrowed.get(env, key) orelse return 0;
+    defer k.release(env);
+    return if (lookout_store_has(storeOf(s), g.ptr(), k.ptr()) != 0) 1 else 0;
+}
+
+/// String nStoreText(...) -- null when the key is not set, which is not the
+/// same as an empty value.
+export fn Java_org_beetlebug_lookout_Lookout_nStoreText(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong, group: j.jstring, key: j.jstring) j.jstring {
+    _ = cls;
+    const g = Borrowed.get(env, group) orelse return null;
+    defer g.release(env);
+    const k = Borrowed.get(env, key) orelse return null;
+    defer k.release(env);
+    const v = lookout_store_text(storeOf(s), g.ptr(), k.ptr()) orelse return null;
+    return env_(env).NewStringUTF.?(env, v);
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nStoreNumber(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong, group: j.jstring, key: j.jstring, fallback: j.jdouble) j.jdouble {
+    _ = cls;
+    const g = Borrowed.get(env, group) orelse return fallback;
+    defer g.release(env);
+    const k = Borrowed.get(env, key) orelse return fallback;
+    defer k.release(env);
+    return lookout_store_number(storeOf(s), g.ptr(), k.ptr(), fallback);
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nStoreFlag(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong, group: j.jstring, key: j.jstring, fallback: j.jboolean) j.jboolean {
+    _ = cls;
+    const g = Borrowed.get(env, group) orelse return fallback;
+    defer g.release(env);
+    const k = Borrowed.get(env, key) orelse return fallback;
+    defer k.release(env);
+    return if (lookout_store_flag(storeOf(s), g.ptr(), k.ptr(), if (fallback != 0) 1 else 0) != 0) 1 else 0;
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nStoreList(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong, group: j.jstring, key: j.jstring) j.jobjectArray {
+    _ = cls;
+    const g = Borrowed.get(env, group) orelse return jstrArray(env, &.{});
+    defer g.release(env);
+    const k = Borrowed.get(env, key) orelse return jstrArray(env, &.{});
+    defer k.release(env);
+    var n: usize = 0;
+    const items = lookout_store_list(storeOf(s), g.ptr(), k.ptr(), &n) orelse return jstrArray(env, &.{});
+    return jstrArray(env, items[0..n]);
+}
+
+/// String[] nStoreKeys(...) -- the keys set under a group, in the order they
+/// were written.
+export fn Java_org_beetlebug_lookout_Lookout_nStoreKeys(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong, group: j.jstring) j.jobjectArray {
+    _ = cls;
+    const g = Borrowed.get(env, group) orelse return jstrArray(env, &.{});
+    defer g.release(env);
+    var n: usize = 0;
+    const keys = lookout_store_keys(storeOf(s), g.ptr(), &n) orelse return jstrArray(env, &.{});
+    return jstrArray(env, keys[0..n]);
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nStoreSetText(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong, group: j.jstring, key: j.jstring, value: j.jstring) void {
+    _ = cls;
+    const g = Borrowed.get(env, group) orelse return;
+    defer g.release(env);
+    const k = Borrowed.get(env, key) orelse return;
+    defer k.release(env);
+    const v = Borrowed.get(env, value) orelse return;
+    defer v.release(env);
+    lookout_store_set_text(storeOf(s), g.ptr(), k.ptr(), v.ptr());
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nStoreSetNumber(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong, group: j.jstring, key: j.jstring, value: j.jdouble) void {
+    _ = cls;
+    const g = Borrowed.get(env, group) orelse return;
+    defer g.release(env);
+    const k = Borrowed.get(env, key) orelse return;
+    defer k.release(env);
+    lookout_store_set_number(storeOf(s), g.ptr(), k.ptr(), value);
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nStoreSetFlag(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong, group: j.jstring, key: j.jstring, value: j.jboolean) void {
+    _ = cls;
+    const g = Borrowed.get(env, group) orelse return;
+    defer g.release(env);
+    const k = Borrowed.get(env, key) orelse return;
+    defer k.release(env);
+    lookout_store_set_flag(storeOf(s), g.ptr(), k.ptr(), if (value != 0) 1 else 0);
+}
+
+/// An EMPTY list clears the key, so a read of it comes back empty.
+export fn Java_org_beetlebug_lookout_Lookout_nStoreSetList(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong, group: j.jstring, key: j.jstring, items: j.jobjectArray) void {
+    _ = cls;
+    const g = Borrowed.get(env, group) orelse return;
+    defer g.release(env);
+    const k = Borrowed.get(env, key) orelse return;
+    defer k.release(env);
+
+    const n: usize = if (items == null) 0 else @intCast(env_(env).GetArrayLength.?(env, items));
+    if (n == 0) {
+        lookout_store_set_list(storeOf(s), g.ptr(), k.ptr(), null, 0);
+        return;
+    }
+
+    // The core copies what it is given, so the strings only have to outlive
+    // the call.
+    const copies = gpa.alloc([:0]u8, n) catch return;
+    var made: usize = 0;
+    defer {
+        for (copies[0..made]) |c| gpa.free(c);
+        gpa.free(copies);
+    }
+    const ptrs = gpa.alloc(?[*:0]const u8, n) catch return;
+    defer gpa.free(ptrs);
+
+    for (0..n) |i| {
+        const js: j.jstring = @ptrCast(env_(env).GetObjectArrayElement.?(env, items, @intCast(i)));
+        const b = Borrowed.get(env, js) orelse return;
+        const src = std.mem.span(b.ptr());
+        copies[i] = gpa.allocSentinel(u8, src.len, 0) catch {
+            b.release(env);
+            return;
+        };
+        @memcpy(copies[i], src);
+        made = i + 1;
+        b.release(env);
+        env_(env).DeleteLocalRef.?(env, js);
+        ptrs[i] = copies[i].ptr;
+    }
+    lookout_store_set_list(storeOf(s), g.ptr(), k.ptr(), ptrs.ptr, n);
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nStoreRemove(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong, group: j.jstring, key: j.jstring) void {
+    _ = cls;
+    const g = Borrowed.get(env, group) orelse return;
+    defer g.release(env);
+    const k = Borrowed.get(env, key) orelse return;
+    defer k.release(env);
+    lookout_store_remove(storeOf(s), g.ptr(), k.ptr());
+}
+
+/// void nSetStore(long h, long store) -- hand the store to the chart handle.
+/// The engine then restores the camera pose and the mariner's display settings
+/// out of it, writes the pose down as the mariner moves, and writes both at
+/// close and at detach.
+export fn Java_org_beetlebug_lookout_Lookout_nSetStore(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, s: j.jlong) void {
+    _ = env;
+    _ = cls;
+    const h = fromLong(hl) orelse return;
+    lookout_set_store(h.l, storeOf(s));
+}

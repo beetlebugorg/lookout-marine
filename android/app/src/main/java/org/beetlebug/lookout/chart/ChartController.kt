@@ -36,7 +36,7 @@ import org.beetlebug.lookout.plugins.readTableSpecs
 import org.beetlebug.lookout.plugins.trimmed
 import org.beetlebug.lookout.settings.MarinerState
 import org.beetlebug.lookout.settings.Scheme
-import org.beetlebug.lookout.store.ViewState
+import org.beetlebug.lookout.store.Store
 
 import android.content.Context
 import android.os.Handler
@@ -198,11 +198,13 @@ class ChartController(private val appContext: Context) {
      */
     fun attach(l: Lookout, queue: Handler) {
         access.bind(l, queue)
+        // The shell's settings file. The engine restores the pose and the
+        // mariner's settings out of it, writes the pose down as the mariner
+        // moves, and writes both at close and at detach.
+        l.setStore(Store.handle)
         val v = DoubleArray(Lookout.MARINER_LEN)
-        l.getMariner(v)                       // the engine's own defaults
-        var date = l.getMarinerDate()
-        MarinerState.applySavedOverlay(appContext, v)?.let { date = it }
-        l.setMariner(v, date)
+        l.getMariner(v)
+        val date = l.getMarinerDate()
         lastPushed = null
         alertsController.reset()
         lastWatchNs = 0L
@@ -221,16 +223,13 @@ class ChartController(private val appContext: Context) {
     }
 
     /**
-     * Put the camera back where it was left. Runs before the render thread
-     * starts, like the mariner state above, so the first tessellation is
-     * already at the restored pose instead of building the opening view and
-     * immediately rebuilding. With nothing saved, the opening view is the
-     * engine's own — the same policy every host gets from lookout_default_view.
+     * The opening view when there is no saved pose. The pose itself is the
+     * ENGINE's: it restores one out of the store at setStore. With nothing
+     * saved the opening view is the engine's own, the same policy every host
+     * gets from lookout_default_view.
      */
     private fun restoreView(l: Lookout) {
-        val saved = ViewState.load(appContext)
-        if (saved != null) l.setView(saved.lon, saved.lat, saved.zoom, saved.rotationDeg)
-        else l.defaultView()
+        if (!Store.has(Store.Group.VIEW, "lon")) l.defaultView()
     }
 
     /**
@@ -276,14 +275,14 @@ class ChartController(private val appContext: Context) {
     }
 
     /**
-     * The surface is going but the engine is not. Persist the pose here: the
-     * periodic save runs off the frame loop, and there are about to be no
-     * frames.
+     * The surface is going but the engine is not. The engine writes the pose
+     * at detach; this puts it on disk, because the periodic flush runs off the
+     * frame loop and there are about to be no frames.
      *
      * RENDER THREAD, inside the detach barrier.
      */
     fun onSurfaceDetached() {
-        saveView()
+        Store.flush()
     }
 
     /**
@@ -295,7 +294,7 @@ class ChartController(private val appContext: Context) {
      */
     fun detach(l: Lookout?) {
         if (!access.isLive(l)) return
-        saveView() // last known pose; the handle is about to close
+        Store.flush() // the engine wrote the pose; put it on disk
         // Before the handle closes: a fetch landing later must find the
         // provider gone, not a dying engine.
         chartLinkController.stop()
@@ -314,12 +313,6 @@ class ChartController(private val appContext: Context) {
             // And nothing left to hold the process up for.
             stopService()
         }
-    }
-
-    /** Persist the last sampled pose. No native call — [lastPushed] has it. */
-    private fun saveView() {
-        val r = lastPushed ?: return
-        ViewState.save(appContext, r.lon, r.lat, r.zoom, r.rotationDeg)
     }
 
     // ---- readouts (render thread) ------------------------------------------
@@ -389,11 +382,12 @@ class ChartController(private val appContext: Context) {
             readouts = r
             rendering = true
         }
-        // Persist periodically as well: a swipe-away or a low-memory kill never
-        // reaches detach().
+        // The engine writes the pose down as the mariner moves, and the store
+        // coalesces. This puts it on disk periodically as well: a swipe-away or
+        // a low-memory kill never reaches detach().
         if (frameTimeNanos - lastSaveNs >= SAVE_INTERVAL_NS) {
             lastSaveNs = frameTimeNanos
-            saveView()
+            Store.flush()
         }
     }
 
@@ -565,10 +559,7 @@ class ChartController(private val appContext: Context) {
     fun applyMariner() {
         val v = mariner.values.copyOf()
         val date = mariner.dateView
-        onEngine { l ->
-            l.setMariner(v, date)
-            MarinerState.save(appContext, v, date)
-        }
+        onEngine { l -> l.setMariner(v, date) }
     }
 
     /**
@@ -581,7 +572,6 @@ class ChartController(private val appContext: Context) {
         val v = DoubleArray(Lookout.MARINER_LEN)
         l.getMariner(v)
         val date = l.getMarinerDate()
-        MarinerState.save(appContext, v, date)
         access.onMain { mariner.loadFrom(v, date) }
     }
 

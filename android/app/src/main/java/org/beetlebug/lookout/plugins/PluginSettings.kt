@@ -2,6 +2,7 @@ package org.beetlebug.lookout.plugins
 
 
 import org.beetlebug.lookout.Lookout
+import org.beetlebug.lookout.store.Store
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -590,35 +591,29 @@ internal fun trimmed(v: Double): String =
  * which is the whole reason the launch intent existed.
  */
 object PluginPrefs {
-    private const val PREFS = "plugins.lists.v1"
-    private const val SCALARS = "plugins.v1"
 
     private fun key(pluginId: String, listKey: String) = "$pluginId/$listKey"
 
     fun saveRows(ctx: android.content.Context, list: PluginListSchema, json: String) {
-        ctx.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
-            .edit().putString(key(list.pluginId, list.key), json).apply()
+        Store.setText(Store.Group.PLUGINS, key(list.pluginId, list.key) + ".rows", json)
     }
 
     /** The saved array, or null when the mariner has never edited this list. */
     fun savedRows(ctx: android.content.Context, list: PluginListSchema): String? =
-        ctx.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
-            .getString(key(list.pluginId, list.key), null)
+        Store.text(Store.Group.PLUGINS, key(list.pluginId, list.key) + ".rows")
 
     /**
-     * One scalar field — the Android twin of macOS's `plugins.v1`. Toggles
-     * ride as 1.0/0.0; the field's kind, read from the live schema at restore,
-     * decides the JSON shape the core is given back. Stored as raw double bits
-     * because SharedPreferences has no double.
+     * One scalar field. Toggles ride as 1 and 0; the live schema decides the
+     * JSON shape at restore.
      */
     fun saveScalar(ctx: android.content.Context, pluginId: String, fieldKey: String, value: Double) {
-        ctx.getSharedPreferences(SCALARS, android.content.Context.MODE_PRIVATE)
-            .edit().putLong(key(pluginId, fieldKey), java.lang.Double.doubleToRawLongBits(value)).apply()
+        Store.setNumber(Store.Group.PLUGINS, key(pluginId, fieldKey), value)
     }
 
-    /** Every saved scalar, keyed `pluginId/fieldKey`. */
+    /** Every saved scalar, keyed `pluginId/fieldKey`. A row list lives under
+     *  the same group and is not one. */
     fun savedScalars(ctx: android.content.Context): Map<String, Double> =
-        ctx.getSharedPreferences(SCALARS, android.content.Context.MODE_PRIVATE)
-            .all.mapNotNull { (k, v) -> (v as? Long)?.let { k to java.lang.Double.longBitsToDouble(it) } }
-            .toMap()
+        Store.keys(Store.Group.PLUGINS)
+            .filterNot { it.endsWith(".rows") }
+            .associateWith { Store.number(Store.Group.PLUGINS, it, 0.0) }
 }

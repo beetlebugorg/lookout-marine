@@ -3,6 +3,7 @@ package org.beetlebug.lookout
 import org.beetlebug.lookout.chart.ChartController
 import org.beetlebug.lookout.chart.ChartScreen
 import org.beetlebug.lookout.charts.ChartsModel
+import org.beetlebug.lookout.store.Store
 import org.beetlebug.lookout.engine.LookoutView
 import org.beetlebug.lookout.hud.LookoutTheme
 import org.beetlebug.lookout.settings.Scheme
@@ -59,6 +60,10 @@ class LookoutActivity : ComponentActivity() {
         // Before any open: without a root the engine re-bakes both atlases on
         // every launch (~1s), having no cache path in the environment.
         Lookout.setCacheDir(cacheDir.absolutePath)
+
+        // Before anything reads a setting. The first launch after the move out
+        // of SharedPreferences copies what the mariner already had.
+        Store.open(applicationContext)
 
         // Tiles are the one thing this app fetches in bulk (a chart link's
         // sources). The response cache spares the pan back over water already

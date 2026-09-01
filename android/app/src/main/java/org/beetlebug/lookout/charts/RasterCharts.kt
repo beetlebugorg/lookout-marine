@@ -7,6 +7,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import java.io.File
 import org.beetlebug.lookout.Lookout
+import org.beetlebug.lookout.store.Store
 
 /**
  * The raster charts the mariner has installed, and which of them are switched
@@ -25,8 +26,6 @@ import org.beetlebug.lookout.Lookout
  * into each chart the engine opens.
  */
 class RasterCharts(appContext: Context) {
-
-    private val prefs = appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     /** Installed charts, in the order added. */
     var paths by mutableStateOf<List<String>>(emptyList())
@@ -53,19 +52,12 @@ class RasterCharts(appContext: Context) {
         private set
 
     init {
-        // An ordered JSON array, because "order added" IS the contract and a
-        // StringSet reloaded .sorted() silently made it alphabetical.
-        val ordered = prefs.getString(KEY_PATHS_ORDERED, null)
-        paths = if (ordered != null) {
-            val arr = org.json.JSONArray(ordered)
-            List(arr.length()) { arr.getString(it) }
-        } else {
-            // The pre-ordered layout, migrated on the next save.
-            prefs.getStringSet(KEY_PATHS, null)?.sorted() ?: emptyList()
-        }
-        off = prefs.getStringSet(KEY_OFF, null)?.toSet() ?: emptySet()
-        hidden = prefs.getStringSet(KEY_HIDDEN, null)?.toSet() ?: emptySet()
-        chartHidden = prefs.getBoolean(KEY_CHART_HIDDEN, false)
+        // A list keeps the order it was written in, because "order added" IS
+        // the contract.
+        paths = Store.list(Store.Group.RASTER, KEY_PATHS)
+        off = Store.list(Store.Group.RASTER, KEY_OFF).toSet()
+        hidden = Store.list(Store.Group.RASTER, KEY_HIDDEN).toSet()
+        chartHidden = Store.flag(Store.Group.RASTER, KEY_CHART_HIDDEN)
     }
 
     fun add(newPaths: List<String>): List<String> {
@@ -110,12 +102,10 @@ class RasterCharts(appContext: Context) {
     }
 
     private fun save() {
-        prefs.edit()
-            .putString(KEY_PATHS_ORDERED, org.json.JSONArray(paths).toString())
-            .putStringSet(KEY_OFF, off)
-            .putStringSet(KEY_HIDDEN, hidden)
-            .putBoolean(KEY_CHART_HIDDEN, chartHidden)
-            .apply()
+        Store.setList(Store.Group.RASTER, KEY_PATHS, paths)
+        Store.setList(Store.Group.RASTER, KEY_OFF, off.toList())
+        Store.setList(Store.Group.RASTER, KEY_HIDDEN, hidden.toList())
+        Store.setFlag(Store.Group.RASTER, KEY_CHART_HIDDEN, chartHidden)
     }
 
     /**
@@ -128,12 +118,10 @@ class RasterCharts(appContext: Context) {
         get() = paths.groupBy { providerLabel(it) }.toList()
 
     companion object {
-        private const val PREFS = "rastercharts.v1"
         private const val KEY_PATHS = "paths"
-        private const val KEY_PATHS_ORDERED = "paths.ordered"
         private const val KEY_OFF = "off"
-        private const val KEY_HIDDEN = "hidden.names"
-        private const val KEY_CHART_HIDDEN = "chart.hidden"
+        private const val KEY_HIDDEN = "hidden"
+        private const val KEY_CHART_HIDDEN = "chart_hidden"
 
         /**
          * The name of the set this file belongs to, from the engine. The

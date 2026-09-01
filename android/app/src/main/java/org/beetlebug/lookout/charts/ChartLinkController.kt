@@ -1,6 +1,7 @@
 package org.beetlebug.lookout.charts
 
 import org.beetlebug.lookout.Lookout
+import org.beetlebug.lookout.store.Store
 import org.beetlebug.lookout.engine.EngineAccess
 
 import android.content.Context
@@ -52,7 +53,6 @@ class ChartLinkController(appContext: Context, private val access: EngineAccess)
         private set
 
     private val linkFetch = ChartLinkFetch()
-    private val linkPrefs = appContext.getSharedPreferences("chartlinks.v1", Context.MODE_PRIVATE)
 
     /**
      * Whether a chart link was the drawn chart last time. One boolean, not a
@@ -60,7 +60,7 @@ class ChartLinkController(appContext: Context, private val access: EngineAccess)
      * the cell library BEFORE a handle exists, and the list itself is the
      * core's. Rewritten from every snapshot.
      */
-    val linkFirstHint: Boolean get() = linkPrefs.getBoolean(LINK_ACTIVE_HINT, false)
+    val linkFirstHint: Boolean get() = Store.flag(Store.Group.CHARTLINKS, LINK_ACTIVE_HINT)
 
     /**
      * Hand the old SharedPreferences list to the core, once, and then drop it.
@@ -72,18 +72,23 @@ class ChartLinkController(appContext: Context, private val access: EngineAccess)
      * RENDER THREAD, on every open; a no-op once the prefs are gone.
      */
     private fun migrateChartLinks(l: Lookout) {
-        val raw = linkPrefs.getString("links", null) ?: return
+        val raw = Store.text(Store.Group.CHARTLINKS, "links") ?: return
         val doc = org.json.JSONObject()
         try {
             doc.put("links", org.json.JSONArray(raw))
         } catch (_: Exception) {
-            linkPrefs.edit().remove("links").remove("active").apply()
+            forgetOldLinks()
             return
         }
-        linkPrefs.getString("active", null)?.let { doc.put("active", it) }
+        Store.text(Store.Group.CHARTLINKS, "active")?.let { doc.put("active", it) }
         Log.i(TAG, "chart links: handing ${raw.length} B of the old store to the core")
         l.chartLinksImport(doc.toString())
-        linkPrefs.edit().remove("links").remove("active").apply()
+        forgetOldLinks()
+    }
+
+    private fun forgetOldLinks() {
+        Store.remove(Store.Group.CHARTLINKS, "links")
+        Store.remove(Store.Group.CHARTLINKS, "active")
     }
 
     /**
@@ -124,8 +129,8 @@ class ChartLinkController(appContext: Context, private val access: EngineAccess)
             chartLinkAttribution = credit
             chartLinkError = err
             chartLinkBusy = busy
-            if (linkPrefs.getBoolean(LINK_ACTIVE_HINT, false) != hint) {
-                linkPrefs.edit().putBoolean(LINK_ACTIVE_HINT, hint).apply()
+            if (Store.flag(Store.Group.CHARTLINKS, LINK_ACTIVE_HINT) != hint) {
+                Store.setFlag(Store.Group.CHARTLINKS, LINK_ACTIVE_HINT, hint)
             }
         }
     }

@@ -2,8 +2,6 @@ package org.beetlebug.lookout.settings
 
 import org.beetlebug.lookout.Lookout
 
-import android.content.Context
-import android.content.SharedPreferences
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -188,49 +186,4 @@ class MarinerState {
     var safetyDepth: Double
         get() = num(MI.SAFETY_DEPTH); set(v) = setNum(MI.SAFETY_DEPTH, v)
 
-    companion object {
-        private const val PREFS = "mariner.v1"
-
-        fun prefs(ctx: Context): SharedPreferences =
-            ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-
-        /**
-         * Saved field-by-field, NOT as raw struct bytes: the engine struct's
-         * layout is an ABI detail that changes (it did twice in one week); a
-         * versioned key-per-field store survives that, and unknown or missing
-         * keys simply keep the engine's defaults.
-         *
-         * Stored as Float — SharedPreferences has no double, and every field
-         * here is a contour depth, an ordinal or a size multiplier, none of
-         * which care past 7 digits. It also keeps the prefs XML readable when
-         * debugging on device.
-         */
-        fun save(ctx: Context, values: DoubleArray, dateView: String) {
-            val e = prefs(ctx).edit()
-            for (i in MI.KEYS.indices) e.putFloat(MI.KEYS[i], values[i].toFloat())
-            e.putString(MI.DATE_KEY, dateView)
-            e.apply()
-        }
-
-        /**
-         * Overlay saved settings onto `values` (normally the engine's own
-         * defaults, read at open). Missing keys leave the field untouched, so a
-         * newly added setting keeps its engine default until the mariner
-         * changes it.
-         */
-        fun applySavedOverlay(ctx: Context, values: DoubleArray): String? {
-            val p = prefs(ctx)
-            for (i in MI.KEYS.indices) {
-                val k = MI.KEYS[i]
-                if (!p.contains(k)) continue
-                val v = p.getFloat(k, values[i].toFloat()).toDouble()
-                // A zero size multiplier means "unset", not "invisible".
-                val isScale = i == MI.SIZE_SCALE || i == MI.TEXT_SIZE_SCALE ||
-                        i == MI.SOUNDING_SIZE_SCALE
-                if (isScale && v <= 0.0) continue
-                values[i] = v
-            }
-            return p.getString(MI.DATE_KEY, null)
-        }
-    }
 }
