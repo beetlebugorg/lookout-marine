@@ -15,7 +15,6 @@ import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import org.json.JSONObject
 import java.io.File
 
 class ChartImport(private val appContext: Context) {
@@ -55,12 +54,12 @@ class ChartImport(private val appContext: Context) {
             // The two scan entry points share one buffer in the core and are
             // NOT reentrant; this thread is the only scanner (state gates a
             // second import).
-            val json = Lookout.scanCharts(source.absolutePath, zip)
-            if (json == null) {
+            val scan = Lookout.scanRead(source.absolutePath, zip)
+            if (scan == null) {
                 finish(source, null, onDone, failed = true)
                 return@Thread
             }
-            val plan = plan(json, source, zip)
+            val plan = plan(scan, source, zip)
             if (plan.ins.isEmpty()) {
                 // Nothing raw: what stands here (or was baked before) opens.
                 finish(source, plan.chartsOut, onDone, failed = false)
@@ -110,75 +109,78 @@ class ChartImport(private val appContext: Context) {
     )
 
     /**
-     * Order the scan's cells the way every shell does and lay the outputs out
-     * the way the engine expects them back: each chart in a directory of its
-     * own stem (an archive mirrors its entry paths; a lift keeps the entry's
-     * own name), pictures under their own root so the vector open's .pmtiles
+     * The scan's cells, in the order the core bakes them, each with the path
+     * the core lays it out at. THE ORDER AND THE PATHS ARE THE CORE'S
+     * (lookout_bake_order and lookout_bake_output_path): four shells had four
+     * copies of both, and the layout has teeth in it.
+     *
+     * Pictures go under a root of their own, so the vector open's .pmtiles
      * walk never swallows them.
      */
-    private fun plan(json: String, source: File, zip: Boolean): Plan {
-        data class Cell(val path: String, val name: String, val kind: String, val band: Int)
-
-        val root = JSONObject(json)
-        val all = ArrayList<Cell>()
-        for (key in listOf("cells", "raster")) {
-            val arr = root.optJSONArray(key) ?: continue
-            for (i in 0 until arr.length()) {
-                val o = arr.optJSONObject(i) ?: continue
-                val p = o.optString("path")
-                if (p.isEmpty()) continue
-                all.add(Cell(p, o.optString("name"), o.optString("kind"), o.optInt("band")))
-            }
-        }
-
-        fun rank(c: Cell) = when (c.kind) {
-            "source" -> 0
-            "raster_source" -> 1
-            else -> 2 // inside an archive even a baked chart has to come out
-        }
-
+    private fun plan(scan: Array<String>, source: File, zip: Boolean): Plan {
         val srcName = source.nameWithoutExtension.ifEmpty { source.name }
         val base = appContext.getExternalFilesDir(null) ?: appContext.filesDir
         val chartsOut = File(base, "Charts/$srcName")
         val rasterOut = File(base, "Rasters/$srcName")
 
-        val needs = all
-            .filter { zip || it.kind == "source" || it.kind == "raster_source" }
-            .sortedWith(compareBy({ rank(it) }, { it.band }, { it.name }))
+        val read = ChartScanRead.decode(scan)
+        val needs = read?.files.orEmpty()
+            .filter { zip || it.kind == ChartScanRead.SOURCE || it.kind == ChartScanRead.RASTER_SOURCE }
+        if (needs.isEmpty()) return Plan(emptyList(), emptyList(), 0, 0, 0, chartsOut)
+
+        val works = needs.map { prepare(it.kind) }.toIntArray()
+        val order = Lookout.bakeOrder(
+            needs.map { it.name }.toTypedArray(),
+            needs.map { it.band }.toIntArray(),
+            works,
+        )
 
         val ins = ArrayList<String>()
         val outs = ArrayList<String>()
         var cells = 0
         var sheets = 0
         var lifts = 0
-        for (c in needs) {
-            val stem = File(c.name).nameWithoutExtension
-            val raster = c.kind == "raster_source" || c.kind == "raster"
-            var dirBase = if (raster) rasterOut else chartsOut
-            if (zip) {
-                val rel = File(c.path).parent
-                if (!rel.isNullOrEmpty()) dirBase = File(dirBase, rel)
-            }
-            val lift = rank(c) == 2
-            val dir = if (lift || dirBase.name == stem) dirBase else File(dirBase, stem)
-            val name = if (lift) File(c.path).name else "$stem.pmtiles"
-            val out = File(dir, name)
+        for (i in order) {
+            val c = needs[i]
+            val work = works[i]
+            val raster = c.kind == ChartScanRead.RASTER || c.kind == ChartScanRead.RASTER_SOURCE
+            val dir = if (raster) rasterOut else chartsOut
+            val out = Lookout.bakeOutputPath(
+                dir.absolutePath, source.absolutePath, c.path, c.name, c.band, work,
+            )
+            if (out.isEmpty()) continue
+            val file = File(out)
             // Already made: a source reports its cells as raw however many
             // times it is scanned; re-importing must not re-bake the rest.
-            if (out.exists()) continue
-            dir.mkdirs()
+            if (file.exists()) continue
+            file.parentFile?.mkdirs()
             ins.add(c.path)
-            outs.add(out.absolutePath)
-            when (rank(c)) {
-                0 -> cells++
-                1 -> sheets++
+            outs.add(out)
+            when (work) {
+                PREPARE_CELL -> cells++
+                PREPARE_SHEET -> sheets++
                 else -> lifts++
             }
         }
         return Plan(ins, outs, cells, sheets, lifts, chartsOut)
     }
 
+    /**
+     * What has to happen to one file before it draws. Inside an archive even a
+     * baked chart has to come out, which is a lift.
+     */
+    private fun prepare(kind: Int): Int = when (kind) {
+        ChartScanRead.SOURCE -> PREPARE_CELL
+        ChartScanRead.RASTER_SOURCE -> PREPARE_SHEET
+        else -> PREPARE_LIFT
+    }
+
     companion object {
         private const val TAG = "lookout"
+
+        // lookout_prepare
+        private const val PREPARE_CELL = 0
+        private const val PREPARE_SHEET = 1
+        private const val PREPARE_LIFT = 2
     }
 }

@@ -2837,3 +2837,194 @@ export fn Java_org_beetlebug_lookout_Lookout_nLicenses(env: [*c]j.JNIEnv, cls: j
     }
     return out.toArray(env);
 }
+
+// ---- the scan and the bake plan, read typed ---------------------------------
+
+const c_scan = opaque {};
+
+extern fn lookout_scan_read(path: ?[*:0]const u8) ?*c_scan;
+extern fn lookout_scan_zip_read(path: ?[*:0]const u8) ?*c_scan;
+extern fn lookout_scan_free(s: ?*c_scan) void;
+extern fn lookout_scan_found(s: ?*const c_scan) ?*const CScanSummary;
+extern fn lookout_scan_cells(s: ?*const c_scan, out_n: *usize) ?[*]const ?*const CChartFile;
+extern fn lookout_scan_raster(s: ?*const c_scan, out_n: *usize) ?[*]const ?*const CChartFile;
+extern fn lookout_bake_order(items: [*]CBakeItem, n: usize) void;
+extern fn lookout_bake_output_path(out_dir: ?[*:0]const u8, source: ?[*:0]const u8, item: *const CBakeItem, out: [*]u8, cap: usize) usize;
+
+const CChartFile = extern struct {
+    path: ?[*:0]const u8,
+    name: ?[*:0]const u8,
+    kind: c_int,
+    band: c_int,
+    band_name: ?[*:0]const u8,
+    bytes: u64,
+    scale: f64,
+    located: c_int,
+    west: f64,
+    south: f64,
+    east: f64,
+    north: f64,
+};
+
+const CScanSummary = extern struct {
+    root: ?[*:0]const u8,
+    updates: usize,
+    other: usize,
+    refused: usize,
+    sources: usize,
+    bytes: u64,
+    producer: ?[*:0]const u8,
+};
+
+const CBakeItem = extern struct {
+    path: ?[*:0]const u8,
+    name: ?[*:0]const u8,
+    band: c_int,
+    work: c_int,
+};
+
+fn scanFiles(out: *Strings, files: []const ?*const CChartFile) void {
+    for (files) |fp| {
+        const f = fp orelse continue;
+        out.str(f.path);
+        out.str(f.name);
+        out.print("{d}", .{f.kind});
+        out.print("{d}", .{f.band});
+        out.str(f.band_name);
+        out.print("{d}", .{f.bytes});
+        out.print("{d}", .{f.scale});
+        out.print("{d}", .{f.located});
+        out.print("{d}", .{f.west});
+        out.print("{d}", .{f.south});
+        out.print("{d}", .{f.east});
+        out.print("{d}", .{f.north});
+    }
+}
+
+/// String[] nScanRead(String path, boolean zip) -- what a folder or one .zip
+/// holds. The summary, the counts, then twelve strings per file:
+///
+///   root, updates, other, refused, sources, bytes, producer
+///   cellCount, rasterCount
+///   then cellCount times, then rasterCount times:
+///     path, name, kind, band, bandName, bytes, scale, located, w, s, e, n
+///
+/// Null when the path cannot be read. Needs no handle: this runs before
+/// anything is open.
+export fn Java_org_beetlebug_lookout_Lookout_nScanRead(env: [*c]j.JNIEnv, cls: j.jclass, path: j.jstring, zip: j.jboolean) j.jobjectArray {
+    _ = cls;
+    const c = env_(env).GetStringUTFChars.?(env, path, null) orelse return null;
+    defer env_(env).ReleaseStringUTFChars.?(env, path, c);
+
+    const read = (if (zip != 0) lookout_scan_zip_read(@ptrCast(c)) else lookout_scan_read(@ptrCast(c))) orelse return null;
+    defer lookout_scan_free(read);
+
+    const found = lookout_scan_found(read) orelse return null;
+    var cn: usize = 0;
+    var rn: usize = 0;
+    const cells = lookout_scan_cells(read, &cn);
+    const raster = lookout_scan_raster(read, &rn);
+    if (cells == null) cn = 0;
+    if (raster == null) rn = 0;
+
+    var out = Strings.init();
+    defer out.deinit();
+
+    out.str(found.root);
+    out.print("{d}", .{found.updates});
+    out.print("{d}", .{found.other});
+    out.print("{d}", .{found.refused});
+    out.print("{d}", .{found.sources});
+    out.print("{d}", .{found.bytes});
+    out.str(found.producer);
+    out.print("{d}", .{cn});
+    out.print("{d}", .{rn});
+    if (cells) |p| scanFiles(&out, p[0..cn]);
+    if (raster) |p| scanFiles(&out, p[0..rn]);
+    return out.toArray(env);
+}
+
+/// int[] nBakeOrder(String[] names, int[] bands, int[] works) -- the order a
+/// bake runs the items in, as indices into what was passed. Coarse band first,
+/// sheets after the survey, a lift last. The core's rule, so four shells do not
+/// keep four copies of it.
+export fn Java_org_beetlebug_lookout_Lookout_nBakeOrder(env: [*c]j.JNIEnv, cls: j.jclass, names: j.jobjectArray, bands: j.jintArray, works: j.jintArray) j.jintArray {
+    _ = cls;
+    const n: usize = @intCast(env_(env).GetArrayLength.?(env, names));
+    if (n == 0) return env_(env).NewIntArray.?(env, 0);
+
+    // The order reads the name, the band and the work and never the path, so
+    // the path carries the caller's index back out.
+    const items = gpa.alloc(CBakeItem, n) catch return null;
+    defer gpa.free(items);
+    const keys = gpa.alloc([:0]u8, n) catch return null;
+    defer {
+        for (keys) |k| gpa.free(k);
+        gpa.free(keys);
+    }
+    const band_vals = gpa.alloc(j.jint, n) catch return null;
+    defer gpa.free(band_vals);
+    const work_vals = gpa.alloc(j.jint, n) catch return null;
+    defer gpa.free(work_vals);
+    env_(env).GetIntArrayRegion.?(env, bands, 0, @intCast(n), band_vals.ptr);
+    env_(env).GetIntArrayRegion.?(env, works, 0, @intCast(n), work_vals.ptr);
+
+    for (0..n) |i| {
+        const js: j.jstring = @ptrCast(env_(env).GetObjectArrayElement.?(env, names, @intCast(i)));
+        const c = env_(env).GetStringUTFChars.?(env, js, null);
+        const name = if (c) |p| std.mem.span(@as([*:0]const u8, @ptrCast(p))) else "";
+        keys[i] = gpa.allocSentinel(u8, name.len, 0) catch {
+            if (c != null) env_(env).ReleaseStringUTFChars.?(env, js, c);
+            // The deferred free walks the whole slice, so the tail has to be
+            // something it can free.
+            for (i..n) |k| keys[k] = gpa.allocSentinel(u8, 0, 0) catch return null;
+            return null;
+        };
+        @memcpy(keys[i], name);
+        if (c != null) env_(env).ReleaseStringUTFChars.?(env, js, c);
+        env_(env).DeleteLocalRef.?(env, js);
+        items[i] = .{
+            .path = @ptrFromInt(i + 1),
+            .name = keys[i].ptr,
+            .band = band_vals[i],
+            .work = work_vals[i],
+        };
+    }
+
+    lookout_bake_order(items.ptr, n);
+
+    const order = gpa.alloc(j.jint, n) catch return null;
+    defer gpa.free(order);
+    for (items, 0..) |it, k| order[k] = @intCast(@intFromPtr(it.path) - 1);
+
+    const arr = env_(env).NewIntArray.?(env, @intCast(n)) orelse return null;
+    env_(env).SetIntArrayRegion.?(env, arr, 0, @intCast(n), order.ptr);
+    return arr;
+}
+
+/// String nBakeOutputPath(String outDir, String source, String path,
+/// String name, int band, int work) -- where one prepared chart is written.
+/// Empty when it does not fit.
+export fn Java_org_beetlebug_lookout_Lookout_nBakeOutputPath(env: [*c]j.JNIEnv, cls: j.jclass, out_dir: j.jstring, source: j.jstring, path: j.jstring, name: j.jstring, band: j.jint, work: j.jint) j.jstring {
+    _ = cls;
+    const c_out = env_(env).GetStringUTFChars.?(env, out_dir, null) orelse return jstr(env, null);
+    defer env_(env).ReleaseStringUTFChars.?(env, out_dir, c_out);
+    const c_src = env_(env).GetStringUTFChars.?(env, source, null) orelse return jstr(env, null);
+    defer env_(env).ReleaseStringUTFChars.?(env, source, c_src);
+    const c_path = env_(env).GetStringUTFChars.?(env, path, null) orelse return jstr(env, null);
+    defer env_(env).ReleaseStringUTFChars.?(env, path, c_path);
+    const c_name = env_(env).GetStringUTFChars.?(env, name, null) orelse return jstr(env, null);
+    defer env_(env).ReleaseStringUTFChars.?(env, name, c_name);
+
+    const item = CBakeItem{
+        .path = @ptrCast(c_path),
+        .name = @ptrCast(c_name),
+        .band = band,
+        .work = work,
+    };
+    var buf: [4096]u8 = undefined;
+    const n = lookout_bake_output_path(@ptrCast(c_out), @ptrCast(c_src), &item, &buf, buf.len);
+    if (n == 0 or n >= buf.len) return jstr(env, null);
+    buf[n] = 0;
+    return env_(env).NewStringUTF.?(env, &buf);
+}

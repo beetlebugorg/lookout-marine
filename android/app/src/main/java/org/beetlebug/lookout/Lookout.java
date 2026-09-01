@@ -624,7 +624,26 @@ public final class Lookout implements AutoCloseable {
     /** Look through a folder or archive for charts; the engine's scan JSON,
      *  or null. NOT REENTRANT — serialize callers — and handle-less: the
      *  scan reads the filesystem, not the open chart. */
-    public static String scanCharts(String path, boolean zip) { return nScanCharts(path, zip); }
+    /**
+     * What a folder or one .zip holds: the summary, the counts, then twelve
+     * strings per file. Null when the path cannot be read. Needs no chart open.
+     */
+    public static String[] scanRead(String path, boolean zip) { return nScanRead(path, zip); }
+
+    /**
+     * The order a bake runs the items in, as indices into what was passed.
+     * Coarse band first, sheets after the survey, a lift last.
+     */
+    public static int[] bakeOrder(String[] names, int[] bands, int[] works) {
+        return nBakeOrder(names, bands, works);
+    }
+
+    /** Where one prepared chart is written under outDir. Empty when it does
+     *  not fit. */
+    public static String bakeOutputPath(String outDir, String source, String path,
+                                        String name, int band, int work) {
+        return nBakeOutputPath(outDir, source, path, name, band, work);
+    }
 
     // ---- portrayal quick toggles -------------------------------------------
 
@@ -647,7 +666,10 @@ public final class Lookout implements AutoCloseable {
     private static native boolean nMarkerRename(long h, long id, String name);
     private static native boolean nMarkerRemove(long h, long id);
     private static native byte[] nAuxFile(long h, String cell, String name, String[] mimeOut);
-    private static native String nScanCharts(String path, boolean zip);
+    private static native String[] nScanRead(String path, boolean zip);
+    private static native int[] nBakeOrder(String[] names, int[] bands, int[] works);
+    private static native String nBakeOutputPath(String outDir, String source, String path,
+                                                 String name, int band, int work);
     private static native void nToggleText(long h);
     private static native void nToggleSoundings(long h);
     private static native void nToggleOtherCategory(long h);

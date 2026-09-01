@@ -275,8 +275,11 @@ typedef struct {
     const char *producer;
 } lookout_scan_summary;
 
-/* Walk a folder and report what is there. NULL when the path cannot be read.
- * No handle needed: this runs before anything is open. */
+/* Walk a folder and report what is there. A path that is not a directory is
+ * taken as one file, because the open panel takes one archive as readily as a
+ * folder of them; a path that is not there reads as one file that is not a
+ * chart. NULL only when the read cannot be allocated. No handle needed: this
+ * runs before anything is open. */
 lookout_scan *lookout_scan_read(const char *path);
 /* lookout_scan_read for a chart set that arrives as ONE .zip. Only the
  * archive's central directory is read; nothing is inflated and nothing is
