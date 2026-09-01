@@ -680,9 +680,9 @@ pub const Lookout = struct {
     saved_view_ms: i64 = 0,
 
     /// The frame loop's own state: when the last tick ran, and how many ticks
-    /// in a row found nothing to draw.
+    /// in a row have found nothing to draw.
     last_tick_ms: i64 = 0,
-    quiet_ticks: u32 = 0,
+    ticks_since_change: u32 = 0,
     last_change_ms: i64 = 0, // when the view last moved
     /// When a frame last went out for own ship's own motion (see SHIP_FRAME_MS).
     last_ship_frame_ms: i64 = 0,
@@ -2339,15 +2339,15 @@ pub const Lookout = struct {
             .needs_redraw = self.needsRedraw(),
             .building = self.isBuilding(),
             .plugins_active = self.pluginsActive(),
-            .quiet = self.quiet_ticks,
+            .ticks_since_change = self.ticks_since_change,
         });
-        self.quiet_ticks = step.quiet;
+        self.ticks_since_change = step.ticks_since_change;
         return step;
     }
 
     /// Start the loop again after a change a shell made itself.
     pub fn frameKick(self: *Lookout) void {
-        self.quiet_ticks = 0;
+        self.ticks_since_change = 0;
         // The next tick is the first one back, so it advances nothing rather
         // than the whole time the loop was stopped.
         self.last_tick_ms = 0;

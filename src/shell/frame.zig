@@ -20,9 +20,9 @@ pub const Verdict = enum(c_int) {
 /// for a minute must not advance a fling by a minute.
 pub const dt_cap: f64 = 0.05;
 
-/// Quiet ticks before a shell stops. At two, a build that finishes just after
-/// a still frame is still drawn.
-pub const quiet_ticks: u32 = 2;
+/// How many ticks in a row may find nothing to draw before a shell stops. At
+/// two, a build that finishes just after a motionless frame is still drawn.
+pub const ticks_before_stop: u32 = 2;
 
 /// The poll rate once a shell has stopped. The AIS store coalesces to 2 Hz;
 /// this is twice that.
@@ -36,15 +36,16 @@ pub const Inputs = struct {
     building: bool,
     /// A plugin layer is up, so traffic can arrive with no input behind it.
     plugins_active: bool,
-    /// How many ticks in a row found none of the above.
-    quiet: u32,
+    /// How many ticks in a row found none of the above. `decide` counts it,
+    /// and the caller keeps it between ticks.
+    ticks_since_change: u32,
 };
 
 pub const Step = struct {
     verdict: Verdict,
     wait_ms: c_int = 0,
-    /// The new count of quiet ticks, which the caller keeps for the next one.
-    quiet: u32 = 0,
+    /// The new count, for the caller to pass back on the next tick.
+    ticks_since_change: u32 = 0,
 };
 
 /// The gap since the last tick, capped. A `last_ms` of zero is the first tick
@@ -56,17 +57,18 @@ pub fn delta(last_ms: i64, now_ms: i64) f64 {
 }
 
 pub fn decide(in: Inputs) Step {
-    if (in.animating or in.needs_redraw) return .{ .verdict = .render, .quiet = 0 };
+    if (in.animating or in.needs_redraw) return .{ .verdict = .render, .ticks_since_change = 0 };
     // Keep ticking so a finished build appears at once instead of at the
     // mariner's next gesture.
-    if (in.building) return .{ .verdict = .wait, .quiet = 0 };
+    if (in.building) return .{ .verdict = .wait, .ticks_since_change = 0 };
 
-    const quiet = in.quiet + 1;
-    if (quiet <= quiet_ticks) return .{ .verdict = .wait, .quiet = quiet };
+    const ticks = in.ticks_since_change + 1;
+    if (ticks <= ticks_before_stop) return .{ .verdict = .wait, .ticks_since_change = ticks };
     // Plugin traffic has no gesture behind it. Without the slow poll, AIS
     // froze until the mariner touched the trackpad.
-    if (in.plugins_active) return .{ .verdict = .wait, .wait_ms = poll_ms, .quiet = quiet };
-    return .{ .verdict = .idle, .quiet = quiet };
+    if (in.plugins_active)
+        return .{ .verdict = .wait, .wait_ms = poll_ms, .ticks_since_change = ticks };
+    return .{ .verdict = .idle, .ticks_since_change = ticks };
 }
 
 // ---- tests ---------------------------------------------------------------------
@@ -79,7 +81,7 @@ const still = Inputs{
     .needs_redraw = false,
     .building = false,
     .plugins_active = false,
-    .quiet = 0,
+    .ticks_since_change = 0,
 };
 
 test "the gap is capped, and the first tick back advances nothing" {
@@ -92,10 +94,10 @@ test "the gap is capped, and the first tick back advances nothing" {
 
 test "anything moving is a frame, and resets the count" {
     var in = still;
-    in.quiet = 7;
+    in.ticks_since_change = 7;
     in.animating = true;
     try t.expectEqual(Verdict.render, decide(in).verdict);
-    try t.expectEqual(@as(u32, 0), decide(in).quiet);
+    try t.expectEqual(@as(u32, 0), decide(in).ticks_since_change);
 
     in.animating = false;
     in.needs_redraw = true;
@@ -104,21 +106,21 @@ test "anything moving is a frame, and resets the count" {
 
 test "a build filling in keeps the loop ticking" {
     var in = still;
-    in.quiet = 7;
+    in.ticks_since_change = 7;
     in.building = true;
     const step = decide(in);
     try t.expectEqual(Verdict.wait, step.verdict);
     try t.expectEqual(@as(c_int, 0), step.wait_ms);
-    try t.expectEqual(@as(u32, 0), step.quiet);
+    try t.expectEqual(@as(u32, 0), step.ticks_since_change);
 }
 
-test "a couple of quiet ticks pass before the loop stops" {
+test "a couple of ticks with nothing to draw pass before the loop stops" {
     var in = still;
-    for (0..quiet_ticks) |_| {
+    for (0..ticks_before_stop) |_| {
         const step = decide(in);
         try t.expectEqual(Verdict.wait, step.verdict);
         try t.expectEqual(@as(c_int, 0), step.wait_ms);
-        in.quiet = step.quiet;
+        in.ticks_since_change = step.ticks_since_change;
     }
     try t.expectEqual(Verdict.idle, decide(in).verdict);
 }
@@ -126,17 +128,17 @@ test "a couple of quiet ticks pass before the loop stops" {
 test "with plugins up the loop slows down instead of stopping" {
     var in = still;
     in.plugins_active = true;
-    in.quiet = quiet_ticks + 1;
+    in.ticks_since_change = ticks_before_stop + 1;
     const step = decide(in);
     try t.expectEqual(Verdict.wait, step.verdict);
     try t.expectEqual(poll_ms, step.wait_ms);
 
-    // The count keeps growing and the answer does not change.
-    in.quiet = step.quiet;
+    // The count keeps growing and the verdict does not change.
+    in.ticks_since_change = step.ticks_since_change;
     try t.expectEqual(poll_ms, decide(in).wait_ms);
 
     // A plugin that wants a frame gets one no matter how high the count is.
-    in.quiet = 400;
+    in.ticks_since_change = 400;
     in.needs_redraw = true;
     try t.expectEqual(Verdict.render, decide(in).verdict);
 }
