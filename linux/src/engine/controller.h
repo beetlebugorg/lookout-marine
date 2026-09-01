@@ -158,8 +158,9 @@ void  lk_chart_controller_chart_link_remove (LkChartController *self, const char
 void  lk_chart_controller_chart_link_refresh (LkChartController *self, const char *url);
 void  lk_chart_controller_chart_links_import (LkChartController *self, const char *json);
 /* Everything the chart list shows, or NULL when nothing changed since the last
- * poll. Transfer full. ONE consumer: whoever polls clears the flag. */
-char *lk_chart_controller_chart_links_changed_json (LkChartController *self);
+ * poll. Transfer full; free it with lookout_links_free. ONE consumer: whoever
+ * polls clears the flag. */
+lookout_links *lk_chart_controller_chart_links_read (LkChartController *self);
 
 /* ---- wasm plugins -------------------------------------------------------- */
 

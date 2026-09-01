@@ -1001,22 +1001,14 @@ lk_chart_controller_chart_links_import (LkChartController *self, const char *jso
   lookout_chart_links_import (self->handle, json);
 }
 
-char *
-lk_chart_controller_chart_links_changed_json (LkChartController *self)
+lookout_links *
+lk_chart_controller_chart_links_read (LkChartController *self)
 {
   if (!LK_IS_CHART_CONTROLLER (self) || self->handle == NULL)
     return NULL;
   if (lookout_chart_links_changed (self->handle) == 0)
     return NULL;
-
-  char *owned = lookout_chart_links_json (self->handle);
-  if (owned == NULL)
-    return NULL;
-  /* lookout and GLib need not share a malloc, so the bytes are copied out and
-   * handed back to the allocator they came from. */
-  char *copy = g_strdup (owned);
-  lookout_string_free (owned);
-  return copy;
+  return lookout_links_read (self->handle);
 }
 
 /* ---- view --------------------------------------------------------------- */

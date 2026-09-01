@@ -320,7 +320,12 @@ lk_chart_bake_start (const char        *source,
       char path[2048];
 
       if (lookout_bake_output_path (out_dir, source, item, path, sizeof path) == 0)
-        continue;
+        {
+          /* Nowhere to write it that fits. Say so rather than leaving one
+             chart quietly out of the library. */
+          g_warning ("no output path for %s under %s", item->name, out_dir);
+          continue;
+        }
 
       /* Already made. A source always reports its cells as needing preparing —
          a .zip of raw cells says so however many times it is opened — so
