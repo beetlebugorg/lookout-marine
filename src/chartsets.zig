@@ -15,6 +15,7 @@
 const std = @import("std");
 
 const library = @import("library.zig");
+const bake = @import("shell/bake.zig");
 const settings = @import("settings.zig");
 const Lock = @import("lock.zig").Lock;
 const sleepMs = @import("lock.zig").sleepMs;
@@ -60,12 +61,22 @@ const Row = struct {
     band_hi: u8 = 0,
     /// Every chart in this set that can be handed to the engine now, sorted.
     openable: [][:0]u8 = &.{},
+    /// Every file the scan found, as the scan found it. A shell bakes from
+    /// this rather than walking the folder again.
+    files: []library.File = &.{},
+    /// The arena the files' strings live in, freed with them.
+    files_arena: ?std.heap.ArenaAllocator = null,
 };
 
 pub const Sets = struct {
     gpa: std.mem.Allocator,
     io: std.Io,
     store: *settings.Store,
+    /// Where the shell puts what it prepared. Each set is scanned there as
+    /// well as at its own path, and a prepared chart WINS over the file it was
+    /// made from, so a folder scanned after an import does not ask to be
+    /// imported again. Empty when the shell prepares nowhere.
+    prepared_root: []u8,
     mu: Lock = .{},
 
     rows: std.ArrayList(Row) = .empty,
@@ -86,12 +97,18 @@ pub const Sets = struct {
     const off_key = "off";
 
     /// Load the saved list and start scanning it.
-    pub fn open(gpa: std.mem.Allocator, io: std.Io, store: *settings.Store) !*Sets {
+    pub fn open(
+        gpa: std.mem.Allocator,
+        io: std.Io,
+        store: *settings.Store,
+        prepared_root: []const u8,
+    ) !*Sets {
         const self = try gpa.create(Sets);
         self.* = .{
             .gpa = gpa,
             .io = io,
             .store = store,
+            .prepared_root = try gpa.dupe(u8, prepared_root),
             .reads = std.heap.ArenaAllocator.init(gpa),
         };
         errdefer self.close();
@@ -126,6 +143,7 @@ pub const Sets = struct {
         self.rows.deinit(self.gpa);
         for (self.queue.items) |p| self.gpa.free(p);
         self.queue.deinit(self.gpa);
+        self.gpa.free(self.prepared_root);
         self.reads.deinit();
         self.gpa.destroy(self);
     }
@@ -136,6 +154,7 @@ pub const Sets = struct {
         self.gpa.free(r.producer);
         for (r.openable) |p| self.gpa.free(p);
         self.gpa.free(r.openable);
+        if (r.files_arena) |*a| a.deinit();
     }
 
     // ---- the list --------------------------------------------------------
@@ -147,6 +166,25 @@ pub const Sets = struct {
         const was = self.dirty;
         self.dirty = false;
         return was;
+    }
+
+    /// Every file one set holds, as the scan found it: the charts ready to
+    /// draw and the ones that bake first, with the band and the size. A shell
+    /// bakes from this rather than walking the folder again.
+    ///
+    /// Borrowed until the next call that changes the list. Empty until the
+    /// background scan has read the folder.
+    pub fn files(self: *Sets, path: []const u8) []const *const library.File {
+        self.mu.lock();
+        defer self.mu.unlock();
+        for (self.rows.items) |r| {
+            if (!std.mem.eql(u8, r.path, path)) continue;
+            const a = self.reads.allocator();
+            const out = a.alloc(*const library.File, r.files.len) catch return &.{};
+            for (r.files, out) |*f, *dst| dst.* = f;
+            return out;
+        }
+        return &.{};
     }
 
     /// The list, in the order added. Borrowed until the next call that changes
@@ -334,19 +372,99 @@ pub const Sets = struct {
 
             var scan = library.scan(self.gpa, self.io, path, null, null) catch continue;
             defer scan.deinit();
-            self.land(path, &scan);
+
+            // What the shell prepared from this folder, if anything. It is
+            // part of the same set: a folder holding both raw cells and ready
+            // imagery arrives whole.
+            var prepared: ?library.Scan = null;
+            defer if (prepared) |*p| p.deinit();
+            if (self.preparedPath(path)) |dir| {
+                defer self.gpa.free(dir);
+                prepared = library.scan(self.gpa, self.io, dir, null, null) catch null;
+            }
+            self.land(path, &scan, if (prepared) |*p| p else null);
         }
     }
 
-    /// Put what a scan found on its row.
-    fn land(self: *Sets, path: []const u8, scan: *const library.Scan) void {
+    /// True when the prepared scan holds a chart made from this file.
+    fn readyHas(prepared: *const library.Scan, name: []const u8) bool {
+        const stem = library.stemOf(name);
+        for ([_][]const library.Cell{ prepared.cells, prepared.raster }) |list| {
+            for (list) |c| {
+                if (std.mem.eql(u8, library.stemOf(c.name), stem)) return true;
+            }
+        }
+        return false;
+    }
+
+    /// Where the shell would have put what it prepared from `path`, or null
+    /// when it prepares nowhere. The caller frees it.
+    fn preparedPath(self: *Sets, path: []const u8) ?[]u8 {
+        if (self.prepared_root.len == 0) return null;
+        const name = bake.preparedName(path);
+        return std.fs.path.join(self.gpa, &.{ self.prepared_root, name }) catch null;
+    }
+
+    /// Put what a scan found on its row. `prepared` is the same set as the
+    /// shell prepared it, when there is one.
+    fn land(
+        self: *Sets,
+        path: []const u8,
+        scan: *const library.Scan,
+        prepared: ?*const library.Scan,
+    ) void {
+        // The files, in the arena that holds their strings, so a shell bakes
+        // from what the scan found rather than walking the folder again.
+        var files_arena = std.heap.ArenaAllocator.init(self.gpa);
+        const fa = files_arena.allocator();
+        var found = std.ArrayList(library.File).empty;
+        if (prepared) |p| {
+            for ([_][]const library.Cell{ p.cells, p.raster }) |list| {
+                for (list) |c| found.append(fa, library.fileOf(fa, c) catch continue) catch {};
+            }
+        }
+        for ([_][]const library.Cell{ scan.cells, scan.raster }) |list| {
+            for (list) |c| {
+                if (prepared != null and readyHas(prepared.?, c.name)) continue;
+                found.append(fa, library.fileOf(fa, c) catch continue) catch {};
+            }
+        }
+
+        // A prepared chart WINS over the file it was made from, matched by the
+        // name without its extension. Otherwise a set that has been imported
+        // reports every cell as still needing one.
+        var ready = std.StringHashMap(void).init(self.gpa);
+        defer ready.deinit();
+        if (prepared) |p| {
+            for ([_][]const library.Cell{ p.cells, p.raster }) |list| {
+                for (list) |c| ready.put(library.stemOf(c.name), {}) catch {};
+            }
+        }
+
         var openable = std.ArrayList([:0]u8).empty;
         var charts: usize = 0;
         var pictures: usize = 0;
         var unprepared: usize = 0;
         var lo: u8 = 0;
         var hi: u8 = 0;
+        // The prepared charts first, then whatever the source folder still
+        // holds that they did not replace.
+        if (prepared) |p| {
+            for (p.cells) |c| {
+                if (c.kind == .source) continue;
+                charts += 1;
+                openable.append(self.gpa, self.gpa.dupeZ(u8, c.path) catch continue) catch {};
+                if (c.band >= 1 and c.band <= 6) {
+                    if (lo == 0 or c.band < lo) lo = c.band;
+                    if (c.band > hi) hi = c.band;
+                }
+            }
+            for (p.raster) |c| {
+                if (c.kind != .raster_source) pictures += 1;
+            }
+        }
         for (scan.cells) |c| {
+            if (ready.contains(library.stemOf(c.name))) continue;
             if (c.kind == .source) {
                 unprepared += 1;
             } else {
@@ -359,6 +477,7 @@ pub const Sets = struct {
             }
         }
         for (scan.raster) |c| {
+            if (ready.contains(library.stemOf(c.name))) continue;
             if (c.kind == .raster_source) unprepared += 1 else pictures += 1;
         }
 
@@ -369,6 +488,9 @@ pub const Sets = struct {
             for (r.openable) |p| self.gpa.free(p);
             self.gpa.free(r.openable);
             r.openable = openable.toOwnedSlice(self.gpa) catch &.{};
+            if (r.files_arena) |*a| a.deinit();
+            r.files_arena = files_arena;
+            r.files = found.items;
             r.charts = charts;
             r.pictures = pictures;
             r.unprepared = unprepared;
@@ -390,6 +512,7 @@ pub const Sets = struct {
         // The row went while the scan ran.
         for (openable.items) |p| self.gpa.free(p);
         openable.deinit(self.gpa);
+        files_arena.deinit();
     }
 };
 
@@ -418,6 +541,17 @@ const Fixture = struct {
         self.tmp.cleanup();
     }
 
+    /// A folder holding exactly the files named, under the temp root.
+    fn folderNamed(self: *Fixture, name: []const u8, files: []const []const u8) ![]u8 {
+        try self.tmp.dir.createDirPath(self.io, name);
+        var buf: [256]u8 = undefined;
+        for (files) |f| {
+            const sub = try std.fmt.bufPrint(&buf, "{s}/{s}", .{ name, f });
+            try self.tmp.dir.writeFile(self.io, .{ .sub_path = sub, .data = "x" });
+        }
+        return std.fmt.allocPrint(t.allocator, "{s}/{s}", .{ self.dir, name });
+    }
+
     /// A folder holding one baked cell and one picture, under the temp root.
     fn folder(self: *Fixture, name: []const u8) ![]u8 {
         try self.tmp.dir.createDirPath(self.io, name);
@@ -430,7 +564,7 @@ const Fixture = struct {
     }
 
     fn open(self: *Fixture) !*Sets {
-        return Sets.open(t.allocator, self.io, self.store);
+        return Sets.open(t.allocator, self.io, self.store, "");
     }
 };
 
@@ -606,4 +740,59 @@ test "a folder that is not there is listed and scans to nothing" {
     try t.expectEqual(@as(usize, 0), rows[0].charts);
     try t.expectEqual(@as(usize, 0), s.compose().len);
     try t.expectEqual(@as(usize, 1), f.store.list(settings.group_chartsets, "paths").len);
+}
+
+test "a prepared chart wins over the file it was made from" {
+    var f = try Fixture.init();
+    defer f.deinit();
+
+    // The mariner's folder holds a raw cell.
+    const src = try f.folderNamed("Set A", &.{"US5MD1MC.000"});
+    defer t.allocator.free(src);
+    // And the shell has prepared it into a root of its own.
+    const root = try f.folderNamed("Prepared", &.{});
+    defer t.allocator.free(root);
+    try f.tmp.dir.createDirPath(f.io, "Prepared/Set A/US5MD1MC");
+    try f.tmp.dir.writeFile(f.io, .{
+        .sub_path = "Prepared/Set A/US5MD1MC/US5MD1MC.pmtiles",
+        .data = "x",
+    });
+
+    const s = try Sets.open(t.allocator, f.io, f.store, root);
+    defer s.close();
+    try t.expect(s.add(src));
+    settle(s);
+
+    const rows = s.all();
+    try t.expectEqual(@as(usize, 1), rows.len);
+    // One chart ready to draw, and nothing left to prepare.
+    try t.expectEqual(@as(usize, 1), rows[0].charts);
+    try t.expectEqual(@as(usize, 0), rows[0].unprepared);
+    // The prepared chart is what opens, rather than the cell it came from.
+    const paths = s.compose();
+    try t.expectEqual(@as(usize, 1), paths.len);
+    try t.expect(std.mem.endsWith(u8, std.mem.span(paths[0]), ".pmtiles"));
+}
+
+test "a set with nothing prepared still reports what it holds" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const src = try f.folderNamed("Set B", &.{"US5MD1MC.000"});
+    defer t.allocator.free(src);
+
+    const s = try Sets.open(t.allocator, f.io, f.store, "");
+    defer s.close();
+    try t.expect(s.add(src));
+    settle(s);
+
+    const rows = s.all();
+    try t.expectEqual(@as(usize, 1), rows.len);
+    try t.expectEqual(@as(usize, 0), rows[0].charts);
+    try t.expectEqual(@as(usize, 1), rows[0].unprepared);
+    // A cell that has not been prepared cannot be handed to the engine.
+    try t.expectEqual(@as(usize, 0), s.compose().len);
+    // And the file list is what a bake reads.
+    const files = s.files(src);
+    try t.expectEqual(@as(usize, 1), files.len);
+    try t.expectEqual(library.FileKind.source, files[0].kind);
 }

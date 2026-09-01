@@ -301,86 +301,137 @@ enum ChartScan {
 
 /// The installed sets, and their on and off state, across launches.
 ///
-/// Only the folder and the switch are stored. The cells are scanned again at
-/// launch, because a folder changes underneath the app: a bake finishes, a
-/// drive is unplugged, the mariner deletes a region. Storing the cell list
-/// would mean offering charts that are no longer there.
-struct ChartSetStore {
-    private static let group = Store.Group.chartsets
-    private static let pathsKey = "paths"
-    private static let offKey = "off"
-    private static let migratedKey = "raster_migrated"
-    /// What the sets replaced. Read once, so a mariner who had charts open
-    /// before this list existed still has them after.
-    private static let recents = Store.Group.recents
+/// The CORE holds the list: `lookout_chart_sets` loads it off the store, scans
+/// each folder on a worker of its own, and answers what to open. Only the
+/// folder and the switch are stored. The cells are scanned again at launch,
+/// because a folder changes underneath the app: a bake finishes, a drive is
+/// unplugged, the mariner deletes a region.
+enum ChartSetStore {
+    /// The model, opened once on the shell's store. Nil when the core cannot
+    /// open one, leaving every read empty and every write a no-op.
+    nonisolated(unsafe) private static var handle: OpaquePointer? = open()
 
-    /// Raster charts added before sets existed, as the folders they live in.
-    /// One list means one list: a picture the mariner added by hand is a set
-    /// like any other, not a second kind of thing in a second section.
-    private static func legacyRasterFolders() -> [String] {
-        let files = Store.shared.strings(RasterModel.group, RasterModel.pathsKey)
-        var seen = Set<String>()
-        var out: [String] = []
-        for f in files where FileManager.default.fileExists(atPath: f) {
-            // Never anything Lookout prepared. Those already belong to the set
-            // they were made from, and each one sits in a directory of its own
-            // name: a folder of 900 sheets would otherwise arrive as 900 sets.
-            if ChartBake.isDerived(f) { continue }
-            let dir = (f as NSString).deletingLastPathComponent
-            if dir.isEmpty || seen.contains(dir) { continue }
-            seen.insert(dir)
-            out.append(dir)
+    private static func open() -> OpaquePointer? {
+        guard let store = Store.shared.handle else { return nil }
+        // Where the bake writes. The core scans it beside each set, so a
+        // folder imported once does not ask to be imported again.
+        return (ChartBake.chartsRoot ?? "").withCString {
+            lookout_chart_sets_open(store, $0)
         }
-        return out
     }
 
-    static func savedPaths() -> [String] {
-        if Store.shared.has(group, pathsKey) {
-            let saved = Store.shared.strings(group, pathsKey)
-            // A mariner who had raster charts before this list existed gets
-            // them as sets, once.
-            let missing = legacyRasterFolders().filter { !saved.contains($0) }
-            guard !missing.isEmpty, Store.shared.bool(group, migratedKey) != true
-            else { return saved }
-            Store.shared.set(true, group, migratedKey)
-            let merged = saved + missing
-            Store.shared.set(merged, group, pathsKey)
-            return merged
+    /// A background scan has landed since the last ask. The frame loop polls
+    /// it, the way it polls the chart links.
+    static func changed() -> Bool {
+        guard let h = handle else { return false }
+        return lookout_chart_sets_changed(h) != 0
+    }
+
+    /// Every set, in the order added.
+    static func all() -> [CoreChartSet] {
+        guard let h = handle else { return [] }
+        var n = 0
+        guard let rows = lookout_chart_sets_all(h, &n) else { return [] }
+        return (0..<n).compactMap { rows[$0].map { CoreChartSet($0.pointee) } }
+    }
+
+    /// Every file one set holds, as the scan found it. The bake reads this
+    /// rather than walking the folder again.
+    static func files(of path: String) -> [ScannedCell] {
+        guard let h = handle else { return [] }
+        return path.withCString { p in
+            var n = 0
+            guard let rows = lookout_chart_set_files(h, p, &n) else { return [] }
+            // A .zip's entries cannot be handed to the engine as they lie.
+            let archive = ChartScan.isArchive(path)
+            return (0..<n).compactMap { i in
+                rows[i].map { ScannedCell($0.pointee, archived: archive) }
+            }
         }
-        // No list yet means this build has never run here. Carry the last
-        // opened paths across: without this the mariner's charts are simply
-        // gone at the next launch, with the folder still on disk and the app
-        // showing the first-run panel.
-        //
-        // The paths are not filtered here. A scan decides what is a chart, so
-        // an entry that was never a chart library, or has since been deleted,
-        // drops out on its own the first time the list is built.
-        let legacy = Store.shared.strings(recents, "paths") + legacyRasterFolders()
-        Store.shared.set(true, group, migratedKey)
-        if !legacy.isEmpty { Store.shared.set(legacy, group, pathsKey) }
-        return legacy
     }
 
-    static func savedOff() -> Set<String> {
-        Set(Store.shared.strings(group, offKey))
+    static func savedPaths() -> [String] { all().map(\.path) }
+    static func savedOff() -> Set<String> { Set(all().filter { !$0.on }.map(\.path)) }
+
+    /// Every chart the switched-on sets hold, sorted and deduplicated. The
+    /// core's rule, so two shells reading one library open it the same way.
+    static func compose() -> [String] {
+        guard let h = handle else { return [] }
+        var n = 0
+        guard let paths = lookout_chart_sets_compose(h, &n) else { return [] }
+        return (0..<n).compactMap { paths[$0].map { String(cString: $0) } }
     }
 
-    /// Put a folder on the list. Adding one already there changes nothing.
-    static func add(_ path: String) {
-        var paths = savedPaths()
-        if !paths.contains(path) { paths.append(path) }
-        Store.shared.set(paths, group, pathsKey)
+    /// Put a folder on the list and scan it. False when it was already there.
+    @discardableResult
+    static func add(_ path: String) -> Bool {
+        guard let h = handle else { return false }
+        return path.withCString { lookout_chart_sets_add(h, $0) != 0 }
     }
 
-    /// Take a folder off the list. This is the ONLY thing that shortens it.
-    static func remove(_ path: String) {
-        Store.shared.set(savedPaths().filter { $0 != path }, group, pathsKey)
-        Store.shared.set(Array(savedOff().subtracting([path])), group, offKey)
+    /// Take a folder off the list. This deletes nothing: what a bake produced
+    /// is the shell's to remove.
+    @discardableResult
+    static func remove(_ path: String) -> Bool {
+        guard let h = handle else { return false }
+        return path.withCString { lookout_chart_sets_remove(h, $0) != 0 }
     }
 
     static func setOff(_ path: String, _ off: Bool) {
-        var list = savedOff()
-        if off { list.insert(path) } else { list.remove(path) }
-        Store.shared.set(Array(list), group, offKey)
+        guard let h = handle else { return }
+        _ = path.withCString { lookout_chart_sets_set_on(h, $0, off ? 0 : 1) }
+    }
+
+    /// For a test: point the model at the store in force. `Store.shared` is
+    /// swapped per test, and a handle held over that swap reads the previous
+    /// test's file.
+    static func reopen() {
+        close()
+        handle = open()
+    }
+
+    /// For a test: close the model and open none. Opening one starts a scan of
+    /// every saved path, which a test putting the mariner's own store back has
+    /// no business starting.
+    static func close() {
+        if let h = handle { lookout_chart_sets_close(h) }
+        handle = nil
+    }
+}
+
+/// One row of the core's list.
+struct CoreChartSet: Identifiable, Hashable {
+    let path: String
+    /// The agency when the charts agree on one, else the folder name.
+    let title: String
+    /// The two-character producer code. Empty when the charts disagree.
+    let producer: String
+    let on: Bool
+    /// False until the background scan has read this folder. Every count below
+    /// is 0 until then.
+    let scanned: Bool
+    let charts: Int
+    let pictures: Int
+    let unprepared: Int
+    let bytes: Int64
+    /// The coarsest and finest usage bands present, 1 to 6. 0 when the set
+    /// holds no cell with a band in its name.
+    let bandLo: Int
+    let bandHi: Int
+
+    var id: String { path }
+
+    init(_ s: lookout_chart_set) {
+        path = String(cString: s.path)
+        title = String(cString: s.title)
+        producer = String(cString: s.producer)
+        on = s.on != 0
+        scanned = s.scanned != 0
+        charts = s.charts
+        pictures = s.pictures
+        unprepared = s.unprepared
+        bytes = Int64(s.bytes)
+        bandLo = Int(s.band_lo)
+        bandHi = Int(s.band_hi)
     }
 }

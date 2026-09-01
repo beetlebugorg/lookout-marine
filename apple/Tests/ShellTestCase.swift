@@ -24,9 +24,15 @@ class ShellTestCase: XCTestCase {
         dir = url
         previous = Store.shared
         Store.shared = Store(directory: url.path)
+        // The set list is a core model held open on a store. Point it at the
+        // one this test just installed, or it reads the previous test's file.
+        ChartSetStore.reopen()
     }
 
     override func tearDown() {
+        // Closed rather than reopened: opening one on the mariner's own store
+        // would start a scan of every folder they have installed.
+        ChartSetStore.close()
         if let previous { Store.shared = previous }
         previous = nil
         if let dir { try? FileManager.default.removeItem(at: dir) }

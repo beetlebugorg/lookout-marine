@@ -46,10 +46,56 @@ extension Store {
         copyFlag(defaults, "lookout.chart.hidden", Store.Group.raster, "chart_hidden")
         copyList(defaults, "lookout.chartsets", Store.Group.chartsets, "paths")
         copyList(defaults, "lookout.chartsets.off", Store.Group.chartsets, "off")
-        copyFlag(defaults, "lookout.chartsets.rastermigrated",
-                 Store.Group.chartsets, "raster_migrated")
 
         importPluginConfigs(defaults)
+        seedChartSets(defaults)
+    }
+
+    /// The sets a mariner had before there was a set list.
+    ///
+    /// With NO list, the paths they last OPENED become their sets: without it
+    /// their charts are simply gone at the next launch, with the folder still
+    /// on disk and the app showing the first-run page.
+    ///
+    /// With a list, only the raster charts they added by hand join it, and
+    /// only once. There is one list, so a picture is a set like any other.
+    ///
+    /// The paths are not filtered. A scan decides what is a chart, so an entry
+    /// that was never a chart library, or has since been deleted, drops out on
+    /// its own the first time the list is built.
+    private func seedChartSets(_ d: UserDefaults) {
+        let group = Store.Group.chartsets
+        let migrated = "raster_migrated"
+        if has(group, "paths") {
+            let saved = strings(group, "paths")
+            let missing = legacyRasterFolders().filter { !saved.contains($0) }
+            guard !missing.isEmpty, bool(group, migrated) != true else { return }
+            set(true, group, migrated)
+            set(saved + missing, group, "paths")
+            return
+        }
+        let legacy = (d.stringArray(forKey: "lookout.recents") ?? []) + legacyRasterFolders()
+        set(true, group, migrated)
+        if !legacy.isEmpty { set(legacy, group, "paths") }
+    }
+
+    /// Raster charts added before sets existed, as the folders they live in. A
+    /// picture the mariner added by hand is a set like any other.
+    private func legacyRasterFolders() -> [String] {
+        var seen = Set<String>()
+        var out: [String] = []
+        for f in strings(Store.Group.raster, "paths")
+        where FileManager.default.fileExists(atPath: f) {
+            // Never anything Lookout prepared. Those already belong to the set
+            // they were made from, and each one sits in a directory of its own
+            // name: a folder of 900 sheets would otherwise arrive as 900 sets.
+            if ChartBake.isDerived(f) { continue }
+            let dir = (f as NSString).deletingLastPathComponent
+            if dir.isEmpty || seen.contains(dir) { continue }
+            seen.insert(dir)
+            out.append(dir)
+        }
+        return out
     }
 
     private func copyList(_ d: UserDefaults, _ from: String, _ group: String, _ key: String) {

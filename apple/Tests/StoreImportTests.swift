@@ -62,6 +62,8 @@ final class StoreImportTests: ShellTestCase {
 
         let s = Store.shared
         XCTAssertEqual(s.strings(Store.Group.chartsets, "paths"), ["/charts/a", "/charts/b"])
+        // The recents are not merged into a list that already exists.
+        XCTAssertEqual(s.strings(Store.Group.recents, "paths"), ["/charts/old"])
         XCTAssertEqual(s.strings(Store.Group.chartsets, "off"), ["/charts/b"])
         XCTAssertEqual(s.strings(Store.Group.raster, "paths"), ["/a/photo.mbtiles"])
         XCTAssertEqual(s.strings(Store.Group.raster, "off"), ["/a/photo.mbtiles"])

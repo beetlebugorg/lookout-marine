@@ -554,27 +554,40 @@ pub fn toRead(gpa: std.mem.Allocator, s: *const Scan) !*Read {
     return self;
 }
 
+/// A file name without its extension, which is what a prepared chart and the
+/// file it was made from have in common.
+pub fn stemOf(name: []const u8) []const u8 {
+    const base = baseName(name);
+    const dot = std.mem.lastIndexOfScalar(u8, base, '.') orelse return base;
+    return base[0..dot];
+}
+
+/// One scanned file as the C struct, with its strings in `a`.
+pub fn fileOf(a: std.mem.Allocator, c: Cell) !File {
+    return .{
+        .path = try owned.str(a, c.path),
+        .name = try owned.str(a, c.name),
+        .kind = fileKindOf(c.kind),
+        .band = c.band,
+        .band_name = if (c.band >= 1 and c.band <= 6)
+            try owned.str(a, bandName(c.band))
+        else
+            try owned.str(a, ""),
+        .bytes = c.bytes,
+        .scale = c.facts.scale,
+        .located = @intFromBool(c.facts.bounds != null),
+        .west = if (c.facts.bounds) |b| b[0] else 0,
+        .south = if (c.facts.bounds) |b| b[1] else 0,
+        .east = if (c.facts.bounds) |b| b[2] else 0,
+        .north = if (c.facts.bounds) |b| b[3] else 0,
+    };
+}
+
 fn readFiles(a: std.mem.Allocator, cells: []const Cell) ![]const *const File {
     const out = try a.alloc(File, cells.len);
     const by_ptr = try a.alloc(*const File, cells.len);
     for (cells, out, by_ptr) |c, *dst, *p| {
-        dst.* = .{
-            .path = try owned.str(a, c.path),
-            .name = try owned.str(a, c.name),
-            .kind = fileKindOf(c.kind),
-            .band = c.band,
-            .band_name = if (c.band >= 1 and c.band <= 6)
-                try owned.str(a, bandName(c.band))
-            else
-                try owned.str(a, ""),
-            .bytes = c.bytes,
-            .scale = c.facts.scale,
-            .located = @intFromBool(c.facts.bounds != null),
-            .west = if (c.facts.bounds) |b| b[0] else 0,
-            .south = if (c.facts.bounds) |b| b[1] else 0,
-            .east = if (c.facts.bounds) |b| b[2] else 0,
-            .north = if (c.facts.bounds) |b| b[3] else 0,
-        };
+        dst.* = try fileOf(a, c);
         p.* = dst;
     }
     return by_ptr;

@@ -745,6 +745,9 @@ final class ChartController: NSObject {
         // landing answer raises needs-redraw, so a resolve keeps this ticking
         // until it is done.
         model.chartLinks.poll()
+        // A set's background scan landing is the core's only unprompted
+        // change, and the flag has one consumer.
+        if ChartSetStore.changed() { model.charts.pullChartSets() }
 
     }
 

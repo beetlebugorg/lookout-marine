@@ -144,7 +144,17 @@ final class ChartsModel {
         // raster stays out. Opening one as a vector chart composes nonsense.
         var seen = Set(Store.shared.strings(RasterModel.group, RasterModel.pathsKey))
         for dir in ChartSetStore.savedPaths() where !off.contains(dir) {
-            for p in cellPaths(for: dir) where !seen.contains(p) {
+            var candidates: [String] = []
+            // What a bake prepared from this set is what draws. The set itself
+            // may still be raw cells, or an archive.
+            if let prepared = ChartBake.preparedDirectory(for: dir),
+               FileManager.default.fileExists(atPath: prepared) {
+                candidates += chartPaths(inDirectory: prepared)
+            }
+            // An archive is never a chart. Its charts come out of it first,
+            // and handing the .zip to the engine composes nothing.
+            if !ChartScan.isArchive(dir) { candidates += cellPaths(for: dir) }
+            for p in candidates where !seen.contains(p) {
                 seen.insert(p)
                 installed.append(p)
             }
@@ -233,55 +243,51 @@ final class ChartsModel {
 
     // MARK: - The installed sets
 
-    /// Every chart the switched-on sets carry, ready to hand to the engine.
-    /// Sorted, and with duplicates dropped: two sets may overlap, and the same
-    /// cell twice would be composed twice.
-    var openPaths: [String] {
-        var seen = Set<String>()
-        var out: [String] = []
-        for set in sets where set.on {
-            for p in set.openablePaths where !seen.contains(p) {
-                seen.insert(p)
-                out.append(p)
-            }
+    /// Every chart the switched-on sets hold, ready to hand to the engine.
+    /// The core's rule: the union, sorted and deduplicated, because two sets
+    /// may overlap and the same cell twice would be composed twice.
+    var openPaths: [String] { ChartSetStore.compose() }
+
+    /// Take the core's list. It loads the saved paths at open and scans each
+    /// folder on a worker of its own, so this reads what it has; `pullChartSets`
+    /// reads it again when a scan lands.
+    func loadChartSets(completion: (() -> Void)? = nil) {
+        guard !ChartSetStore.savedPaths().isEmpty else {
+            completion?()
+            return
         }
-        return out.sorted()
+        scanning = true
+        pullChartSets()
+        completion?()
     }
 
-    /// Look through the folders saved from the last run. The cells are scanned
-    /// again rather than stored, because a folder changes underneath the app.
-    func loadChartSets(completion: (() -> Void)? = nil) {
-        let paths = ChartSetStore.savedPaths()
-        let off = ChartSetStore.savedOff()
-        guard !paths.isEmpty, !scanning else { completion?(); return }
-        scanning = true
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let found = paths.compactMap { p -> ChartSet? in
-                // Either kind counts. A folder of pictures is a set.
-                guard var s = ChartScan.scan(p),
-                      !s.cells.isEmpty || !s.rasters.isEmpty else { return nil }
-                s.on = !off.contains(p)
-                return s
-            }
-            DispatchQueue.main.async {
-                guard let self else { return }
-                self.sets = found
-                self.scanning = false
-                self.syncRasterFromSets()
-                // The launch walk cannot see a library of pictures: it looks
-                // for cells, and finds none. Open what the scan found once it
-                // knows, or a mariner carrying only imagery gets the first-run
-                // page every time with their charts sitting on the list.
-                if !self.hasChart && (!self.openPaths.isEmpty || !self.raster.paths.isEmpty) {
-                    self.requestOpen(self.openPaths)
-                }
-                // The saved list is NOT rewritten here. A folder that did not
-                // answer this time is a drive that is not plugged in, not a
-                // folder the mariner threw away, and writing the shorter list
-                // back would lose their charts for good. Only an explicit add
-                // or remove changes what is saved.
-                completion?()
-            }
+    /// The core's list, as the settings page draws it. Called at launch and
+    /// from the readout tick whenever a background scan lands.
+    func pullChartSets() {
+        let rows = ChartSetStore.all()
+        scanning = rows.contains { !$0.scanned }
+        sets = rows.compactMap { row -> ChartSet? in
+            // A folder still being read stays on the list with nothing in it
+            // yet. One that was read and held no charts is not a chart folder.
+            let files = ChartSetStore.files(of: row.path)
+            guard !row.scanned || !files.isEmpty else { return nil }
+            let prepared = ChartBake.preparedDirectory(for: row.path)
+            return ChartSet(
+                path: row.path,
+                producer: row.producer.isEmpty ? nil : row.producer,
+                preparedPath: FileManager.default.fileExists(atPath: prepared ?? "")
+                    ? prepared : nil,
+                cells: files.filter { !$0.isRaster },
+                rasters: files.filter(\.isRaster),
+                on: row.on)
+        }
+        syncRasterFromSets()
+        // The launch walk cannot see a library of pictures: it looks for
+        // cells, and finds none. Open what the scan found once it knows, or a
+        // mariner carrying only imagery gets the first-run page every time
+        // with their charts sitting on the list.
+        if !hasChart && (!openPaths.isEmpty || !raster.paths.isEmpty) {
+            requestOpen(openPaths)
         }
     }
 

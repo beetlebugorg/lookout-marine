@@ -8,6 +8,7 @@ const std = @import("std");
 const capi = @import("../capi.zig");
 const sets = @import("../chartsets.zig");
 const settings = @import("../settings.zig");
+const library = @import("../library.zig");
 
 const gpa = capi.gpa;
 const capi_io = capi.capi_io;
@@ -25,9 +26,12 @@ fn span(p: ?[*:0]const u8) []const u8 {
 
 /// Load the saved list and start the background scans. See
 /// lookout-library.h.
-export fn lookout_chart_sets_open(store: ?*settings.Store) ?*lookout_chart_sets {
+export fn lookout_chart_sets_open(
+    store: ?*settings.Store,
+    prepared_root: ?[*:0]const u8,
+) ?*lookout_chart_sets {
     const s = store orelse return null;
-    return sets.Sets.open(gpa, capi_io, s) catch null;
+    return sets.Sets.open(gpa, capi_io, s, span(prepared_root)) catch null;
 }
 
 export fn lookout_chart_sets_close(s: ?*lookout_chart_sets) void {
@@ -50,6 +54,22 @@ export fn lookout_chart_sets_all(s: ?*lookout_chart_sets, out_n: ?*usize) ?[*]co
     count(out_n, rows.len);
     if (rows.len == 0) return null;
     return rows.ptr;
+}
+
+/// Every file one set holds. See lookout-library.h.
+export fn lookout_chart_set_files(
+    s: ?*lookout_chart_sets,
+    path: ?[*:0]const u8,
+    out_n: ?*usize,
+) ?[*]const *const library.File {
+    const x = s orelse {
+        count(out_n, 0);
+        return null;
+    };
+    const list = x.files(span(path));
+    count(out_n, list.len);
+    if (list.len == 0) return null;
+    return list.ptr;
 }
 
 export fn lookout_chart_sets_add(s: ?*lookout_chart_sets, path: ?[*:0]const u8) c_int {
