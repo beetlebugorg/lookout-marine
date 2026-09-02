@@ -398,7 +398,7 @@ namespace winrt::LookoutMarine::implementation
     void MainWindow::RenderLoop()
     {
         long long last_qpc = 0;
-        DWORD idle_wait_ms = 1;
+        int wait_ms = 0;
         LARGE_INTEGER freq;
         QueryPerformanceFrequency(&freq);
         const bool prof = !frame_prof_path.empty();
@@ -430,7 +430,7 @@ namespace winrt::LookoutMarine::implementation
                     lk_controller_readout(controller, &r);
                 LARGE_INTEGER rt0, rt1;
                 QueryPerformanceCounter(&rt0);
-                drew = lk_controller_tick(controller, dt) != 0;
+                drew = lk_controller_tick(controller, &wait_ms) != 0;
                 if (prof && drew)
                 {
                     QueryPerformanceCounter(&rt1);
@@ -447,15 +447,13 @@ namespace winrt::LookoutMarine::implementation
                     render_ms,
                 });
             /* Parked, not slept: input kicks the event and the next frame
-             * starts at once. The escalating timeout is only for what the
-             * engine does on its own — a plugin drawing, a build finishing —
-             * and caps at the same 250 ms the Mac shell idles at. A quiet
-             * chart costs four wakeups a second instead of 125. */
-            if (drew)
-                idle_wait_ms = 1;
-            else if (idle_wait_ms < 250)
-                idle_wait_ms = idle_wait_ms * 2 > 250 ? 250 : idle_wait_ms * 2;
-            lk_controller_wait(drew ? 1 : idle_wait_ms);
+             * starts at once. How long to park is the ENGINE's answer, so a
+             * quiet chart with plugins up costs four wakeups a second and one
+             * with none costs none at all until something kicks. */
+            // A wait of zero is the next display tick, and this thread has no
+            // display link to hang off, so it comes back at the shortest park
+            // the loop has ever taken.
+            lk_controller_wait(wait_ms == LK_WAIT_IDLE ? LK_WAIT_IDLE : std::max(wait_ms, 1));
           }
           catch (...)
           {

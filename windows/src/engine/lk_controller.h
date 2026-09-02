@@ -1,9 +1,11 @@
-/* lk_controller — the one lookout* handle and the on-demand render loop.
+/* lk_controller — the one lookout* handle, and the seam to the engine's frame
+ * loop.
  *
- * Host-agnostic C (no WinUI, no GTK): the C++/WinRT shell owns the window, the
- * SwapChainPanel, the per-frame pacemaker and input; it drives this each frame
- * with lk_controller_tick() and forwards gestures to the lk_controller_* calls.
- * Mirrors linux/src/lk-chart-controller.c, minus GObject/GTK. */
+ * Host-agnostic C (no WinUI): the C++/WinRT shell owns the window, the
+ * SwapChainPanel, the render thread and input; it drives this each frame with
+ * lk_controller_tick() and forwards gestures to the lk_controller_* calls.
+ * WHEN the next frame is, and what to advance before it, is the engine's
+ * answer (lookout_frame_next). */
 #ifndef LK_CONTROLLER_H
 #define LK_CONTROLLER_H
 
@@ -63,15 +65,22 @@ void lk_controller_invalidate(lk_controller *self);
 void lk_controller_close(lk_controller *self);
 int  lk_controller_is_open(lk_controller *self);
 
-/* Per-frame. Advances animation, renders when needed, persists the pose every
- * few seconds. Returns 1 if a frame was drawn this tick. */
-int  lk_controller_tick(lk_controller *self, double dt);
-/* 1 while the host should keep ticking (animating / needs redraw / building). */
-int  lk_controller_needs_tick(lk_controller *self);
+/* Park until a mutation kicks the loop, rather than for a number of ms. */
+#define LK_WAIT_IDLE (-1)
 
-/* Park the render thread until a mutation kicks it or `ms` passes. Every
- * mutating lk_controller_* call kicks, so the frame that shows a change
- * starts at once; the timeout covers what the engine does on its own. */
+/* One tick of the render loop. The ENGINE measures the gap since the last
+ * tick and caps it, steps the fling, adopts the queued chart-link answers,
+ * writes the pose down on its own cadence and decides whether there is a
+ * frame to draw (lookout_frame_next). Returns 1 if a frame was drawn.
+ *
+ * `wait_ms` (may be NULL) receives how long to park before asking again: 0 to
+ * come straight back, a count of milliseconds, or LK_WAIT_IDLE when nothing
+ * is moving and only a kick starts the loop again. */
+int  lk_controller_tick(lk_controller *self, int *wait_ms);
+
+/* Park the render thread until a mutation kicks it, or `ms` passes, or
+ * forever for LK_WAIT_IDLE. Every mutating lk_controller_* call kicks, so the
+ * frame that shows a change starts at once. */
 void lk_controller_wait(int ms);
 void lk_controller_kick(void);
 
@@ -176,10 +185,9 @@ void lk_controller_readout(lk_controller *self, lk_readout *out);
 
 /* 1 while a plugin layer is running.
  *
- * This shell needs no idle poll of its own for them, unlike the render-on-demand
- * ones: RenderLoop already asks lookout_needs_redraw every few milliseconds on
- * its own thread, so geometry a plugin posts with no gesture behind it is picked
- * up by the next tick. */
+ * This shell needs no idle poll of its own for them: the engine keeps asking
+ * for a frame four times a second while a plugin layer is up, so geometry a
+ * plugin posts with no gesture behind it is picked up by the next tick. */
 int lk_controller_plugins_active(lk_controller *self);
 
 /* Every loaded plugin with its settings schema and the values in force. The
