@@ -32,6 +32,10 @@ pub const Job = struct {
     /// `outs` never moves after the job starts, so the index is all that
     /// crosses between the threads.
     last_out: std.atomic.Value(u32) = .init(0),
+    /// Why a phase stopped, as tile57 said it. Written by the job's own thread
+    /// before `running` clears, and read after it, so the release on `running`
+    /// is what publishes it.
+    why: [cc.TILE57_ERROR_MSG_MAX]u8 = @splat(0),
 
     /// Where the phase now running starts in the job. tile57 counts from zero
     /// each phase; the mariner is watching one job.
@@ -101,6 +105,7 @@ pub const Job = struct {
             .ok = @intFromBool(self.ok.load(.acquire)),
             .running = @intFromBool(self.running.load(.acquire)),
             .chart = @splat(0),
+            .why = self.why,
         };
         const last = self.last_out.load(.acquire);
         if (last > 0 and last <= self.outs.len) {
@@ -182,6 +187,9 @@ pub const Job = struct {
         }
 
         self.baked.store(total, .release);
+        // What tile57 said, so a shell that has nothing to show can say why
+        // rather than only that. Written before `running` clears.
+        if (st != cc.TILE57_OK) self.why = err.message;
         // A cancelled bake is not a failure: whatever landed is a usable
         // library.
         self.ok.store(st == cc.TILE57_OK, .release);
@@ -219,6 +227,9 @@ pub const Progress = extern struct {
     /// runs several charts at once, so this is one of the few in flight rather
     /// than the one `done` counts to.
     chart: [64]u8,
+    /// Why a phase stopped, as tile57 said it. Empty while `ok` is 1, and
+    /// empty for a failure tile57 gave no detail for.
+    why: [cc.TILE57_ERROR_MSG_MAX]u8,
 };
 
 // ---- tests ---------------------------------------------------------------------
@@ -277,6 +288,16 @@ test "the chart a poll names is the one written last" {
 
     Job.label(job, 0);
     try t.expectEqualStrings("US4MD11M", std.mem.sliceTo(&job.poll().chart, 0));
+}
+
+// Nothing failed, so there is nothing to say about why.
+test "a job that ran no phase says nothing about why" {
+    const job = try emptyJob(2);
+    defer job.free();
+    settle(job);
+    const p = job.poll();
+    try t.expectEqual(@as(c_int, 1), p.ok);
+    try t.expectEqualStrings("", std.mem.sliceTo(&p.why, 0));
 }
 
 test "a chart name past the buffer is cut rather than lost" {

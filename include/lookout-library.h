@@ -130,6 +130,10 @@ typedef struct {
      * name. A bake runs several charts at once, so this is one of the few in
      * flight rather than the one `done` counts to. */
     char chart[64];
+    /* Why a phase stopped, NUL-terminated. Empty while `ok` is 1, and empty
+     * for a failure the baker gave no detail for, where an import that
+     * produced nothing has to say so in the shell's own words. */
+    char why[256];
 } lookout_bake_progress;
 
 /* Start a bake on a thread of its own. NULL when it does not start. The
