@@ -64,7 +64,8 @@ void TestLicenses()
 
     LK_CASE("every field the core states reaches the row");
     {
-        LicenseComponent const &wamr = Manifest().components[0];
+        LicenseManifest m = Manifest();
+        LicenseComponent const &wamr = m.components[0];
         LK_EQ(wamr.id, std::string("wamr"));
         LK_EQ(wamr.name, std::string("WAMR"));
         LK_EQ(wamr.group, std::string("Runtime"));
