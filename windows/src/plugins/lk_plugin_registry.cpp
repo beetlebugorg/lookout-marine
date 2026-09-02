@@ -1,7 +1,6 @@
 /* lk_plugin_registry — see lk_plugin_registry.h. */
 #include "lk_plugin_registry.h"
 
-#include <algorithm>
 #include <cmath>
 #include <cstdio>
 
@@ -11,59 +10,6 @@ namespace
 {
     using lkw::json::Kind;
     using lkw::json::Value;
-
-    lkw::PluginField ReadField(Value const &o, bool *ok)
-    {
-        lkw::PluginField f;
-        std::string kind = o.MemberString("kind");
-        f.key = o.MemberString("key");
-        *ok = !f.key.empty() && (kind == "number" || kind == "toggle" || kind == "text");
-        if (!*ok)
-            return f;
-
-        f.kind = kind == "toggle" ? lkw::PluginKind::Toggle
-               : kind == "text"   ? lkw::PluginKind::Text
-                                  : lkw::PluginKind::Number;
-        f.label = o.MemberString("label", f.key);
-        f.desc = o.MemberString("desc");
-        f.unit = o.MemberString("unit");
-        f.min = o.MemberNumber("min", 0);
-        f.max = o.MemberNumber("max", 1);
-        f.optional = o.MemberBool("optional", false);
-
-        switch (f.kind)
-        {
-        case lkw::PluginKind::Toggle: f.fallback = o.MemberBool("default", false) ? 1 : 0; break;
-        case lkw::PluginKind::Text:   f.fallback_text = o.MemberString("default"); break;
-        default:                      f.fallback = o.MemberNumber("default", 0); break;
-        }
-        return f;
-    }
-
-    lkw::PluginCell ReadCell(Value const &row, lkw::PluginField const &f)
-    {
-        lkw::PluginCell cell;
-        cell.kind = f.kind;
-        switch (f.kind)
-        {
-        case lkw::PluginKind::Toggle:
-            cell.toggle = row.MemberBool(f.key, f.fallback != 0);
-            break;
-        case lkw::PluginKind::Text:
-        {
-            /* A cell the mariner CLEARED is empty, not defaulted: an optional
-             * address left blank has to survive the round trip, or the
-             * manifest's default reappears in the field every time. */
-            Value const &v = row.Member(f.key);
-            cell.text = v.kind() == Kind::String ? v.String() : f.fallback_text;
-            break;
-        }
-        default:
-            cell.number = row.MemberNumber(f.key, f.fallback);
-            break;
-        }
-        return cell;
-    }
 
     /* "Connected · 44 msg/s" out of a {"state":…,"detail":…} object. */
     std::string Line(Value const &o, std::string *out_state)
@@ -153,164 +99,38 @@ namespace lkw
         return StateTone::Bad;
     }
 
-    /* ---- reading the registry --------------------------------------------- */
+    /* ---- the model, out of the core's read --------------------------------- */
 
-    std::optional<std::vector<PluginInfo>> ReadRegistry(std::string_view json)
+    char const *SectionId(lookout_section section)
     {
-        auto doc = json::Parse(json);
-        if (!doc || doc->kind() != Kind::Object || !doc->Has("plugins"))
-            return std::nullopt;
-
-        std::vector<PluginInfo> out;
-        for (auto const &entry : (*doc)["plugins"].Items())
+        switch (section)
         {
-            if (entry.kind() != Kind::Object)
-                continue;
-
-            PluginInfo info;
-            info.id = entry.MemberString("id");
-            if (info.id.empty())
-                continue;
-            info.name = entry.MemberString("name", info.id);
-            info.version = entry.MemberString("version");
-            info.origin = entry.MemberString("origin", "bundled");
-            info.live = entry.MemberBool("live", false);
-            info.status = entry.MemberString("status");
-
-            for (auto const &ce : entry["capabilities"].Items())
-            {
-                if (ce.kind() != Kind::Object)
-                    continue;
-                PluginCapability cap;
-                cap.cap = ce.MemberString("cap");
-                cap.sentence = ce.MemberString("sentence");
-                cap.granted = ce.MemberBool("granted", true);
-                if (!cap.cap.empty())
-                    info.capabilities.push_back(std::move(cap));
-            }
-
-            for (auto const &fe : entry["file_types"].Items())
-                if (fe.kind() == Kind::String)
-                    info.file_types.push_back(fe.String());
-
-            for (auto const &fo : entry["settings"].Items())
-            {
-                if (fo.kind() != Kind::Object)
-                    continue;
-                bool ok = false;
-                PluginField f = ReadField(fo, &ok);
-                /* A text field is only ever a column of a list; the core
-                 * refuses a scalar one, so there is nothing to draw for it. */
-                if (!ok || f.kind == PluginKind::Text)
-                    continue;
-
-                info.values[f.key] = f.kind == PluginKind::Toggle
-                                         ? (fo.MemberBool("value", f.fallback != 0) ? 1 : 0)
-                                         : fo.MemberNumber("value", f.fallback);
-
-                std::string tab = fo.MemberString("tab", kDefaultTab);
-                std::string title = fo.MemberString("group", info.name);
-                auto it = std::find_if(info.groups.begin(), info.groups.end(),
-                                       [&](PluginGroup const &g) {
-                                           return g.tab == tab && g.title == title;
-                                       });
-                if (it == info.groups.end())
-                    info.groups.push_back({ info.id, title, tab, { f } });
-                else
-                    it->fields.push_back(f);
-                info.fields.push_back(f);
-            }
-
-            for (auto const &lo : entry["lists"].Items())
-            {
-                if (lo.kind() != Kind::Object)
-                    continue;
-
-                PluginList list;
-                list.plugin_id = info.id;
-                list.key = lo.MemberString("key");
-                if (list.key.empty())
-                    continue;
-                list.tab = lo.MemberString("tab", kDefaultTab);
-                list.title = lo.MemberString("group", info.name);
-                list.footer = lo.MemberString("footer");
-                list.empty = lo.MemberString("empty", "Nothing here yet.");
-                list.add_label = lo.MemberString("add_label", "Add");
-                list.switch_key = lo.MemberString("switch_key");
-                list.max_rows = (int)lo.MemberNumber("max_rows", 0);
-
-                /* What to browse the boat's network for. The core carries the
-                 * declaration; finding anything is this shell's own job. */
-                for (auto const &dobj : lo["discover"].Items())
-                {
-                    if (dobj.kind() != Kind::Object)
-                        continue;
-                    PluginDiscover want;
-                    want.service = dobj.MemberString("service");
-                    if (want.service.empty())
-                        continue;
-                    Value const &set = dobj["set"];
-                    for (auto const &key : set.MemberNames())
-                    {
-                        /* Kept as text and typed again when a row takes it,
-                         * which is what a cell of a row is here anyway. */
-                        Value const &value = set[key];
-                        switch (value.kind())
-                        {
-                        case Kind::Bool:   want.set[key] = value.Bool(false) ? "true" : "false"; break;
-                        case Kind::String: want.set[key] = value.String(); break;
-                        case Kind::Number: want.set[key] = Trimmed(value.Number(0)); break;
-                        default: break;
-                        }
-                    }
-                    list.discover.push_back(std::move(want));
-                }
-
-                for (auto const &ce : lo["item_fields"].Items())
-                {
-                    if (ce.kind() != Kind::Object)
-                        continue;
-                    bool ok = false;
-                    PluginField f = ReadField(ce, &ok);
-                    if (ok)
-                        list.item_fields.push_back(f);
-                }
-
-                /* A list with no switch column named takes its first toggle,
-                 * which is what a list with one toggle wants. */
-                if (list.switch_key.empty())
-                {
-                    for (auto const &f : list.item_fields)
-                    {
-                        if (f.kind == PluginKind::Toggle)
-                        {
-                            list.switch_key = f.key;
-                            break;
-                        }
-                    }
-                }
-
-                std::vector<PluginRow> rows;
-                for (auto const &ro : lo["rows"].Items())
-                {
-                    if (ro.kind() != Kind::Object)
-                        continue;
-                    PluginRow row;
-                    row.id = ro.MemberString("id");
-                    if (row.id.empty())
-                        continue;
-                    for (auto const &f : list.item_fields)
-                        row.cells[f.key] = ReadCell(ro, f);
-                    rows.push_back(std::move(row));
-                }
-
-                info.rows[list.key] = std::move(rows);
-                info.lists.push_back(std::move(list));
-            }
-
-            out.push_back(std::move(info));
+        case LOOKOUT_SECTION_DISPLAY:     return "display";
+        case LOOKOUT_SECTION_DEPTHS:      return "depths";
+        case LOOKOUT_SECTION_TEXT:        return "text";
+        case LOOKOUT_SECTION_CHARTS:      return "charts";
+        case LOOKOUT_SECTION_VESSELS:     return "vessels";
+        case LOOKOUT_SECTION_ALARMS:      return "alarms";
+        case LOOKOUT_SECTION_CONNECTIONS: return "connections";
+        default:                          return "advanced";
         }
-        return out;
+    }
+
+    PluginField::PluginField(lookout_plugin_setting const &s)
+        : key{ s.key }, label{ s.label }, desc{ s.desc }, unit{ s.unit }, kind{ s.kind },
+          min{ s.min }, max{ s.max }, fallback{ s.default_number },
+          fallback_text{ s.default_text }, optional{ s.optional != 0 }
+    {
+        /* The manifest may name no label, and a control with no name on it is
+         * unusable. */
+        if (label.empty())
+            label = key;
+    }
+
+    PluginCell::PluginCell(lookout_plugin_value const &v)
+        : kind{ v.kind }, number{ v.number }, toggle{ v.number != 0 },
+          text{ v.text != nullptr ? v.text : "" }
+    {
     }
 
     /* ---- writing the config ----------------------------------------------- */
@@ -328,7 +148,7 @@ namespace lkw
             auto it = p.values.find(f.key);
             double v = it != p.values.end() ? it->second : f.fallback;
             out += Quoted(f.key) + ":";
-            out += f.kind == PluginKind::Toggle ? (v != 0 ? "true" : "false") : Trimmed(v);
+            out += f.kind == LOOKOUT_PLUGIN_SETTING_TOGGLE ? (v != 0 ? "true" : "false") : Trimmed(v);
         }
 
         for (auto const &list : p.lists)
@@ -354,16 +174,16 @@ namespace lkw
                         auto cell = row.cells.find(f.key);
                         if (cell == row.cells.end())
                         {
-                            out += f.kind == PluginKind::Toggle
+                            out += f.kind == LOOKOUT_PLUGIN_SETTING_TOGGLE
                                        ? (f.fallback != 0 ? "true" : "false")
-                                   : f.kind == PluginKind::Text ? Quoted(f.fallback_text)
+                                   : f.kind == LOOKOUT_PLUGIN_SETTING_TEXT ? Quoted(f.fallback_text)
                                                                 : Trimmed(f.fallback);
                             continue;
                         }
                         switch (f.kind)
                         {
-                        case PluginKind::Toggle: out += cell->second.toggle ? "true" : "false"; break;
-                        case PluginKind::Text:   out += Quoted(cell->second.text); break;
+                        case LOOKOUT_PLUGIN_SETTING_TOGGLE: out += cell->second.toggle ? "true" : "false"; break;
+                        case LOOKOUT_PLUGIN_SETTING_TEXT:   out += Quoted(cell->second.text); break;
                         default:                 out += Trimmed(cell->second.number); break;
                         }
                     }

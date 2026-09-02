@@ -6,11 +6,8 @@
 #include <cstdio>
 #include <filesystem>
 
-#include "lk_json.h"
-
 extern "C"
 {
-#include "lookout.h"
 #include "tile57.h"
 }
 
@@ -37,9 +34,9 @@ namespace lkw
          * the call boundary. */
         int Rank(ScannedCell const &c)
         {
-            if (c.kind == "source")
+            if (c.kind == LOOKOUT_FILE_SOURCE)
                 return 0;
-            if (c.kind == "raster_source")
+            if (c.kind == LOOKOUT_FILE_RASTER_SOURCE)
                 return 1;
             return 2;
         }
@@ -85,42 +82,40 @@ namespace lkw
     ScanResult ScanCharts(std::string const &path)
     {
         ScanResult out;
-        size_t len = 0;
-        /* Both scans share one buffer inside the core and are NOT reentrant, so
-         * this must stay on one thread. It runs before the bake thread starts. */
-        char const *json = IsArchive(path) ? lookout_scan_zip(path.c_str(), &len)
-                                           : lookout_scan_charts(path.c_str(), &len);
-        if (json == nullptr || len == 0)
+        /* A read is the caller's own copy, so two scans may run at once. */
+        const bool zip = IsArchive(path);
+        lookout_scan *scan = zip ? lookout_scan_zip_read(path.c_str())
+                                 : lookout_scan_read(path.c_str());
+        if (scan == nullptr)
             return out;
-
-        auto doc = json::Parse(std::string_view(json, len));
-        if (!doc || doc->kind() != json::Kind::Object)
-            return out;
-        json::Value const &root = *doc;
 
         out.ok = true;
-        out.root = root.MemberString("root");
-        out.sources = (unsigned)root.MemberNumber("sources", 0);
+        if (lookout_scan_summary const *found = lookout_scan_found(scan))
+        {
+            out.root = found->root;
+            out.sources = (unsigned)found->sources;
+        }
 
         /* Inside an archive every entry is archived: `path` is an entry name,
          * and nothing opens until the bake takes it out. */
-        const bool zip = IsArchive(path);
-        for (char const *key : { "cells", "raster" })
+        for (int half = 0; half < 2; ++half)
         {
-            for (auto const &o : root[key].Items())
+            size_t n = 0;
+            lookout_chart_file const *const *files =
+                half == 0 ? lookout_scan_cells(scan, &n) : lookout_scan_raster(scan, &n);
+            for (size_t i = 0; i < n; ++i)
             {
-                if (o.kind() != json::Kind::Object)
-                    continue;
                 ScannedCell c;
-                c.path = o.MemberString("path");
-                c.name = o.MemberString("name");
-                c.kind = o.MemberString("kind");
-                c.band = (int)o.MemberNumber("band", 0);
+                c.path = files[i]->path;
+                c.name = files[i]->name;
+                c.kind = files[i]->kind;
+                c.band = files[i]->band;
                 c.archived = zip;
                 if (!c.path.empty())
                     out.cells.push_back(std::move(c));
             }
         }
+        lookout_scan_free(scan);
         return out;
     }
 
@@ -186,7 +181,7 @@ namespace lkw
         /* ordered_ and out_paths_ run in step, so the kind rides on the index:
          * a baked sheet is a picture for the raster underlay, never a chart
          * for the vector open. */
-        if (ordered_[i].kind == "raster_source")
+        if (ordered_[i].kind == LOOKOUT_FILE_RASTER_SOURCE)
             finished_rasters_.push_back(out_paths_[i]);
         else
             finished_.push_back(out_paths_[i]);
@@ -229,7 +224,7 @@ namespace lkw
         for (auto const &c : ordered_)
         {
             std::filesystem::path stem = std::filesystem::path(c.name).stem();
-            const bool raster = (c.kind == "raster_source" || c.kind == "raster");
+            const bool raster = (c.kind == LOOKOUT_FILE_RASTER_SOURCE || c.kind == LOOKOUT_FILE_RASTER);
             std::filesystem::path base = raster ? raster_out_dir : out_dir;
             if (zip)
             {
@@ -343,7 +338,7 @@ namespace lkw
                 std::error_code ec;
                 if (!std::filesystem::exists(out_paths_[i], ec))
                     continue;
-                if (ordered_[i].kind == "raster")
+                if (ordered_[i].kind == LOOKOUT_FILE_RASTER)
                     finished_rasters_.push_back(out_paths_[i]);
                 else
                     finished_.push_back(out_paths_[i]);

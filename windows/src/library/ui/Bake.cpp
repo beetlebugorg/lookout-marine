@@ -129,7 +129,7 @@ namespace winrt::LookoutMarine::implementation
             {
                 if (c.NeedsPrepare())
                     continue;
-                (c.kind == "raster" ? pictures : baked).push_back(c.path);
+                (c.kind == LOOKOUT_FILE_RASTER ? pictures : baked).push_back(c.path);
             }
             if (dropped_ready > 0)
             {
@@ -284,7 +284,7 @@ namespace winrt::LookoutMarine::implementation
             lkw::ScannedCell c;
             c.path = p;
             c.name = std::filesystem::path(p).filename().string();
-            c.kind = "raster_source";
+            c.kind = LOOKOUT_FILE_RASTER_SOURCE;
             scan.cells.push_back(std::move(c));
         }
 

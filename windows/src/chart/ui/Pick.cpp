@@ -102,27 +102,38 @@ namespace winrt::LookoutMarine::implementation
 
     void MainWindow::ShowPick(double x, double y)
     {
-        lk_pick_feature *feats = nullptr;
-        int n = lk_controller_pick_at(controller, x, y, &feats);
+        std::vector<lkw::PickDecoded> decoded;
+        if (lookout_picks *read = lk_controller_picks_read(controller, x, y))
+        {
+            size_t n = 0;
+            lookout_pick_feature const *const *all = lookout_picks_all(read, &n);
+            for (size_t i = 0; i < n; ++i)
+            {
+                size_t note_n = 0, row_n = 0, source_n = 0;
+                char const *const *notes = lookout_pick_notes(all[i], &note_n);
+                auto rows = lookout_pick_rows(all[i], &row_n);
+                auto source = lookout_pick_source(all[i], &source_n);
+                decoded.emplace_back(*all[i], notes, note_n, rows, row_n, source, source_n);
+            }
+            lookout_picks_free(read);
+        }
+
         // $LOOKOUT_HITMAP: the classes a pick resolved, for chasing a report
         // that names something the eye disagrees with.
         if (hitmap_log)
         {
             fprintf(stderr, "[pick] at (%.0f, %.0f) -> [", x, y);
-            for (int i = 0; i < n; ++i)
-                fprintf(stderr, "%s%s", i > 0 ? "," : "", feats[i].cls ? feats[i].cls : "?");
+            for (size_t i = 0; i < decoded.size(); ++i)
+                fprintf(stderr, "%s%s", i > 0 ? "," : "", decoded[i].cls.c_str());
             fprintf(stderr, "]\n");
         }
         DismissPick(); // a tap on bare water is how a mariner dismisses it
-        if (n <= 0)
+        if (decoded.empty())
             return;
 
-        pick_feats = feats;
+        int const n = (int)decoded.size();
         pick_count = n;
-        pick_decoded.clear();
-        pick_decoded.reserve((size_t)n);
-        for (int i = 0; i < n; ++i)
-            pick_decoded.push_back(lkw::DecodePick(feats[i].cls, feats[i].json, feats[i].chart));
+        pick_decoded = std::move(decoded);
         pick_x = x;
         pick_y = y;
         pick_height_floor = 0;
@@ -204,7 +215,7 @@ namespace winrt::LookoutMarine::implementation
 
             for (int i = 0; i < n; ++i)
             {
-                bool meta = strncmp(feats[i].cls, "M_", 2) == 0;
+                bool meta = pick_decoded[(size_t)i].cls.rfind("M_", 0) == 0;
                 if (meta)
                 {
                     have_meta = true;
@@ -236,8 +247,6 @@ namespace winrt::LookoutMarine::implementation
         PickBody().Children().Clear();
         PickList().Children().Clear();
         PickNotesShelf().Children().Clear();
-        lk_controller_pick_free(pick_feats, pick_count);
-        pick_feats = nullptr;
         pick_count = 0;
         pick_decoded.clear();
         pick_index = -1;
@@ -298,9 +307,9 @@ namespace winrt::LookoutMarine::implementation
         PickSubtitle().Text(d.subtitle.empty() ? hstring{ L" " } : H(d.subtitle));
         PickFootnote().Text(H(d.footnote));
         wchar_t fold[64];
-        swprintf_s(fold, L"S-57 source attributes (%zu)", d.raw.size());
+        swprintf_s(fold, L"S-57 source attributes (%zu)", d.source.size());
         PickFoldLabel().Text(fold);
-        PickFoldBtn().Visibility(d.raw.empty() ? Visibility::Collapsed : Visibility::Visible);
+        PickFoldBtn().Visibility(d.source.empty() ? Visibility::Collapsed : Visibility::Visible);
         BuildPickBody();
     }
 
@@ -344,10 +353,10 @@ namespace winrt::LookoutMarine::implementation
         }
 
         // A blank body reads as a defect: say why there is nothing to read.
-        if (d.empty != lkw::PickEmpty::No)
+        if (d.empty != LOOKOUT_PICK_READS)
         {
             Controls::TextBlock verdict;
-            verdict.Text(d.empty == lkw::PickEmpty::NoAttributes
+            verdict.Text(d.empty == LOOKOUT_PICK_NO_ATTRIBUTES
                              ? L"The cell carries no attributes for this object."
                              : L"The cell carries only source data for this object.");
             verdict.FontSize(13);
@@ -385,14 +394,14 @@ namespace winrt::LookoutMarine::implementation
             body.Children().Append(grid);
 
             // A row that names an aux file gets the file itself below it.
-            if (row.file && !row.value.empty() && pick_feats != nullptr)
-                AddAuxFileView(body, pick_feats[pick_index].chart, row.value);
+            if (row.file && !row.value.empty())
+                AddAuxFileView(body, d.chart, row.value);
         }
 
         // The raw payload, when the fold is open.
         if (pick_fold_open)
         {
-            for (auto const &raw : d.raw)
+            for (auto const &raw : d.source)
             {
                 Controls::Grid grid;
                 Controls::ColumnDefinition c0, c1;
@@ -403,9 +412,9 @@ namespace winrt::LookoutMarine::implementation
                 grid.Margin({ 16.0 + raw.depth * 12.0, 1, 16, 1 });
                 grid.ColumnSpacing(8);
                 Controls::TextBlock name;
-                name.Text(raw.name.empty()
+                name.Text(raw.label.empty()
                               ? hstring{}
-                              : H(raw.value.empty() ? raw.name : raw.name + ":"));
+                              : H(raw.value.empty() ? raw.label : raw.label + ":"));
                 name.FontSize(11);
                 name.FontFamily(Media::FontFamily{ L"Consolas" });
                 name.Foreground(Brush(Muted(DarkChrome())));
@@ -451,11 +460,10 @@ namespace winrt::LookoutMarine::implementation
     // the cell's own words.
     void MainWindow::CopyPickReport()
     {
-        if (pick_feats == nullptr || pick_index < 0 || pick_index >= pick_count)
+        if (pick_index < 0 || pick_index >= (int)pick_decoded.size())
             return;
-        auto const &f = pick_feats[pick_index];
         Windows::ApplicationModel::DataTransfer::DataPackage dp;
-        dp.SetText(H(lkw::PickPlainText(f.cls, f.json, f.chart)));
+        dp.SetText(H(lkw::PickPlainText(pick_decoded[(size_t)pick_index])));
         Windows::ApplicationModel::DataTransfer::Clipboard::SetContent(dp);
     }
 }

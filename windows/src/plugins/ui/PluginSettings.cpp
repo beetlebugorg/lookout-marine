@@ -1,16 +1,15 @@
 // The mariner's controls over the wasm plugins.
 //
 // A plugin declares a settings schema in its manifest; the core hands the whole
-// registry over as JSON through lookout_plugins_json, and this turns that into
-// WinUI controls. The shell knows nothing about what any plugin does — a number
-// with a unit and a range, a toggle, a text box, and a list the mariner adds
-// rows to, is the whole vocabulary.
+// registry over as structs through lookout_plugins_read, and this turns that
+// into WinUI controls. The shell knows nothing about what any plugin does — a
+// number with a unit and a range, a toggle, a text box, and a list the mariner
+// adds rows to, is the whole vocabulary.
 //
-// The mariner never meets the plugin system. A field names the SECTION of the
-// settings pane it belongs in ("alarms", "vessels", "connections", …) and the
-// heading it sits under, so an AIS setting reads as a chart setting that happens
-// to come from a plugin. The section ids are the core's (src/plugin/host.zig,
-// `Tab`), so every shell agrees.
+// The mariner never meets the plugin system. A setting names the SECTION of the
+// settings pane it belongs in (Alarms, Vessels, Connections, …) and the heading
+// it sits under, so an AIS setting reads as a chart setting that happens to come
+// from a plugin. The sections are lookout_section, so every shell agrees.
 //
 // Edits auto-apply on the same 60 ms debounce the mariner settings use, through
 // lookout_plugin_config_set, which the plugin handles live: no restart. They are
@@ -24,10 +23,10 @@
 #include "pch.h"
 #include "MainWindow.xaml.h"
 
+#include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
-#include <cstdlib>
 
 #include "lk_plugin_registry.h"
 #include "lk_store.h"
@@ -59,25 +58,152 @@ namespace winrt::LookoutMarine::implementation
 {
     // ---- reading the registry ---------------------------------------------
 
-    // NULL IS NOT AN EMPTY REGISTRY. lookout_plugins_json answers NULL with no
-    // chart open and in a build with no plugin host; a core holding no plugins
-    // answers {"plugins":[]} instead. Reading the two the same way would empty
-    // the whole pane the moment one read came back short, which looks from the
+    // NULL IS NOT AN EMPTY REGISTRY. The core answers NULL with no chart open
+    // and in a build with no plugin host; a core holding no plugins answers a
+    // read of nothing instead. Reading the two the same way would empty the
+    // whole pane the moment one read came back short, which looks from the
     // outside like a trapping plugin taking the settings schema with it.
     //
-    // The document's own shape is lk_plugin_registry.h's; this is only the
-    // call to the core and the ownership of the string it lends.
+    // Everything below is a walk: the shapes are the core's and every field is
+    // copied out before the read is freed, so nothing here outlives the call.
     bool MainWindow::ReadPluginRegistry(std::vector<lkw::PluginInfo> &out)
     {
-        char *json = lk_controller_plugins_json(controller);
-        if (json == nullptr)
+        lookout_plugins *read = lk_controller_plugins_read(controller);
+        if (read == nullptr)
             return false;
-        auto read = lkw::ReadRegistry(json);
-        free(json);
-        if (!read)
-            return false;
-        out = std::move(*read);
+
+        out.clear();
+        size_t plugin_n = 0;
+        lookout_plugin const *const *all = lookout_plugins_all(read, &plugin_n);
+        for (size_t pi = 0; pi < plugin_n; ++pi)
+        {
+            lookout_plugin const *src = all[pi];
+            lkw::PluginInfo info;
+            info.id = src->id;
+            info.name = src->name[0] != '\0' ? src->name : src->id;
+            info.version = src->version;
+            info.origin = src->origin;
+            info.live = src->live != 0;
+            info.status = src->status;
+
+            size_t cap_n = 0;
+            auto caps = lookout_plugin_capabilities(src, &cap_n);
+            for (size_t ci = 0; ci < cap_n; ++ci)
+            {
+                info.capabilities.push_back(
+                    { caps[ci]->name, caps[ci]->sentence, caps[ci]->granted != 0 });
+                // The file types a plugin claims are the `files` capability's
+                // allowlist, which is what its row says the open panel accepts.
+                if (std::string{ caps[ci]->name } != "files")
+                    continue;
+                size_t type_n = 0;
+                auto types = lookout_plugin_capability_allows(caps[ci], &type_n);
+                for (size_t ti = 0; ti < type_n; ++ti)
+                    info.file_types.push_back(types[ti]);
+            }
+
+            size_t set_n = 0;
+            auto settings = lookout_plugin_settings(src, &set_n);
+            for (size_t si = 0; si < set_n; ++si)
+                ReadPluginSetting(info, *settings[si]);
+
+            out.push_back(std::move(info));
+        }
+
+        lookout_plugins_free(read);
         return true;
+    }
+
+    // One setting: a list becomes a repeating group with its own rows, and
+    // anything else a control filed under a heading. A TEXT setting is only
+    // ever a column of a list — the core refuses a scalar one, so there is
+    // nothing to draw for it.
+    void MainWindow::ReadPluginSetting(lkw::PluginInfo &info, lookout_plugin_setting const &s)
+    {
+        std::string const tab = lkw::SectionId(s.section);
+        std::string const title = s.group[0] != '\0' ? s.group : info.name;
+
+        if (s.kind == LOOKOUT_PLUGIN_SETTING_LIST)
+        {
+            lkw::PluginList list;
+            list.plugin_id = info.id;
+            list.key = s.key;
+            list.tab = tab;
+            list.title = title;
+            list.footer = s.footer;
+            list.empty = s.empty[0] != '\0' ? s.empty : "Nothing here yet.";
+            list.add_label = s.add_label[0] != '\0' ? s.add_label : "Add";
+            list.switch_key = s.switch_key;
+            list.max_rows = (int)s.max_items;
+
+            size_t field_n = 0;
+            auto fields = lookout_plugin_setting_fields(&s, &field_n);
+            for (size_t fi = 0; fi < field_n; ++fi)
+                list.item_fields.emplace_back(*fields[fi]);
+
+            // A list with no switch column named takes its first toggle,
+            // which is what a list with one toggle wants.
+            if (list.switch_key.empty())
+            {
+                for (auto const &f : list.item_fields)
+                {
+                    if (f.kind == LOOKOUT_PLUGIN_SETTING_TOGGLE)
+                    {
+                        list.switch_key = f.key;
+                        break;
+                    }
+                }
+            }
+
+            // What to browse the boat's network for. The core carries the
+            // declaration; finding anything is this shell's own job.
+            size_t svc_n = 0;
+            auto services = lookout_plugin_setting_services(&s, &svc_n);
+            for (size_t vi = 0; vi < svc_n; ++vi)
+            {
+                lkw::PluginDiscover want;
+                want.service = services[vi]->type;
+                size_t val_n = 0;
+                auto values = lookout_plugin_service_values(services[vi], &val_n);
+                for (size_t xi = 0; xi < val_n; ++xi)
+                    want.set.emplace(values[xi]->key, lkw::PluginCell{ *values[xi] });
+                list.discover.push_back(std::move(want));
+            }
+
+            std::vector<lkw::PluginRow> rows;
+            size_t item_n = 0;
+            auto items = lookout_plugin_setting_items(&s, &item_n);
+            for (size_t ii = 0; ii < item_n; ++ii)
+            {
+                lkw::PluginRow row;
+                row.id = items[ii]->id;
+                size_t val_n = 0;
+                auto values = lookout_plugin_item_values(items[ii], &val_n);
+                for (size_t xi = 0; xi < val_n; ++xi)
+                    row.cells.emplace(values[xi]->key, lkw::PluginCell{ *values[xi] });
+                rows.push_back(std::move(row));
+            }
+
+            info.rows[list.key] = std::move(rows);
+            info.lists.push_back(std::move(list));
+            return;
+        }
+
+        if (s.kind == LOOKOUT_PLUGIN_SETTING_TEXT)
+            return;
+
+        lkw::PluginField f{ s };
+        info.values[f.key] = s.value;
+
+        auto it = std::find_if(info.groups.begin(), info.groups.end(),
+                               [&](lkw::PluginGroup const &g) {
+                                   return g.tab == tab && g.title == title;
+                               });
+        if (it == info.groups.end())
+            info.groups.push_back({ info.id, title, tab, { f } });
+        else
+            it->fields.push_back(f);
+        info.fields.push_back(f);
     }
 
     void MainWindow::ReloadPlugins()
@@ -323,7 +449,7 @@ namespace winrt::LookoutMarine::implementation
             std::string key = f.key;
             switch (f.kind)
             {
-            case lkw::PluginKind::Text:
+            case LOOKOUT_PLUGIN_SETTING_TEXT:
             {
                 Controls::TextBox box;
                 auto cell = row_it->cells.find(f.key);
@@ -350,7 +476,7 @@ namespace winrt::LookoutMarine::implementation
                 fields.Children().Append(box);
                 break;
             }
-            case lkw::PluginKind::Number:
+            case LOOKOUT_PLUGIN_SETTING_NUMBER:
             {
                 Controls::NumberBox nb;
                 auto cell = row_it->cells.find(f.key);
@@ -439,7 +565,7 @@ namespace winrt::LookoutMarine::implementation
                     auto it = p.values.find(f.key);
                     double value = it != p.values.end() ? it->second : f.fallback;
 
-                    if (f.kind == lkw::PluginKind::Toggle)
+                    if (f.kind == LOOKOUT_PLUGIN_SETTING_TOGGLE)
                     {
                         Controls::ToggleSwitch ts;
                         ts.Header(winrt::box_value(Wide(f.label)));
@@ -612,7 +738,7 @@ namespace winrt::LookoutMarine::implementation
             if (ui.row_id.empty())
             {
                 line = lkw::PluginStatusLine(*p, &state);
-                if (p->origin == "developer")
+                if (p->origin == LOOKOUT_ORIGIN_DEVELOPER)
                     line += " · developer copy";
             }
             else if (!lkw::PluginItemStatusLine(*p, ui.row_id, &line, &state))
@@ -644,7 +770,7 @@ namespace winrt::LookoutMarine::implementation
 
         std::vector<lkw::PluginInfo const *> managed;
         for (auto const &p : plugins)
-            if (p.origin != "bundled")
+            if (p.origin != LOOKOUT_ORIGIN_BUNDLED)
                 managed.push_back(&p);
 
         if (managed.empty())
@@ -662,7 +788,7 @@ namespace winrt::LookoutMarine::implementation
             std::string status_line = lkw::PluginStatusLine(*p, &state);
             // The one provenance a mariner must see at rest sits where the
             // status is, not in the name.
-            if (p->origin == "developer")
+            if (p->origin == LOOKOUT_ORIGIN_DEVELOPER)
                 status_line += " · developer copy";
 
             Controls::StackPanel header;
@@ -732,7 +858,7 @@ namespace winrt::LookoutMarine::implementation
                 };
                 if (!p->version.empty())
                     add("Version " + p->version);
-                add(p->origin == "developer" ? "developer copy from LOOKOUT_PLUGINS"
+                add(p->origin == LOOKOUT_ORIGIN_DEVELOPER ? "developer copy from LOOKOUT_PLUGINS"
                                              : "installed from a plugin file");
                 if (!p->file_types.empty())
                 {
@@ -752,7 +878,7 @@ namespace winrt::LookoutMarine::implementation
                 body.Children().Append(line);
             }
 
-            if (p->origin == "installed")
+            if (p->origin == LOOKOUT_ORIGIN_INSTALLED)
             {
                 Controls::Button rm;
                 rm.Content(winrt::box_value(L"Uninstall…"));
@@ -831,7 +957,7 @@ namespace winrt::LookoutMarine::implementation
 
         // The core clamps too. Doing it here as well keeps the control and the
         // value it shows in step without a round trip.
-        double clamped = f->kind == lkw::PluginKind::Toggle ? (v != 0 ? 1 : 0)
+        double clamped = f->kind == LOOKOUT_PLUGIN_SETTING_TOGGLE ? (v != 0 ? 1 : 0)
                                                             : (std::min)((std::max)(v, f->min), f->max);
         if (p->values[key] == clamped)
             return;
@@ -1000,23 +1126,13 @@ namespace winrt::LookoutMarine::implementation
                                 [&](lkw::PluginDiscover const &d) { return d.service == found.service; });
         if (set != list->discover.end())
         {
+            // The core types each preset in its own field's kind, so the cell
+            // takes the value whole rather than being parsed back out of text.
             for (auto const &preset : set->set)
             {
                 auto cell = row.cells.find(preset.first);
-                if (cell == row.cells.end())
-                    continue;
-                switch (cell->second.kind)
-                {
-                case lkw::PluginKind::Toggle:
-                    cell->second.toggle = preset.second == "true";
-                    break;
-                case lkw::PluginKind::Number:
-                    cell->second.number = atof(preset.second.c_str());
-                    break;
-                case lkw::PluginKind::Text:
-                    cell->second.text = preset.second;
-                    break;
-                }
+                if (cell != row.cells.end())
+                    cell->second = preset.second;
             }
         }
 

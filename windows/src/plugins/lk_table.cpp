@@ -5,14 +5,10 @@
 #include <cstdarg>
 #include <cstdio>
 
-#include "lk_json.h"
 #include "lk_plugin_registry.h" /* Trimmed: one rule for a number as text */
 
 namespace
 {
-    using lkw::json::Kind;
-    using lkw::json::Value;
-
     std::string Upper(std::string s)
     {
         /* ASCII only, on purpose: a flag is one of the core's own words. */
@@ -37,14 +33,14 @@ namespace lkw
 {
     char const *const kMissingCell = "\xe2\x80\x94"; /* em dash */
 
-    bool NumericColumn(std::string const &type)
+    bool NumericColumn(lookout_column_type type)
     {
-        return type != "text" && type != "flag";
+        return type != LOOKOUT_COLUMN_TEXT && type != LOOKOUT_COLUMN_FLAG;
     }
 
-    double ColumnWidth(std::string const &type)
+    double ColumnWidth(lookout_column_type type)
     {
-        return type == "text" ? 150.0 : 84.0;
+        return type == LOOKOUT_COLUMN_TEXT ? 150.0 : 84.0;
     }
 
     /* A cable is 185.2 m: under that a mariner reads metres, over it nautical
@@ -80,111 +76,61 @@ namespace lkw
         return Printf("%s%lld:%02lld", sign, t / 60, t % 60);
     }
 
-    namespace
+    /* `type` says how to format the value, `kind` says which field holds it.
+     * A plugin may send a string for a numeric column, and the string is what
+     * the mariner sees. */
+    TableCell FormatCell(lookout_table_cell const &cell)
     {
-        TableCell FormatCell(std::string const &type, Value const &v)
+        if (cell.kind == LOOKOUT_TABLE_CELL_ABSENT)
+            return { kMissingCell, true };
+
+        if (cell.kind == LOOKOUT_TABLE_CELL_TEXT)
         {
-            if (v.IsNothing())
-                return { kMissingCell, true };
+            std::string s = cell.text != nullptr ? cell.text : std::string{};
+            return { cell.type == LOOKOUT_COLUMN_FLAG ? Upper(s) : s, false };
+        }
 
-            if (type == "text" || type == "flag")
-            {
-                std::string s = v.kind() == Kind::String ? v.String() : std::string{};
-                return { type == "flag" ? Upper(s) : s, false };
-            }
-
-            double n = v.Number(0.0);
-            if (type == "distance")
-                return { FormatDistance(n), false };
-            if (type == "speed")
-                return { FormatSpeed(n), false };
-            if (type == "bearing")
-                return { FormatBearing(n), false };
-            if (type == "duration")
-                return { FormatDuration(n), false };
+        switch (cell.type)
+        {
+        case LOOKOUT_COLUMN_DISTANCE: return { FormatDistance(cell.number), false };
+        case LOOKOUT_COLUMN_SPEED:    return { FormatSpeed(cell.number), false };
+        case LOOKOUT_COLUMN_BEARING:  return { FormatBearing(cell.number), false };
+        case LOOKOUT_COLUMN_DURATION: return { FormatDuration(cell.number), false };
+        default:
             /* A plain number is written whole when it is whole: "%g" alone
              * turns an identifier past six digits — an MMSI in a number
              * column — into 3.67123e+08, which is not a number anyone can
              * read back to a coastguard. */
-            return { Trimmed(n), false };
+            return { Trimmed(cell.number), false };
         }
     }
 
-    std::optional<std::vector<TableSpec>> ReadTables(std::string_view json)
+    TableColumn::TableColumn(lookout_table_column const &c)
+        : key{ c.key }, label{ c.label }, type{ c.type }
     {
-        auto doc = json::Parse(json);
-        if (!doc || doc->kind() != Kind::Object)
-            return std::nullopt;
-
-        std::vector<TableSpec> out;
-        for (auto const &o : (*doc)["tables"].Items())
-        {
-            if (o.kind() != Kind::Object)
-                continue;
-            TableSpec spec;
-            spec.plugin = o.MemberString("plugin");
-            spec.key = o.MemberString("key");
-            spec.title = o.MemberString("title");
-            /* `at` present means a row can carry a position, which is what
-             * makes a row activate onto the chart. */
-            spec.locatable = o.Has("at");
-            Value const &sort = o["sort"];
-            if (sort.kind() == Kind::Object)
-            {
-                spec.sort_key = sort.MemberString("key");
-                spec.sort_ascending = sort.MemberBool("ascending", true);
-            }
-            for (auto const &c : o["columns"].Items())
-            {
-                if (c.kind() != Kind::Object)
-                    continue;
-                TableColumn col;
-                col.key = c.MemberString("key");
-                col.label = c.MemberString("label");
-                col.type = c.MemberString("type", "text");
-                spec.columns.push_back(std::move(col));
-            }
-            out.push_back(std::move(spec));
-        }
-        return out;
     }
 
-    std::optional<TableBatch> ReadTableRows(std::string_view json, TableSpec const &spec)
+    TableSpec::TableSpec(lookout_table const &t, std::vector<TableColumn> cols)
+        : plugin{ t.plugin }, key{ t.key }, title{ t.title }, columns{ std::move(cols) },
+          sort_key{ t.sort_key }, sort_ascending{ t.sort_ascending != 0 },
+          /* Both `at` keys are set together, and an empty pair means a row of
+           * this table has no position to reveal. */
+          locatable{ t.at_lat[0] != '\0' && t.at_lon[0] != '\0' }
     {
-        auto doc = json::Parse(json);
-        if (!doc || doc->kind() != Kind::Object)
-            return std::nullopt;
+    }
 
-        TableBatch batch;
-        batch.seq = (long long)doc->MemberNumber("seq", 0);
-
-        for (auto const &rv : (*doc)["rows"].Items())
+    TableRow::TableRow(lookout_table_row const &row, TableSpec const &spec,
+                       lookout_table_cell const *const *cells, size_t n)
+        : has_at{ spec.locatable && row.located != 0 }, lon{ row.lon }, lat{ row.lat }
+    {
+        for (size_t i = 0; i < n; ++i)
         {
-            if (rv.kind() != Kind::Object)
-                continue;
-            Value const &cells = rv["cells"];
-
-            TableRow row;
-            for (size_t i = 0; i < spec.columns.size(); ++i)
-            {
-                Value const &v = cells.At(i);
-                row.cells.push_back(FormatCell(spec.columns[i].type, v));
-                /* The flag cell tints the whole row, in the plugin's own
-                 * word rather than the upper-cased one on screen. */
-                if (spec.columns[i].type == "flag" && v.kind() == Kind::String)
-                    row.flag = v.String();
-            }
-
-            Value const &at = rv["at"];
-            if (spec.locatable && at.Length() >= 2)
-            {
-                row.has_at = true;
-                row.lon = at.At(0).Number(0);
-                row.lat = at.At(1).Number(0);
-            }
-
-            batch.rows.push_back(std::move(row));
+            this->cells.push_back(FormatCell(*cells[i]));
+            /* The flag cell tints the whole row, in the plugin's own word
+             * rather than the upper-cased one on screen. */
+            if (cells[i]->type == LOOKOUT_COLUMN_FLAG &&
+                cells[i]->kind == LOOKOUT_TABLE_CELL_TEXT && cells[i]->text != nullptr)
+                flag = cells[i]->text;
         }
-        return batch;
     }
 }

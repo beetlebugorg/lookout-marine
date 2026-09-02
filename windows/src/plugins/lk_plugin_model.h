@@ -1,27 +1,22 @@
 // lk_plugin_model — the shape the wasm plugin registry takes on this side.
 //
 // A plugin declares a settings schema in its manifest and the core hands the
-// whole registry over as JSON (lookout_plugins_json); plugins/ui/PluginSettings.cpp
-// parses it into these and draws a control per field. Mirrors PluginSettings.swift
-// (macOS/iOS) and linux/src/lk-plugins.h.
+// whole registry over as structs (lookout_plugins_read); plugins/ui/PluginSettings.cpp
+// walks the read into these and draws a control per field.
 //
 // Plain structs and no WinRT: this is the model, and the pane that renders it
-// is the only thing that should know about WinUI.
+// is the only thing that should know about WinUI. The kinds and the sections
+// are the core's enums, so a field means the same thing on every shell.
 #pragma once
 
 #include <map>
 #include <string>
 #include <vector>
 
+#include "lookout.h"
+
 namespace lkw
 {
-    enum class PluginKind
-    {
-        Number,
-        Toggle,
-        Text,
-    };
-
     // One control, as the manifest declared it.
     struct PluginField
     {
@@ -29,11 +24,14 @@ namespace lkw
         std::string label;
         std::string desc; // what it does for the person at the helm; may be empty
         std::string unit; // "m", "kn", "min"; may be empty
-        PluginKind kind{ PluginKind::Number };
+        lookout_plugin_setting_kind kind{ LOOKOUT_PLUGIN_SETTING_NUMBER };
         double min{ 0 }, max{ 1 };
         double fallback{ 0 };       // the manifest default; a toggle is 0 or 1
         std::string fallback_text;  // a text field's default; only inside a row
         bool optional{ false };     // a text field that may be left empty
+
+        PluginField() = default;
+        explicit PluginField(lookout_plugin_setting const &s);
     };
 
     // One heading's worth of controls inside one settings section — the unit the
@@ -47,14 +45,27 @@ namespace lkw
         std::vector<PluginField> fields;
     };
 
+    // One value in a row. A row is not a settings field: it holds text as well
+    // as numbers and toggles.
+    struct PluginCell
+    {
+        lookout_plugin_setting_kind kind{ LOOKOUT_PLUGIN_SETTING_NUMBER };
+        double number{ 0 };
+        bool toggle{ false };
+        std::string text;
+
+        PluginCell() = default;
+        explicit PluginCell(lookout_plugin_value const &v);
+    };
+
     // One DNS-SD service a connection list is browsed for. `set` is the columns
-    // a discovered row takes beyond its name, address and port, as text keyed by
-    // column: a Signal K server announces its websocket, so a row added from one
-    // arrives with that column on.
+    // a discovered row takes beyond its name, address and port: a Signal K
+    // server announces its websocket, so a row added from one arrives with that
+    // column on.
     struct PluginDiscover
     {
         std::string service;
-        std::map<std::string, std::string> set;
+        std::map<std::string, PluginCell> set;
     };
 
     // A repeating group the mariner adds rows to.
@@ -72,16 +83,6 @@ namespace lkw
         std::vector<PluginField> item_fields;
         // What to browse the boat's network for on this list's behalf.
         std::vector<PluginDiscover> discover;
-    };
-
-    // One value in a row. A row is not a settings field: it holds text as well
-    // as numbers and toggles.
-    struct PluginCell
-    {
-        PluginKind kind{ PluginKind::Number };
-        double number{ 0 };
-        bool toggle{ false };
-        std::string text;
     };
 
     // One row of a list. The id is the shell's and never changes once assigned:
@@ -108,7 +109,7 @@ namespace lkw
         std::string id;
         std::string name;
         std::string version;
-        std::string origin; // "bundled", "installed" or "developer"
+        lookout_plugin_origin origin{ LOOKOUT_ORIGIN_BUNDLED };
         bool live{ false };
         // The plugin's own status line, {"state":…,"detail":…,"items":[…]}. The
         // Plugins section shows the line; the ITEMS go to the list rows.
@@ -123,26 +124,5 @@ namespace lkw
         // The file types this plugin claims, so its row can say what the open
         // panel now accepts. Empty for a plugin that opens no files.
         std::vector<std::string> file_types;
-    };
-
-    // One declared plugin table (the AIS Targets list). A column TYPE is the
-    // unit contract: distance metres, speed m/s, bearing degrees true,
-    // duration seconds, plus number/text/flag — the plugin sends SI and the
-    // shell formats for the mariner (plugins/ui/Tables.cpp).
-    struct TableColumn
-    {
-        std::string key;
-        std::string label;
-        std::string type;
-    };
-    struct TableSpec
-    {
-        std::string plugin; // owning plugin id
-        std::string key;    // table key within the plugin
-        std::string title;  // "AIS Targets"
-        std::vector<TableColumn> columns;
-        std::string sort_key;       // declared default sort
-        bool sort_ascending{ true };
-        bool locatable{ false }; // rows carry a position: activate centres the chart
     };
 }

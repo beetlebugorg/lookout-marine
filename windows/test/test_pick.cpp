@@ -1,19 +1,64 @@
-/* The pick report decoder.
+/* The pick report, as the card holds it.
  *
- * The engine composes the report and the shell lays it out, so what is tested
- * here is the contract between them: the envelope's two halves, the fallbacks
- * that keep a card from ever being blank, and the flattening order of the raw
- * S-57 payload — which is what a mariner copies into a chart-error report, so
- * it has to come out the same every time and the same as the other shells.
+ * The engine composes the report and flattens the source fold, so what is
+ * tested here is what this shell still decides: that every field the core
+ * hands over reaches the card, and the CLIPBOARD form — which is what a
+ * mariner pastes into a chart-error report, so it has to come out the same
+ * every time.
  */
 #include "lk_test.h"
 
 #include "lk_pick.h"
 
 using namespace lktest;
-using lkw::DecodePick;
-using lkw::PickEmpty;
+using lkw::PickDecoded;
 using lkw::PickPlainText;
+using lkw::PickRow;
+
+namespace
+{
+    lookout_pick_row Row(char const *label, char const *value, int depth, int file,
+                         int picture)
+    {
+        lookout_pick_row r{};
+        r.label = label;
+        r.value = value;
+        r.depth = depth;
+        r.file = file;
+        r.picture = picture;
+        return r;
+    }
+
+    lookout_pick_feature Feature(char const *cls, char const *chart)
+    {
+        lookout_pick_feature f{};
+        f.cls = cls;
+        f.chart = chart;
+        f.title = "";
+        f.subtitle = "";
+        f.chip = "";
+        f.footnote = "";
+        f.empty = LOOKOUT_PICK_READS;
+        f.raw = "";
+        return f;
+    }
+
+    /* One decoded feature out of the pieces a read hands over. */
+    PickDecoded Decode(lookout_pick_feature const &f,
+                       std::vector<char const *> const &notes,
+                       std::vector<lookout_pick_row> const &rows,
+                       std::vector<lookout_pick_row> const &source)
+    {
+        std::vector<lookout_pick_row const *> row_ptrs, source_ptrs;
+        for (auto const &r : rows)
+            row_ptrs.push_back(&r);
+        for (auto const &r : source)
+            source_ptrs.push_back(&r);
+        return PickDecoded{ f, notes.data(), notes.size(),
+                            row_ptrs.data(), row_ptrs.size(),
+                            source_ptrs.data(), source_ptrs.size() };
+    }
+}
 
 void TestPick()
 {
@@ -21,198 +66,92 @@ void TestPick()
 
     LK_CASE("the composed report is what the card shows");
     {
-        auto d = DecodePick("BOYLAT", R"({"report":{
-              "title":"Green can",
-              "subtitle":"Lateral buoy",
-              "chip":"Buoy",
-              "footnote":"US5MD1MC",
-              "rows":[{"label":"Colour","value":"green"},
-                      {"label":"Shape","value":"can","depth":1}]
-            }})",
-                            "chart.pmtiles");
+        lookout_pick_feature f = Feature("BOYLAT", "US5MD1MC");
+        f.title = "Green can";
+        f.subtitle = "Lateral buoy";
+        f.chip = "Green can";
+        f.footnote = "US5MD1MC · NOAA · 1:12,000";
+        std::vector<lookout_pick_row> rows{ Row("Colour", "green", 0, 0, 0),
+                                            Row("Shape", "can", 0, 0, 0) };
+        std::vector<char const *> notes{ "Reported adrift 2024." };
+        auto d = Decode(f, notes, rows, {});
+
+        LK_EQ(d.cls, std::string("BOYLAT"));
+        LK_EQ(d.chart, std::string("US5MD1MC"));
         LK_EQ(d.title, std::string("Green can"));
         LK_EQ(d.subtitle, std::string("Lateral buoy"));
-        LK_EQ(d.chip, std::string("Buoy"));
-        LK_EQ(d.footnote, std::string("US5MD1MC"));
+        LK_EQ(d.chip, std::string("Green can"));
+        LK_EQ(d.footnote, std::string("US5MD1MC \xc2\xb7 NOAA \xc2\xb7 1:12,000"));
+        LK_EQ(d.empty, LOOKOUT_PICK_READS);
+        LK_EQ(d.notes.size(), (size_t)1);
+        LK_EQ(d.notes[0], std::string("Reported adrift 2024."));
         LK_EQ(d.rows.size(), (size_t)2);
         LK_EQ(d.rows[0].label, std::string("Colour"));
         LK_EQ(d.rows[0].value, std::string("green"));
-        LK_EQ(d.rows[0].depth, 0);
-        LK_EQ(d.rows[1].depth, 1);
-        LK_EQ(d.empty == PickEmpty::No, true);
     }
 
-    /* A card must never be blank: what the report does not say, the class name
-     * and the chart name say. */
-    LK_CASE("the title, chip and footnote fall back");
-    {
-        auto d = DecodePick("DEPARE", R"({"report":{}})", "US5MD1MC");
-        LK_EQ(d.title, std::string("DEPARE"));
-        LK_EQ(d.chip, std::string("DEPARE"));
-        LK_EQ(d.footnote, std::string("US5MD1MC"));
-        LK_EQ(d.subtitle, std::string("")); /* the one field with no fallback */
-    }
-
-    LK_CASE("an empty string in the report is not a value");
-    {
-        auto d = DecodePick("DEPARE", R"({"report":{"title":"","footnote":""}})", "US5MD1MC");
-        LK_EQ(d.title, std::string("DEPARE"));
-        LK_EQ(d.footnote, std::string("US5MD1MC"));
-    }
-
-    /* A blank body reads as a defect, so the report says why it is blank. */
+    /* A blank body reads as a defect, so the card says which of the two it is. */
     LK_CASE("the two reasons a body has nothing to read");
     {
-        LK_CHECK(DecodePick("X", R"({"report":{"empty":"none"}})", "c").empty ==
-                 PickEmpty::NoAttributes);
-        LK_CHECK(DecodePick("X", R"({"report":{"empty":"source"}})", "c").empty ==
-                 PickEmpty::SourceOnly);
-        LK_CHECK(DecodePick("X", R"({"report":{"empty":"who knows"}})", "c").empty ==
-                 PickEmpty::No);
-        LK_CHECK(DecodePick("X", R"({"report":{}})", "c").empty == PickEmpty::No);
-    }
-
-    LK_CASE("promoted cautions, empty ones dropped");
-    {
-        auto d = DecodePick("X", R"({"report":{"notes":["Report changes","","Depths unreliable"]}})",
-                            "c");
-        LK_EQ(d.notes.size(), (size_t)2);
-        LK_EQ(d.notes[0], std::string("Report changes"));
-        LK_EQ(d.notes[1], std::string("Depths unreliable"));
+        lookout_pick_feature f = Feature("DEPARE", "US5MD1MC");
+        f.empty = LOOKOUT_PICK_NO_ATTRIBUTES;
+        LK_EQ(Decode(f, {}, {}, {}).empty, LOOKOUT_PICK_NO_ATTRIBUTES);
+        f.empty = LOOKOUT_PICK_SOURCE_ONLY;
+        LK_EQ(Decode(f, {}, {}, {}).empty, LOOKOUT_PICK_SOURCE_ONLY);
     }
 
     LK_CASE("a row that names a file, and one that names a picture");
     {
-        auto d = DecodePick("X", R"({"report":{"rows":[
-              {"label":"Textual description","value":"US5MD1MC.TXT","file":true},
-              {"label":"Pictorial representation","value":"BR.jpg","file":true,"picture":true},
-              {"label":"Colour","value":"green"}]}})",
-                            "c");
-        LK_EQ(d.rows.size(), (size_t)3);
+        std::vector<lookout_pick_row> rows{ Row("Text", "US5MD1MC.TXT", 0, 1, 0),
+                                            Row("Picture", "US5MD1MC.TIF", 0, 1, 1) };
+        auto d = Decode(Feature("BOYLAT", "US5MD1MC"), {}, rows, {});
         LK_EQ(d.rows[0].file, true);
         LK_EQ(d.rows[0].picture, false);
         LK_EQ(d.rows[1].file, true);
         LK_EQ(d.rows[1].picture, true);
-        LK_EQ(d.rows[2].file, false);
     }
 
-    LK_CASE("a row that is not an object is skipped, not half read");
+    /* An array element has no name of its own; the fold indents it under the
+     * heading above. */
+    LK_CASE("the source fold keeps its depths and its unnamed rows");
     {
-        auto d = DecodePick("X", R"({"report":{"rows":[{"label":"A"},"junk",17]}})", "c");
-        LK_EQ(d.rows.size(), (size_t)1);
-        LK_EQ(d.rows[0].label, std::string("A"));
+        std::vector<lookout_pick_row> source{ Row("OBJNAM", "Bell", 0, 0, 0),
+                                              Row("SORDAT", "", 0, 0, 0),
+                                              Row("", "1998", 1, 0, 0) };
+        auto d = Decode(Feature("BOYLAT", "US5MD1MC"), {}, {}, source);
+        LK_EQ(d.source.size(), (size_t)3);
+        LK_EQ(d.source[1].value, std::string(""));
+        LK_EQ(d.source[2].label, std::string(""));
+        LK_EQ(d.source[2].depth, 1);
     }
 
-    /* The raw half, flattened. Top-level keys stay at depth 0; an object or
-     * array member emits a heading and takes its children one level in. */
-    LK_CASE("the raw payload flattens with sorted keys");
+    /* A cell states its text in whatever it was published in. A TextBlock
+     * takes UTF-16 and throws on bytes that are not UTF-8, so the card must
+     * never be handed any. */
+    LK_CASE("a value that is not UTF-8 arrives as UTF-8");
     {
-        auto d = DecodePick("X", R"({"report":{},"s57":{"OBJNAM":"Thomas Point","COLOUR":"3"}})",
-                            "c");
-        LK_EQ(d.raw.size(), (size_t)2);
-        LK_EQ(d.raw[0].name, std::string("COLOUR")); /* sorted, not as written */
-        LK_EQ(d.raw[0].value, std::string("3"));
-        LK_EQ(d.raw[0].depth, 0);
-        LK_EQ(d.raw[1].name, std::string("OBJNAM"));
-    }
-
-    LK_CASE("a nested object emits a heading and indents its keys");
-    {
-        auto d = DecodePick("X", R"({"report":{},"s57":{"A":1,"Z":{"inner":"v"}}})", "c");
-        LK_EQ(d.raw.size(), (size_t)3);
-        LK_EQ(d.raw[0].name, std::string("A"));
-        LK_EQ(d.raw[0].depth, 0);
-        LK_EQ(d.raw[1].name, std::string("Z"));
-        LK_EQ(d.raw[1].value, std::string("")); /* a heading carries no value */
-        LK_EQ(d.raw[1].depth, 0);
-        LK_EQ(d.raw[2].name, std::string("inner"));
-        LK_EQ(d.raw[2].depth, 1);
-    }
-
-    LK_CASE("an array emits a heading and its items one level in, unnamed");
-    {
-        auto d = DecodePick("X", R"({"report":{},"s57":{"SORDAT":["1998","2004"]}})", "c");
-        LK_EQ(d.raw.size(), (size_t)3);
-        LK_EQ(d.raw[0].name, std::string("SORDAT"));
-        LK_EQ(d.raw[0].depth, 0);
-        LK_EQ(d.raw[1].name, std::string(""));
-        LK_EQ(d.raw[1].value, std::string("1998"));
-        LK_EQ(d.raw[1].depth, 1);
-        LK_EQ(d.raw[2].value, std::string("2004"));
-    }
-
-    /* An attribute reads as the cell wrote it: a whole number carries no ".0",
-     * and a boolean and a null are not invented text. */
-    LK_CASE("scalars as display text");
-    {
-        auto d = DecodePick("X", R"({"report":{},"s57":{"a":17,"b":2.5,"c":true,"d":null}})", "c");
-        LK_EQ(d.raw.size(), (size_t)4);
-        LK_EQ(d.raw[0].value, std::string("17"));
-        LK_EQ(d.raw[1].value, std::string("2.5"));
-        LK_EQ(d.raw[2].value, std::string("true"));
-        LK_EQ(d.raw[3].value, std::string(""));
-    }
-
-    LK_CASE("no envelope: the whole document is the raw payload");
-    {
-        auto d = DecodePick("SOUNDG", R"({"VALSOU":4.2})", "US5MD1MC");
-        LK_EQ(d.title, std::string("SOUNDG")); /* nothing decoded it */
-        LK_EQ(d.rows.size(), (size_t)0);
-        LK_EQ(d.raw.size(), (size_t)1);
-        LK_EQ(d.raw[0].name, std::string("VALSOU"));
-        LK_EQ(d.raw[0].value, std::string("4.2"));
-    }
-
-    LK_CASE("an envelope with no raw half has an empty fold");
-    {
-        auto d = DecodePick("X", R"({"report":{"title":"T"}})", "c");
-        LK_EQ(d.title, std::string("T"));
-        LK_EQ(d.raw.size(), (size_t)0);
-    }
-
-    LK_CASE("an unreadable payload keeps the fallbacks and shows nothing");
-    {
-        for (char const *bad : { "", "not json", "{", "{\"report\":", "[1,2" })
-        {
-            auto d = DecodePick("BCNCAR", bad, "US5MD1MC");
-            LK_EQ(d.title, std::string("BCNCAR"));
-            LK_EQ(d.footnote, std::string("US5MD1MC"));
-            LK_EQ(d.rows.size(), (size_t)0);
-            LK_EQ(d.raw.size(), (size_t)0);
-        }
-    }
-
-    LK_CASE("null strings from the engine are not a fault");
-    {
-        auto d = DecodePick(nullptr, nullptr, nullptr);
-        LK_EQ(d.title, std::string(""));
-        LK_EQ(d.raw.size(), (size_t)0);
-    }
-
-    /* A cell's text is not always well-formed UTF-8. It has to come out
-     * showable either way — the card hands it straight to a TextBlock. */
-    LK_CASE("a payload that is not UTF-8 still decodes");
-    {
-        std::string json = "{\"report\":{\"title\":\"caf\xe9\"}}"; /* Latin-1 e-acute */
-        auto d = DecodePick("X", json.c_str(), "c");
-        LK_EQ(d.title, std::string("caf\xc3\xa9")); /* the same character, as UTF-8 */
+        std::vector<lookout_pick_row> rows{ Row("Name", "caf\xe9", 0, 0, 0) };
+        auto d = Decode(Feature("BOYLAT", "US5MD1MC"), {}, rows, {});
+        LK_EQ(d.rows[0].value, std::string("caf\xc3\xa9"));
     }
 
     Suite("lk_pick clipboard form");
 
-    LK_CASE("the class, the chart, then the raw rows two spaces per depth");
+    LK_CASE("the class, the chart, then the source rows two spaces per depth");
     {
-        std::string text = PickPlainText(
-            "BOYLAT", R"({"report":{},"s57":{"OBJNAM":"Bell","SORDAT":["1998"]}})", "US5MD1MC");
-        LK_EQ(text, std::string("BOYLAT  US5MD1MC\n"
-                                "OBJNAM: Bell\n"
-                                "SORDAT:\n"
-                                "  1998\n"));
+        std::vector<lookout_pick_row> source{ Row("OBJNAM", "Bell", 0, 0, 0),
+                                              Row("SORDAT", "", 0, 0, 0),
+                                              Row("", "1998", 1, 0, 0) };
+        auto d = Decode(Feature("BOYLAT", "US5MD1MC"), {}, {}, source);
+        LK_EQ(PickPlainText(d), std::string("BOYLAT  US5MD1MC\n"
+                                            "OBJNAM: Bell\n"
+                                            "SORDAT:\n"
+                                            "  1998\n"));
     }
 
-    LK_CASE("an unreadable payload still names the object and the chart");
+    LK_CASE("a feature with no source fold still names the object and the chart");
     {
-        LK_EQ(PickPlainText("BOYLAT", "junk", "US5MD1MC"),
-              std::string("BOYLAT  US5MD1MC\n"));
+        auto d = Decode(Feature("BOYLAT", "US5MD1MC"), {}, {}, {});
+        LK_EQ(PickPlainText(d), std::string("BOYLAT  US5MD1MC\n"));
     }
 }

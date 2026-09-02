@@ -44,16 +44,6 @@ typedef struct {
     int    chart_hidden;
 } lk_readout;
 
-/* One identified feature from a ranked pick. Strings are malloc'd,
- * NUL-terminated, never NULL; free the whole list with
- * lk_controller_pick_free. `json` is the engine's report envelope
- * {"report":{...},"s57":<raw attributes>} (see lookout_pick_ranked). */
-typedef struct {
-    char *cls;   /* S-57 object-class acronym */
-    char *json;  /* report envelope */
-    char *chart; /* source cell name */
-} lk_pick_feature;
-
 lk_controller *lk_controller_new(void);
 void           lk_controller_free(lk_controller *self);
 
@@ -165,12 +155,10 @@ void lk_controller_toggle_text(lk_controller *self);
 void lk_controller_toggle_soundings(lk_controller *self);
 void lk_controller_toggle_other_category(lk_controller *self);
 
-/* Ranked cursor pick at a screen point (lookout_pick_ranked: the features
- * worth reporting, best first, depths in the mariner's unit). Mallocs *out
- * (NULL when nothing was hit) and returns the count. */
-int  lk_controller_pick_at(lk_controller *self, double x, double y,
-                           lk_pick_feature **out);
-void lk_controller_pick_free(lk_pick_feature *feats, int n);
+/* Ranked cursor pick at a screen point: the features the core reports, best
+ * first, with the page rows and the source fold already shaped. NULL when
+ * nothing was hit; the caller frees the read with lookout_picks_free. */
+lookout_picks *lk_controller_picks_read(lk_controller *self, double x, double y);
 
 /* A file a picked feature points at (TXTDSC / NTXTDS / PICREP /
  * fileReference). The bytes belong to the engine and stay valid until the
@@ -195,35 +183,35 @@ void lk_controller_readout(lk_controller *self, lk_readout *out);
  * up by the next tick. */
 int lk_controller_plugins_active(lk_controller *self);
 
-/* Every loaded plugin with its settings schema and the values in force, as the
- * JSON lookout_plugins_json documents. The caller frees it with free().
+/* Every loaded plugin with its settings schema and the values in force. The
+ * caller frees the read with lookout_plugins_free.
  *
  * NULL IS NOT AN EMPTY REGISTRY: the core answers NULL with no chart open and
- * in a build with no plugin host, while a core holding no plugins answers
- * {"plugins":[]}. A caller with a registry already on screen keeps it. */
-char *lk_controller_plugins_json(lk_controller *self);
+ * in a build with no plugin host, while a core holding no plugins answers a
+ * read of nothing. A caller with a registry already on screen keeps it. */
+lookout_plugins *lk_controller_plugins_read(lk_controller *self);
 
 /* Push one plugin's settings, applied live. `json` is an object of the keys its
  * schema declares. 1 when the plugin took them. */
 int lk_controller_set_plugin_config(lk_controller *self, const char *id, const char *json);
 
-/* Plugin alerts: {"seq":N,"alerts":[{id,plugin,severity,title,body,raised,
- * acknowledged}...]} as a malloc'd copy the caller frees, or NULL when
+/* Plugin alerts, freed by the caller with lookout_alerts_free, or NULL when
  * unreadable (no chart, no plugin layer). NULL is not "no alerts": the caller
  * clears the strip and silences the siren but keeps watching. */
-char *lk_controller_alerts_json(lk_controller *self);
+lookout_alerts *lk_controller_alerts_read(lk_controller *self);
 /* Acknowledge one alert: silences it and takes it off the strip. That alert
  * only; a second alarm keeps sounding. 1 on success. */
 int lk_controller_alert_ack(lk_controller *self, unsigned long long id);
 
-/* Plugin tables (the AIS Targets list). tables_json lists the declarations;
- * table_rows answers one dialog's rows ALREADY ORDERED by the core (sort_key
- * NULL = the declared default); table_open tells the plugin somebody is
- * looking — call it with 1 on open and 0 on close, or the plugin builds no
- * rows. Malloc'd copies; NULL when unreadable. */
-char *lk_controller_tables_json(lk_controller *self);
-char *lk_controller_table_rows(lk_controller *self, const char *plugin, const char *key,
-                               const char *sort_key, int ascending);
+/* Plugin tables (the AIS Targets list). tables_read lists the declarations;
+ * table_rows_read answers one dialog's rows ALREADY ORDERED by the core
+ * (sort_key NULL = the declared default); table_open tells the plugin somebody
+ * is looking — call it with 1 on open and 0 on close, or the plugin builds no
+ * rows. Each read is freed by its own core call; NULL when unreadable. */
+lookout_tables *lk_controller_tables_read(lk_controller *self);
+lookout_table_rows *lk_controller_table_rows_read(lk_controller *self, const char *plugin,
+                                                  const char *key, const char *sort_key,
+                                                  int ascending);
 void lk_controller_table_open(lk_controller *self, const char *plugin, const char *key, int open);
 
 /* The install surface. inspect returns the consent-sheet JSON for a .lkplug

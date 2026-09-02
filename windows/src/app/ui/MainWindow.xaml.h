@@ -7,6 +7,7 @@
 #include "lk_pick.h"
 #include "lk_discovery.h"
 #include "lk_plugin_model.h"
+#include "lk_table.h"
 
 #include <atomic>
 #include <map>
@@ -79,6 +80,7 @@ namespace winrt::LookoutMarine::implementation
         // shape, the config object and the status lines are model code, in
         // plugins/lk_plugin_registry.h; what is left here is the drawing.
         bool ReadPluginRegistry(std::vector<lkw::PluginInfo> &out);
+        void ReadPluginSetting(lkw::PluginInfo &info, lookout_plugin_setting const &s);
         void ReloadPlugins();
         bool RefreshPluginStatus();
         void StartPluginStatusPoll();
@@ -470,7 +472,6 @@ namespace winrt::LookoutMarine::implementation
         long long last_sample_qpc{ 0 };
 
         // pick report state
-        lk_pick_feature *pick_feats{ nullptr }; // freed with lk_controller_pick_free
         int pick_count{ 0 };
         std::vector<lkw::PickDecoded> pick_decoded;
         int pick_index{ -1 };

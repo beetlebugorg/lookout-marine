@@ -1,13 +1,10 @@
-/* The licence manifest.
+/* The licence manifest, as the two screens read it.
  *
- * One manifest serves every shell, so the thing that matters here is the
- * filter: a build must list the components it actually carries and no others.
- * Listing another shell's dependency is a false statement about this binary,
- * and dropping one of its own is a licence obligation unmet.
- *
- * The labels matter for the same reason. A component whose terms could not be
- * determined has to SAY so — a blank licence column reads as "no licence",
- * which is the one thing it never means.
+ * One manifest serves every shell and the CORE filters it to the shell that
+ * asks, so what is left here is the labels. They matter for the same reason
+ * the filter does: a component whose terms could not be determined has to SAY
+ * so — a blank licence column reads as "no licence", which is the one thing it
+ * never means.
  */
 #include "lk_test.h"
 
@@ -15,75 +12,60 @@
 
 using namespace lktest;
 using lkw::LicenseComponent;
-using lkw::ParseLicenses;
+using lkw::LicenseManifest;
 
 namespace
 {
-    char const *kManifest = R"({
-      "app": {
-        "name": "Lookout Marine",
-        "summary": "A chartplotter",
-        "license": "MIT",
-        "copyright": "2026 the authors",
-        "url": "https://example.invalid",
-        "text": "MIT License\n\nPermission is hereby granted..."
-      },
-      "components": [
-        { "id": "wamr", "name": "WAMR", "group": "Runtime",
-          "license": "Apache-2.0 WITH LLVM-exception",
-          "license_short": "Apache-2.0",
-          "commit": "0123456789abcdef", "pinned_in": "scripts/build-wamr.sh",
-          "shells": ["windows", "linux", "android", "macos"],
-          "text": "Apache License..." },
-        { "id": "winappsdk", "name": "Windows App SDK", "group": "Platform",
-          "license": "MIT", "version": "2.3.1",
-          "shells": ["windows"] },
-        { "id": "gtk", "name": "GTK", "group": "Platform",
-          "license": "LGPL-2.1", "version": "4.14",
-          "shells": ["linux"] },
-        { "id": "mystery", "name": "Mystery", "group": "Runtime",
-          "license": "", "license_note": "no licence file upstream",
-          "version": "1.0", "shells": ["windows"] },
-        { "id": "nobody", "name": "Nobody", "group": "Runtime" }
-      ]
-    })";
+    lookout_license Entry(char const *id, char const *name, char const *group,
+                          char const *license, char const *license_short,
+                          char const *license_note, char const *version,
+                          char const *commit, char const *pinned_in)
+    {
+        lookout_license c{};
+        c.id = id;
+        c.name = name;
+        c.group = group;
+        c.summary = "";
+        c.license = license;
+        c.license_short = license_short;
+        c.license_note = license_note;
+        c.version = version;
+        c.commit = commit;
+        c.pinned_in = pinned_in;
+        c.copyright = "";
+        c.url = "";
+        c.text = "Apache License...";
+        c.notice = "";
+        return c;
+    }
+
+    /* The three components this build would carry, in the manifest's order. */
+    LicenseManifest Manifest()
+    {
+        LicenseManifest m;
+        m.app.name = "Lookout Marine";
+        m.app.license = "MIT";
+        m.app.text = "MIT License\n\nPermission is hereby granted...";
+        m.components.emplace_back(Entry("wamr", "WAMR", "Runtime",
+                                        "Apache-2.0 WITH LLVM-exception", "Apache-2.0", "",
+                                        "", "0123456789abcdef", "scripts/build-wamr.sh"));
+        m.components.emplace_back(Entry("winappsdk", "Windows App SDK", "Platform", "MIT",
+                                        "", "", "2.3.1", "", ""));
+        m.components.emplace_back(Entry("mystery", "Mystery", "Runtime", "", "",
+                                        "no licence file upstream", "1.0", "", ""));
+        m.ok = true;
+        return m;
+    }
 }
 
 void TestLicenses()
 {
     Suite("lk_licenses");
 
-    LK_CASE("this build lists what this build carries, and nothing else");
+    LK_CASE("every field the core states reaches the row");
     {
-        auto m = ParseLicenses(kManifest);
-        LK_EQ(m.ok, true);
-        LK_EQ(m.components.size(), (size_t)3); /* gtk and the shell-less one are out */
-        LK_EQ(m.components[0].id, std::string("wamr"));
-        LK_EQ(m.components[1].id, std::string("winappsdk"));
-        LK_EQ(m.components[2].id, std::string("mystery"));
-    }
-
-    LK_CASE("an entry that names no shells is nobody's");
-    {
-        auto m = ParseLicenses(R"({"app":{"name":"A"},"components":[{"id":"x"}]})");
-        LK_EQ(m.components.size(), (size_t)0);
-        LK_EQ(m.ok, false); /* no components is not a manifest this build can show */
-    }
-
-    LK_CASE("the app's own terms are not a component");
-    {
-        auto m = ParseLicenses(kManifest);
-        LK_EQ(m.app.name, std::string("Lookout Marine"));
-        LK_EQ(m.app.license, std::string("MIT"));
-        LK_CHECK(m.app.text.find("Permission is hereby granted") != std::string::npos);
-        for (auto const &c : m.components)
-            LK_NE(c.id, std::string("app"));
-    }
-
-    LK_CASE("every field is set, and an unstated one is empty");
-    {
-        auto m = ParseLicenses(kManifest);
-        LicenseComponent const &wamr = m.components[0];
+        LicenseComponent const &wamr = Manifest().components[0];
+        LK_EQ(wamr.id, std::string("wamr"));
         LK_EQ(wamr.name, std::string("WAMR"));
         LK_EQ(wamr.group, std::string("Runtime"));
         LK_EQ(wamr.pinned_in, std::string("scripts/build-wamr.sh"));
@@ -92,10 +74,20 @@ void TestLicenses()
         LK_EQ(wamr.summary, std::string(""));
     }
 
+    LK_CASE("the app's own terms are not a component");
+    {
+        auto m = Manifest();
+        LK_EQ(m.app.name, std::string("Lookout Marine"));
+        LK_EQ(m.app.license, std::string("MIT"));
+        LK_CHECK(m.app.text.find("Permission is hereby granted") != std::string::npos);
+        for (auto const &c : m.components)
+            LK_NE(c.id, std::string("app"));
+    }
+
     /* What it is pinned at: its version, or the first seven of its commit. */
     LK_CASE("the pin label");
     {
-        auto m = ParseLicenses(kManifest);
+        auto m = Manifest();
         LK_EQ(m.components[0].PinLabel(), std::string("0123456"));
         LK_EQ(m.components[1].PinLabel(), std::string("2.3.1"));
 
@@ -110,7 +102,7 @@ void TestLicenses()
     /* Terms that could not be determined say so rather than showing nothing. */
     LK_CASE("the licence labels");
     {
-        auto m = ParseLicenses(kManifest);
+        auto m = Manifest();
         LicenseComponent const &wamr = m.components[0];
         LK_EQ(wamr.LicenseLabel(), std::string("Apache-2.0 WITH LLVM-exception"));
         LK_EQ(wamr.ColumnLabel(), std::string("Apache-2.0")); /* the narrow column */
@@ -126,7 +118,7 @@ void TestLicenses()
 
     LK_CASE("the groups keep the manifest's order and their rows");
     {
-        auto groups = ParseLicenses(kManifest).Groups();
+        auto groups = Manifest().Groups();
         LK_EQ(groups.size(), (size_t)2);
         LK_EQ(groups[0].first, std::string("Runtime"));
         LK_EQ(groups[0].second.size(), (size_t)2); /* wamr and mystery */
@@ -136,22 +128,11 @@ void TestLicenses()
         LK_EQ(groups[1].second.size(), (size_t)1);
     }
 
-    /* A manifest that will not parse is not an empty one: the screen says the
-     * list could not be read rather than claiming this build carries nothing. */
-    LK_CASE("a manifest that does not parse is not ok");
+    /* Above this many rows the screens group them under their headings and
+     * offer a search. The number is the core's, so the four shells stop each
+     * holding their own copy of it. */
+    LK_CASE("the grouping threshold is the core's");
     {
-        for (char const *bad : { "", "not json", "[]", "{", "{\"app\":\"text\"}" })
-        {
-            auto m = ParseLicenses(bad);
-            LK_EQ(m.ok, false);
-            LK_EQ(m.components.size(), (size_t)0);
-        }
-    }
-
-    LK_CASE("an app with no name is not ok either");
-    {
-        auto m = ParseLicenses(R"({"components":[{"id":"x","shells":["windows"]}]})");
-        LK_EQ(m.components.size(), (size_t)1);
-        LK_EQ(m.ok, false);
+        LK_EQ(LOOKOUT_LICENSES_GROUP_ABOVE, 12);
     }
 }

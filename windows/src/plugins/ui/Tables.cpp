@@ -179,10 +179,11 @@ namespace lkw
 
     static void ReloadTable(VesselTableWin *t, bool force)
     {
-        char *json = lk_controller_table_rows(t->controller, t->spec.plugin.c_str(),
-                                              t->spec.key.c_str(), t->sort_key.c_str(),
-                                              t->ascending ? 1 : 0);
-        if (json == nullptr)
+        lookout_table_rows *read =
+            lk_controller_table_rows_read(t->controller, t->spec.plugin.c_str(),
+                                          t->spec.key.c_str(), t->sort_key.c_str(),
+                                          t->ascending ? 1 : 0);
+        if (read == nullptr)
         {
             // The plugin has gone; the table empties rather than lying.
             if (t->seq != -1)
@@ -194,19 +195,33 @@ namespace lkw
             return;
         }
 
-        // A malformed batch changes nothing; the next second answers again.
-        auto batch = ReadTableRows(json, t->spec);
-        free(json);
-        if (!batch || (!force && batch->seq == t->seq))
+        // A batch whose seq has not moved is the same rows, and rebuilding for
+        // it flickers a table nobody is feeding once a second.
+        long long seq = (long long)lookout_table_rows_seq(read);
+        if (!force && seq == t->seq)
+        {
+            lookout_table_rows_free(read);
             return;
-        t->seq = batch->seq;
+        }
+        t->seq = seq;
+
+        std::vector<TableRow> batch_rows;
+        size_t row_n = 0;
+        lookout_table_row const *const *all = lookout_table_rows_all(read, &row_n);
+        for (size_t i = 0; i < row_n; ++i)
+        {
+            size_t cell_n = 0;
+            auto cells = lookout_table_row_cells(all[i], &cell_n);
+            batch_rows.emplace_back(*all[i], t->spec, cells, cell_n);
+        }
+        lookout_table_rows_free(read);
 
         t->rows.Children().Clear();
         t->row_at.clear();
         t->row_has_at.clear();
         t->row_flags.clear();
         bool const dark = DarkOf(t); // one read for the whole batch
-        for (auto const &row : batch->rows)
+        for (auto const &row : batch_rows)
         {
             t->row_flags.push_back(row.flag);
             t->row_at.push_back({ row.lon, row.lat });
@@ -239,8 +254,8 @@ namespace lkw
                 cell.TextAlignment(NumericColumn(col.type) ? TextAlignment::Right
                                                            : TextAlignment::Left);
                 auto color = value.missing ? TableFaint(dark)
-                    : col.type == "flag" && row.flag == "alarm" ? kAlarmText
-                    : col.type == "flag" && row.flag == "warning" ? kWarnText
+                    : col.type == LOOKOUT_COLUMN_FLAG && row.flag == "alarm" ? kAlarmText
+                    : col.type == LOOKOUT_COLUMN_FLAG && row.flag == "warning" ? kWarnText
                     : TableInk(dark);
                 cell.Foreground(Media::SolidColorBrush{ color });
                 cellrow.Children().Append(cell);
@@ -271,7 +286,7 @@ namespace lkw
         // rather than leaving it pointing past the end.
         if (t->selected >= (int)t->row_flags.size())
             t->selected = (int)t->row_flags.size() - 1;
-        t->empty.Visibility(batch->rows.empty() ? Visibility::Visible : Visibility::Collapsed);
+        t->empty.Visibility(batch_rows.empty() ? Visibility::Visible : Visibility::Collapsed);
     }
 }
 
@@ -294,13 +309,22 @@ namespace winrt::LookoutMarine::implementation
     void MainWindow::RefreshPluginTables()
     {
         tables.clear();
-        char *json = lk_controller_tables_json(controller);
-        if (json == nullptr)
+        lookout_tables *read = lk_controller_tables_read(controller);
+        if (read == nullptr)
             return;
-        auto read = lkw::ReadTables(json);
-        free(json);
-        if (read)
-            tables = std::move(*read);
+
+        size_t table_n = 0;
+        lookout_table const *const *all = lookout_tables_all(read, &table_n);
+        for (size_t i = 0; i < table_n; ++i)
+        {
+            size_t col_n = 0;
+            auto cols = lookout_table_columns(all[i], &col_n);
+            std::vector<lkw::TableColumn> columns;
+            for (size_t c = 0; c < col_n; ++c)
+                columns.emplace_back(*cols[c]);
+            tables.emplace_back(*all[i], std::move(columns));
+        }
+        lookout_tables_free(read);
     }
 
     void MainWindow::OpenPluginTable(lkw::TableSpec const &spec)

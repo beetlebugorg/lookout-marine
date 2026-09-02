@@ -131,15 +131,15 @@ quietly lost test suite.
 | Directory | What it is |
 |---|---|
 | `src/app/ui/` | The two XAML types (`App`, `MainWindow`), the window shell and the render thread, the menu bubble, the transparent backdrop, and the glue that compiles the XAML-generated TUs a command-line build does not auto-register |
-| `src/chart/` | `lk_pick` — the pick report envelope decoder |
+| `src/chart/` | `lk_pick` — the pick report as the card holds it, and the clipboard form |
 | `src/chart/ui/` | The open flow and the chart panel, gestures and commands, the mariner's markers, the pick report card and the files a pick points at |
 | `src/hud/ui/` | The readout capsule and the scale bar, the startup loader phases, the overlay bubbles and the GPS and follow pills, the zoom-to-scale panel, and `lk_format` (the brushes) |
 | `src/library/` | `lk_paths` (chart and raster discovery, the agency name, the set names) and `lk_bake` (the import's order and progress) |
 | `src/library/ui/` | The installed sets and their switches, charts by link, the raster underlay and its pill, the import panel |
-| `src/plugins/` | `lk_plugin_registry` (the settings schema and the config object), `lk_table` (the declarations, the rows and the mariner's units), `lk_alerts` (the severity and audibility rules), `lk_discovery` (DNS-SD) |
+| `src/plugins/` | `lk_plugin_registry` (the config object that goes back and the status line), `lk_table` (the declarations, the rows and the mariner's units), `lk_alerts` (the audibility rule), `lk_discovery` (DNS-SD) |
 | `src/plugins/ui/` | The plugin settings sections and connection lists, the `.lkplug` consent sheet and install, the table windows, the alert strip and its siren |
 | `src/settings/ui/` | The mariner settings window: the section list, the pages, the debounced apply. No model of its own yet — its pages read the core's mariner struct and the plugin registry direct |
-| `src/about/` | `lk_licenses` — the manifest model |
+| `src/about/` | `lk_licenses` — the manifest model and the labels on a row |
 | `src/about/ui/` | About and the licences screen |
 | `src/engine/` | The seams to what is not XAML: `lk_controller` (the one `lookout*` handle and every `lookout_*` call) and `lk_store` (`%APPDATA%\lookout-marine`), both plain C ports of the Linux shell's own |
 | `src/util/` | What every area uses and none of them owns: `lk_json`, `lk_utf8` |
@@ -162,11 +162,14 @@ are the app icon as a Win32 ICON resource.
 pwsh windows/build-tests.ps1
 ```
 
-The suite covers the shell's **model**: the JSON reader every seam with the core
-goes through, the pick report decoder, the licence manifest, the plugin registry
-and the config object that goes back, and the alert rules. Not the WinUI layer,
-which needs a XAML host, and not what a mariner types or the strings a mariner
-reads, which are the core's format kit and are tested there.
+The suite covers the shell's **model**: the JSON reader a plugin's own status
+document goes through, the pick report card, the licence labels, the config
+object the plugin registry hands back, and the alert rules. Not the WinUI layer,
+which needs a XAML host, and not what the core now decides. The typed reads
+(`lookout_plugins_read`, `lookout_alerts_read`, the tables, the pick, the
+licences, the scan) are tested in the core, and a model file here may name the
+core's TYPES but calls none of its functions, which is what keeps this target
+linkable with no core.
 
 It builds with `zig`, not MSVC, on purpose: `zig` is already a prerequisite of
 this shell, so the tests run for anyone who can build the app — including on a

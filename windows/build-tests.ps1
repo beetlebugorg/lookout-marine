@@ -35,9 +35,11 @@ $sourceDirs = @('app\ui', 'chart', 'chart\ui', 'hud', 'hud\ui', 'library', 'libr
     'plugins', 'plugins\ui', 'settings\ui', 'about', 'about\ui', 'engine', 'util') |
     ForEach-Object { "-I$PSScriptRoot\src\$_" }
 
-# The core's headers, for the TYPES the store and the paths speak in
-# (lookout_view, tile57_mariner). Headers only: nothing here links the core,
-# and a test that needed a lookout_* symbol would be testing the core.
+# The core's headers, for the TYPES the model speaks in (lookout_view,
+# tile57_mariner, and every struct and enum a typed read hands over). Headers
+# only: nothing here links the core, and a test that needed a lookout_* symbol
+# would be testing the core. Reading an array out of a live read is therefore
+# the UI's call, and what it hands over is what these files shape.
 $coreInclude = Join-Path (Split-Path $PSScriptRoot -Parent) 'zig-out\include'
 if (Test-Path $coreInclude) { $sourceDirs += "-I$coreInclude" }
 else { Write-Warning "no core headers at $coreInclude; run windows\build-core.ps1 first" }
