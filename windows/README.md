@@ -141,15 +141,16 @@ quietly lost test suite.
 | `src/settings/ui/` | The mariner settings window: the section list, the pages, the debounced apply. No model of its own yet — its pages read the core's mariner struct and the plugin registry direct |
 | `src/about/` | `lk_licenses` — the manifest model and the labels on a row |
 | `src/about/ui/` | About and the licences screen |
-| `src/engine/` | The seams to what is not XAML: `lk_controller` (the one `lookout*` handle and every `lookout_*` call) and `lk_store` (`%APPDATA%\lookout-marine`), both plain C ports of the Linux shell's own |
+| `src/engine/` | The seams to what is not XAML: `lk_controller` (the one `lookout*` handle) and `lk_store` (the core settings store under `%APPDATA%\lookout-marine`, and the one-time read of what an older build wrote), both plain C |
 | `src/util/` | What every area uses and none of them owns: `lk_json`, `lk_utf8` |
 | `test/` | The model layer's tests and the check harness they are written against |
 
-Two model files are not in the test build because they call the core rather
+Three model files are not in the test build because they call the core rather
 than only reasoning about its answers: `lk_licenses_baked.cpp` (which fetches
-the baked manifest) and `lk_bake.cpp` (which drives tile57). Both are split so
-that the part worth testing — reading the manifest, reading a scan — is not
-in them.
+the baked manifest), `lk_bake.cpp` (which drives tile57), and `lk_store.c`
+(which is the core settings store). Each is split so that the part worth
+testing — the labels on a licence row, the bake's order, what a scan found —
+is not in it.
 
 At the root: `build-core.ps1` builds the Zig core where the vcxproj expects its
 outputs, `build-tests.ps1` builds and runs the tests, `pch.h` is the WinRT

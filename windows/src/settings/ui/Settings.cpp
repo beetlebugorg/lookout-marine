@@ -356,7 +356,6 @@ namespace winrt::LookoutMarine::implementation
             apply_timer.Tick([this](auto &&, auto &&) {
                 apply_timer.Stop();
                 lk_controller_set_mariner(controller, &pending);
-                lk_store_save_mariner(&pending);
                 UpdateReadouts();
             });
         }

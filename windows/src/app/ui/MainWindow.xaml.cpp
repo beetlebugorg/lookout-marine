@@ -164,6 +164,9 @@ namespace winrt::LookoutMarine::implementation
             StopRenderThread();
             lk_controller_free(controller);
             controller = nullptr;
+            // The store coalesces its writes, so the last of them reaches the
+            // disk here rather than at whatever the window was doing.
+            lk_store_shutdown();
         });
     }
 

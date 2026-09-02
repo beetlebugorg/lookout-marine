@@ -10,13 +10,15 @@ namespace lkw
     std::vector<std::string> CollectCells(std::string const &dir);
     /* A folder expands to its cells; a file is itself; a dangling path is empty. */
     std::vector<std::string> CellsFor(std::string const &path);
-    /* Startup chart: $LOOKOUT_OPEN, then the last recent, then the repo test
-     * cell. A recent that names raw source (the .zip an import was baked FROM)
-     * stands for its baked library: restarting must reopen the charts, never
-     * hand the zip to the vector open, which skips it and draws nothing.
-     * `source_out`, when given, receives the path the choice came from (the
-     * env value, the recent, or empty for the fallback cell). */
-    std::vector<std::string> InitialPaths(std::string *source_out = nullptr);
+    /* Startup chart: $LOOKOUT_OPEN, then `most_recent` (the head of the store's
+     * recents, or NULL when there is none), then the repo test cell. A recent
+     * that names raw source (the .zip an import was baked FROM) stands for its
+     * baked library: restarting must reopen the charts, never hand the zip to
+     * the vector open, which skips it and draws nothing. `source_out`, when
+     * given, receives the path the choice came from (the env value, the
+     * recent, or empty for the fallback cell). */
+    std::vector<std::string> InitialPaths(char const *most_recent,
+                                          std::string *source_out = nullptr);
 
     /* The set's display name from the charts themselves: the hydrographic
      * office whose S-57 producer code opens every cell name (US* -> "NOAA"),

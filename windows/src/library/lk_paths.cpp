@@ -10,8 +10,6 @@
 #include <filesystem>
 #include <utility>
 
-#include "lk_store.h"
-
 namespace lkw
 {
     std::string ChartLibraryDir()
@@ -207,7 +205,7 @@ namespace lkw
         return {};
     }
 
-    std::vector<std::string> InitialPaths(std::string *source_out)
+    std::vector<std::string> InitialPaths(char const *most_recent, std::string *source_out)
     {
         if (source_out != nullptr)
             source_out->clear();
@@ -223,11 +221,8 @@ namespace lkw
                 return cells;
             }
         }
-        char **recents = lk_store_load_recents();
-        if (recents != nullptr)
         {
-            std::string first = recents[0] != nullptr ? recents[0] : "";
-            lk_store_free_recents(recents);
+            std::string first = most_recent != nullptr ? most_recent : "";
             // A recent that names raw source — the .zip an import was baked
             // FROM, noted by builds before the bake learned to note the
             // library — stands for the library the bake filled. Handing the

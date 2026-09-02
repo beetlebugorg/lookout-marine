@@ -10,7 +10,6 @@
 struct lk_controller {
     lookout *handle;          /* NULL until a chart is open */
     unsigned width, height;   /* logical points */
-    unsigned long long last_view_saved_ms;
 };
 
 /* The render thread parks between frames (lk_controller_wait); any mutation
@@ -454,23 +453,27 @@ lk_controller_open(lk_controller *self, const char *const *paths, int n,
     lookout_set_pixel_density(h, density);
     lookout_resize(h, width_pt, height_pt);
 
-    /* Reopen where we left off; a first run (no saved pose) takes the core's
-     * default view, not fit_chart: fitting a big library lands on an
-     * arbitrary harbor cell, and the default keeps that centre but pulls back
-     * to an overview (the one piece of this policy the core keeps in one
-     * place — see lookout.h). */
-    lookout_view v;
-    if (!lk_store_load_view(&v))
+    /* The engine keeps the pose and the mariner's settings in the store from
+     * here: it restores both now, writes the pose down as the mariner moves,
+     * and writes both at close. */
+    lookout_set_store(h, lk_store_handle());
+
+    /* A first run (no saved pose) takes the core's default view, not
+     * fit_chart: fitting a big library lands on an arbitrary harbor cell, and
+     * the default keeps that centre but pulls back to an overview (the one
+     * piece of this policy the core keeps in one place — see lookout.h). */
+    if (!lk_store_has_saved_view()) {
+        lookout_view v;
         lookout_default_view(h, &v);
-    lookout_set_view(h, &v);
+        lookout_set_view(h, &v);
+    }
     apply_env_view(h);
 
-    /* device_scale (physical symbol/text size) is the host's to state. */
+    /* device_scale (physical symbol/text size) is the host's to state, and is
+     * the one field the store leaves alone. */
     tile57_mariner m;
     lookout_get_mariner(h, &m);
     m.device_scale = density;
-    /* Saved settings overlay the defaults, so the chart reopens as left. */
-    lk_store_apply_saved_mariner(&m);
     lookout_set_mariner(h, &m);
 
     /* The plugins belong to the handle this open just made, so they are loaded
@@ -479,7 +482,6 @@ lk_controller_open(lk_controller *self, const char *const *paths, int n,
     load_plugins(h);
     lk_store_each_plugin_config(push_saved_plugin_config, h);
 
-    self->last_view_saved_ms = GetTickCount64();
     return 1;
 }
 
@@ -508,11 +510,8 @@ lk_controller_close(lk_controller *self)
     if (self == NULL || self->handle == NULL)
         return;
 
-    /* Persist the pose to reopen on, before the handle dies. */
-    lookout_view v;
-    lookout_get_view(self->handle, &v);
-    lk_store_save_view(&v);
-
+    /* lookout_close writes the pose and the mariner's settings on the way
+     * out, so the store the handle was given is what reopens it. */
     lookout_close(self->handle);
     self->handle = NULL;
 }
@@ -542,18 +541,8 @@ lk_controller_tick(lk_controller *self, double dt)
         lookout_tick_anim(self->handle, dt);
 
     int drew = 0;
-    if (animating || lookout_needs_redraw(self->handle)) {
+    if (animating || lookout_needs_redraw(self->handle))
         drew = lookout_render(self->handle);
-
-        /* Persist periodically: a crash never reaches close(). */
-        unsigned long long now = GetTickCount64();
-        if (now - self->last_view_saved_ms >= 3000) {
-            self->last_view_saved_ms = now;
-            lookout_view v;
-            lookout_get_view(self->handle, &v);
-            lk_store_save_view(&v);
-        }
-    }
     return drew;
 }
 
@@ -689,18 +678,30 @@ lk_controller_get_mariner(lk_controller *self, tile57_mariner *out)
 {
     if (out == NULL)
         return;
-    if (lk_controller_is_open(self))
+    if (lk_controller_is_open(self)) {
         lookout_get_mariner(self->handle, out);
-    else
-        lookout_mariner_defaults(out);
+        return;
+    }
+    /* The settings window opens before a chart does and after one closes, and
+     * what it shows there is the mariner's own choices either way. The read
+     * overlays the defaults, so a field the store never held is left alone. */
+    lookout_mariner_defaults(out);
+    lookout_store_read_mariner(lk_store_handle(), out);
 }
 
 void
 lk_controller_set_mariner(lk_controller *self, const tile57_mariner *m)
 {
     lk_controller_kick();
-    if (lk_controller_is_open(self) && m != NULL)
+    if (m == NULL)
+        return;
+    /* With a chart open the engine writes the settings down itself. With none
+     * open there is no engine to do it, and a choice made at the settings
+     * window still has to be there at the next one. */
+    if (lk_controller_is_open(self))
         lookout_set_mariner(self->handle, m);
+    else
+        lookout_store_write_mariner(lk_store_handle(), m);
 }
 
 void
@@ -713,7 +714,6 @@ lk_controller_set_scheme(lk_controller *self, int scheme)
     lookout_get_mariner(self->handle, &m);
     m.scheme = (tile57_scheme)scheme;
     lookout_set_mariner(self->handle, &m);
-    lk_store_save_mariner(&m);
 }
 
 void
@@ -723,9 +723,6 @@ lk_controller_cycle_scheme(lk_controller *self)
     if (!lk_controller_is_open(self))
         return;
     lookout_cycle_scheme(self->handle);
-    tile57_mariner m;
-    lookout_get_mariner(self->handle, &m);
-    lk_store_save_mariner(&m);
 }
 
 void

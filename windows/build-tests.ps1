@@ -46,9 +46,9 @@ else { Write-Warning "no core headers at $coreInclude; run windows\build-core.ps
 
 # The shell's own sources under test. A new module goes in one of the first two
 # lists, its suite in the third, and main.cpp names the suite function.
-$cSources = @(
-    'src\engine\lk_store.c'
-)
+# No C model file at the moment: lk_store.c speaks to the core store and
+# lk_coord.c is the core's format kit. A new one goes here.
+$cSources = @()
 $cppSources = @(
     'src\util\lk_json.cpp',
     'src\util\lk_utf8.cpp',
@@ -70,8 +70,7 @@ $suites = @(
     'test\test_plugin_registry.cpp',
     'test\test_alerts.cpp',
     'test\test_table.cpp',
-    'test\test_paths.cpp',
-    'test\test_store.cpp'
+    'test\test_paths.cpp'
 )
 
 New-Item -ItemType Directory -Force $out | Out-Null

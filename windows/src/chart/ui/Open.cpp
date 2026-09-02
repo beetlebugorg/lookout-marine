@@ -68,7 +68,11 @@ namespace winrt::LookoutMarine::implementation
                 return;
             }
             std::string source;
-            auto paths = lkw::InitialPaths(&source);
+            char **recents = lk_store_load_recents();
+            char const *most_recent =
+                recents != nullptr && recents[0] != nullptr ? recents[0] : nullptr;
+            auto paths = lkw::InitialPaths(most_recent, &source);
+            lk_store_free_recents(recents);
             if (paths.empty())
             {
                 EmptyState().Visibility(Visibility::Visible);
