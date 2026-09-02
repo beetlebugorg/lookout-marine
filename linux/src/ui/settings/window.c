@@ -122,7 +122,7 @@ static void
 lk_settings_about_section (GtkWidget *page)
 {
   const GPtrArray *components = lk_licenses_components ();
-  const LkLicenseComponent *engine = lk_licenses_component ("tile57");
+  const lookout_license *engine = lk_licenses_component ("tile57");
   GtkWidget *about = lk_section (page, "About");
   GtkWidget *version = gtk_label_new (lk_licenses_app_version ());
 

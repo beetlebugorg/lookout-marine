@@ -4,7 +4,7 @@
 // sources, generates a wrapper style for bare tiles, fetches the sprite packs,
 // builds the credit line, templates the tile urls and persists the list. This
 // file is the shell's two halves of it — a WinHTTP fetcher for the urls
-// lookout asks for, and the snapshot the Chart list and the scale-bar credit
+// lookout asks for, and the read the Chart list and the scale-bar credit
 // render. See lookout.h, lookout_set_http_provider.
 #include "pch.h"
 #include "MainWindow.xaml.h"
@@ -116,7 +116,7 @@ namespace
     }
 
     // The path a local url names, or an empty string when it names a host.
-    // A mariner's own style.json is a real way to get a chart aboard —
+    // A mariner's own style.json is a real way to install a chart —
     // offline, or one they wrote themselves.
     std::string LocalPath(std::string const &url)
     {
@@ -399,40 +399,35 @@ namespace winrt::LookoutMarine::implementation
     {
         if (controller == nullptr)
             return;
-        char *json = lk_controller_chart_links_changed_json(controller);
-        if (json == nullptr)
-            return;
-        std::string text(json);
-        lk_controller_string_free(json);
-
-        JsonObject top{ nullptr };
-        if (!JsonObject::TryParse(winrt::to_hstring(text), top))
+        lookout_links *read = lk_controller_chart_links_changed_read(controller);
+        if (read == nullptr)
             return;
 
         chart_links.clear();
-        if (top.HasKey(L"links"))
+        size_t n = 0;
+        lookout_chart_link const *const *all = lookout_links_all(read, &n);
+        for (size_t i = 0; i < n; ++i)
         {
-            auto arr = top.GetNamedArray(L"links", JsonArray{});
-            for (auto const &value : arr)
-            {
-                if (value.ValueType() != JsonValueType::Object)
-                    continue;
-                auto row = value.GetObject();
-                std::string url = winrt::to_string(row.GetNamedString(L"url", L""));
-                if (url.empty())
-                    continue;
-                ChartLink link;
-                link.url = url;
-                link.name = winrt::to_string(row.GetNamedString(L"name", winrt::to_hstring(url)));
-                chart_links.push_back(std::move(link));
-            }
+            ChartLink link;
+            link.url = all[i]->url;
+            link.name = all[i]->name;
+            chart_links.push_back(std::move(link));
         }
+
+        // An empty active url is lookout's own chart, where the JSON wrote
+        // null: a url is never empty.
         active_chart_link.clear();
-        if (top.HasKey(L"active") && top.GetNamedValue(L"active").ValueType() == JsonValueType::String)
-            active_chart_link = winrt::to_string(top.GetNamedString(L"active"));
-        chart_link_error = winrt::to_string(top.GetNamedString(L"error", L""));
-        chart_link_busy = top.GetNamedBoolean(L"busy", false);
-        std::string credit = winrt::to_string(top.GetNamedString(L"attribution", L""));
+        chart_link_error.clear();
+        chart_link_busy = false;
+        std::string credit;
+        if (lookout_link_state const *state = lookout_links_state(read))
+        {
+            active_chart_link = state->active;
+            chart_link_error = state->error;
+            chart_link_busy = state->busy != 0;
+            credit = state->attribution;
+        }
+        lookout_links_free(read);
 
         // Public tile hosts make the visible credit a condition of service, so
         // it sits under the scale bar for as long as the link draws.

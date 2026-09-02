@@ -43,14 +43,13 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import org.json.JSONObject
 
 /**
  * The licenses screen: this app's terms, and every component the build is made
  * from.
  *
  * The core bakes vendor/licenses/licenses.json into the binary and hands it
- * over whole ([Lookout.licensesJson]), so this needs no connection, no file and
+ * over whole ([Lookout.licenses]), so this needs no connection, no file and
  * no chart open. The entries whose `shells` array names "android" are the ones
  * this build carries; the rest belong to other shells and are dropped.
  *
@@ -119,60 +118,55 @@ data class LicenseManifest(val app: LicenseApp, val components: List<LicenseComp
         }
 
     companion object {
-        /** The shell this build is, as the manifest names it. */
-        const val SHELL = "android"
+        /** The baked list. Read once: it is static in the core and cannot
+         *  change while the process runs. */
+        val current: LicenseManifest? by lazy { decode(Lookout.licenses()) }
 
-        /** The baked list, or null when it will not parse. Read once: it is
-         *  static in the core and cannot change while the process runs. */
-        val current: LicenseManifest? by lazy { parse(Lookout.licensesJson()) }
-
-        fun parse(json: String?): LicenseManifest? {
-            if (json.isNullOrEmpty()) return null
-            return try {
-                val root = JSONObject(json)
-                val a = root.getJSONObject("app")
-                val app = LicenseApp(
-                    name = a.optString("name"),
-                    summary = a.optString("summary"),
-                    license = a.optString("license"),
-                    copyright = a.optString("copyright"),
-                    url = a.optString("url"),
-                    text = a.optString("text"),
+        /**
+         * The flat read: fourteen strings each, this app's terms first, then
+         * the components. `internal` so the suite drives the same walk.
+         */
+        internal fun decode(flat: Array<String>?): LicenseManifest? {
+            if (flat == null || flat.size < FIELDS) return null
+            val app = LicenseApp(
+                name = flat[1],
+                summary = flat[3],
+                license = flat[4],
+                copyright = flat[10],
+                url = flat[11],
+                text = flat[12],
+            )
+            val out = ArrayList<LicenseComponent>((flat.size - FIELDS) / FIELDS)
+            var k = FIELDS
+            while (k + FIELDS <= flat.size) {
+                out.add(
+                    LicenseComponent(
+                        id = flat[k],
+                        name = flat[k + 1],
+                        group = flat[k + 2],
+                        summary = flat[k + 3],
+                        license = flat[k + 4],
+                        licenseShort = flat[k + 5],
+                        licenseNote = flat[k + 6],
+                        version = flat[k + 7],
+                        commit = flat[k + 8],
+                        pinnedIn = flat[k + 9],
+                        copyright = flat[k + 10],
+                        url = flat[k + 11],
+                        text = flat[k + 12],
+                        notice = flat[k + 13],
+                    ),
                 )
-                val arr = root.getJSONArray("components")
-                val out = ArrayList<LicenseComponent>(arr.length())
-                for (i in 0 until arr.length()) {
-                    val o = arr.getJSONObject(i)
-                    val shells = o.optJSONArray("shells") ?: continue
-                    var carries = false
-                    for (s in 0 until shells.length()) {
-                        if (shells.optString(s) == SHELL) { carries = true; break }
-                    }
-                    if (!carries) continue
-                    out.add(
-                        LicenseComponent(
-                            id = o.optString("id"),
-                            name = o.optString("name"),
-                            group = o.optString("group"),
-                            summary = o.optString("summary"),
-                            license = o.optString("license"),
-                            licenseShort = o.optString("license_short"),
-                            licenseNote = o.optString("license_note"),
-                            version = o.optString("version"),
-                            commit = o.optString("commit"),
-                            pinnedIn = o.optString("pinned_in"),
-                            copyright = o.optString("copyright"),
-                            url = o.optString("url"),
-                            text = o.optString("text"),
-                            notice = o.optString("notice"),
-                        )
-                    )
-                }
-                LicenseManifest(app, out)
-            } catch (e: Exception) {
-                null
+                k += FIELDS
             }
+            return LicenseManifest(app, out)
         }
+
+        /** LOOKOUT_LICENSES_GROUP_ABOVE. Above this many components a screen
+         *  groups the rows under their headings and offers a search. */
+        const val GROUP_ABOVE = 12
+
+        private const val FIELDS = 14
     }
 }
 
@@ -230,7 +224,7 @@ private fun LicenseList(manifest: LicenseManifest, onOpen: (LicenseSelection) ->
     // Search and the group headings earn their place above twelve entries and
     // not below: under that the headings outnumber the rows and the field is a
     // control for a list that fits on one screen.
-    val long = manifest.components.size > 12
+    val long = manifest.components.size > LicenseManifest.GROUP_ABOVE
     var search by remember { mutableStateOf("") }
     val term = search.trim().lowercase()
     val matching = if (term.isEmpty()) manifest.components else manifest.components.filter {

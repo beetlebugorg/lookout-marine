@@ -24,6 +24,7 @@ const j = @cImport({
 // cImport the rest of the core uses — never a hand-copied layout. The mariner
 // struct's ABI has moved twice; a redeclaration here would rot silently.
 const cc = @import("c.zig").c;
+const bakejob = @import("bakejob.zig");
 
 // The C ABI (capi.zig exports, same archive — resolved at link).
 const lookout_view = extern struct { lon: f64, lat: f64, zoom: f64, rotation_deg: f64 };
@@ -1407,103 +1408,9 @@ export fn Java_org_beetlebug_lookout_Lookout_nToggleOtherCategory(env: [*c]j.JNI
 
 // ---- the bake ---------------------------------------------------------------
 //
-// The import pipeline's engine half: run the phased bake — cells, then
-// sheets, then the lift — on a thread of its own and let Java POLL a
-// snapshot, the way the Windows shell's BakeJob does. No callback ever
-// crosses into the JVM: a bake worker is not an attached thread and must
-// not become one just to move a progress bar.
-
-const BakeJob = struct {
-    thread: ?std.Thread = null,
-    cancelled: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-    running: std.atomic.Value(bool) = std.atomic.Value(bool).init(true),
-    ok: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-    done: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
-    baked: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
-    phase_offset: u32 = 0,
-    total: u32 = 0,
-
-    source: [:0]u8,
-    ins: [][:0]u8,
-    outs: [][:0]u8,
-    cells: usize,
-    sheets: usize,
-    lifts: usize,
-    archive: bool,
-
-    fn free(self: *BakeJob) void {
-        for (self.ins) |s| gpa.free(s);
-        for (self.outs) |s| gpa.free(s);
-        gpa.free(self.ins);
-        gpa.free(self.outs);
-        gpa.free(self.source);
-        gpa.destroy(self);
-    }
-};
-
-fn bakeProgress(ctx: ?*anyopaque, done: u32, total: u32) callconv(.c) bool {
-    _ = total;
-    const job: *BakeJob = @ptrCast(@alignCast(ctx.?));
-    job.done.store(job.phase_offset + done, .release);
-    return !job.cancelled.load(.acquire);
-}
-
-fn bakeWorker(job: *BakeJob) void {
-    const cpus = std.Thread.getCpuCount() catch 4;
-    // A MEMORY bound, not a speed dial: each worker holds a whole cell.
-    const workers: u32 = @intCast(@max(1, @min(8, cpus)));
-
-    const ins_c = gpa.alloc([*c]const u8, job.ins.len) catch {
-        job.running.store(false, .release);
-        return;
-    };
-    defer gpa.free(ins_c);
-    const outs_c = gpa.alloc([*c]const u8, job.outs.len) catch {
-        job.running.store(false, .release);
-        return;
-    };
-    defer gpa.free(outs_c);
-    for (job.ins, 0..) |s, i| ins_c[i] = s.ptr;
-    for (job.outs, 0..) |s, i| outs_c[i] = s.ptr;
-
-    var st: cc.tile57_status = cc.TILE57_OK;
-    var err: cc.tile57_error = undefined;
-    var total_baked: u32 = 0;
-
-    // Sorted by kind upstream, so each phase is one contiguous run.
-    if (job.cells > 0 and !job.cancelled.load(.acquire)) {
-        job.phase_offset = 0;
-        var n: u32 = 0;
-        st = if (job.archive)
-            cc.tile57_bake_zip_charts(job.source.ptr, ins_c.ptr, outs_c.ptr, job.cells, workers, bakeProgress, null, job, &n, &err)
-        else
-            cc.tile57_bake_files(ins_c.ptr, outs_c.ptr, job.cells, workers, bakeProgress, null, job, &n, &err);
-        total_baked += n;
-    }
-    if (st == cc.TILE57_OK and job.sheets > 0 and !job.cancelled.load(.acquire)) {
-        job.phase_offset = @intCast(job.cells);
-        var n: u32 = 0;
-        st = if (job.archive)
-            cc.tile57_bake_zip_rasters(job.source.ptr, ins_c.ptr + job.cells, outs_c.ptr + job.cells, job.sheets, workers, bakeProgress, null, job, &n, &err)
-        else
-            cc.tile57_bake_rasters(ins_c.ptr + job.cells, outs_c.ptr + job.cells, job.sheets, workers, bakeProgress, null, job, &n, &err);
-        total_baked += n;
-    }
-    // Only an archive holds anything to lift; in a folder those files are
-    // already where the engine can read them.
-    if (st == cc.TILE57_OK and job.archive and job.lifts > 0 and !job.cancelled.load(.acquire)) {
-        job.phase_offset = @intCast(job.cells + job.sheets);
-        const off = job.cells + job.sheets;
-        var n: u32 = 0;
-        st = cc.tile57_zip_extract(job.source.ptr, ins_c.ptr + off, outs_c.ptr + off, job.lifts, bakeProgress, job, &n, &err);
-        total_baked += n;
-    }
-
-    job.baked.store(total_baked, .release);
-    // A cancelled bake is not a failure: whatever landed is a usable library.
-    job.ok.store(st == cc.TILE57_OK, .release);
-    job.running.store(false, .release);
-}
+// src/bakejob.zig runs the phased bake. What is here is the JNI: taking the
+// path arrays out of the JVM, and letting Java poll a snapshot. No callback
+// crosses into the JVM, because a bake worker is not an attached thread.
 
 /// long nBakeStart(String source, String[] ins, String[] outs, int cells,
 ///                 int sheets, int lifts, boolean zip) -- 0 when nothing
@@ -1561,28 +1468,18 @@ export fn Java_org_beetlebug_lookout_Lookout_nBakeStart(env: [*c]j.JNIEnv, cls: 
         return 0;
     };
 
-    const job = gpa.create(BakeJob) catch {
-        for (ins_z) |s| gpa.free(s);
-        gpa.free(ins_z);
-        for (outs_z) |s| gpa.free(s);
-        gpa.free(outs_z);
-        gpa.free(src_copy);
-        return 0;
-    };
-    job.* = .{
-        .source = src_copy,
-        .ins = ins_z,
-        .outs = outs_z,
-        .cells = @intCast(cells),
-        .sheets = @intCast(sheets),
-        .lifts = @intCast(lifts),
-        .archive = zip != 0,
-        .total = @intCast(want),
-    };
-    job.thread = std.Thread.spawn(.{}, bakeWorker, .{job}) catch {
-        job.free();
-        return 0;
-    };
+    // The job owns every string from here, and frees them itself when the
+    // spawn fails.
+    const job = bakejob.Job.start(
+        gpa,
+        src_copy,
+        ins_z,
+        outs_z,
+        @intCast(cells),
+        @intCast(sheets),
+        @intCast(lifts),
+        zip != 0,
+    ) orelse return 0;
     return @bitCast(@intFromPtr(job));
 }
 
@@ -1591,17 +1488,15 @@ export fn Java_org_beetlebug_lookout_Lookout_nBakeStart(env: [*c]j.JNIEnv, cls: 
 export fn Java_org_beetlebug_lookout_Lookout_nBakePoll(env: [*c]j.JNIEnv, cls: j.jclass, jl: j.jlong, out: j.jintArray) j.jboolean {
     _ = cls;
     if (jl == 0) return 0;
-    const job: *BakeJob = @ptrFromInt(@as(usize, @bitCast(jl)));
+    const job: *bakejob.Job = @ptrFromInt(@as(usize, @bitCast(jl)));
+    const p = job.poll();
     if (env_(env).GetArrayLength.?(env, out) >= 4) {
         var buf: [4]j.jint = .{
-            @intCast(job.done.load(.acquire)),
-            @intCast(job.total),
-            @intCast(job.baked.load(.acquire)),
-            if (job.ok.load(.acquire)) 1 else 0,
+            @intCast(p.done), @intCast(p.total), @intCast(p.baked), @intCast(p.ok),
         };
         env_(env).SetIntArrayRegion.?(env, out, 0, 4, &buf);
     }
-    return if (job.running.load(.acquire)) 1 else 0;
+    return if (p.running != 0) 1 else 0;
 }
 
 /// void nBakeCancel(long job) -- tile57 stops at the next chart boundary.
@@ -1609,8 +1504,8 @@ export fn Java_org_beetlebug_lookout_Lookout_nBakeCancel(env: [*c]j.JNIEnv, cls:
     _ = env;
     _ = cls;
     if (jl == 0) return;
-    const job: *BakeJob = @ptrFromInt(@as(usize, @bitCast(jl)));
-    job.cancelled.store(true, .release);
+    const job: *bakejob.Job = @ptrFromInt(@as(usize, @bitCast(jl)));
+    job.cancel();
 }
 
 /// void nBakeFree(long job) -- joins the worker; cancel a running bake first
@@ -1619,8 +1514,7 @@ export fn Java_org_beetlebug_lookout_Lookout_nBakeFree(env: [*c]j.JNIEnv, cls: j
     _ = env;
     _ = cls;
     if (jl == 0) return;
-    const job: *BakeJob = @ptrFromInt(@as(usize, @bitCast(jl)));
-    if (job.thread) |t| t.join();
+    const job: *bakejob.Job = @ptrFromInt(@as(usize, @bitCast(jl)));
     job.free();
 }
 
@@ -2038,6 +1932,106 @@ export fn Java_org_beetlebug_lookout_Lookout_nOpenFile(env: [*c]j.JNIEnv, cls: j
 // ---- licenses ---------------------------------------------------------------
 
 extern fn lookout_licenses_json(out_len: ?*usize) [*:0]const u8;
+extern fn lookout_fmt_coord_dm(value: f64, is_lat: c_int, out: [*]u8, cap: usize) usize;
+extern fn lookout_fmt_position(lat: f64, lon: f64, out: [*]u8, cap: usize) usize;
+extern fn lookout_fmt_scale(denominator: f64, out: [*]u8, cap: usize) usize;
+extern fn lookout_band_name(denominator: f64) [*:0]const u8;
+extern fn lookout_parse_position(text: [*:0]const u8, out_lat: ?*f64, out_lon: ?*f64) c_int;
+extern fn lookout_parse_scale(text: [*:0]const u8, out_denominator: ?*f64) c_int;
+extern fn lookout_zoom_delta_for_scale(current: f64, wanted: f64) f64;
+extern fn lookout_raster_set_name_for(path: [*:0]const u8, out_len: ?*usize) ?[*]const u8;
+
+/// String nRasterSetNameFor(String path) -- what to call the set a raster file
+/// belongs to, WITHOUT opening it. The engine's own rule, the one it names the
+/// sets it draws by, so a shell grouping by anything else disagrees with what
+/// the pill then shows.
+export fn Java_org_beetlebug_lookout_Lookout_nRasterSetNameFor(env: [*c]j.JNIEnv, cls: j.jclass, path: j.jstring) j.jstring {
+    _ = cls;
+    const c = env_(env).GetStringUTFChars.?(env, path, null) orelse
+        return env_(env).NewStringUTF.?(env, "");
+    defer env_(env).ReleaseStringUTFChars.?(env, path, c);
+    var n: usize = 0;
+    const name = lookout_raster_set_name_for(@ptrCast(c), &n) orelse
+        return env_(env).NewStringUTF.?(env, "");
+    // The engine hands out ptr+len over static storage; NewStringUTF needs a
+    // NUL terminator.
+    var buf: [128]u8 = undefined;
+    if (n >= buf.len) return env_(env).NewStringUTF.?(env, "");
+    @memcpy(buf[0..n], name[0..n]);
+    buf[n] = 0;
+    return env_(env).NewStringUTF.?(env, &buf);
+}
+
+
+// ---- the format kit ---------------------------------------------------------
+//
+// The strings a mariner reads and the text a mariner types. None of it needs a
+// handle, so all of it is static and safe from any thread.
+
+/// String nFmtPosition(double lat, double lon) -- "38<degrees>58.578'N 076<degrees>28.920'W".
+export fn Java_org_beetlebug_lookout_Lookout_nFmtPosition(env: [*c]j.JNIEnv, cls: j.jclass, lat: j.jdouble, lon: j.jdouble) j.jstring {
+    _ = cls;
+    var buf: [72]u8 = undefined;
+    _ = lookout_fmt_position(lat, lon, &buf, buf.len);
+    return env_(env).NewStringUTF.?(env, &buf);
+}
+
+/// String nFmtCoordDm(double value, boolean isLat) -- one half of a position.
+export fn Java_org_beetlebug_lookout_Lookout_nFmtCoordDm(env: [*c]j.JNIEnv, cls: j.jclass, value: j.jdouble, is_lat: j.jboolean) j.jstring {
+    _ = cls;
+    var buf: [32]u8 = undefined;
+    _ = lookout_fmt_coord_dm(value, if (is_lat != 0) 1 else 0, &buf, buf.len);
+    return env_(env).NewStringUTF.?(env, &buf);
+}
+
+/// String nFmtScale(double denominator) -- "1:13,267".
+export fn Java_org_beetlebug_lookout_Lookout_nFmtScale(env: [*c]j.JNIEnv, cls: j.jclass, denominator: j.jdouble) j.jstring {
+    _ = cls;
+    var buf: [32]u8 = undefined;
+    _ = lookout_fmt_scale(denominator, &buf, buf.len);
+    return env_(env).NewStringUTF.?(env, &buf);
+}
+
+/// String nBandName(double denominator) -- the S-52 navigational purpose band.
+export fn Java_org_beetlebug_lookout_Lookout_nBandName(env: [*c]j.JNIEnv, cls: j.jclass, denominator: j.jdouble) j.jstring {
+    _ = cls;
+    return env_(env).NewStringUTF.?(env, lookout_band_name(denominator));
+}
+
+/// double[] nParsePosition(String text) -- {lat, lon}, or null when the text is
+/// not a position.
+export fn Java_org_beetlebug_lookout_Lookout_nParsePosition(env: [*c]j.JNIEnv, cls: j.jclass, text: j.jstring) j.jdoubleArray {
+    _ = cls;
+    const c = env_(env).GetStringUTFChars.?(env, text, null) orelse return null;
+    defer env_(env).ReleaseStringUTFChars.?(env, text, c);
+    var lat: f64 = 0;
+    var lon: f64 = 0;
+    if (lookout_parse_position(@ptrCast(c), &lat, &lon) == 0) return null;
+    const arr = env_(env).NewDoubleArray.?(env, 2) orelse return null;
+    var pair = [2]j.jdouble{ lat, lon };
+    env_(env).SetDoubleArrayRegion.?(env, arr, 0, 2, &pair);
+    return arr;
+}
+
+/// double nParseScale(String text) -- the denominator, or 0 when the text is
+/// not a scale. A parsed denominator is never 0: the engine refuses anything
+/// below 100.
+export fn Java_org_beetlebug_lookout_Lookout_nParseScale(env: [*c]j.JNIEnv, cls: j.jclass, text: j.jstring) j.jdouble {
+    _ = cls;
+    const c = env_(env).GetStringUTFChars.?(env, text, null) orelse return 0;
+    defer env_(env).ReleaseStringUTFChars.?(env, text, c);
+    var d: f64 = 0;
+    if (lookout_parse_scale(@ptrCast(c), &d) == 0) return 0;
+    return d;
+}
+
+/// double nZoomDeltaForScale(double current, double wanted) -- a wanted scale as
+/// a zoom delta, to hand to nZoomAt.
+export fn Java_org_beetlebug_lookout_Lookout_nZoomDeltaForScale(env: [*c]j.JNIEnv, cls: j.jclass, current: j.jdouble, wanted: j.jdouble) j.jdouble {
+    _ = env;
+    _ = cls;
+    return lookout_zoom_delta_for_scale(current, wanted);
+}
 
 /// String nLicensesJson() -- this app's terms and every component it is built
 /// from, as the JSON the licenses screen decodes. Baked into the binary, so it
@@ -2045,4 +2039,1434 @@ extern fn lookout_licenses_json(out_len: ?*usize) [*:0]const u8;
 export fn Java_org_beetlebug_lookout_Lookout_nLicensesJson(env: [*c]j.JNIEnv, cls: j.jclass) j.jstring {
     _ = cls;
     return env_(env).NewStringUTF.?(env, lookout_licenses_json(null));
+}
+
+// ---- the plugin registry, read typed ----------------------------------------
+//
+// lookout_plugins_read hands back a snapshot: one arena, every pointer
+// borrowed, alive until nPluginsFree. The shell holds it for the length of one
+// decode and no longer.
+//
+// Every accessor is addressed by index rather than by a handle per object, so
+// the shell holds one long and the snapshot owns everything else. `field`
+// selects which member, and the ordinals are mirrored in Lookout.java.
+
+const c_plugins = opaque {};
+const c_plugin = opaque {};
+const c_cap = opaque {};
+const c_setting = opaque {};
+const c_item = opaque {};
+const c_value = opaque {};
+const c_service = opaque {};
+
+extern fn lookout_plugins_read(h: ?*anyopaque) ?*c_plugins;
+extern fn lookout_plugins_free(p: ?*c_plugins) void;
+extern fn lookout_plugins_all(p: ?*const c_plugins, out_n: *usize) ?[*]const ?*const c_plugin;
+extern fn lookout_plugin_capabilities(p: ?*const c_plugin, out_n: *usize) ?[*]const ?*const c_cap;
+extern fn lookout_plugin_capability_allows(c: ?*const c_cap, out_n: *usize) ?[*]const ?[*:0]const u8;
+extern fn lookout_plugin_settings(p: ?*const c_plugin, out_n: *usize) ?[*]const ?*const c_setting;
+extern fn lookout_plugin_setting_fields(s: ?*const c_setting, out_n: *usize) ?[*]const ?*const c_setting;
+extern fn lookout_plugin_setting_items(s: ?*const c_setting, out_n: *usize) ?[*]const ?*const c_item;
+extern fn lookout_plugin_item_values(it: ?*const c_item, out_n: *usize) ?[*]const ?*const c_value;
+extern fn lookout_plugin_setting_services(s: ?*const c_setting, out_n: *usize) ?[*]const ?*const c_service;
+extern fn lookout_plugin_service_values(svc: ?*const c_service, out_n: *usize) ?[*]const ?*const c_value;
+
+const CPlugin = extern struct {
+    id: ?[*:0]const u8,
+    name: ?[*:0]const u8,
+    version: ?[*:0]const u8,
+    status: ?[*:0]const u8,
+    origin: c_int,
+    live: c_int,
+};
+
+const CCapability = extern struct {
+    name: ?[*:0]const u8,
+    sentence: ?[*:0]const u8,
+    granted: c_int,
+};
+
+const CSetting = extern struct {
+    key: ?[*:0]const u8,
+    label: ?[*:0]const u8,
+    desc: ?[*:0]const u8,
+    group: ?[*:0]const u8,
+    kind: c_int,
+    section: c_int,
+    unit: ?[*:0]const u8,
+    min: f64,
+    max: f64,
+    default_number: f64,
+    default_text: ?[*:0]const u8,
+    placeholder: ?[*:0]const u8,
+    optional: c_int,
+    max_text: usize,
+    footer: ?[*:0]const u8,
+    empty: ?[*:0]const u8,
+    add_label: ?[*:0]const u8,
+    switch_key: ?[*:0]const u8,
+    max_items: usize,
+    value: f64,
+};
+
+const CItem = extern struct { id: ?[*:0]const u8 };
+
+const CValue = extern struct {
+    key: ?[*:0]const u8,
+    kind: c_int,
+    number: f64,
+    text: ?[*:0]const u8,
+};
+
+const CService = extern struct { type: ?[*:0]const u8 };
+
+/// The snapshot behind a jlong, or null. A bit-pattern round-trip, for the
+/// same reason fromLong is one.
+fn readOf(p: j.jlong) ?*c_plugins {
+    if (p == 0) return null;
+    return @ptrFromInt(@as(usize, @bitCast(p)));
+}
+
+/// The i'th plugin, or null when the index is past the end.
+fn pluginAt(p: j.jlong, i: j.jint) ?*const CPlugin {
+    const read = readOf(p) orelse return null;
+    var n: usize = 0;
+    const all = lookout_plugins_all(read, &n) orelse return null;
+    if (i < 0 or @as(usize, @intCast(i)) >= n) return null;
+    return @ptrCast(@alignCast(all[@intCast(i)] orelse return null));
+}
+
+/// The s'th setting of the i'th plugin, and when `field` is 0 or more, that
+/// setting's field'th list field instead.
+fn settingAt(p: j.jlong, i: j.jint, s: j.jint, field: j.jint) ?*const CSetting {
+    const plug = pluginAt(p, i) orelse return null;
+    var n: usize = 0;
+    const list = lookout_plugin_settings(@ptrCast(plug), &n) orelse return null;
+    if (s < 0 or @as(usize, @intCast(s)) >= n) return null;
+    const setting: *const CSetting = @ptrCast(@alignCast(list[@intCast(s)] orelse return null));
+    if (field < 0) return setting;
+    var fn_: usize = 0;
+    const fields = lookout_plugin_setting_fields(@ptrCast(setting), &fn_) orelse return null;
+    if (@as(usize, @intCast(field)) >= fn_) return null;
+    return @ptrCast(@alignCast(fields[@intCast(field)] orelse return null));
+}
+
+/// A borrowed C string as a Java string. A null pointer arrives as "", because
+/// the shell's model has no nullable text.
+fn jstr(env: [*c]j.JNIEnv, s: ?[*:0]const u8) j.jstring {
+    return env_(env).NewStringUTF.?(env, s orelse "");
+}
+
+/// A list of borrowed C strings as a String[].
+fn jstrArray(env: [*c]j.JNIEnv, items: []const ?[*:0]const u8) j.jobjectArray {
+    const cls = env_(env).FindClass.?(env, "java/lang/String") orelse return null;
+    const arr = env_(env).NewObjectArray.?(env, @intCast(items.len), cls, null) orelse return null;
+    for (items, 0..) |it, k| {
+        const js = jstr(env, it) orelse continue;
+        env_(env).SetObjectArrayElement.?(env, arr, @intCast(k), js);
+        // The default local-ref table is small.
+        env_(env).DeleteLocalRef.?(env, js);
+    }
+    return arr;
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nPluginsRead(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) j.jlong {
+    _ = env;
+    _ = cls;
+    const h = fromLong(hl) orelse return 0;
+    const read = lookout_plugins_read(h.l) orelse return 0;
+    return @bitCast(@as(u64, @intFromPtr(read)));
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nPluginsFree(env: [*c]j.JNIEnv, cls: j.jclass, p: j.jlong) void {
+    _ = env;
+    _ = cls;
+    lookout_plugins_free(readOf(p));
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nPluginCount(env: [*c]j.JNIEnv, cls: j.jclass, p: j.jlong) j.jint {
+    _ = env;
+    _ = cls;
+    const read = readOf(p) orelse return 0;
+    var n: usize = 0;
+    _ = lookout_plugins_all(read, &n);
+    return @intCast(n);
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nPluginText(env: [*c]j.JNIEnv, cls: j.jclass, p: j.jlong, i: j.jint, field: j.jint) j.jstring {
+    _ = cls;
+    const plug = pluginAt(p, i) orelse return jstr(env, null);
+    return jstr(env, switch (field) {
+        0 => plug.id,
+        1 => plug.name,
+        2 => plug.version,
+        3 => plug.status,
+        else => null,
+    });
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nPluginInt(env: [*c]j.JNIEnv, cls: j.jclass, p: j.jlong, i: j.jint, field: j.jint) j.jint {
+    _ = env;
+    _ = cls;
+    const plug = pluginAt(p, i) orelse return 0;
+    return switch (field) {
+        0 => plug.origin,
+        1 => plug.live,
+        else => 0,
+    };
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nCapCount(env: [*c]j.JNIEnv, cls: j.jclass, p: j.jlong, i: j.jint) j.jint {
+    _ = env;
+    _ = cls;
+    const plug = pluginAt(p, i) orelse return 0;
+    var n: usize = 0;
+    _ = lookout_plugin_capabilities(@ptrCast(plug), &n);
+    return @intCast(n);
+}
+
+fn capAt(p: j.jlong, i: j.jint, c: j.jint) ?*const CCapability {
+    const plug = pluginAt(p, i) orelse return null;
+    var n: usize = 0;
+    const caps = lookout_plugin_capabilities(@ptrCast(plug), &n) orelse return null;
+    if (c < 0 or @as(usize, @intCast(c)) >= n) return null;
+    return @ptrCast(@alignCast(caps[@intCast(c)] orelse return null));
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nCapText(env: [*c]j.JNIEnv, cls: j.jclass, p: j.jlong, i: j.jint, c: j.jint, field: j.jint) j.jstring {
+    _ = cls;
+    const cap = capAt(p, i, c) orelse return jstr(env, null);
+    return jstr(env, if (field == 0) cap.name else cap.sentence);
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nCapGranted(env: [*c]j.JNIEnv, cls: j.jclass, p: j.jlong, i: j.jint, c: j.jint) j.jint {
+    _ = env;
+    _ = cls;
+    const cap = capAt(p, i, c) orelse return 0;
+    return cap.granted;
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nCapAllows(env: [*c]j.JNIEnv, cls: j.jclass, p: j.jlong, i: j.jint, c: j.jint) j.jobjectArray {
+    _ = cls;
+    const cap = capAt(p, i, c) orelse return jstrArray(env, &.{});
+    var n: usize = 0;
+    const allows = lookout_plugin_capability_allows(@ptrCast(cap), &n) orelse return jstrArray(env, &.{});
+    return jstrArray(env, allows[0..n]);
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nSettingCount(env: [*c]j.JNIEnv, cls: j.jclass, p: j.jlong, i: j.jint) j.jint {
+    _ = env;
+    _ = cls;
+    const plug = pluginAt(p, i) orelse return 0;
+    var n: usize = 0;
+    _ = lookout_plugin_settings(@ptrCast(plug), &n);
+    return @intCast(n);
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nSettingFieldCount(env: [*c]j.JNIEnv, cls: j.jclass, p: j.jlong, i: j.jint, s: j.jint) j.jint {
+    _ = env;
+    _ = cls;
+    const setting = settingAt(p, i, s, -1) orelse return 0;
+    var n: usize = 0;
+    _ = lookout_plugin_setting_fields(@ptrCast(setting), &n);
+    return @intCast(n);
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nSettingText(env: [*c]j.JNIEnv, cls: j.jclass, p: j.jlong, i: j.jint, s: j.jint, fi: j.jint, field: j.jint) j.jstring {
+    _ = cls;
+    const st = settingAt(p, i, s, fi) orelse return jstr(env, null);
+    return jstr(env, switch (field) {
+        0 => st.key,
+        1 => st.label,
+        2 => st.desc,
+        3 => st.group,
+        4 => st.unit,
+        5 => st.default_text,
+        6 => st.placeholder,
+        7 => st.footer,
+        8 => st.empty,
+        9 => st.add_label,
+        10 => st.switch_key,
+        else => null,
+    });
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nSettingNumber(env: [*c]j.JNIEnv, cls: j.jclass, p: j.jlong, i: j.jint, s: j.jint, fi: j.jint, field: j.jint) j.jdouble {
+    _ = env;
+    _ = cls;
+    const st = settingAt(p, i, s, fi) orelse return 0;
+    return switch (field) {
+        0 => st.min,
+        1 => st.max,
+        2 => st.default_number,
+        3 => st.value,
+        else => 0,
+    };
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nSettingInt(env: [*c]j.JNIEnv, cls: j.jclass, p: j.jlong, i: j.jint, s: j.jint, fi: j.jint, field: j.jint) j.jint {
+    _ = env;
+    _ = cls;
+    const st = settingAt(p, i, s, fi) orelse return 0;
+    return switch (field) {
+        0 => st.kind,
+        1 => st.section,
+        2 => st.optional,
+        3 => @intCast(st.max_text),
+        4 => @intCast(st.max_items),
+        else => 0,
+    };
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nItemCount(env: [*c]j.JNIEnv, cls: j.jclass, p: j.jlong, i: j.jint, s: j.jint) j.jint {
+    _ = env;
+    _ = cls;
+    const setting = settingAt(p, i, s, -1) orelse return 0;
+    var n: usize = 0;
+    _ = lookout_plugin_setting_items(@ptrCast(setting), &n);
+    return @intCast(n);
+}
+
+fn itemAt(p: j.jlong, i: j.jint, s: j.jint, it: j.jint) ?*const CItem {
+    const setting = settingAt(p, i, s, -1) orelse return null;
+    var n: usize = 0;
+    const items = lookout_plugin_setting_items(@ptrCast(setting), &n) orelse return null;
+    if (it < 0 or @as(usize, @intCast(it)) >= n) return null;
+    return @ptrCast(@alignCast(items[@intCast(it)] orelse return null));
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nItemId(env: [*c]j.JNIEnv, cls: j.jclass, p: j.jlong, i: j.jint, s: j.jint, it: j.jint) j.jstring {
+    _ = cls;
+    const item = itemAt(p, i, s, it) orelse return jstr(env, null);
+    return jstr(env, item.id);
+}
+
+/// One item's values as {key, text, key, text, ...}. Every cell is text: the
+/// row editor binds text controls, and the core coerces on the way back.
+export fn Java_org_beetlebug_lookout_Lookout_nItemValues(env: [*c]j.JNIEnv, cls: j.jclass, p: j.jlong, i: j.jint, s: j.jint, it: j.jint) j.jobjectArray {
+    _ = cls;
+    const item = itemAt(p, i, s, it) orelse return jstrArray(env, &.{});
+    var n: usize = 0;
+    const values = lookout_plugin_item_values(@ptrCast(item), &n) orelse return jstrArray(env, &.{});
+    return valuePairs(env, values[0..n]);
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nServices(env: [*c]j.JNIEnv, cls: j.jclass, p: j.jlong, i: j.jint, s: j.jint) j.jobjectArray {
+    _ = cls;
+    const setting = settingAt(p, i, s, -1) orelse return jstrArray(env, &.{});
+    var n: usize = 0;
+    const svcs = lookout_plugin_setting_services(@ptrCast(setting), &n) orelse return jstrArray(env, &.{});
+    const cls_s = env_(env).FindClass.?(env, "java/lang/String") orelse return null;
+    const arr = env_(env).NewObjectArray.?(env, @intCast(n), cls_s, null) orelse return null;
+    for (svcs[0..n], 0..) |sv, k| {
+        const svc: *const CService = @ptrCast(@alignCast(sv orelse continue));
+        const js = jstr(env, svc.type) orelse continue;
+        env_(env).SetObjectArrayElement.?(env, arr, @intCast(k), js);
+        env_(env).DeleteLocalRef.?(env, js);
+    }
+    return arr;
+}
+
+/// What a row added from a find has set beyond its name, address and port, as
+/// {key, text, ...}.
+export fn Java_org_beetlebug_lookout_Lookout_nServiceSet(env: [*c]j.JNIEnv, cls: j.jclass, p: j.jlong, i: j.jint, s: j.jint, sv: j.jint) j.jobjectArray {
+    _ = cls;
+    const setting = settingAt(p, i, s, -1) orelse return jstrArray(env, &.{});
+    var n: usize = 0;
+    const svcs = lookout_plugin_setting_services(@ptrCast(setting), &n) orelse return jstrArray(env, &.{});
+    if (sv < 0 or @as(usize, @intCast(sv)) >= n) return jstrArray(env, &.{});
+    const svc: *const CService = @ptrCast(@alignCast(svcs[@intCast(sv)] orelse return jstrArray(env, &.{})));
+    var vn: usize = 0;
+    const values = lookout_plugin_service_values(@ptrCast(svc), &vn) orelse return jstrArray(env, &.{});
+    return valuePairs(env, values[0..vn]);
+}
+
+/// A run of values as {key, text, key, text, ...}. A number is written the way
+/// the shell writes numbers back, and a toggle as "true" or "false".
+fn valuePairs(env: [*c]j.JNIEnv, values: []const ?*const c_value) j.jobjectArray {
+    const cls_s = env_(env).FindClass.?(env, "java/lang/String") orelse return null;
+    const arr = env_(env).NewObjectArray.?(env, @intCast(values.len * 2), cls_s, null) orelse return null;
+    var buf: [64]u8 = undefined;
+    for (values, 0..) |vp, k| {
+        const v: *const CValue = @ptrCast(@alignCast(vp orelse continue));
+        const key = jstr(env, v.key) orelse continue;
+        env_(env).SetObjectArrayElement.?(env, arr, @intCast(k * 2), key);
+        env_(env).DeleteLocalRef.?(env, key);
+
+        const text: j.jstring = switch (v.kind) {
+            // TOGGLE
+            1 => jstr(env, if (v.number != 0) "true" else "false"),
+            // NUMBER
+            0 => blk: {
+                const z = std.fmt.bufPrintZ(&buf, "{d}", .{v.number}) catch break :blk jstr(env, "");
+                break :blk env_(env).NewStringUTF.?(env, z.ptr);
+            },
+            else => jstr(env, v.text),
+        };
+        if (text) |t| {
+            env_(env).SetObjectArrayElement.?(env, arr, @intCast(k * 2 + 1), t);
+            env_(env).DeleteLocalRef.?(env, t);
+        }
+    }
+    return arr;
+}
+
+// ---- the alerts, read typed -------------------------------------------------
+
+const c_alerts = opaque {};
+const c_alert = opaque {};
+
+extern fn lookout_alerts_read(h: ?*anyopaque) ?*c_alerts;
+extern fn lookout_alerts_free(a: ?*c_alerts) void;
+extern fn lookout_alerts_seq(a: ?*const c_alerts) u64;
+extern fn lookout_alerts_all(a: ?*const c_alerts, out_n: *usize) ?[*]const ?*const c_alert;
+
+const CAlert = extern struct {
+    id: u64,
+    plugin: ?[*:0]const u8,
+    title: ?[*:0]const u8,
+    body: ?[*:0]const u8,
+    severity: c_int,
+    acknowledged: c_int,
+    raised: i64,
+};
+
+/// String[] nAlerts(long h) -- every alert raised and not yet seen off, as
+/// {seq, id, plugin, severity, title, body, raised, acknowledged} with the seq
+/// first and seven strings per alert after it. Null when no plugin layer is up,
+/// which is not the same as no alerts.
+///
+/// A flat array rather than an accessor per field: an alert has seven members
+/// and the set is short, so one crossing is cheaper than seven per row.
+export fn Java_org_beetlebug_lookout_Lookout_nAlerts(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) j.jobjectArray {
+    _ = cls;
+    const h = fromLong(hl) orelse return null;
+    const read = lookout_alerts_read(h.l) orelse return null;
+    defer lookout_alerts_free(read);
+
+    var n: usize = 0;
+    const all = lookout_alerts_all(read, &n) orelse return null;
+
+    const cls_s = env_(env).FindClass.?(env, "java/lang/String") orelse return null;
+    const arr = env_(env).NewObjectArray.?(env, @intCast(1 + n * 7), cls_s, null) orelse return null;
+
+    var buf: [32]u8 = undefined;
+    const put = struct {
+        fn num(e: [*c]j.JNIEnv, a: j.jobjectArray, at: usize, b: []u8, v: i64) void {
+            const z = std.fmt.bufPrintZ(b, "{d}", .{v}) catch return;
+            const s = env_(e).NewStringUTF.?(e, z.ptr) orelse return;
+            env_(e).SetObjectArrayElement.?(e, a, @intCast(at), s);
+            env_(e).DeleteLocalRef.?(e, s);
+        }
+        fn str(e: [*c]j.JNIEnv, a: j.jobjectArray, at: usize, v: ?[*:0]const u8) void {
+            const s = jstr(e, v) orelse return;
+            env_(e).SetObjectArrayElement.?(e, a, @intCast(at), s);
+            env_(e).DeleteLocalRef.?(e, s);
+        }
+    };
+
+    put.num(env, arr, 0, &buf, @bitCast(lookout_alerts_seq(read)));
+    for (all[0..n], 0..) |ap, k| {
+        const a: *const CAlert = @ptrCast(@alignCast(ap orelse continue));
+        const at = 1 + k * 7;
+        put.num(env, arr, at, &buf, @bitCast(a.id));
+        put.str(env, arr, at + 1, a.plugin);
+        put.num(env, arr, at + 2, &buf, a.severity);
+        put.str(env, arr, at + 3, a.title);
+        put.str(env, arr, at + 4, a.body);
+        put.num(env, arr, at + 5, &buf, a.raised);
+        put.num(env, arr, at + 6, &buf, a.acknowledged);
+    }
+    return arr;
+}
+
+// ---- the tables, read typed -------------------------------------------------
+
+const c_tables = opaque {};
+const c_table = opaque {};
+const c_column = opaque {};
+const c_rows = opaque {};
+const c_row = opaque {};
+const c_cell = opaque {};
+
+extern fn lookout_tables_read(h: ?*anyopaque) ?*c_tables;
+extern fn lookout_tables_free(t: ?*c_tables) void;
+extern fn lookout_tables_all(t: ?*const c_tables, out_n: *usize) ?[*]const ?*const c_table;
+extern fn lookout_table_columns(t: ?*const c_table, out_n: *usize) ?[*]const ?*const c_column;
+extern fn lookout_table_rows_read(h: ?*anyopaque, id: ?[*:0]const u8, key: ?[*:0]const u8, sort_key: ?[*:0]const u8, ascending: c_int) ?*c_rows;
+extern fn lookout_table_rows_free(r: ?*c_rows) void;
+extern fn lookout_table_rows_seq(r: ?*const c_rows) u64;
+extern fn lookout_table_rows_all(r: ?*const c_rows, out_n: *usize) ?[*]const ?*const c_row;
+extern fn lookout_table_row_cells(row: ?*const c_row, out_n: *usize) ?[*]const ?*const c_cell;
+
+const CColumn = extern struct {
+    key: ?[*:0]const u8,
+    label: ?[*:0]const u8,
+    type: c_int,
+};
+
+const CTable = extern struct {
+    plugin: ?[*:0]const u8,
+    key: ?[*:0]const u8,
+    title: ?[*:0]const u8,
+    menu: ?[*:0]const u8,
+    sort_key: ?[*:0]const u8,
+    sort_ascending: c_int,
+    at_lat: ?[*:0]const u8,
+    at_lon: ?[*:0]const u8,
+    open: c_int,
+    rows: usize,
+    seq: u64,
+};
+
+const CRow = extern struct {
+    id: ?[*:0]const u8,
+    band: i32,
+    located: c_int,
+    lon: f64,
+    lat: f64,
+};
+
+const CCell = extern struct {
+    type: c_int,
+    kind: c_int,
+    number: f64,
+    text: ?[*:0]const u8,
+};
+
+/// A growing String[] the writers below append to. JNI has no array append, so
+/// the strings are gathered first and the array is built once at the end.
+const Strings = struct {
+    list: std.ArrayList([]u8),
+
+    fn init() Strings {
+        return .{ .list = .empty };
+    }
+
+    fn deinit(self: *Strings) void {
+        for (self.list.items) |s| gpa.free(s);
+        self.list.deinit(gpa);
+    }
+
+    fn str(self: *Strings, s: ?[*:0]const u8) void {
+        const src = if (s) |p| std.mem.span(p) else "";
+        const copy = gpa.alloc(u8, src.len) catch return;
+        @memcpy(copy, src);
+        self.list.append(gpa, copy) catch gpa.free(copy);
+    }
+
+    fn print(self: *Strings, comptime fmt: []const u8, args: anytype) void {
+        const s = std.fmt.allocPrint(gpa, fmt, args) catch return;
+        self.list.append(gpa, s) catch gpa.free(s);
+    }
+
+    fn toArray(self: *Strings, env: [*c]j.JNIEnv) j.jobjectArray {
+        const cls = env_(env).FindClass.?(env, "java/lang/String") orelse return null;
+        const arr = env_(env).NewObjectArray.?(env, @intCast(self.list.items.len), cls, null) orelse return null;
+        for (self.list.items, 0..) |s, k| {
+            const z = gpa.allocSentinel(u8, s.len, 0) catch continue;
+            defer gpa.free(z);
+            @memcpy(z, s);
+            const js = env_(env).NewStringUTF.?(env, z.ptr) orelse continue;
+            env_(env).SetObjectArrayElement.?(env, arr, @intCast(k), js);
+            // The default local-ref table is small; a long table would exhaust it.
+            env_(env).DeleteLocalRef.?(env, js);
+        }
+        return arr;
+    }
+};
+
+/// String[] nTables(long h) -- every table the loaded plugins declare. Eight
+/// strings per table, then three per column:
+///
+///   plugin, key, title, menu, sortKey, sortAscending, locatable, columnCount
+///   then columnCount times: key, label, type
+///
+/// Null when no plugin layer is up.
+export fn Java_org_beetlebug_lookout_Lookout_nTables(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) j.jobjectArray {
+    _ = cls;
+    const h = fromLong(hl) orelse return null;
+    const read = lookout_tables_read(h.l) orelse return null;
+    defer lookout_tables_free(read);
+
+    var n: usize = 0;
+    const all = lookout_tables_all(read, &n) orelse return null;
+
+    var out = Strings.init();
+    defer out.deinit();
+
+    for (all[0..n]) |tp| {
+        const t: *const CTable = @ptrCast(@alignCast(tp orelse continue));
+        var cn: usize = 0;
+        const cols = lookout_table_columns(@ptrCast(t), &cn) orelse continue;
+        out.str(t.plugin);
+        out.str(t.key);
+        out.str(t.title);
+        out.str(t.menu);
+        out.str(t.sort_key);
+        out.print("{d}", .{t.sort_ascending});
+        // Both `at` keys are set together, so either one answers it.
+        const lat = if (t.at_lat) |p| std.mem.span(p) else "";
+        out.print("{d}", .{@intFromBool(lat.len > 0)});
+        out.print("{d}", .{cn});
+        for (cols[0..cn]) |cp| {
+            const c: *const CColumn = @ptrCast(@alignCast(cp orelse continue));
+            out.str(c.key);
+            out.str(c.label);
+            out.print("{d}", .{c.type});
+        }
+    }
+    return out.toArray(env);
+}
+
+/// String[] nTableRows(long h, String id, String key, String sortKey,
+/// boolean ascending) -- one table's rows, already in order. The seq, then six
+/// strings per row and two per cell:
+///
+///   seq
+///   then per row: id, band, located, lon, lat, cellCount
+///   then cellCount times: kind, value
+///
+/// A kind of 0 is a cell the plugin did not send, which is not a zero.
+export fn Java_org_beetlebug_lookout_Lookout_nTableRows(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, id: j.jstring, key: j.jstring, sort_key: j.jstring, ascending: j.jboolean) j.jobjectArray {
+    _ = cls;
+    const h = fromLong(hl) orelse return null;
+    const c_id = env_(env).GetStringUTFChars.?(env, id, null) orelse return null;
+    defer env_(env).ReleaseStringUTFChars.?(env, id, c_id);
+    const c_key = env_(env).GetStringUTFChars.?(env, key, null) orelse return null;
+    defer env_(env).ReleaseStringUTFChars.?(env, key, c_key);
+    const c_sort = env_(env).GetStringUTFChars.?(env, sort_key, null) orelse return null;
+    defer env_(env).ReleaseStringUTFChars.?(env, sort_key, c_sort);
+
+    const read = lookout_table_rows_read(h.l, @ptrCast(c_id), @ptrCast(c_key), @ptrCast(c_sort), if (ascending != 0) 1 else 0) orelse return null;
+    defer lookout_table_rows_free(read);
+
+    var n: usize = 0;
+    const all = lookout_table_rows_all(read, &n) orelse return null;
+
+    var out = Strings.init();
+    defer out.deinit();
+
+    out.print("{d}", .{lookout_table_rows_seq(read)});
+    for (all[0..n]) |rp| {
+        const r: *const CRow = @ptrCast(@alignCast(rp orelse continue));
+        var cn: usize = 0;
+        const cells = lookout_table_row_cells(@ptrCast(r), &cn) orelse {
+            continue;
+        };
+        out.str(r.id);
+        out.print("{d}", .{r.band});
+        out.print("{d}", .{r.located});
+        out.print("{d}", .{r.lon});
+        out.print("{d}", .{r.lat});
+        out.print("{d}", .{cn});
+        for (cells[0..cn]) |cp| {
+            const c: *const CCell = @ptrCast(@alignCast(cp orelse continue));
+            out.print("{d}", .{c.kind});
+            switch (c.kind) {
+                // NUMBER
+                1 => out.print("{d}", .{c.number}),
+                // TEXT
+                2 => out.str(c.text),
+                else => out.str(null),
+            }
+        }
+    }
+    return out.toArray(env);
+}
+
+// ---- the pick report, read typed --------------------------------------------
+
+const c_picks = opaque {};
+const c_feature = opaque {};
+const c_pick_row = opaque {};
+
+extern fn lookout_picks_read(h: ?*anyopaque, lon: f64, lat: f64) ?*c_picks;
+extern fn lookout_picks_free(p: ?*c_picks) void;
+extern fn lookout_picks_all(p: ?*const c_picks, out_n: *usize) ?[*]const ?*const c_feature;
+extern fn lookout_pick_notes(f: ?*const c_feature, out_n: *usize) ?[*]const ?[*:0]const u8;
+extern fn lookout_pick_rows(f: ?*const c_feature, out_n: *usize) ?[*]const ?*const c_pick_row;
+extern fn lookout_pick_source(f: ?*const c_feature, out_n: *usize) ?[*]const ?*const c_pick_row;
+
+const CPickRow = extern struct {
+    label: ?[*:0]const u8,
+    value: ?[*:0]const u8,
+    depth: c_int,
+    file: c_int,
+    picture: c_int,
+};
+
+const CFeature = extern struct {
+    cls: ?[*:0]const u8,
+    chart: ?[*:0]const u8,
+    title: ?[*:0]const u8,
+    subtitle: ?[*:0]const u8,
+    chip: ?[*:0]const u8,
+    footnote: ?[*:0]const u8,
+    empty: c_int,
+    raw: ?[*:0]const u8,
+};
+
+fn pickRows(out: *Strings, rows: []const ?*const c_pick_row) void {
+    for (rows) |rp| {
+        const r: *const CPickRow = @ptrCast(@alignCast(rp orelse continue));
+        out.str(r.label);
+        out.str(r.value);
+        out.print("{d}", .{r.depth});
+        out.print("{d}", .{r.file});
+        out.print("{d}", .{r.picture});
+    }
+}
+
+/// String[] nPickRead(long h, double lon, double lat) -- the features under a
+/// point, best first, each as the page the engine composed. Eleven strings per
+/// feature, then its notes, its report rows and its source rows:
+///
+///   cls, chart, title, subtitle, chip, footnote, empty, raw,
+///   noteCount, rowCount, sourceCount
+///   then noteCount strings
+///   then rowCount times:   label, value, depth, file, picture
+///   then sourceCount times: the same five
+export fn Java_org_beetlebug_lookout_Lookout_nPickRead(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, lon: j.jdouble, lat: j.jdouble) j.jobjectArray {
+    _ = cls;
+    const h = fromLong(hl) orelse return null;
+    const read = lookout_picks_read(h.l, lon, lat) orelse return null;
+    defer lookout_picks_free(read);
+
+    var n: usize = 0;
+    const all = lookout_picks_all(read, &n) orelse return null;
+
+    var out = Strings.init();
+    defer out.deinit();
+
+    for (all[0..n]) |fp| {
+        const f: *const CFeature = @ptrCast(@alignCast(fp orelse continue));
+        var notes_n: usize = 0;
+        var rows_n: usize = 0;
+        var src_n: usize = 0;
+        const notes = lookout_pick_notes(@ptrCast(f), &notes_n);
+        const rows = lookout_pick_rows(@ptrCast(f), &rows_n);
+        const src = lookout_pick_source(@ptrCast(f), &src_n);
+        if (notes == null) notes_n = 0;
+        if (rows == null) rows_n = 0;
+        if (src == null) src_n = 0;
+
+        out.str(f.cls);
+        out.str(f.chart);
+        out.str(f.title);
+        out.str(f.subtitle);
+        out.str(f.chip);
+        out.str(f.footnote);
+        out.print("{d}", .{f.empty});
+        out.str(f.raw);
+        out.print("{d}", .{notes_n});
+        out.print("{d}", .{rows_n});
+        out.print("{d}", .{src_n});
+
+        if (notes) |p| for (p[0..notes_n]) |note| out.str(note);
+        if (rows) |p| pickRows(&out, p[0..rows_n]);
+        if (src) |p| pickRows(&out, p[0..src_n]);
+    }
+    return out.toArray(env);
+}
+
+// ---- the license manifest, read typed ---------------------------------------
+
+const c_licenses = opaque {};
+const c_license = opaque {};
+
+extern fn lookout_licenses_read(shell: ?[*:0]const u8) ?*c_licenses;
+extern fn lookout_licenses_free(l: ?*c_licenses) void;
+extern fn lookout_licenses_all(l: ?*const c_licenses, out_n: *usize) ?[*]const ?*const c_license;
+extern fn lookout_licenses_app(l: ?*const c_licenses) ?*const c_license;
+
+const CLicense = extern struct {
+    id: ?[*:0]const u8,
+    name: ?[*:0]const u8,
+    group: ?[*:0]const u8,
+    summary: ?[*:0]const u8,
+    license: ?[*:0]const u8,
+    license_short: ?[*:0]const u8,
+    license_note: ?[*:0]const u8,
+    version: ?[*:0]const u8,
+    commit: ?[*:0]const u8,
+    pinned_in: ?[*:0]const u8,
+    copyright: ?[*:0]const u8,
+    url: ?[*:0]const u8,
+    text: ?[*:0]const u8,
+    notice: ?[*:0]const u8,
+};
+
+fn licenseFields(out: *Strings, l: *const CLicense) void {
+    out.str(l.id);
+    out.str(l.name);
+    out.str(l.group);
+    out.str(l.summary);
+    out.str(l.license);
+    out.str(l.license_short);
+    out.str(l.license_note);
+    out.str(l.version);
+    out.str(l.commit);
+    out.str(l.pinned_in);
+    out.str(l.copyright);
+    out.str(l.url);
+    out.str(l.text);
+    out.str(l.notice);
+}
+
+/// String[] nLicenses() -- this app's terms, then every component this shell
+/// ships with. Fourteen strings each, the app's entry first. The core filters
+/// by shell, so what comes back is this build's list and no other's. Baked
+/// into the binary, so it needs no chart open and no handle.
+export fn Java_org_beetlebug_lookout_Lookout_nLicenses(env: [*c]j.JNIEnv, cls: j.jclass) j.jobjectArray {
+    _ = cls;
+    const read = lookout_licenses_read("android") orelse return null;
+    defer lookout_licenses_free(read);
+
+    var n: usize = 0;
+    const all = lookout_licenses_all(read, &n) orelse return null;
+
+    var out = Strings.init();
+    defer out.deinit();
+
+    const app: *const CLicense = @ptrCast(@alignCast(lookout_licenses_app(read) orelse return null));
+    licenseFields(&out, app);
+    for (all[0..n]) |lp| {
+        const l: *const CLicense = @ptrCast(@alignCast(lp orelse continue));
+        licenseFields(&out, l);
+    }
+    return out.toArray(env);
+}
+
+// ---- the scan and the bake plan, read typed ---------------------------------
+
+const c_scan = opaque {};
+
+extern fn lookout_scan_read(path: ?[*:0]const u8) ?*c_scan;
+extern fn lookout_scan_zip_read(path: ?[*:0]const u8) ?*c_scan;
+extern fn lookout_scan_free(s: ?*c_scan) void;
+extern fn lookout_scan_found(s: ?*const c_scan) ?*const CScanSummary;
+extern fn lookout_scan_cells(s: ?*const c_scan, out_n: *usize) ?[*]const ?*const CChartFile;
+extern fn lookout_scan_raster(s: ?*const c_scan, out_n: *usize) ?[*]const ?*const CChartFile;
+extern fn lookout_bake_order(items: [*]CBakeItem, n: usize) void;
+extern fn lookout_bake_output_path(out_dir: ?[*:0]const u8, source: ?[*:0]const u8, item: *const CBakeItem, out: [*]u8, cap: usize) usize;
+
+const CChartFile = extern struct {
+    path: ?[*:0]const u8,
+    name: ?[*:0]const u8,
+    kind: c_int,
+    band: c_int,
+    band_name: ?[*:0]const u8,
+    bytes: u64,
+    scale: f64,
+    located: c_int,
+    west: f64,
+    south: f64,
+    east: f64,
+    north: f64,
+};
+
+const CScanSummary = extern struct {
+    root: ?[*:0]const u8,
+    updates: usize,
+    other: usize,
+    refused: usize,
+    sources: usize,
+    bytes: u64,
+    producer: ?[*:0]const u8,
+};
+
+const CBakeItem = extern struct {
+    path: ?[*:0]const u8,
+    name: ?[*:0]const u8,
+    band: c_int,
+    work: c_int,
+};
+
+fn scanFiles(out: *Strings, files: []const ?*const CChartFile) void {
+    for (files) |fp| {
+        const f = fp orelse continue;
+        out.str(f.path);
+        out.str(f.name);
+        out.print("{d}", .{f.kind});
+        out.print("{d}", .{f.band});
+        out.str(f.band_name);
+        out.print("{d}", .{f.bytes});
+        out.print("{d}", .{f.scale});
+        out.print("{d}", .{f.located});
+        out.print("{d}", .{f.west});
+        out.print("{d}", .{f.south});
+        out.print("{d}", .{f.east});
+        out.print("{d}", .{f.north});
+    }
+}
+
+/// String[] nScanRead(String path, boolean zip) -- what a folder or one .zip
+/// holds. The summary, the counts, then twelve strings per file:
+///
+///   root, updates, other, refused, sources, bytes, producer
+///   cellCount, rasterCount
+///   then cellCount times, then rasterCount times:
+///     path, name, kind, band, bandName, bytes, scale, located, w, s, e, n
+///
+/// Null when the path cannot be read. Needs no handle: this runs before
+/// anything is open.
+export fn Java_org_beetlebug_lookout_Lookout_nScanRead(env: [*c]j.JNIEnv, cls: j.jclass, path: j.jstring, zip: j.jboolean) j.jobjectArray {
+    _ = cls;
+    const c = env_(env).GetStringUTFChars.?(env, path, null) orelse return null;
+    defer env_(env).ReleaseStringUTFChars.?(env, path, c);
+
+    const read = (if (zip != 0) lookout_scan_zip_read(@ptrCast(c)) else lookout_scan_read(@ptrCast(c))) orelse return null;
+    defer lookout_scan_free(read);
+
+    const found = lookout_scan_found(read) orelse return null;
+    var cn: usize = 0;
+    var rn: usize = 0;
+    const cells = lookout_scan_cells(read, &cn);
+    const raster = lookout_scan_raster(read, &rn);
+    if (cells == null) cn = 0;
+    if (raster == null) rn = 0;
+
+    var out = Strings.init();
+    defer out.deinit();
+
+    out.str(found.root);
+    out.print("{d}", .{found.updates});
+    out.print("{d}", .{found.other});
+    out.print("{d}", .{found.refused});
+    out.print("{d}", .{found.sources});
+    out.print("{d}", .{found.bytes});
+    out.str(found.producer);
+    out.print("{d}", .{cn});
+    out.print("{d}", .{rn});
+    if (cells) |p| scanFiles(&out, p[0..cn]);
+    if (raster) |p| scanFiles(&out, p[0..rn]);
+    return out.toArray(env);
+}
+
+/// int[] nBakeOrder(String[] names, int[] bands, int[] works) -- the order a
+/// bake runs the items in, as indices into what was passed. Coarse band first,
+/// sheets after the survey, a lift last. The core's rule, so four shells do not
+/// keep four copies of it.
+export fn Java_org_beetlebug_lookout_Lookout_nBakeOrder(env: [*c]j.JNIEnv, cls: j.jclass, names: j.jobjectArray, bands: j.jintArray, works: j.jintArray) j.jintArray {
+    _ = cls;
+    const n: usize = @intCast(env_(env).GetArrayLength.?(env, names));
+    if (n == 0) return env_(env).NewIntArray.?(env, 0);
+
+    // The order reads the name, the band and the work and never the path, so
+    // the path carries the caller's index back out.
+    const items = gpa.alloc(CBakeItem, n) catch return null;
+    defer gpa.free(items);
+    const keys = gpa.alloc([:0]u8, n) catch return null;
+    defer {
+        for (keys) |k| gpa.free(k);
+        gpa.free(keys);
+    }
+    const band_vals = gpa.alloc(j.jint, n) catch return null;
+    defer gpa.free(band_vals);
+    const work_vals = gpa.alloc(j.jint, n) catch return null;
+    defer gpa.free(work_vals);
+    env_(env).GetIntArrayRegion.?(env, bands, 0, @intCast(n), band_vals.ptr);
+    env_(env).GetIntArrayRegion.?(env, works, 0, @intCast(n), work_vals.ptr);
+
+    for (0..n) |i| {
+        const js: j.jstring = @ptrCast(env_(env).GetObjectArrayElement.?(env, names, @intCast(i)));
+        const c = env_(env).GetStringUTFChars.?(env, js, null);
+        const name = if (c) |p| std.mem.span(@as([*:0]const u8, @ptrCast(p))) else "";
+        keys[i] = gpa.allocSentinel(u8, name.len, 0) catch {
+            if (c != null) env_(env).ReleaseStringUTFChars.?(env, js, c);
+            // The deferred free walks the whole slice, so the tail has to be
+            // something it can free.
+            for (i..n) |k| keys[k] = gpa.allocSentinel(u8, 0, 0) catch return null;
+            return null;
+        };
+        @memcpy(keys[i], name);
+        if (c != null) env_(env).ReleaseStringUTFChars.?(env, js, c);
+        env_(env).DeleteLocalRef.?(env, js);
+        items[i] = .{
+            .path = @ptrFromInt(i + 1),
+            .name = keys[i].ptr,
+            .band = band_vals[i],
+            .work = work_vals[i],
+        };
+    }
+
+    lookout_bake_order(items.ptr, n);
+
+    const order = gpa.alloc(j.jint, n) catch return null;
+    defer gpa.free(order);
+    for (items, 0..) |it, k| order[k] = @intCast(@intFromPtr(it.path) - 1);
+
+    const arr = env_(env).NewIntArray.?(env, @intCast(n)) orelse return null;
+    env_(env).SetIntArrayRegion.?(env, arr, 0, @intCast(n), order.ptr);
+    return arr;
+}
+
+/// String nBakeOutputPath(String outDir, String source, String path,
+/// String name, int band, int work) -- where one prepared chart is written.
+/// Empty when it does not fit.
+export fn Java_org_beetlebug_lookout_Lookout_nBakeOutputPath(env: [*c]j.JNIEnv, cls: j.jclass, out_dir: j.jstring, source: j.jstring, path: j.jstring, name: j.jstring, band: j.jint, work: j.jint) j.jstring {
+    _ = cls;
+    const c_out = env_(env).GetStringUTFChars.?(env, out_dir, null) orelse return jstr(env, null);
+    defer env_(env).ReleaseStringUTFChars.?(env, out_dir, c_out);
+    const c_src = env_(env).GetStringUTFChars.?(env, source, null) orelse return jstr(env, null);
+    defer env_(env).ReleaseStringUTFChars.?(env, source, c_src);
+    const c_path = env_(env).GetStringUTFChars.?(env, path, null) orelse return jstr(env, null);
+    defer env_(env).ReleaseStringUTFChars.?(env, path, c_path);
+    const c_name = env_(env).GetStringUTFChars.?(env, name, null) orelse return jstr(env, null);
+    defer env_(env).ReleaseStringUTFChars.?(env, name, c_name);
+
+    const item = CBakeItem{
+        .path = @ptrCast(c_path),
+        .name = @ptrCast(c_name),
+        .band = band,
+        .work = work,
+    };
+    var buf: [4096]u8 = undefined;
+    const n = lookout_bake_output_path(@ptrCast(c_out), @ptrCast(c_src), &item, &buf, buf.len);
+    if (n == 0 or n >= buf.len) return jstr(env, null);
+    buf[n] = 0;
+    return env_(env).NewStringUTF.?(env, &buf);
+}
+
+// ---- the settings store -----------------------------------------------------
+//
+// One ini file under the app's own directory, replacing four SharedPreferences
+// files. The engine takes the same store (nSetStore) and keeps the camera pose
+// and the mariner's display settings in it.
+
+const c_store = opaque {};
+
+extern fn lookout_store_open(dir: ?[*:0]const u8) ?*c_store;
+extern fn lookout_store_close(s: ?*c_store) void;
+extern fn lookout_store_flush(s: ?*c_store) void;
+extern fn lookout_store_has(s: ?*c_store, group: ?[*:0]const u8, key: ?[*:0]const u8) c_int;
+extern fn lookout_store_text(s: ?*c_store, group: ?[*:0]const u8, key: ?[*:0]const u8) ?[*:0]const u8;
+extern fn lookout_store_number(s: ?*c_store, group: ?[*:0]const u8, key: ?[*:0]const u8, fallback: f64) f64;
+extern fn lookout_store_flag(s: ?*c_store, group: ?[*:0]const u8, key: ?[*:0]const u8, fallback: c_int) c_int;
+extern fn lookout_store_list(s: ?*c_store, group: ?[*:0]const u8, key: ?[*:0]const u8, out_n: *usize) ?[*]const ?[*:0]const u8;
+extern fn lookout_store_keys(s: ?*c_store, group: ?[*:0]const u8, out_n: *usize) ?[*]const ?[*:0]const u8;
+extern fn lookout_store_set_text(s: ?*c_store, group: ?[*:0]const u8, key: ?[*:0]const u8, value: ?[*:0]const u8) void;
+extern fn lookout_store_set_number(s: ?*c_store, group: ?[*:0]const u8, key: ?[*:0]const u8, value: f64) void;
+extern fn lookout_store_set_flag(s: ?*c_store, group: ?[*:0]const u8, key: ?[*:0]const u8, value: c_int) void;
+extern fn lookout_store_set_list(s: ?*c_store, group: ?[*:0]const u8, key: ?[*:0]const u8, items: ?[*]const ?[*:0]const u8, n: usize) void;
+extern fn lookout_store_remove(s: ?*c_store, group: ?[*:0]const u8, key: ?[*:0]const u8) void;
+extern fn lookout_set_store(h: ?*anyopaque, s: ?*c_store) void;
+
+fn storeOf(s: j.jlong) ?*c_store {
+    if (s == 0) return null;
+    return @ptrFromInt(@as(usize, @bitCast(s)));
+}
+
+/// A borrowed jstring as a NUL-terminated slice, plus the handle to release it
+/// with. The caller releases; there is no other way to hold a JNI string.
+const Borrowed = struct {
+    js: j.jstring,
+    c: [*c]const u8,
+
+    fn get(env: [*c]j.JNIEnv, js: j.jstring) ?Borrowed {
+        const c = env_(env).GetStringUTFChars.?(env, js, null) orelse return null;
+        return .{ .js = js, .c = c };
+    }
+
+    fn ptr(self: Borrowed) [*:0]const u8 {
+        return @ptrCast(self.c);
+    }
+
+    fn release(self: Borrowed, env: [*c]j.JNIEnv) void {
+        env_(env).ReleaseStringUTFChars.?(env, self.js, self.c);
+    }
+};
+
+export fn Java_org_beetlebug_lookout_Lookout_nStoreOpen(env: [*c]j.JNIEnv, cls: j.jclass, dir: j.jstring) j.jlong {
+    _ = cls;
+    const d = Borrowed.get(env, dir) orelse return 0;
+    defer d.release(env);
+    const s = lookout_store_open(d.ptr()) orelse return 0;
+    return @bitCast(@as(u64, @intFromPtr(s)));
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nStoreClose(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong) void {
+    _ = env;
+    _ = cls;
+    lookout_store_close(storeOf(s));
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nStoreFlush(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong) void {
+    _ = env;
+    _ = cls;
+    lookout_store_flush(storeOf(s));
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nStoreHas(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong, group: j.jstring, key: j.jstring) j.jboolean {
+    _ = cls;
+    const g = Borrowed.get(env, group) orelse return 0;
+    defer g.release(env);
+    const k = Borrowed.get(env, key) orelse return 0;
+    defer k.release(env);
+    return if (lookout_store_has(storeOf(s), g.ptr(), k.ptr()) != 0) 1 else 0;
+}
+
+/// String nStoreText(...) -- null when the key is not set, which is not the
+/// same as an empty value.
+export fn Java_org_beetlebug_lookout_Lookout_nStoreText(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong, group: j.jstring, key: j.jstring) j.jstring {
+    _ = cls;
+    const g = Borrowed.get(env, group) orelse return null;
+    defer g.release(env);
+    const k = Borrowed.get(env, key) orelse return null;
+    defer k.release(env);
+    const v = lookout_store_text(storeOf(s), g.ptr(), k.ptr()) orelse return null;
+    return env_(env).NewStringUTF.?(env, v);
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nStoreNumber(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong, group: j.jstring, key: j.jstring, fallback: j.jdouble) j.jdouble {
+    _ = cls;
+    const g = Borrowed.get(env, group) orelse return fallback;
+    defer g.release(env);
+    const k = Borrowed.get(env, key) orelse return fallback;
+    defer k.release(env);
+    return lookout_store_number(storeOf(s), g.ptr(), k.ptr(), fallback);
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nStoreFlag(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong, group: j.jstring, key: j.jstring, fallback: j.jboolean) j.jboolean {
+    _ = cls;
+    const g = Borrowed.get(env, group) orelse return fallback;
+    defer g.release(env);
+    const k = Borrowed.get(env, key) orelse return fallback;
+    defer k.release(env);
+    return if (lookout_store_flag(storeOf(s), g.ptr(), k.ptr(), if (fallback != 0) 1 else 0) != 0) 1 else 0;
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nStoreList(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong, group: j.jstring, key: j.jstring) j.jobjectArray {
+    _ = cls;
+    const g = Borrowed.get(env, group) orelse return jstrArray(env, &.{});
+    defer g.release(env);
+    const k = Borrowed.get(env, key) orelse return jstrArray(env, &.{});
+    defer k.release(env);
+    var n: usize = 0;
+    const items = lookout_store_list(storeOf(s), g.ptr(), k.ptr(), &n) orelse return jstrArray(env, &.{});
+    return jstrArray(env, items[0..n]);
+}
+
+/// String[] nStoreKeys(...) -- the keys set under a group, in the order they
+/// were written.
+export fn Java_org_beetlebug_lookout_Lookout_nStoreKeys(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong, group: j.jstring) j.jobjectArray {
+    _ = cls;
+    const g = Borrowed.get(env, group) orelse return jstrArray(env, &.{});
+    defer g.release(env);
+    var n: usize = 0;
+    const keys = lookout_store_keys(storeOf(s), g.ptr(), &n) orelse return jstrArray(env, &.{});
+    return jstrArray(env, keys[0..n]);
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nStoreSetText(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong, group: j.jstring, key: j.jstring, value: j.jstring) void {
+    _ = cls;
+    const g = Borrowed.get(env, group) orelse return;
+    defer g.release(env);
+    const k = Borrowed.get(env, key) orelse return;
+    defer k.release(env);
+    const v = Borrowed.get(env, value) orelse return;
+    defer v.release(env);
+    lookout_store_set_text(storeOf(s), g.ptr(), k.ptr(), v.ptr());
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nStoreSetNumber(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong, group: j.jstring, key: j.jstring, value: j.jdouble) void {
+    _ = cls;
+    const g = Borrowed.get(env, group) orelse return;
+    defer g.release(env);
+    const k = Borrowed.get(env, key) orelse return;
+    defer k.release(env);
+    lookout_store_set_number(storeOf(s), g.ptr(), k.ptr(), value);
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nStoreSetFlag(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong, group: j.jstring, key: j.jstring, value: j.jboolean) void {
+    _ = cls;
+    const g = Borrowed.get(env, group) orelse return;
+    defer g.release(env);
+    const k = Borrowed.get(env, key) orelse return;
+    defer k.release(env);
+    lookout_store_set_flag(storeOf(s), g.ptr(), k.ptr(), if (value != 0) 1 else 0);
+}
+
+/// An EMPTY list clears the key, so a read of it comes back empty.
+export fn Java_org_beetlebug_lookout_Lookout_nStoreSetList(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong, group: j.jstring, key: j.jstring, items: j.jobjectArray) void {
+    _ = cls;
+    const g = Borrowed.get(env, group) orelse return;
+    defer g.release(env);
+    const k = Borrowed.get(env, key) orelse return;
+    defer k.release(env);
+
+    const n: usize = if (items == null) 0 else @intCast(env_(env).GetArrayLength.?(env, items));
+    if (n == 0) {
+        lookout_store_set_list(storeOf(s), g.ptr(), k.ptr(), null, 0);
+        return;
+    }
+
+    // The core copies what it is given, so the strings only have to outlive
+    // the call.
+    const copies = gpa.alloc([:0]u8, n) catch return;
+    var made: usize = 0;
+    defer {
+        for (copies[0..made]) |c| gpa.free(c);
+        gpa.free(copies);
+    }
+    const ptrs = gpa.alloc(?[*:0]const u8, n) catch return;
+    defer gpa.free(ptrs);
+
+    for (0..n) |i| {
+        const js: j.jstring = @ptrCast(env_(env).GetObjectArrayElement.?(env, items, @intCast(i)));
+        const b = Borrowed.get(env, js) orelse return;
+        const src = std.mem.span(b.ptr());
+        copies[i] = gpa.allocSentinel(u8, src.len, 0) catch {
+            b.release(env);
+            return;
+        };
+        @memcpy(copies[i], src);
+        made = i + 1;
+        b.release(env);
+        env_(env).DeleteLocalRef.?(env, js);
+        ptrs[i] = copies[i].ptr;
+    }
+    lookout_store_set_list(storeOf(s), g.ptr(), k.ptr(), ptrs.ptr, n);
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nStoreRemove(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong, group: j.jstring, key: j.jstring) void {
+    _ = cls;
+    const g = Borrowed.get(env, group) orelse return;
+    defer g.release(env);
+    const k = Borrowed.get(env, key) orelse return;
+    defer k.release(env);
+    lookout_store_remove(storeOf(s), g.ptr(), k.ptr());
+}
+
+/// void nSetStore(long h, long store) -- hand the store to the chart handle.
+/// The engine then restores the camera pose and the mariner's display settings
+/// out of it, writes the pose down as the mariner moves, and writes both at
+/// close and at detach.
+export fn Java_org_beetlebug_lookout_Lookout_nSetStore(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, s: j.jlong) void {
+    _ = env;
+    _ = cls;
+    const h = fromLong(hl) orelse return;
+    lookout_set_store(h.l, storeOf(s));
+}
+
+// ---- the frame loop ---------------------------------------------------------
+
+const CFrame = extern struct {
+    verdict: c_int,
+    wait_ms: c_int,
+    building: c_int,
+};
+
+extern fn lookout_frame_next(h: ?*anyopaque, out: *CFrame) void;
+extern fn lookout_frame_kick(h: ?*anyopaque) void;
+
+/// void nFrameNext(long h, int[] out) -- one tick, into
+/// {verdict, waitMs, building}. The gap since the last tick is measured in the
+/// core and capped there, so an app that was in the background for a minute
+/// does not advance a fling by a minute.
+export fn Java_org_beetlebug_lookout_Lookout_nFrameNext(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, out: j.jintArray) void {
+    _ = cls;
+    var f = CFrame{ .verdict = 2, .wait_ms = 0, .building = 0 };
+    if (fromLong(hl)) |h| lookout_frame_next(h.l, &f);
+    var buf = [3]j.jint{ f.verdict, f.wait_ms, f.building };
+    env_(env).SetIntArrayRegion.?(env, out, 0, 3, &buf);
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nFrameKick(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) void {
+    _ = env;
+    _ = cls;
+    const h = fromLong(hl) orelse return;
+    lookout_frame_kick(h.l);
+}
+
+// ---- the installed sets -----------------------------------------------------
+//
+// The folders of charts the mariner added, which of them are drawn, and what
+// each holds. The chart is the UNION of the sets switched on.
+
+const c_sets = opaque {};
+
+extern fn lookout_chart_sets_open(store: ?*c_store, prepared_root: ?[*:0]const u8) ?*c_sets;
+extern fn lookout_chart_sets_close(s: ?*c_sets) void;
+extern fn lookout_chart_sets_changed(s: ?*c_sets) c_int;
+extern fn lookout_chart_sets_all(s: ?*c_sets, out_n: *usize) ?[*]const ?*const CChartSet;
+extern fn lookout_chart_set_files(s: ?*c_sets, path: ?[*:0]const u8, out_n: *usize) ?[*]const ?*const CChartFile;
+extern fn lookout_chart_sets_add(s: ?*c_sets, path: ?[*:0]const u8) c_int;
+extern fn lookout_chart_sets_remove(s: ?*c_sets, path: ?[*:0]const u8) c_int;
+extern fn lookout_chart_sets_set_on(s: ?*c_sets, path: ?[*:0]const u8, on: c_int) c_int;
+extern fn lookout_chart_sets_is_on(s: ?*c_sets, path: ?[*:0]const u8) c_int;
+extern fn lookout_chart_sets_compose(s: ?*c_sets, out_n: *usize) ?[*]const ?[*:0]const u8;
+
+const CChartSet = extern struct {
+    path: ?[*:0]const u8,
+    title: ?[*:0]const u8,
+    producer: ?[*:0]const u8,
+    on: c_int,
+    scanned: c_int,
+    charts: usize,
+    pictures: usize,
+    unprepared: usize,
+    bytes: u64,
+    band_lo: c_int,
+    band_hi: c_int,
+};
+
+fn setsOf(s: j.jlong) ?*c_sets {
+    if (s == 0) return null;
+    return @ptrFromInt(@as(usize, @bitCast(s)));
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nChartSetsOpen(env: [*c]j.JNIEnv, cls: j.jclass, store: j.jlong, prepared: j.jstring) j.jlong {
+    _ = cls;
+    const p = Borrowed.get(env, prepared) orelse return 0;
+    defer p.release(env);
+    const s = lookout_chart_sets_open(storeOf(store), p.ptr()) orelse return 0;
+    return @bitCast(@as(u64, @intFromPtr(s)));
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nChartSetsClose(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong) void {
+    _ = env;
+    _ = cls;
+    lookout_chart_sets_close(setsOf(s));
+}
+
+/// A background scan landing raises this, and that is the only change the sets
+/// announce on their own.
+export fn Java_org_beetlebug_lookout_Lookout_nChartSetsChanged(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong) j.jboolean {
+    _ = env;
+    _ = cls;
+    return if (lookout_chart_sets_changed(setsOf(s)) != 0) 1 else 0;
+}
+
+/// String[] nChartSetsAll(long s) -- the list, in the order added. Eleven
+/// strings per set:
+///
+///   path, title, producer, on, scanned, charts, pictures, unprepared,
+///   bytes, bandLo, bandHi
+export fn Java_org_beetlebug_lookout_Lookout_nChartSetsAll(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong) j.jobjectArray {
+    _ = cls;
+    var n: usize = 0;
+    const all = lookout_chart_sets_all(setsOf(s), &n) orelse return jstrArray(env, &.{});
+
+    var out = Strings.init();
+    defer out.deinit();
+
+    for (all[0..n]) |sp| {
+        const set: *const CChartSet = @ptrCast(@alignCast(sp orelse continue));
+        out.str(set.path);
+        out.str(set.title);
+        out.str(set.producer);
+        out.print("{d}", .{set.on});
+        out.print("{d}", .{set.scanned});
+        out.print("{d}", .{set.charts});
+        out.print("{d}", .{set.pictures});
+        out.print("{d}", .{set.unprepared});
+        out.print("{d}", .{set.bytes});
+        out.print("{d}", .{set.band_lo});
+        out.print("{d}", .{set.band_hi});
+    }
+    return out.toArray(env);
+}
+
+/// String[] nChartSetFiles(long s, String path) -- every file one set holds, as
+/// the background scan found it. The scan read's own row shape, so a bake reads
+/// this rather than walking the folder again.
+export fn Java_org_beetlebug_lookout_Lookout_nChartSetFiles(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong, path: j.jstring) j.jobjectArray {
+    _ = cls;
+    const p = Borrowed.get(env, path) orelse return jstrArray(env, &.{});
+    defer p.release(env);
+    var n: usize = 0;
+    const files = lookout_chart_set_files(setsOf(s), p.ptr(), &n) orelse return jstrArray(env, &.{});
+
+    var out = Strings.init();
+    defer out.deinit();
+    scanFiles(&out, files[0..n]);
+    return out.toArray(env);
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nChartSetsAdd(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong, path: j.jstring) j.jboolean {
+    _ = cls;
+    const p = Borrowed.get(env, path) orelse return 0;
+    defer p.release(env);
+    return if (lookout_chart_sets_add(setsOf(s), p.ptr()) != 0) 1 else 0;
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nChartSetsRemove(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong, path: j.jstring) j.jboolean {
+    _ = cls;
+    const p = Borrowed.get(env, path) orelse return 0;
+    defer p.release(env);
+    return if (lookout_chart_sets_remove(setsOf(s), p.ptr()) != 0) 1 else 0;
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nChartSetsSetOn(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong, path: j.jstring, on: j.jboolean) j.jboolean {
+    _ = cls;
+    const p = Borrowed.get(env, path) orelse return 0;
+    defer p.release(env);
+    return if (lookout_chart_sets_set_on(setsOf(s), p.ptr(), if (on != 0) 1 else 0) != 0) 1 else 0;
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nChartSetsIsOn(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong, path: j.jstring) j.jboolean {
+    _ = cls;
+    const p = Borrowed.get(env, path) orelse return 0;
+    defer p.release(env);
+    return if (lookout_chart_sets_is_on(setsOf(s), p.ptr()) != 0) 1 else 0;
+}
+
+/// String[] nChartSetsCompose(long s) -- every chart the switched-on sets hold,
+/// sorted and deduplicated. Two sets may overlap, and the same cell twice would
+/// be composed twice.
+export fn Java_org_beetlebug_lookout_Lookout_nChartSetsCompose(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong) j.jobjectArray {
+    _ = cls;
+    var n: usize = 0;
+    const paths = lookout_chart_sets_compose(setsOf(s), &n) orelse return jstrArray(env, &.{});
+    return jstrArray(env, paths[0..n]);
+}
+
+// ---- what a bake prepared, and removing it ----------------------------------
+
+extern fn lookout_bake_prepared_name(source: ?[*:0]const u8, out: [*]u8, cap: usize) usize;
+extern fn lookout_bake_is_derived(root: ?[*:0]const u8, path: ?[*:0]const u8) c_int;
+extern fn lookout_bake_trash_prefix() [*:0]const u8;
+extern fn lookout_bake_is_trash(name: ?[*:0]const u8) c_int;
+
+/// String nBakePreparedName(String source) -- the directory name `source` is
+/// prepared into, under the shell's charts root. An archive names it without
+/// the .zip.
+export fn Java_org_beetlebug_lookout_Lookout_nBakePreparedName(env: [*c]j.JNIEnv, cls: j.jclass, source: j.jstring) j.jstring {
+    _ = cls;
+    const s = Borrowed.get(env, source) orelse return jstr(env, null);
+    defer s.release(env);
+    var buf: [1024]u8 = undefined;
+    const n = lookout_bake_prepared_name(s.ptr(), &buf, buf.len);
+    if (n == 0 or n >= buf.len) return jstr(env, null);
+    buf[n] = 0;
+    return env_(env).NewStringUTF.?(env, &buf);
+}
+
+/// boolean nBakeIsDerived(String root, String path) -- true when `path` is
+/// under the directory this app prepares into. Removing a set may delete what
+/// is under it; what is outside is the mariner's own.
+export fn Java_org_beetlebug_lookout_Lookout_nBakeIsDerived(env: [*c]j.JNIEnv, cls: j.jclass, root: j.jstring, path: j.jstring) j.jboolean {
+    _ = cls;
+    const r = Borrowed.get(env, root) orelse return 0;
+    defer r.release(env);
+    const p = Borrowed.get(env, path) orelse return 0;
+    defer p.release(env);
+    return if (lookout_bake_is_derived(r.ptr(), p.ptr()) != 0) 1 else 0;
+}
+
+/// String nBakeTrashPrefix() -- what a removal renames to before deleting
+/// behind itself.
+export fn Java_org_beetlebug_lookout_Lookout_nBakeTrashPrefix(env: [*c]j.JNIEnv, cls: j.jclass) j.jstring {
+    _ = cls;
+    return env_(env).NewStringUTF.?(env, lookout_bake_trash_prefix());
+}
+
+/// boolean nBakeIsTrash(String name) -- the test a launch sweep uses.
+export fn Java_org_beetlebug_lookout_Lookout_nBakeIsTrash(env: [*c]j.JNIEnv, cls: j.jclass, name: j.jstring) j.jboolean {
+    _ = cls;
+    const n = Borrowed.get(env, name) orelse return 0;
+    defer n.release(env);
+    return if (lookout_bake_is_trash(n.ptr()) != 0) 1 else 0;
 }

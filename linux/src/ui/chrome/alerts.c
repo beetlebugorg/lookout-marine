@@ -1,7 +1,6 @@
 #include "ui/chrome/alerts.h"
 
 #include "ui/hud/hud.h"
-#include "util/json.h"
 
 #include <math.h>
 #include <string.h>
@@ -28,18 +27,13 @@
  * children, so the width is stated where the long text is. */
 #define LK_ALERT_MAX_CHARS 48
 
-typedef enum {
-  LK_ALERT_NOTICE,
-  LK_ALERT_WARNING,
-  LK_ALERT_ALARM,
-} LkAlertSeverity;
-
+/* One alert, copied out of a read so the strip outlives it. */
 typedef struct {
-  guint64         id;
-  LkAlertSeverity severity;
-  char           *title;
-  char           *body;
-  gboolean        acknowledged;
+  guint64                id;
+  lookout_alert_severity severity;
+  char                  *title;
+  char                  *body;
+  gboolean               acknowledged;
 } LkAlert;
 
 typedef struct {
@@ -200,23 +194,13 @@ lk_siren_set_sounding (LkAlerts *self, gboolean on)
 
 /* A severity this build does not know is an alarm, the way the core treats one
  * it cannot read. Silence is never the fallback. */
-static LkAlertSeverity
-lk_alert_severity_parse (const char *word)
-{
-  if (g_strcmp0 (word, "notice") == 0)
-    return LK_ALERT_NOTICE;
-  if (g_strcmp0 (word, "warning") == 0)
-    return LK_ALERT_WARNING;
-  return LK_ALERT_ALARM;
-}
-
 static const char *
-lk_alert_icon (LkAlertSeverity severity)
+lk_alert_icon (lookout_alert_severity severity)
 {
   switch (severity)
     {
-    case LK_ALERT_ALARM:   return "lk-alarm-symbolic";
-    case LK_ALERT_WARNING: return "dialog-warning-symbolic";
+    case LOOKOUT_ALERT_ALARM:   return "lk-alarm-symbolic";
+    case LOOKOUT_ALERT_WARNING: return "dialog-warning-symbolic";
     default:               return "dialog-information-symbolic";
     }
 }
@@ -224,12 +208,12 @@ lk_alert_icon (LkAlertSeverity severity)
 /* The strip wears the chrome's own tokens, so it stays readable at night
  * without a hardcoded red burning the mariner's dark adaptation. */
 static const char *
-lk_alert_css_class (LkAlertSeverity severity)
+lk_alert_css_class (lookout_alert_severity severity)
 {
   switch (severity)
     {
-    case LK_ALERT_ALARM:   return "lk-alarm";
-    case LK_ALERT_WARNING: return "lk-warning";
+    case LOOKOUT_ALERT_ALARM:   return "lk-alarm";
+    case LOOKOUT_ALERT_WARNING: return "lk-warning";
     default:               return "lk-notice";
     }
 }
@@ -369,9 +353,9 @@ lk_alerts_poll (gpointer user_data)
 {
   LkAlerts *self = user_data;
   LkChartController *controller = lk_app_model_get_controller (self->model);
-  g_autofree char *json = lk_chart_controller_alerts_json (controller);
+  lookout_alerts *read = lk_chart_controller_alerts_read (controller);
 
-  if (json == NULL)
+  if (read == NULL)
     {
       /* Unreadable is not "no alerts", but nothing readable is nothing
        * showable: clear the strip, silence the siren, and KEEP WATCHING.
@@ -387,39 +371,32 @@ lk_alerts_poll (gpointer user_data)
       return G_SOURCE_CONTINUE;
     }
 
-  g_autoptr (LkJson) root = lk_json_parse (json);
-  if (root == NULL)
-    return G_SOURCE_CONTINUE; /* a malformed read changes nothing */
-
   /* seq bumps on every change to the set. The rows are rebuilt only when it
    * moves, so a strip nobody is feeding does not flicker once a second. */
-  gint64 seq = (gint64) lk_json_number (lk_json_member (root, "seq"), 0);
+  gint64 seq = (gint64) lookout_alerts_seq (read);
   if (seq != self->seq)
     {
-      const LkJson *list = lk_json_member (root, "alerts");
+      size_t count = 0;
+      const lookout_alert *const *list = lookout_alerts_all (read, &count);
 
       self->seq = seq;
       g_ptr_array_set_size (self->alerts, 0);
 
-      for (guint i = 0; i < lk_json_length (list); i++)
+      for (size_t i = 0; i < count; i++)
         {
-          const LkJson *node = lk_json_at (list, i);
-          const char *title = lk_json_member_string (node, "title");
-
-          if (title == NULL)
-            continue;
-
           LkAlert *alert = g_new0 (LkAlert, 1);
-          alert->id = (guint64) lk_json_number (lk_json_member (node, "id"), 0);
-          alert->severity = lk_alert_severity_parse (lk_json_member_string (node, "severity"));
-          alert->title = g_strdup (title);
-          alert->body = g_strdup (lk_json_member_string (node, "body"));
-          alert->acknowledged = lk_json_member_bool (node, "acknowledged", FALSE);
+
+          alert->id = list[i]->id;
+          alert->severity = list[i]->severity;
+          alert->title = g_strdup (list[i]->title);
+          alert->body = g_strdup (list[i]->body);
+          alert->acknowledged = list[i]->acknowledged != 0;
           g_ptr_array_add (self->alerts, alert);
         }
 
       lk_alerts_rebuild (self);
     }
+  lookout_alerts_free (read);
 
   /* The siren follows the state every poll, rebuilt or not: an alarm is audible
    * until it is acknowledged, and a warning is never counted. */
@@ -428,7 +405,7 @@ lk_alerts_poll (gpointer user_data)
     {
       const LkAlert *alert = g_ptr_array_index (self->alerts, i);
 
-      audible = alert->severity == LK_ALERT_ALARM && !alert->acknowledged;
+      audible = alert->severity == LOOKOUT_ALERT_ALARM && !alert->acknowledged;
     }
   lk_siren_set_sounding (self, audible);
 

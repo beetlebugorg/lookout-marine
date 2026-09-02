@@ -757,6 +757,19 @@ test "set names: a provider for a community file, the bake for a sheet" {
     try testing.expectEqualStrings("USWestCoast", setNameFor("/c/USWestCoast/L14-6320-2600-16-32_14/L14-6320-2600-16-32_14.pmtiles"));
     try testing.expectEqualStrings("OSM", setNameFor("/c/OSM-OpenCPN2-KAP-USWestCoast-20260615/L14-x/L14-x.pmtiles"));
     try testing.expectEqualStrings("loose", setNameFor("/c/somewhere/loose.pmtiles"));
+
+    // The names the four shells each had a rule for, now that
+    // lookout_raster_set_name_for exports this one.
+    try testing.expectEqualStrings("OpenSeaMap", setNameFor("/c/OpenSeaMap.mbtiles"));
+    try testing.expectEqualStrings("Yandex", setNameFor("/c/Yandex-sat.mbtiles"));
+    try testing.expectEqualStrings("SASP", setNameFor("/c/SASP-2024.mbtiles"));
+    // Longest first, so a name holding both reports the longer one.
+    try testing.expectEqualStrings("Navionics", setNameFor("/c/ArcGIS-and-Navionics.mbtiles"));
+    // ArcGIS is matched before Imagery, so an ArcGIS imagery bundle is ArcGIS.
+    try testing.expectEqualStrings("ArcGIS", setNameFor("/c/ArcGIS.Imagery.z12.mbtiles"));
+    // Every sheet of a baked bundle reports the bundle.
+    try testing.expectEqualStrings("Bundle", setNameFor("/c/Bundle/L14-a/L14-a.pmtiles"));
+    try testing.expectEqualStrings("Bundle", setNameFor("/c/Bundle/L14-b/L14-b.pmtiles"));
 }
 
 test "world y from latitude matches the mercator corners" {

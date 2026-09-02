@@ -40,6 +40,7 @@
 //! `http_get`, which a shell reading a file:// url will naturally do.
 
 const std = @import("std");
+const owned = @import("owned");
 const Lock = @import("lock.zig").Lock;
 
 /// Fetch the bytes at `url`. Called with the api lock held: the shell must not
@@ -199,6 +200,41 @@ const Answer = struct {
     id: u64,
     bytes: []u8,
     status: c_int,
+};
+
+// ---- the read a shell draws ---------------------------------------------------
+
+/// One chart the mariner added by link. Picking it renders that publisher's
+/// style instead of the built-in chart.
+pub const Link = extern struct {
+    url: [*:0]const u8,
+    name: [*:0]const u8,
+};
+
+/// Everything beside the list. `active` is the picked link's url, empty for
+/// lookout's own chart.
+pub const State = extern struct {
+    active: [*:0]const u8,
+    /// A condition of service on public tile hosts, not a courtesy: draw it
+    /// while a link is active. Empty when there is none.
+    attribution: [*:0]const u8,
+    /// Empty when the last resolve succeeded.
+    err: [*:0]const u8,
+    /// 1 while a resolve is in flight.
+    busy: c_int,
+};
+
+/// The link list, held until the shell frees it.
+pub const Read = struct {
+    arena: std.heap.ArenaAllocator,
+    state: State = undefined,
+    links: []const *const Link = &.{},
+
+    pub fn free(self: *Read) void {
+        const gpa = self.arena.child_allocator;
+        self.arena.deinit();
+        gpa.destroy(self);
+    }
 };
 
 pub const Links = struct {
@@ -1071,6 +1107,36 @@ pub const Links = struct {
             out.deinit(alloc);
             return null;
         };
+    }
+
+    /// The same snapshot, as structs. Both this and `snapshotAlloc` walk the
+    /// same state under the same lock, so the two say the same thing.
+    pub fn read(self: *Links, gpa: std.mem.Allocator) !*Read {
+        const out = try gpa.create(Read);
+        errdefer gpa.destroy(out);
+        out.* = .{ .arena = std.heap.ArenaAllocator.init(gpa) };
+        errdefer out.arena.deinit();
+        const a = out.arena.allocator();
+
+        const rows = try a.alloc(Link, self.entries.items.len);
+        const by_ptr = try a.alloc(*const Link, rows.len);
+        for (self.entries.items, rows, by_ptr) |e, *dst, *p| {
+            dst.* = .{
+                .url = try owned.str(a, e.url),
+                .name = try owned.str(a, e.name),
+            };
+            p.* = dst;
+        }
+        out.links = by_ptr;
+        out.state = .{
+            // Empty is lookout's own chart, where the JSON writes null. A url
+            // is never empty.
+            .active = try owned.str(a, self.active orelse ""),
+            .attribution = try owned.str(a, self.attribution),
+            .err = try owned.str(a, self.err),
+            .busy = @intFromBool(self.rs != null),
+        };
+        return out;
     }
 
     /// `full` writes what the UI renders; without it, only what the store
@@ -2470,4 +2536,58 @@ test "chartlinks: a local path is told from a url" {
     try testing.expect(!insideLinkDir(link, "/Users/mariner/other/tiles.json"));
     try testing.expect(!insideLinkDir(link, "https://h/tiles.json"));
     try testing.expect(!insideLinkDir("https://h/style.json", "/etc/passwd"));
+}
+
+test "chartlinks: the typed read says what the snapshot says" {
+    const f = try Fake.open(testing.allocator);
+    defer f.close();
+
+    f.links.add("https://h/style.json");
+    try f.answer("style.json",
+        \\{"version":8,"name":"Harbour","layers":[],
+        \\ "sources":{"a":{"type":"raster","tiles":["https://a/{z}/{x}/{y}.png"],
+        \\  "attribution":"&copy; Somebody"}}}
+    , 200);
+    f.links.add("https://b/style.json");
+    try f.answer("style.json", "{\"version\":8,\"name\":\"Bay\",\"layers\":[]}", 200);
+
+    const snap = f.links.snapshotAlloc(testing.allocator).?;
+    defer testing.allocator.free(snap);
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const doc = try std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), snap, .{});
+    const o = doc.object;
+
+    const r = try f.links.read(testing.allocator);
+    defer r.free();
+
+    const list = o.get("links").?.array;
+    try testing.expectEqual(list.items.len, r.links.len);
+    for (list.items, r.links) |item, got| {
+        try testing.expectEqualStrings(item.object.get("url").?.string, std.mem.span(got.url));
+        try testing.expectEqualStrings(item.object.get("name").?.string, std.mem.span(got.name));
+    }
+    // The JSON writes null for lookout's own chart; the read writes an empty
+    // string, because a url is never empty.
+    const active = o.get("active").?;
+    try testing.expectEqualStrings(
+        if (active == .string) active.string else "",
+        std.mem.span(r.state.active),
+    );
+    try testing.expectEqualStrings(o.get("attribution").?.string, std.mem.span(r.state.attribution));
+    try testing.expectEqualStrings(o.get("error").?.string, std.mem.span(r.state.err));
+    try testing.expectEqual(o.get("busy").?.bool, r.state.busy != 0);
+}
+
+test "chartlinks: lookout's own chart reads as an empty active url" {
+    const f = try Fake.open(testing.allocator);
+    defer f.close();
+
+    const r = try f.links.read(testing.allocator);
+    defer r.free();
+    try testing.expectEqual(@as(usize, 0), r.links.len);
+    try testing.expectEqualStrings("", std.mem.span(r.state.active));
+    try testing.expectEqualStrings("", std.mem.span(r.state.attribution));
+    try testing.expectEqualStrings("", std.mem.span(r.state.err));
+    try testing.expectEqual(@as(c_int, 0), r.state.busy);
 }

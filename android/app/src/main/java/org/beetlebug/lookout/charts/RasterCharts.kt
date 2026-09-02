@@ -6,6 +6,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import java.io.File
+import org.beetlebug.lookout.Lookout
+import org.beetlebug.lookout.store.Store
 
 /**
  * The raster charts the mariner has installed, and which of them are switched
@@ -24,8 +26,6 @@ import java.io.File
  * into each chart the engine opens.
  */
 class RasterCharts(appContext: Context) {
-
-    private val prefs = appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     /** Installed charts, in the order added. */
     var paths by mutableStateOf<List<String>>(emptyList())
@@ -52,19 +52,12 @@ class RasterCharts(appContext: Context) {
         private set
 
     init {
-        // An ordered JSON array, because "order added" IS the contract and a
-        // StringSet reloaded .sorted() silently made it alphabetical.
-        val ordered = prefs.getString(KEY_PATHS_ORDERED, null)
-        paths = if (ordered != null) {
-            val arr = org.json.JSONArray(ordered)
-            List(arr.length()) { arr.getString(it) }
-        } else {
-            // The pre-ordered layout, migrated on the next save.
-            prefs.getStringSet(KEY_PATHS, null)?.sorted() ?: emptyList()
-        }
-        off = prefs.getStringSet(KEY_OFF, null)?.toSet() ?: emptySet()
-        hidden = prefs.getStringSet(KEY_HIDDEN, null)?.toSet() ?: emptySet()
-        chartHidden = prefs.getBoolean(KEY_CHART_HIDDEN, false)
+        // A list keeps the order it was written in, because "order added" IS
+        // the contract.
+        paths = Store.list(Store.Group.RASTER, KEY_PATHS)
+        off = Store.list(Store.Group.RASTER, KEY_OFF).toSet()
+        hidden = Store.list(Store.Group.RASTER, KEY_HIDDEN).toSet()
+        chartHidden = Store.flag(Store.Group.RASTER, KEY_CHART_HIDDEN)
     }
 
     fun add(newPaths: List<String>): List<String> {
@@ -91,7 +84,7 @@ class RasterCharts(appContext: Context) {
     /**
      * Record which sets are drawn, from the engine's own answers — the engine
      * owns the election; the shell never tracks it, only remembers it.
-     * Entries for sets not aboard this launch are KEPT (see [hidden]).
+     * Entries for sets not installed this launch are KEPT (see [hidden]).
      */
     fun noteShown(sets: List<Pair<String, Boolean>>) {
         val seen = sets.map { it.first }.toSet()
@@ -109,12 +102,10 @@ class RasterCharts(appContext: Context) {
     }
 
     private fun save() {
-        prefs.edit()
-            .putString(KEY_PATHS_ORDERED, org.json.JSONArray(paths).toString())
-            .putStringSet(KEY_OFF, off)
-            .putStringSet(KEY_HIDDEN, hidden)
-            .putBoolean(KEY_CHART_HIDDEN, chartHidden)
-            .apply()
+        Store.setList(Store.Group.RASTER, KEY_PATHS, paths)
+        Store.setList(Store.Group.RASTER, KEY_OFF, off.toList())
+        Store.setList(Store.Group.RASTER, KEY_HIDDEN, hidden.toList())
+        Store.setFlag(Store.Group.RASTER, KEY_CHART_HIDDEN, chartHidden)
     }
 
     /**
@@ -127,30 +118,18 @@ class RasterCharts(appContext: Context) {
         get() = paths.groupBy { providerLabel(it) }.toList()
 
     companion object {
-        private const val PREFS = "rastercharts.v1"
         private const val KEY_PATHS = "paths"
-        private const val KEY_PATHS_ORDERED = "paths.ordered"
         private const val KEY_OFF = "off"
-        private const val KEY_HIDDEN = "hidden.names"
-        private const val KEY_CHART_HIDDEN = "chart.hidden"
+        private const val KEY_HIDDEN = "hidden"
+        private const val KEY_CHART_HIDDEN = "chart_hidden"
 
         /**
-         * Providers seen in community charts, longest first so "ArcGIS.Imagery"
-         * is not matched as "ArcGIS". The engine does the same thing when it
-         * groups files into sets; this only has to AGREE with it well enough to
-         * label the settings rows.
+         * The name of the set this file belongs to, from the engine. The
+         * engine groups the files it draws by this name and the pill shows it,
+         * so a settings row grouped by any other rule disagrees with the pill.
+         * Needs no chart open.
          */
-        private val PROVIDERS = listOf(
-            "ArcGIS.Imagery", "GoogleSatellite", "BingSatellite",
-            "OpenSeaMap", "Navionics", "ArcGIS", "Google", "Bing",
-            "CMap", "C-Map", "Esri", "Sentinel", "Landsat",
-        )
-
-        fun providerLabel(path: String): String {
-            val name = File(path).name
-            PROVIDERS.firstOrNull { name.contains(it, ignoreCase = true) }?.let { return it }
-            return File(path).nameWithoutExtension.substringBefore('.')
-        }
+        fun providerLabel(path: String): String = Lookout.rasterSetNameFor(path)
 
         /**
          * Every raster chart under [dir]. `.mbtiles` today; the extension is a

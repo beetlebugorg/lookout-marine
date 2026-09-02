@@ -40,7 +40,7 @@ class RasterController(private val access: EngineAccess, val charts: RasterChart
     /**
      * Put the mariner's per-set choice back after an open, TWO passes — hide
      * first, then show — or the election (showing a set turns off same-water
-     * rivals) loses the pick. Then the no-survey override: with no ENC aboard
+     * rivals) loses the pick. Then the no-survey override: with no ENC installed
      * "hidden" no longer means what it meant, and obeying it leaves a blank
      * sea, so the first covering set draws anyway. The SAVED choice is not
      * rewritten (the reference's restoreRasterShown, move for move).
@@ -61,7 +61,7 @@ class RasterController(private val access: EngineAccess, val charts: RasterChart
             if (!shownInView) {
                 for (i in 0 until n) {
                     if (l.rasterSetInView(i)) {
-                        Log.i(TAG, "no survey aboard; drawing ${l.rasterSetName(i)} over the blank sea")
+                        Log.i(TAG, "no survey installed; drawing ${l.rasterSetName(i)} over the blank sea")
                         l.rasterSetShown(i, true)
                         break
                     }

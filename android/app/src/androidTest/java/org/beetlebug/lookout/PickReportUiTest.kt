@@ -1,7 +1,7 @@
 package org.beetlebug.lookout
 
 import org.beetlebug.lookout.pick.OverlayInfo
-import org.beetlebug.lookout.pick.PickFeature
+import org.beetlebug.lookout.pick.PickDecoded
 import org.beetlebug.lookout.hud.LookoutTheme
 import org.beetlebug.lookout.pick.OverlayBubble
 import org.beetlebug.lookout.pick.PickReportCard
@@ -37,36 +37,46 @@ class PickReportUiTest {
 
     @get:Rule val compose = createComposeRule()
 
-    private val light = PickFeature(
+    private val light = one(PickFixture.feature(
         cls = "LIGHTS",
-        s57 = """
-            {"report":{
-              "title":"Thomas Point Shoal Light",
-              "subtitle":"Fl W 5s 43ft 16M",
-              "chip":"Light",
-              "notes":["Restricted area: no anchoring within 100 m."],
-              "rows":[
-                {"label":"Character","value":"Flashing white","depth":0},
-                {"label":"Chart note","value":"US5MD1MC.TXT","depth":0,"file":true}],
-              "footnote":"US5MD1MC · edition 12"},
-             "s57":{"OBJNAM":"Thomas Point Shoal Light","LITCHR":2,"SECTR1":[10,20]}}
-        """.trimIndent(),
         chart = "US5MD1MC",
-    )
+        title = "Thomas Point Shoal Light",
+        subtitle = "Fl W 5s 43ft 16M",
+        chip = "Light",
+        footnote = "US5MD1MC · edition 12",
+        notes = listOf("Restricted area: no anchoring within 100 m."),
+        rows = listOf(
+            PickFixture.row("Character", "Flashing white"),
+            PickFixture.row("Chart note", "US5MD1MC.TXT", file = true),
+        ),
+        source = listOf(
+            PickFixture.row("LITCHR", "2"),
+            PickFixture.row("OBJNAM", "Thomas Point Shoal Light"),
+            PickFixture.row("SECTR1"),
+            PickFixture.row("", "10", depth = 1),
+            PickFixture.row("", "20", depth = 1),
+        ),
+    ))
 
-    private val buoy = PickFeature(
+    private val buoy = one(PickFixture.feature(
         cls = "BOYLAT",
-        s57 = """{"report":{"title":"Green can buoy","subtitle":"Port hand",
-                  "chip":"Buoy","rows":[{"label":"Colour","value":"Green","depth":0}],
-                  "footnote":"US5MD1MC"},"s57":{"COLOUR":4}}""",
         chart = "US5MD1MC",
-    )
+        title = "Green can buoy",
+        subtitle = "Port hand",
+        chip = "Buoy",
+        footnote = "US5MD1MC",
+        rows = listOf(PickFixture.row("Colour", "Green")),
+        source = listOf(PickFixture.row("COLOUR", "4")),
+    ))
+
+    private fun one(feature: List<String>): PickDecoded =
+        PickDecoded.decode(PickFixture.read(feature)).single()
 
     private var selected = 0
     private var dismissed = false
     private var openedFile: Pair<String, String>? = null
 
-    private fun show(results: List<PickFeature>, startAt: Int = 0) {
+    private fun show(results: List<PickDecoded>, startAt: Int = 0) {
         selected = startAt
         dismissed = false
         openedFile = null
@@ -215,18 +225,21 @@ class PickReportUiTest {
 
     /** A blank body reads as a defect, so the card says which kind of empty. */
     @Test fun anObjectWithNoAttributesSaysSo() {
-        show(listOf(PickFeature("DEPARE", """{"report":{"title":"Depth area","empty":"none"},"s57":{}}""", "US5MD1MC")))
+        show(listOf(one(PickFixture.feature("DEPARE", "US5MD1MC", title = "Depth area",
+            empty = PickFixture.NO_ATTRIBUTES))))
         compose.onNodeWithText("The cell carries no attributes for this object.").assertIsDisplayed()
     }
 
     @Test fun anObjectWithOnlySourceDataSaysSo() {
-        show(listOf(PickFeature("M_NSYS", """{"report":{"title":"Nav system","empty":"source"},"s57":{}}""", "US5MD1MC")))
+        show(listOf(one(PickFixture.feature("M_NSYS", "US5MD1MC", title = "Nav system",
+            empty = PickFixture.SOURCE_ONLY))))
         compose.onNodeWithText("The cell carries only source data for this object.").assertIsDisplayed()
     }
 
     /** A compose that failed still shows the object class and the cell. */
     @Test fun aRawPayloadStillMakesACard() {
-        show(listOf(PickFeature("BOYLAT", """{"OBJNAM":"Green can"}""", "US5MD1MC")))
+        show(listOf(one(PickFixture.feature("BOYLAT", "US5MD1MC",
+            source = listOf(PickFixture.row("OBJNAM", "Green can"))))))
         compose.onNodeWithText("BOYLAT").assertIsDisplayed()
         compose.onNodeWithText("US5MD1MC").assertIsDisplayed()
     }

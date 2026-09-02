@@ -11,7 +11,7 @@ G_BEGIN_DECLS
 /* The opening page: a compass rose, a pulsing bar, and three steps. */
 GtkWidget *lk_window_build_loader (void);
 
-/* The first-run page: where charts come from, and how to bring one aboard. */
+/* The first-run page: where charts come from, and how to install one. */
 GtkWidget *lk_window_build_empty_state (void);
 
 /* One step row, appended to `box`. The opening page and the import panel both

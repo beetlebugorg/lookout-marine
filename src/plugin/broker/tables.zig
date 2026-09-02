@@ -8,6 +8,7 @@ const std = @import("std");
 
 const broker = @import("../broker.zig");
 const caps = @import("caps.zig");
+const pl = @import("plugins");
 const testing = @import("testing.zig");
 
 const vstore = @import("../store.zig");
@@ -508,6 +509,11 @@ test "a declaration the shell could not render is refused with a reason" {
     try wide.appendSlice(t.allocator, "]}");
     try t.expectEqual(@as(i32, -1), f.declare(wide.items));
 
+    // No columns at all: there is nothing to draw.
+    try t.expectEqual(@as(i32, -1), f.declare(
+        "{\"key\":\"t\",\"title\":\"T\",\"menu\":\"M\",\"columns\":[]}",
+    ));
+
     // A column type the shell has no idea how to sort or show.
     try t.expectEqual(@as(i32, -1), f.declare(
         "{\"key\":\"t\",\"title\":\"T\",\"menu\":\"M\"," ++
@@ -623,4 +629,130 @@ test "a plugin that goes takes its tables with it" {
     defer json.deinit(t.allocator);
     try f.broker.tablesJson(&json);
     try t.expectEqualStrings("{\"tables\":[]}", json.items);
+}
+
+test "the typed tables say what the JSON says" {
+    const a = t.allocator;
+    const f = try TableFixture.init();
+    defer f.deinit();
+    try t.expectEqual(@as(i32, 0), f.declare(test_table_decl));
+    try t.expectEqual(@as(i32, 2), f.update(
+        "{\"key\":\"targets\",\"upsert\":[" ++
+            "{\"id\":\"1\",\"band\":0,\"name\":\"BRAVO\",\"cpa\":400}," ++
+            "{\"id\":\"2\",\"band\":1,\"name\":\"ALPHA\"}]}",
+    ));
+
+    var json: std.ArrayList(u8) = .empty;
+    defer json.deinit(a);
+    try f.broker.tablesJson(&json);
+
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const doc = try std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), json.items, .{});
+
+    const read = try pl.Tables.init(a);
+    defer read.free();
+    try f.broker.tablesRead(read);
+
+    const list = doc.object.get("tables").?.array;
+    try t.expectEqual(list.items.len, read.rows.len);
+    for (list.items, read.rows) |item, got| {
+        const o = item.object;
+        const rec = pl.recOf(pl.TableRec, got);
+        try t.expectEqualStrings(o.get("plugin").?.string, std.mem.span(got.plugin));
+        try t.expectEqualStrings(o.get("key").?.string, std.mem.span(got.key));
+        try t.expectEqualStrings(o.get("title").?.string, std.mem.span(got.title));
+        try t.expectEqualStrings(o.get("menu").?.string, std.mem.span(got.menu));
+        try t.expectEqualStrings(o.get("sort").?.object.get("key").?.string, std.mem.span(got.sort_key));
+        try t.expectEqual(o.get("sort").?.object.get("ascending").?.bool, got.sort_ascending != 0);
+        try t.expectEqual(o.get("open").?.bool, got.open != 0);
+        try t.expectEqual(@as(usize, @intCast(o.get("rows").?.integer)), got.rows);
+        try t.expectEqual(@as(u64, @intCast(o.get("seq").?.integer)), got.seq);
+
+        // "at" is absent from the JSON when the table declares no position,
+        // and empty in the read.
+        if (o.get("at")) |at| {
+            try t.expectEqualStrings(at.object.get("lat").?.string, std.mem.span(got.at_lat));
+            try t.expectEqualStrings(at.object.get("lon").?.string, std.mem.span(got.at_lon));
+        } else {
+            try t.expectEqualStrings("", std.mem.span(got.at_lat));
+            try t.expectEqualStrings("", std.mem.span(got.at_lon));
+        }
+
+        const cols = o.get("columns").?.array;
+        try t.expectEqual(cols.items.len, rec.columns_len);
+        for (cols.items, rec.columns[0..rec.columns_len]) |c, col| {
+            try t.expectEqualStrings(c.object.get("key").?.string, std.mem.span(col.key));
+            try t.expectEqualStrings(c.object.get("label").?.string, std.mem.span(col.label));
+            try t.expectEqualStrings(c.object.get("type").?.string, @tagName(col.type));
+        }
+    }
+}
+
+test "the typed rows say what the JSON says" {
+    const a = t.allocator;
+    const f = try TableFixture.init();
+    defer f.deinit();
+    try t.expectEqual(@as(i32, 0), f.declare(test_table_decl));
+    try t.expectEqual(@as(i32, 4), f.update(
+        "{\"key\":\"targets\",\"upsert\":[" ++
+            "{\"id\":\"1\",\"band\":1,\"name\":\"BRAVO\",\"cpa\":400,\"lat\":38.9,\"lon\":-76.4}," ++
+            "{\"id\":\"2\",\"band\":1,\"name\":\"ALPHA\",\"cpa\":900}," ++
+            "{\"id\":\"3\",\"band\":1,\"name\":\"CHARLIE\"}," ++
+            "{\"id\":\"4\",\"band\":0,\"name\":\"ZULU\",\"cpa\":5000,\"state\":\"alarm\"}]}",
+    ));
+
+    var json: std.ArrayList(u8) = .empty;
+    defer json.deinit(a);
+
+    for ([_][]const u8{ "cpa", "name", "state", "nonesuch", "" }) |sort_key| {
+        for ([_]bool{ true, false }) |ascending| {
+            try f.rows(sort_key, ascending, &json);
+
+            var arena = std.heap.ArenaAllocator.init(a);
+            defer arena.deinit();
+            const doc = try std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), json.items, .{});
+
+            const read = try pl.Rows.init(a);
+            defer read.free();
+            try t.expect(try f.broker.tableRowsRead("org.example.table", "targets", sort_key, ascending, read));
+
+            try t.expectEqual(@as(u64, @intCast(doc.object.get("seq").?.integer)), read.seq);
+            const list = doc.object.get("rows").?.array;
+            try t.expectEqual(list.items.len, read.rows.len);
+            for (list.items, read.rows) |item, got| {
+                const o = item.object;
+                const rec = pl.recOf(pl.RowRec, got);
+                try t.expectEqualStrings(o.get("id").?.string, std.mem.span(got.id));
+                try t.expectEqual(@as(i32, @intCast(o.get("band").?.integer)), got.band);
+
+                if (o.get("at")) |at| {
+                    try t.expectEqual(@as(c_int, 1), got.located);
+                    try t.expectEqual(at.array.items[0].float, got.lon);
+                    try t.expectEqual(at.array.items[1].float, got.lat);
+                } else {
+                    try t.expectEqual(@as(c_int, 0), got.located);
+                }
+
+                const cells = o.get("cells").?.array;
+                try t.expectEqual(cells.items.len, rec.cells_len);
+                for (cells.items, rec.cells[0..rec.cells_len]) |c, cell| switch (c) {
+                    .null => try t.expectEqual(pl.CellKind.absent, cell.kind),
+                    .string => |s| {
+                        try t.expectEqual(pl.CellKind.text, cell.kind);
+                        try t.expectEqualStrings(s, std.mem.span(cell.text));
+                    },
+                    .integer => |x| {
+                        try t.expectEqual(pl.CellKind.number, cell.kind);
+                        try t.expectEqual(@as(f64, @floatFromInt(x)), cell.number);
+                    },
+                    .float => |x| {
+                        try t.expectEqual(pl.CellKind.number, cell.kind);
+                        try t.expectEqual(x, cell.number);
+                    },
+                    else => unreachable,
+                };
+            }
+        }
+    }
 }

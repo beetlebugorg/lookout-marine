@@ -8,7 +8,6 @@
 #include "MainWindow.xaml.h"
 
 #include "lk_format.h"
-#include "lk_text.h"
 
 using namespace winrt;
 using namespace Microsoft::UI::Xaml;
@@ -75,8 +74,10 @@ namespace winrt::LookoutMarine::implementation
         Controls::MenuFlyoutItem copy;
         copy.Text(L"Copy Position");
         copy.Click([lat, lon](auto &&, auto &&) {
+            char pos[LOOKOUT_POSITION_MAX];
+            lookout_fmt_position(lat, lon, pos, sizeof pos);
             Windows::ApplicationModel::DataTransfer::DataPackage pkg;
-            pkg.SetText(winrt::to_hstring(lkw::FormatCoord(lat, lon)));
+            pkg.SetText(winrt::to_hstring(pos));
             Windows::ApplicationModel::DataTransfer::Clipboard::SetContent(pkg);
         });
         menu.Items().Append(copy);

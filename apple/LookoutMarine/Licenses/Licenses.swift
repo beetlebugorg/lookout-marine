@@ -1,10 +1,11 @@
 //  Licenses.swift — the licenses screen.
 //
-//  lookout_licenses_json carries the list, baked in from
-//  vendor/licenses/licenses.json, so nothing here needs a connection.
+//  lookout_licenses_read hands the list over, baked in from
+//  vendor/licenses/licenses.json, so nothing here needs a connection. The core
+//  filters it to this shell.
 //
-//  Search and the group headings appear above twelve entries and not below:
-//  under that the headings outnumber the rows.
+//  Search and the group headings appear above LOOKOUT_LICENSES_GROUP_ABOVE
+//  entries and not below: under that the headings outnumber the rows.
 //
 //  A license text is never truncated or reflowed by anything but the width of
 //  the view. The app's own entry is not a component and stays out of the count.
@@ -16,8 +17,8 @@ import UIKit
 
 // MARK: - The manifest
 
-/// One component the build carries.
-struct LicenseComponent: Decodable, Identifiable, Hashable {
+/// One component of the build. The core states every field.
+struct LicenseComponent: Identifiable, Hashable {
     let id: String
     let name: String
     let group: String
@@ -32,16 +33,25 @@ struct LicenseComponent: Decodable, Identifiable, Hashable {
     let pinnedIn: String
     let copyright: String
     let url: String
-    let shells: [String]
     let text: String
     /// The component's NOTICE file, empty when it ships none.
     let notice: String
 
-    enum CodingKeys: String, CodingKey {
-        case id, name, group, summary, license, version, commit, copyright, url, shells, text, notice
-        case licenseShort = "license_short"
-        case licenseNote = "license_note"
-        case pinnedIn = "pinned_in"
+    init(_ c: lookout_license) {
+        id = String(cString: c.id)
+        name = String(cString: c.name)
+        group = String(cString: c.group)
+        summary = String(cString: c.summary)
+        license = String(cString: c.license)
+        licenseShort = String(cString: c.license_short)
+        licenseNote = String(cString: c.license_note)
+        version = String(cString: c.version)
+        commit = String(cString: c.commit)
+        pinnedIn = String(cString: c.pinned_in)
+        copyright = String(cString: c.copyright)
+        url = String(cString: c.url)
+        text = String(cString: c.text)
+        notice = String(cString: c.notice)
     }
 
     var licenseLabel: String { license.isEmpty ? "Not resolved" : license }
@@ -60,17 +70,26 @@ struct LicenseComponent: Decodable, Identifiable, Hashable {
 
 }
 
-/// This app's own terms.
-struct LicenseApp: Decodable {
+/// This app's own terms. Not a component, and out of the component count.
+struct LicenseApp {
     let name: String
     let summary: String
     let license: String
     let copyright: String
     let url: String
     let text: String
+
+    init(_ c: lookout_license) {
+        name = String(cString: c.name)
+        summary = String(cString: c.summary)
+        license = String(cString: c.license)
+        copyright = String(cString: c.copyright)
+        url = String(cString: c.url)
+        text = String(cString: c.text)
+    }
 }
 
-struct LicenseManifest: Decodable {
+struct LicenseManifest {
     let app: LicenseApp
     let components: [LicenseComponent]
 
@@ -83,15 +102,22 @@ struct LicenseManifest: Decodable {
         #endif
     }
 
+    /// Above this many components the screen groups the rows and offers a
+    /// search. The core states it, so the shells cannot drift.
+    static let groupAbove = Int(LOOKOUT_LICENSES_GROUP_ABOVE)
+
     /// The components this build carries. Static in the core, so it needs no
-    /// chart open.
+    /// chart open, and the core filters by shell.
     static let current: LicenseManifest? = {
-        var len = 0
-        let p = lookout_licenses_json(&len)
-        guard len > 0 else { return nil }
-        let data = Data(UnsafeRawBufferPointer(start: p, count: len))
-        guard let m = try? JSONDecoder().decode(LicenseManifest.self, from: data) else { return nil }
-        return LicenseManifest(app: m.app, components: m.components.filter { $0.shells.contains(shell) })
+        guard let read = shell.withCString({ lookout_licenses_read($0) }) else { return nil }
+        defer { lookout_licenses_free(read) }
+        guard let app = lookout_licenses_app(read) else { return nil }
+        var n = 0
+        var components: [LicenseComponent] = []
+        if let all = lookout_licenses_all(read, &n) {
+            components = (0..<n).compactMap { all[$0].map { LicenseComponent($0.pointee) } }
+        }
+        return LicenseManifest(app: LicenseApp(app.pointee), components: components)
     }()
 
     /// The groups in the order the manifest lists them, each with its rows.
@@ -146,8 +172,8 @@ struct LicensesView: View {
     @ObservedObject private var nav = LicensesNav.shared
     @State private var search = ""
 
-    private var searchable: Bool { manifest.components.count > 12 }
-    private var grouped: Bool { manifest.components.count > 12 }
+    private var searchable: Bool { manifest.components.count > LicenseManifest.groupAbove }
+    private var grouped: Bool { manifest.components.count > LicenseManifest.groupAbove }
 
     /// Every row that matches the search, in manifest order, ungrouped.
     private var flat: [LicenseComponent] { groups.flatMap(\.items) }

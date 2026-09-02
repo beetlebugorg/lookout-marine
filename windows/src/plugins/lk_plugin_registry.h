@@ -1,43 +1,33 @@
 /* lk_plugin_registry — the wasm plugin registry, read and written.
  *
  * A plugin declares a settings schema in its manifest; the core hands the
- * whole registry over as JSON (lookout_plugins_json) and takes a config
- * object back (lookout_plugin_config_set). Between those two calls is a
- * contract with no UI in it at all: what a field is, which section it lands
- * in, what a list row carries, what the plugin's status line says. That
- * contract lives here, so it can be checked without a settings window.
+ * whole registry over as structs (lookout_plugins_read) and takes a config
+ * object back (lookout_plugin_config_set). What crosses back is this shell's
+ * to compose, and so is everything the status document says, so those live
+ * here and can be checked without a settings window.
  *
  * The pane that draws it is plugins/ui/PluginSettings.cpp, and it is the only thing
  * that should know about WinUI. Model types are in lk_plugin_model.h.
  */
 #pragma once
 
-#include <optional>
 #include <string>
-#include <string_view>
-#include <vector>
 
 #include "lk_plugin_model.h"
 
 namespace lkw
 {
-    /* NULL IS NOT AN EMPTY REGISTRY. lookout_plugins_json answers nothing with
-     * no chart open and in a build with no plugin host; a core holding no
-     * plugins answers {"plugins":[]} instead. Reading the two the same way
-     * empties the whole pane the moment one read comes back short, which looks
-     * from the outside like a trapping plugin taking the settings schema with
-     * it. So: nothing when the document is not a registry, an empty vector
-     * when it is a registry of nothing. */
-    std::optional<std::vector<PluginInfo>> ReadRegistry(std::string_view json);
-
     /* The config object to hand the plugin: every scalar field by key, and
      * every list as its whole array of rows, each carrying the id the shell
      * assigned it. A toggle goes as a JSON bool, which is the only shape the
      * core accepts for one. */
     std::string PluginConfigJson(PluginInfo const &p);
 
-    /* The section anything that names none lands in — the core's own fallback. */
-    inline constexpr char const *kDefaultTab = "advanced";
+    /* The settings section a core section lands in, by the ids
+     * settings/ui/Settings.cpp keeps its own sections under. A section this
+     * shell has no page for lands in Advanced, which is the core's own
+     * fallback too. */
+    char const *SectionId(lookout_section section);
 
     /* A spin step that suits the range: metres of CPA move in tens, minutes
      * and knots one at a time. */

@@ -1,6 +1,5 @@
 #include "ui/chrome/search.h"
 
-#include "model/coord.h"
 #include "ui/hud/hud.h"
 
 typedef struct {
@@ -35,11 +34,12 @@ lk_search_changed (GtkEditable *editable, gpointer user_data)
       return;
     }
 
-  if (lk_coordinate_parse (text, &lat, &lon))
+  if (lookout_parse_position (text, &lat, &lon))
     {
-      g_autofree char *lat_s = lk_coord_format_dm (lat, TRUE);
-      g_autofree char *lon_s = lk_coord_format_dm (lon, FALSE);
-      g_autofree char *label = g_strdup_printf ("Go to %s %s", lat_s, lon_s);
+      char position[LOOKOUT_POSITION_MAX];
+
+      lookout_fmt_position (lat, lon, position, sizeof position);
+      g_autofree char *label = g_strdup_printf ("Go to %s", position);
       gtk_label_set_text (GTK_LABEL (search->result), label);
       gtk_widget_add_css_class (search->result, "lk-search-go");
     }

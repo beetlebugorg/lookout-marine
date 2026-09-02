@@ -42,14 +42,14 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import org.json.JSONObject
+import org.beetlebug.lookout.Lookout
 
 /**
  * The alerts the plugins raise, on screen and out loud. The Android twin of
  * PluginAlerts.swift.
  *
  * A plugin raises an alert with a severity, a title and a body. The core holds
- * it and hands it over through lookout_plugin_alerts_json, already ordered:
+ * it and hands it over through lookout_alerts_read, already ordered:
  * what nobody has answered first, then the loudest, then the oldest. This file
  * shows it, sounds the alarms, and acknowledges one when the mariner silences
  * it.
@@ -81,9 +81,10 @@ enum class PluginAlertSeverity {
          * way the core treats one it cannot read. Silence is never the
          * fallback.
          */
-        fun parse(s: String?): PluginAlertSeverity = when (s) {
-            "warning" -> WARNING
-            "notice" -> NOTICE
+        fun of(severity: Int): PluginAlertSeverity = when (severity) {
+            // lookout_alert_severity
+            1 -> WARNING
+            0 -> NOTICE
             else -> ALARM
         }
     }
@@ -107,36 +108,41 @@ data class PluginAlert(
  */
 data class PluginAlertSet(val seq: Long, val alerts: List<PluginAlert>) {
     companion object {
-        /** Null for a payload that will not parse, which the caller treats as
-         *  "the core said nothing", not as "there are no alerts". */
-        fun parse(json: String?): PluginAlertSet? {
-            if (json.isNullOrEmpty()) return null
-            return try {
-                val top = JSONObject(json)
-                val arr = top.optJSONArray("alerts")
-                val list = buildList {
-                    for (i in 0 until (arr?.length() ?: 0)) {
-                        val o = arr!!.optJSONObject(i) ?: continue
-                        val title = o.optString("title")
-                        if (title.isEmpty()) continue
+        /**
+         * The set as the core last stated it, or null when the core stated
+         * nothing. Null is "the core said nothing", which the caller must not
+         * read as "there are no alerts".
+         */
+        fun read(l: Lookout): PluginAlertSet? = decode(l.alerts())
+
+        /**
+         * The flat array the native hands back: the seq, then seven strings per
+         * alert. `internal` so the suite can drive it without a core.
+         */
+        internal fun decode(flat: Array<String>?): PluginAlertSet? {
+            if (flat == null) return null
+            val seq = flat.firstOrNull()?.toLongOrNull() ?: return null
+            val alerts = buildList {
+                var k = 1
+                while (k + 6 < flat.size) {
+                    val title = flat[k + 3]
+                    if (title.isNotEmpty()) {
                         add(
                             PluginAlert(
-                                id = o.optLong("id"),
-                                plugin = o.optString("plugin"),
-                                severity = PluginAlertSeverity.parse(o.optString("severity")),
+                                id = flat[k].toLongOrNull() ?: 0L,
+                                plugin = flat[k + 1],
+                                severity = PluginAlertSeverity.of(flat[k + 2].toIntOrNull() ?: 0),
                                 title = title,
-                                body = o.optString("body"),
-                                raised = o.optLong("raised"),
-                                acknowledged = o.optBoolean("acknowledged"),
+                                body = flat[k + 4],
+                                raised = flat[k + 5].toLongOrNull() ?: 0L,
+                                acknowledged = flat[k + 6] != "0",
                             ),
                         )
                     }
+                    k += 7
                 }
-                PluginAlertSet(top.optLong("seq", -1), list)
-            } catch (e: Exception) {
-                Log.w("lookout", "alerts: unreadable JSON: $e")
-                null
             }
+            return PluginAlertSet(seq, alerts)
         }
     }
 }

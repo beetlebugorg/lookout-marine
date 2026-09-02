@@ -1,6 +1,0 @@
-{"seq":47,"alerts":[
-{"id":9001,"plugin":"org.beetlebug.ais","severity":"alarm","title":"AIS CPA alarm","body":"ANNE: CPA 124 m in 585 s","raised":1756400000000,"acknowledged":false},
-{"id":9002,"plugin":"org.beetlebug.ais","severity":"alarm","title":"AIS CPA alarm","body":"BRAVO: CPA 90 m in 200 s","raised":1756400012000,"acknowledged":false},
-{"id":9003,"plugin":"org.beetlebug.nmea0183","severity":"warning","title":"Gateway unreachable","body":"nav.local:10111","raised":1756399000000,"acknowledged":false},
-{"id":9004,"plugin":"org.example.grib","severity":"notice","title":"Forecast is 9 hours old","body":"","raised":1756390000000,"acknowledged":true}
-]}

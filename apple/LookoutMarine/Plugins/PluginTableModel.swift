@@ -2,9 +2,8 @@
 //
 //  A plugin declares a table in its manifest: a key, a title, the menu it is
 //  opened from, and typed columns. The core hands the declaration over through
-//  lookout_plugin_tables_json and the rows through lookout_plugin_table_rows,
-//  already in the order they are to be shown. Nothing here knows what any
-//  plugin does.
+//  lookout_tables_read and the rows through lookout_table_rows_read, already in
+//  the order they are to be shown. Nothing here knows what any plugin does.
 //
 //  UNITS ARE THE SHELL'S. The column type says what a number means: distance
 //  is metres, speed metres per second, bearing degrees true, duration seconds,
@@ -34,12 +33,39 @@ enum PluginColumnType: String {
         case .text, .flag: return false
         }
     }
+
+    /// A type this build does not know shows as text. The core refuses a
+    /// declaration naming one, so this is the newer-core case rather than the
+    /// bad-plugin case.
+    init(_ t: lookout_column_type) {
+        switch t {
+        case LOOKOUT_COLUMN_DISTANCE: self = .distance
+        case LOOKOUT_COLUMN_SPEED:    self = .speed
+        case LOOKOUT_COLUMN_BEARING:  self = .bearing
+        case LOOKOUT_COLUMN_DURATION: self = .duration
+        case LOOKOUT_COLUMN_NUMBER:   self = .number
+        case LOOKOUT_COLUMN_FLAG:     self = .flag
+        default:                      self = .text
+        }
+    }
 }
 
 struct PluginTableColumn {
     let key: String
     let label: String
     let type: PluginColumnType
+
+    init(key: String, label: String, type: PluginColumnType) {
+        self.key = key
+        self.label = label
+        self.type = type
+    }
+
+    init(_ c: lookout_table_column) {
+        self.init(key: String(cString: c.key),
+                  label: String(cString: c.label),
+                  type: PluginColumnType(c.type))
+    }
 }
 
 /// One table a plugin declares. `id` is what a menu item carries.
@@ -57,23 +83,18 @@ struct PluginTableSpec: Identifiable {
 
     var id: String { "\(plugin)/\(key)" }
 
-    init?(_ o: [String: Any]) {
-        guard let plugin = o["plugin"] as? String,
-              let key = o["key"] as? String,
-              let cols = o["columns"] as? [[String: Any]], !cols.isEmpty else { return nil }
-        self.plugin = plugin
-        self.key = key
-        self.title = o["title"] as? String ?? key
-        self.menu = o["menu"] as? String ?? "Window"
-        self.columns = cols.compactMap {
-            guard let k = $0["key"] as? String,
-                  let t = PluginColumnType(rawValue: $0["type"] as? String ?? "") else { return nil }
-            return PluginTableColumn(key: k, label: $0["label"] as? String ?? "", type: t)
-        }
-        let sort = o["sort"] as? [String: Any] ?? [:]
-        self.sortKey = sort["key"] as? String ?? ""
-        self.sortAscending = sort["ascending"] as? Bool ?? true
-        self.locatable = o["at"] != nil
+    /// One declaration of a read, with the columns already read out of it.
+    /// Every string is copied, so the spec outlives the read it came from.
+    init(_ t: lookout_table, columns: [PluginTableColumn]) {
+        self.plugin = String(cString: t.plugin)
+        self.key = String(cString: t.key)
+        self.title = String(cString: t.title)
+        self.menu = String(cString: t.menu)
+        self.columns = columns
+        self.sortKey = String(cString: t.sort_key)
+        self.sortAscending = t.sort_ascending != 0
+        // The core sets both halves together, so one of them answers it.
+        self.locatable = !String(cString: t.at_lat).isEmpty
     }
 }
 
@@ -84,16 +105,13 @@ enum PluginCell {
     case number(Double)
     case text(String)
 
-    init(_ any: Any?) {
-        switch any {
-        case let n as NSNumber:
-            // JSONSerialization gives booleans as NSNumber too; a cell is
-            // never a boolean, so anything numeric reads as a number.
-            self = .number(n.doubleValue)
-        case let s as String:
-            self = .text(s)
-        default:
-            self = .empty
+    /// `kind` is what the plugin sent. A string in a distance column stays a
+    /// string and shows as one.
+    init(_ c: lookout_table_cell) {
+        switch c.kind {
+        case LOOKOUT_TABLE_CELL_NUMBER: self = .number(c.number)
+        case LOOKOUT_TABLE_CELL_TEXT:   self = .text(String(cString: c.text))
+        default:                  self = .empty
         }
     }
 
@@ -110,16 +128,17 @@ struct PluginTableRow {
     let lon: Double?
     let cells: [PluginCell]
 
-    init?(_ o: [String: Any], columns: Int) {
-        guard let id = o["id"] as? String else { return nil }
-        self.id = id
-        self.band = o["band"] as? Int ?? 0
-        let at = o["at"] as? [Double] ?? []
-        self.lon = at.count == 2 ? at[0] : nil
-        self.lat = at.count == 2 ? at[1] : nil
-        var cells = (o["cells"] as? [Any] ?? []).map { PluginCell($0) }
-        while cells.count < columns { cells.append(.empty) }
-        self.cells = cells
+    /// One row of a read, with its cells already read out of it. A row that
+    /// carried fewer cells than the table has columns is padded, so it still
+    /// lines up under the headings.
+    init(_ r: lookout_table_row, cells: [PluginCell], columns: Int) {
+        self.id = String(cString: r.id)
+        self.band = Int(r.band)
+        self.lon = r.located != 0 ? r.lon : nil
+        self.lat = r.located != 0 ? r.lat : nil
+        var padded = cells
+        while padded.count < columns { padded.append(.empty) }
+        self.cells = padded
     }
 
     func cell(_ i: Int) -> PluginCell { i < cells.count ? cells[i] : .empty }

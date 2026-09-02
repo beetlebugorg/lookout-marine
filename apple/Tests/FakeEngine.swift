@@ -70,14 +70,14 @@ final class FakeEngine: RasterEngine, ChartLinkEngine, PluginEngine,
     func ownShip() -> (state: FixState, lat: Double, lon: Double)? { ship }
 
     // MARK: Chart links
-    /// What chartLinksSnapshot answers. Nil means the core had nothing.
-    var linksJSON: String?
+    /// What chartLinksSnapshot returns. Nil is no change since the last poll.
+    var links: ChartLinkSnapshot?
     func addChartLink(_ link: String) { note("addChartLink(\(link))") }
     func refreshChartLink(_ url: String) { note("refreshChartLink(\(url))") }
     func removeChartLink(_ url: String) { note("removeChartLink(\(url))") }
     func selectChartLink(_ url: String?) { note("selectChartLink(\(url ?? "nil"))") }
     func importChartLinks(_ json: String) { note("importChartLinks") }
-    func chartLinksSnapshot() -> String? { linksJSON }
+    func chartLinksSnapshot() -> ChartLinkSnapshot? { links }
 
     // MARK: Plugins
     var specs: [PluginTableSpec] = []
@@ -107,7 +107,7 @@ final class FakeEngine: RasterEngine, ChartLinkEngine, PluginEngine,
     /// mapping is enough: no test here is about the projection.
     var geoAt: (lon: Double, lat: Double)? = (lon: -76.0, lat: 39.0)
     var screenAt = CGPoint(x: 100, y: 100)
-    var features: [PickFeature] = []
+    var features: [PickDecoded] = []
     var revealPin: OverlayPin?
     var markerList: [ChartMarker] = []
     var markerAt: ChartMarker?
@@ -117,7 +117,7 @@ final class FakeEngine: RasterEngine, ChartLinkEngine, PluginEngine,
 
     func geo(atPoint pt: CGPoint) -> (lon: Double, lat: Double)? { geoAt }
     func screenPoint(forGeoLon lon: Double, lat: Double) -> CGPoint { screenAt }
-    func pick(lon: Double, lat: Double) -> [PickFeature] { features }
+    func pick(lon: Double, lat: Double) -> [PickDecoded] { features }
     func reveal(lon: Double, lat: Double) -> OverlayPin? { revealPin }
     func panRevealingPick(dxPt: CGFloat, dyPt: CGFloat) { panned.append(dyPt) }
     func markers() -> [ChartMarker] { markerList }

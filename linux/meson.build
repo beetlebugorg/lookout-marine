@@ -86,9 +86,10 @@ endif
 # ---- the Zig core -----------------------------------------------------------
 #
 # `zig build lib` builds the tile57 engine and the lookout core from source and
-# installs liblookout_marine.a, libtile57.a, lookout.h and tile57.h into
-# zig-out/. It is its own build system with its own cache, so it runs as one
-# always-stale custom target rather than being modelled file-by-file here.
+# installs liblookout_marine.a, libtile57.a, the four lookout headers and
+# tile57.h into zig-out/. It is its own build system with its own cache, so it
+# runs as one always-stale custom target rather than being modelled file-by-file
+# here.
 
 zig = find_program('zig', required: true)
 build_core = find_program('build-core.sh', native: true)
@@ -102,14 +103,18 @@ core_root = meson.current_source_dir() / '..'
 # on. Off Apple the static core leaves it unembedded (an ELF linker rejects an
 # archive nested inside an archive), so the executable links the pair; naming it
 # AFTER liblookout_marine.a is what resolves the wasm symbols the core calls.
-core_outputs = ['liblookout_marine.a', 'libtile57.a', 'lookout.h', 'tile57.h']
+core_outputs = [
+  'liblookout_marine.a', 'libtile57.a', 'lookout.h', 'tile57.h',
+  'lookout-library.h', 'lookout-plugins.h', 'lookout-shell.h',
+]
 core_command = [
   build_core, core_root, get_option('core-optimize'),
   '@OUTPUT0@', '@OUTPUT1@', '@OUTPUT2@', '@OUTPUT3@',
+  '@OUTPUT4@', '@OUTPUT5@', '@OUTPUT6@',
 ]
 if plugins
   core_outputs += 'libvmlib.a'
-  core_command += '@OUTPUT4@'
+  core_command += '@OUTPUT7@'
 endif
 
 core = custom_target('lookout-core',
@@ -128,7 +133,6 @@ sources = files(
   'src/library/scan.c',
   'src/library/sets.c',
   'src/model/app-model.c',
-  'src/model/coord.c',
   'src/model/mariner.c',
   'src/model/store.c',
   'src/plugins/discovery.c',
@@ -193,10 +197,10 @@ resources = gnome.compile_resources(
 #
 # The headers among the core outputs order this target after the core build;
 # the archives are link inputs the consumers name for themselves.
-core_headers = [core[2], core[3]]
+core_headers = [core[2], core[3], core[4], core[5], core[6]]
 core_archives = [core[0], core[1]]
 if plugins
-  core_archives += core[4]
+  core_archives += core[7]
 endif
 
 shell_c_args = c_args + ['-I' + meson.current_build_dir()]

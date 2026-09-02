@@ -365,7 +365,7 @@ src/
     mariner.c         The live tile57_mariner behind the settings form
 
   library/
-    sets.c            The sets aboard, which are on, and their background scans
+    sets.c            The installed sets, which are on, and their background scans
     scan.c            Looking through a folder or an archive for charts
     bake.c            Preparing cells and sheets the engine cannot draw yet
     links.c           Charts by link: a publisher's live map drawn as the chart

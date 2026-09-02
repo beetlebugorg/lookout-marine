@@ -117,8 +117,8 @@ final class MarinerSettings: ObservableObject {
 
     /// Bind to the live chart: load its current state, then auto-apply edits
     /// (debounced so text/slider drags don't thrash the engine). Call on appear.
-    /// Every applied edit is also SAVED — settings survive relaunch (restored
-    /// by ChartController at open via applySavedOverlay).
+    /// Every applied edit reaches the engine, which writes it down: settings
+    /// survive relaunch, and are restored when the store is attached at open.
     func bind(to controller: ChartController?) {
         applyCancellable = nil                       // don't echo the load below
         self.controller = controller
@@ -127,89 +127,15 @@ final class MarinerSettings: ObservableObject {
             .debounce(for: .milliseconds(60), scheduler: RunLoop.main)
             .sink { [weak self] in
                 guard let self else { return }
-                let m = self.toMariner()
-                self.controller?.setMariner(m)
-                Self.save(m)
+                self.controller?.setMariner(self.toMariner())
             }
     }
 
     // MARK: - Persistence
     //
-    // Saved field-by-field, NOT as raw struct bytes: the engine struct's layout
-    // is an ABI detail that changes (it did twice this week); a versioned
-    // dictionary survives that. Unknown/missing keys keep engine defaults.
-
-    private static let defaultsKey = "mariner.v1"
-
-    nonisolated static func save(_ m: tile57_mariner) {
-        var d: [String: Any] = [:]
-        d["scheme"] = Int(m.scheme.rawValue)
-        d["depth_unit"] = Int(m.depth_unit.rawValue)
-        d["shallow_contour"] = m.shallow_contour
-        d["safety_contour"] = m.safety_contour
-        d["deep_contour"] = m.deep_contour
-        d["safety_depth"] = m.safety_depth
-        d["four_shade_water"] = m.four_shade_water
-        d["display_base"] = m.display_base
-        d["display_standard"] = m.display_standard
-        d["display_other"] = m.display_other
-        d["soundings"] = Int(m.soundings)
-        d["text_names"] = m.text_names
-        d["show_light_descriptions"] = m.show_light_descriptions
-        d["text_other"] = m.text_other
-        d["simplified_points"] = m.simplified_points
-        d["boundary_style"] = Int(m.boundary_style.rawValue)
-        d["show_full_sector_lines"] = m.show_full_sector_lines
-        d["data_quality"] = m.data_quality
-        d["show_isolated_dangers_shallow"] = m.show_isolated_dangers_shallow
-        d["show_inform_callouts"] = m.show_inform_callouts
-        d["show_meta_bounds"] = m.show_meta_bounds
-        d["show_overscale"] = m.show_overscale
-        d["size_scale"] = m.size_scale
-        d["text_size_scale"] = m.text_size_scale
-        d["sounding_size_scale"] = m.sounding_size_scale
-        d["date_dependent"] = m.date_dependent
-        d["highlight_date_dependent"] = m.highlight_date_dependent
-        d["date_view"] = m.dateViewString
-        Store.shared.set(d, defaultsKey)
-    }
-
-    /// Overlay the saved settings onto `m` (typically the engine defaults +
-    /// device_scale). Missing keys leave the field untouched.
-    nonisolated static func applySavedOverlay(_ m: inout tile57_mariner) {
-        guard let d = Store.shared.dictionary(defaultsKey) else { return }
-        func f(_ k: String) -> Double? { d[k] as? Double }
-        func b(_ k: String) -> Bool? { d[k] as? Bool }
-        func i(_ k: String) -> Int? { d[k] as? Int }
-        if let v = i("scheme") { m.scheme = tile57_scheme(UInt32(v)) }
-        if let v = i("depth_unit") { m.depth_unit = tile57_depth_unit(UInt32(v)) }
-        if let v = f("shallow_contour") { m.shallow_contour = v }
-        if let v = f("safety_contour") { m.safety_contour = v }
-        if let v = f("deep_contour") { m.deep_contour = v }
-        if let v = f("safety_depth") { m.safety_depth = v }
-        if let v = b("four_shade_water") { m.four_shade_water = v }
-        if let v = b("display_base") { m.display_base = v }
-        if let v = b("display_standard") { m.display_standard = v }
-        if let v = b("display_other") { m.display_other = v }
-        if let v = i("soundings") { m.soundings = UInt8(clamping: v) }
-        if let v = b("text_names") { m.text_names = v }
-        if let v = b("show_light_descriptions") { m.show_light_descriptions = v }
-        if let v = b("text_other") { m.text_other = v }
-        if let v = b("simplified_points") { m.simplified_points = v }
-        if let v = i("boundary_style") { m.boundary_style = tile57_boundary_style(UInt32(v)) }
-        if let v = b("show_full_sector_lines") { m.show_full_sector_lines = v }
-        if let v = b("data_quality") { m.data_quality = v }
-        if let v = b("show_isolated_dangers_shallow") { m.show_isolated_dangers_shallow = v }
-        if let v = b("show_inform_callouts") { m.show_inform_callouts = v }
-        if let v = b("show_meta_bounds") { m.show_meta_bounds = v }
-        if let v = b("show_overscale") { m.show_overscale = v }
-        if let v = f("size_scale"), v > 0 { m.size_scale = v }
-        if let v = f("text_size_scale"), v > 0 { m.text_size_scale = v }
-        if let v = f("sounding_size_scale"), v > 0 { m.sounding_size_scale = v }
-        if let v = b("date_dependent") { m.date_dependent = v }
-        if let v = b("highlight_date_dependent") { m.highlight_date_dependent = v }
-        if let v = d["date_view"] as? String { m.setDateView(v) }
-    }
+    // The ENGINE keeps these. lookout_set_store hands it the shell's store and
+    // it writes every field on every change, restores them at attach, and does
+    // the same for the three other shells. Nothing here writes a setting.
 
     private func defaultMariner() -> tile57_mariner {
         var m = tile57_mariner()

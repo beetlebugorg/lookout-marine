@@ -25,11 +25,11 @@ final class RasterModelTests: ShellTestCase {
         let (m, _) = model()
         XCTAssertNil(m.add(["/a/ArcGIS.mbtiles", "/a/Bing.mbtiles"]))
         XCTAssertEqual(m.paths, ["/a/ArcGIS.mbtiles", "/a/Bing.mbtiles"])
-        XCTAssertEqual(Store.shared.strings(RasterModel.pathsKey),
+        XCTAssertEqual(Store.shared.strings(RasterModel.group, RasterModel.pathsKey),
                        ["/a/ArcGIS.mbtiles", "/a/Bing.mbtiles"])
     }
 
-    /// A file already aboard is not installed twice.
+    /// A file already installed is not installed twice.
     func testAddIsIdempotent() {
         let (m, e) = model()
         m.add(["/a/one.mbtiles"])
@@ -80,13 +80,13 @@ final class RasterModelTests: ShellTestCase {
                            RasterSet(id: 1, name: "Bing", inView: true, shown: true)]
         m.refresh()
         XCTAssertEqual(m.hidden, ["ArcGIS"])
-        XCTAssertEqual(Store.shared.strings(RasterModel.hiddenKey), ["ArcGIS"])
+        XCTAssertEqual(Store.shared.strings(RasterModel.group, RasterModel.hiddenKey), ["ArcGIS"])
     }
 
     /// A set not installed this launch keeps its entry: a mariner who unplugs
     /// the drive holding one has not changed their mind about it.
     func testAnAbsentSetKeepsItsEntry() {
-        Store.shared.set(["Navionics"], RasterModel.hiddenKey)
+        Store.shared.set(["Navionics"], RasterModel.group, RasterModel.hiddenKey)
         let (m, e) = model()
         e.rasterSetList = [RasterSet(id: 0, name: "ArcGIS", inView: true, shown: true)]
         m.refresh()
@@ -118,7 +118,7 @@ final class RasterModelTests: ShellTestCase {
         m.remove("/a/one.mbtiles")
         XCTAssertTrue(m.paths.isEmpty)
         XCTAssertTrue(m.off.isEmpty)
-        XCTAssertEqual(Store.shared.strings(RasterModel.pathsKey), [])
+        XCTAssertEqual(Store.shared.strings(RasterModel.group, RasterModel.pathsKey), [])
     }
 
     /// The three lists describe the same charts, so clearing drops all three.
@@ -133,7 +133,7 @@ final class RasterModelTests: ShellTestCase {
         XCTAssertTrue(m.paths.isEmpty)
         XCTAssertTrue(m.off.isEmpty)
         XCTAssertTrue(m.hidden.isEmpty)
-        XCTAssertEqual(Store.shared.strings(RasterModel.hiddenKey), [])
+        XCTAssertEqual(Store.shared.strings(RasterModel.group, RasterModel.hiddenKey), [])
     }
 
     /// Nothing installed: the caller is told, so it can offer the picker
@@ -152,17 +152,17 @@ final class RasterModelTests: ShellTestCase {
         m.toggleChart()
         XCTAssertTrue(m.chartHidden)
         XCTAssertTrue(m.chartHiddenSaved)
-        XCTAssertTrue(Store.shared.bool(RasterModel.chartHiddenKey))
+        XCTAssertTrue((Store.shared.bool(RasterModel.group, RasterModel.chartHiddenKey) ?? false))
     }
 
-    /// What is aboard is read at init, and anything since deleted is dropped:
+    /// What is installed is read at init, and anything since deleted is dropped:
     /// a stale entry must not become an error dismissed at every launch.
     func testInitDropsPathsThatAreGone() {
         let here = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString + ".mbtiles")
         FileManager.default.createFile(atPath: here.path, contents: Data())
         defer { try? FileManager.default.removeItem(at: here) }
-        Store.shared.set([here.path, "/no/such/photo.mbtiles"], RasterModel.pathsKey)
+        Store.shared.set([here.path, "/no/such/photo.mbtiles"], RasterModel.group, RasterModel.pathsKey)
         XCTAssertEqual(RasterModel().paths, [here.path])
     }
 }

@@ -201,7 +201,7 @@ namespace winrt::LookoutMarine::implementation
         menu.Items().Append(MenuItem(L"Open Charts…", L"Ctrl+O", [this] { PickChartFolder(); }));
         menu.Items().Append(MenuItem(L"Open Chart File…", L"Ctrl+Shift+O", [this] { PickChartFile(); }));
 
-        // The sets aboard, each with its switch — the same list Settings >
+        // The installed sets, each with its switch — the same list Settings >
         // Charts manages, reachable without opening Settings (the reference's
         // File > Charts submenu).
         MenuFlyoutSubItem sets;

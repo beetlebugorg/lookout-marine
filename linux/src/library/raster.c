@@ -15,76 +15,19 @@ struct _LkRasterCharts {
 
 /* ---- set names ---------------------------------------------------------- */
 
-/* A producer this name carries, if any. Longest first, so "OpenSeaMap" is not
- * reported as "OSM". The list and the order are the engine's (providerIn in
- * raster.zig): both must answer with the same name for one file. */
-static const char *LK_RASTER_PROVIDERS[] = {
-  "OpenSeaMap", "Navionics", "Sentinel", "ArcGIS", "Google",
-  "C-Map",      "Yandex",    "Imagery",  "Bing",   "ESRI",
-  "Esri",       "CMap",      "NAIP",     "SASP",   "OSM",
-};
-
-static const char *
-lk_raster_provider_in (const char *name)
-{
-  g_autofree char *lower = g_ascii_strdown (name, -1);
-
-  for (gsize i = 0; i < G_N_ELEMENTS (LK_RASTER_PROVIDERS); i++)
-    {
-      g_autofree char *needle = g_ascii_strdown (LK_RASTER_PROVIDERS[i], -1);
-      if (strstr (lower, needle) != NULL)
-        return LK_RASTER_PROVIDERS[i];
-    }
-  return NULL;
-}
-
-/* Two shapes, because raster charts arrive two ways.
- *
- * A community MBTiles names its provider, and that is what a mariner chooses
- * between: the same water ships from ArcGIS, Bing, Google and Navionics side by
- * side, and one of them shows the bottom today.
- *
- * A baked RNC does not. `tile57 bake` writes <root>/<stem>/<stem>.pmtiles, one
- * directory per sheet, and a bundle holds hundreds. Naming each after its own
- * file would make hundreds of sets of one sheet, which is not a choice a
- * mariner can make. They belong to the bake they came from. */
+/* What a raster chart's set is called. The ENGINE decides, because it is what
+ * names the sets it draws by: a shell grouping by anything else disagrees with
+ * what the pill then shows. Transfer full. */
 char *
 lk_raster_set_name_for (const char *path)
 {
+  size_t length = 0;
+  const char *name;
+
   g_return_val_if_fail (path != NULL, g_strdup (""));
 
-  g_autofree char *base = g_path_get_basename (path);
-  const char *provider = lk_raster_provider_in (base);
-  if (provider != NULL)
-    return g_strdup (provider);
-
-  const char *dot = strrchr (base, '.');
-  g_autofree char *stem = dot != NULL ? g_strndup (base, dot - base) : g_strdup (base);
-
-  /* The bake's layout: the file sits alone in a directory named for itself, and
-   * the directory above is the bake. Group by the bake, and read the producer
-   * out of ITS name — a baked sheet gives nothing usable of its own, while the
-   * bundle it came from is named for who made it. */
-  if (g_str_has_suffix (base, ".pmtiles"))
-    {
-      g_autofree char *dir = g_path_get_dirname (path);
-      g_autofree char *dir_name = g_path_get_basename (dir);
-
-      if (g_strcmp0 (dir_name, stem) == 0)
-        {
-          g_autofree char *root = g_path_get_dirname (dir);
-          g_autofree char *root_name = g_path_get_basename (root);
-
-          if (root_name[0] != '\0' && !g_str_equal (root_name, "/") &&
-              !g_str_equal (root_name, "."))
-            {
-              const char *known = lk_raster_provider_in (root_name);
-              return known != NULL ? g_strdup (known) : g_steal_pointer (&root_name);
-            }
-        }
-    }
-
-  return stem[0] != '\0' ? g_steal_pointer (&stem) : g_steal_pointer (&base);
+  name = lookout_raster_set_name_for (path, &length);
+  return name != NULL ? g_strndup (name, length) : g_strdup ("");
 }
 
 /* ---- the installed list ------------------------------------------------- */

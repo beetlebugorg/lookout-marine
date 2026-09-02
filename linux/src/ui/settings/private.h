@@ -46,7 +46,7 @@ struct _LkSettings {
   GtkWidget *stack;
 
   /* The three lists on the Charts page: the installed raster charts, the
-   * charts by link, and the library of sets aboard. All three answer a signal
+   * charts by link, and the library of installed sets. All three answer a signal
    * their own controls raise, so all three defer their rebuild. */
   LkDeferredList raster;
   LkDeferredList links;

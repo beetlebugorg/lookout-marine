@@ -40,8 +40,14 @@ pub const Scheme = cc.tile57_scheme;
 /// `-Dplugins` there are no WAMR headers for src/plugin/wasm.zig's @cImport to
 /// find, so the file must not be analysed at all.
 const plugins_on = @import("build_options").plugins;
+const plugin_read = @import("plugins");
 const phost = if (plugins_on) @import("plugin/host.zig") else struct {};
 const clock = @import("clock.zig");
+const settings = @import("settings.zig");
+/// The bake, for the host test that drives it over a real archive.
+pub const bakejob = @import("bakejob.zig");
+pub const bake_rules = @import("shell/bake.zig");
+const frame_rules = @import("shell/frame.zig"); // when the next frame is
 
 const MAX_SCHEMES = 3; // day / dusk / night
 
@@ -664,6 +670,19 @@ pub const Lookout = struct {
     adding: bool = false,
 
     view_dirty: bool = true, // camera/state changed since the last render (on-demand)
+
+    /// The shell's settings file, when it has handed one over. With none
+    /// attached the engine persists nothing and behaves exactly as it did.
+    store: ?*settings.Store = null,
+    /// The pose last written down, so a camera that has not moved is not
+    /// written again, and when it was written.
+    saved_view: ?View = null,
+    saved_view_ms: i64 = 0,
+
+    /// The frame loop's own state: when the last tick ran, and how many ticks
+    /// in a row have found nothing to draw.
+    last_tick_ms: i64 = 0,
+    ticks_since_change: u32 = 0,
     last_change_ms: i64 = 0, // when the view last moved
     /// When a frame last went out for own ship's own motion (see SHIP_FRAME_MS).
     last_ship_frame_ms: i64 = 0,
@@ -1524,6 +1543,20 @@ pub const Lookout = struct {
         return ps.json.items;
     }
 
+    /// What a shell reads about the plugins: what is loaded, what each asks
+    /// consent for, and what each lets the mariner set. The caller frees it.
+    /// Null when no plugin layer is up.
+    pub fn readPlugins(self: *Lookout) ?*plugin_read.Read {
+        if (!plugins_on) return null;
+        const ps = self.plugins orelse return null;
+        const out = plugin_read.Read.init(self.alloc) catch return null;
+        phost.read.build(&ps.host, out) catch {
+            out.free();
+            return null;
+        };
+        return out;
+    }
+
     /// One plugin's settings, as JSON. Borrowed until the next call.
     pub fn pluginConfig(self: *Lookout, id: []const u8) ?[]const u8 {
         if (!plugins_on) return null;
@@ -1943,6 +1976,8 @@ pub const Lookout = struct {
     }
 
     pub fn close(self: *Lookout) void {
+        // The pose to reopen on, before anything is torn down.
+        self.saveView(true);
         // FIRST: the plugin threads draw into the overlay store and read the
         // GPU layer's frame through it, so they have to be stopped before
         // anything below them is torn down.
@@ -2123,6 +2158,8 @@ pub const Lookout = struct {
     /// flight, and must not render again until attachSurface returns.
     pub fn detachSurface(self: *Lookout) void {
         if (!self.surface_attached) return;
+        // No frames after this, so the pose has to be written down now.
+        self.saveView(true);
         self.ct.detachSurface();
         self.surface_attached = false;
         // The next attach presents a frame even if nothing else moved.
@@ -2278,6 +2315,232 @@ pub const Lookout = struct {
     }
     /// Apply the full S-52 state.
     ///
+    // ---- the frame loop -------------------------------------------------------
+
+    /// One tick: advance what is moving, decide whether a frame is wanted, and
+    /// say when to ask again. The gap is measured here and capped.
+    pub fn frameStep(self: *Lookout) frame_rules.Step {
+        const now = clock.ticksMs();
+        const dt = frame_rules.delta(self.last_tick_ms, now);
+        self.last_tick_ms = now;
+
+        if (self.cam.animating()) {
+            self.tickAnim(dt);
+        }
+        // A resolve's answer stalls on the first one without this.
+        self.links.adopt();
+        // The store coalesces its writes, so something has to ask it whether
+        // the window has passed. A settings file written once at startup and
+        // never again would otherwise never reach the disk.
+        if (self.store) |s| s.tick();
+
+        const step = frame_rules.decide(.{
+            .animating = self.cam.animating(),
+            .needs_redraw = self.needsRedraw(),
+            .building = self.isBuilding(),
+            .plugins_active = self.pluginsActive(),
+            .ticks_since_change = self.ticks_since_change,
+        });
+        self.ticks_since_change = step.ticks_since_change;
+        return step;
+    }
+
+    /// Start the loop again after a change a shell made itself.
+    pub fn frameKick(self: *Lookout) void {
+        self.ticks_since_change = 0;
+        // The next tick is the first one back, so it advances nothing rather
+        // than the whole time the loop was stopped.
+        self.last_tick_ms = 0;
+        self.markDirty();
+    }
+
+    // ---- what the engine persists -------------------------------------------
+    //
+    // The pose and the mariner's display settings, in the store the shell hands
+    // over. Four shells each had their own copy of this: the same fields, the
+    // same three-second cadence, the same "only when it moved" rule, and four
+    // chances to get one of them wrong.
+
+    /// How often the pose is written down while the mariner is moving. A crash
+    /// or a force-quit never reaches `close`, so the pose cannot only be
+    /// written there.
+    const view_save_ms: i64 = 3000;
+
+    /// Attach a store. The pose and the mariner settings in it are restored at
+    /// once, and everything after is written to it. Pass null to detach, which
+    /// writes the pose down on the way out.
+    ///
+    /// The store belongs to the shell and must outlive the handle.
+    pub fn setStore(self: *Lookout, s: ?*settings.Store) void {
+        if (self.store != null and s == null) self.saveView(true);
+        self.store = s;
+        const store = s orelse return;
+
+        var m = self.mariner;
+        restoreMariner(store, &m);
+        self.setMariner(m);
+
+        if (readView(store)) |v| {
+            self.setView(v);
+            self.saved_view = v;
+            self.saved_view_ms = clock.wallMs();
+        }
+    }
+
+    /// The saved pose, or null when there has never been one. Half a pose is
+    /// no pose, and the opening view then comes from `defaultView`, the same
+    /// policy every host gets.
+    fn readView(store: *settings.Store) ?View {
+        const g = settings.group_view;
+        if (!store.has(g, "lon") or !store.has(g, "lat") or !store.has(g, "zoom")) return null;
+        return .{
+            .lon = store.number(g, "lon", 0),
+            .lat = store.number(g, "lat", 0),
+            .zoom = store.number(g, "zoom", 0),
+            .rotation_deg = store.number(g, "rotation_deg", 0),
+        };
+    }
+
+    /// Write the pose down. `force` writes it whatever the cadence says, for
+    /// the moments the handle may be about to go away.
+    ///
+    /// Only when it MOVED: frames keep coming while a plugin moves own ship, so
+    /// a boat at anchor would otherwise write the same four numbers every three
+    /// seconds for as long as it lay there.
+    fn saveView(self: *Lookout, force: bool) void {
+        const store = self.store orelse return;
+        const now = clock.wallMs();
+        if (!force and now - self.saved_view_ms < view_save_ms) return;
+        const v = self.view();
+        if (!viewMoved(self.saved_view, v)) return;
+        self.saved_view = v;
+        self.saved_view_ms = now;
+        writeView(store, v);
+    }
+
+    /// True when this pose is a different one from the last written down.
+    fn viewMoved(saved: ?View, v: View) bool {
+        const old = saved orelse return true;
+        return old.lon != v.lon or old.lat != v.lat or
+            old.zoom != v.zoom or old.rotation_deg != v.rotation_deg;
+    }
+
+    fn writeView(store: *settings.Store, v: View) void {
+        const g = settings.group_view;
+        store.setNumber(g, "lon", v.lon);
+        store.setNumber(g, "lat", v.lat);
+        store.setNumber(g, "zoom", v.zoom);
+        store.setNumber(g, "rotation_deg", v.rotation_deg);
+    }
+
+    /// The mariner's display settings, field by field. NOT the raw struct
+    /// bytes: the layout is an ABI detail, and named keys survive a field
+    /// being appended.
+    ///
+    /// `device_scale`, `ignore_scamin`, `scamin_filter_gate` and the viewing
+    /// groups are left out. The first belongs to this device, the next two are
+    /// debug toggles, and the last is a borrowed pointer.
+    fn saveMariner(self: *Lookout) void {
+        writeMariner(self.store orelse return, self.mariner);
+    }
+
+    /// The write half, over a store rather than a handle: settings are settings
+    /// whether or not a chart is open, so a shell with none can still keep them.
+    /// Exported as lookout_store_write_mariner.
+    pub fn writeMariner(store: *settings.Store, m: Mariner) void {
+        const g = settings.group_mariner;
+        store.setNumber(g, "scheme", @floatFromInt(m.scheme));
+        store.setNumber(g, "depth_unit", @floatFromInt(m.depth_unit));
+        store.setNumber(g, "shallow_contour", m.shallow_contour);
+        store.setNumber(g, "safety_contour", m.safety_contour);
+        store.setNumber(g, "deep_contour", m.deep_contour);
+        store.setNumber(g, "safety_depth", m.safety_depth);
+        store.setFlag(g, "four_shade_water", m.four_shade_water);
+        store.setFlag(g, "display_base", m.display_base);
+        store.setFlag(g, "display_standard", m.display_standard);
+        store.setFlag(g, "display_other", m.display_other);
+        store.setNumber(g, "soundings", @floatFromInt(m.soundings));
+        store.setFlag(g, "text_names", m.text_names);
+        store.setFlag(g, "show_light_descriptions", m.show_light_descriptions);
+        store.setFlag(g, "text_other", m.text_other);
+        store.setFlag(g, "simplified_points", m.simplified_points);
+        store.setNumber(g, "boundary_style", @floatFromInt(m.boundary_style));
+        store.setFlag(g, "show_full_sector_lines", m.show_full_sector_lines);
+        store.setFlag(g, "data_quality", m.data_quality);
+        store.setFlag(g, "show_isolated_dangers_shallow", m.show_isolated_dangers_shallow);
+        store.setFlag(g, "show_inform_callouts", m.show_inform_callouts);
+        store.setFlag(g, "show_meta_bounds", m.show_meta_bounds);
+        store.setFlag(g, "show_overscale", m.show_overscale);
+        store.setNumber(g, "size_scale", m.size_scale);
+        store.setNumber(g, "text_size_scale", m.text_size_scale);
+        store.setNumber(g, "sounding_size_scale", m.sounding_size_scale);
+        store.setFlag(g, "date_dependent", m.date_dependent);
+        store.setFlag(g, "highlight_date_dependent", m.highlight_date_dependent);
+        store.setText(g, "date_view", std.mem.sliceTo(&m.date_view, 0));
+    }
+
+    /// Overlay what the store holds onto `m`, which already holds the engine
+    /// defaults and this device's scale. A key that is not there leaves the
+    /// field alone, so a setting this build does not write yet keeps its
+    /// default and one it no longer writes is ignored.
+    /// Exported as lookout_store_read_mariner.
+    pub fn restoreMariner(store: *settings.Store, m: *Mariner) void {
+        const g = settings.group_mariner;
+        const num = struct {
+            fn go(s: *settings.Store, key: []const u8) ?f64 {
+                if (!s.has(g, key)) return null;
+                return s.number(g, key, 0);
+            }
+        }.go;
+        const flag = struct {
+            fn go(s: *settings.Store, key: []const u8) ?bool {
+                if (!s.has(g, key)) return null;
+                return s.flag(g, key, false);
+            }
+        }.go;
+
+        if (num(store, "scheme")) |v| m.scheme = @intFromFloat(v);
+        if (num(store, "depth_unit")) |v| m.depth_unit = @intFromFloat(v);
+        if (num(store, "shallow_contour")) |v| m.shallow_contour = v;
+        if (num(store, "safety_contour")) |v| m.safety_contour = v;
+        if (num(store, "deep_contour")) |v| m.deep_contour = v;
+        if (num(store, "safety_depth")) |v| m.safety_depth = v;
+        if (flag(store, "four_shade_water")) |v| m.four_shade_water = v;
+        if (flag(store, "display_base")) |v| m.display_base = v;
+        if (flag(store, "display_standard")) |v| m.display_standard = v;
+        if (flag(store, "display_other")) |v| m.display_other = v;
+        if (num(store, "soundings")) |v| m.soundings = @intFromFloat(std.math.clamp(v, 0, 255));
+        if (flag(store, "text_names")) |v| m.text_names = v;
+        if (flag(store, "show_light_descriptions")) |v| m.show_light_descriptions = v;
+        if (flag(store, "text_other")) |v| m.text_other = v;
+        if (flag(store, "simplified_points")) |v| m.simplified_points = v;
+        if (num(store, "boundary_style")) |v| m.boundary_style = @intFromFloat(v);
+        if (flag(store, "show_full_sector_lines")) |v| m.show_full_sector_lines = v;
+        if (flag(store, "data_quality")) |v| m.data_quality = v;
+        if (flag(store, "show_isolated_dangers_shallow")) |v| m.show_isolated_dangers_shallow = v;
+        if (flag(store, "show_inform_callouts")) |v| m.show_inform_callouts = v;
+        if (flag(store, "show_meta_bounds")) |v| m.show_meta_bounds = v;
+        if (flag(store, "show_overscale")) |v| m.show_overscale = v;
+        // A zero scale is an unset field, which reads as 1.0. Saving one back
+        // would turn every symbol on the chart into nothing.
+        if (num(store, "size_scale")) |v| {
+            if (v > 0) m.size_scale = v;
+        }
+        if (num(store, "text_size_scale")) |v| {
+            if (v > 0) m.text_size_scale = v;
+        }
+        if (num(store, "sounding_size_scale")) |v| {
+            if (v > 0) m.sounding_size_scale = v;
+        }
+        if (flag(store, "date_dependent")) |v| m.date_dependent = v;
+        if (flag(store, "highlight_date_dependent")) |v| m.highlight_date_dependent = v;
+        if (store.text(g, "date_view")) |v| {
+            @memset(&m.date_view, 0);
+            const n = @min(v.len, m.date_view.len - 1);
+            @memcpy(m.date_view[0..n], v[0..n]);
+        }
+    }
+
     /// Every setting lands in the STYLE here — display categories and text
     /// groups as filters, the palette as colours, the safety contour and the
     /// depth units as the values the shading and the labels are built from. So
@@ -2294,6 +2557,10 @@ pub const Lookout = struct {
     }
 
     fn deriveLive(self: *Lookout) void {
+        // Every path that changes the mariner state comes through here,
+        // including the convenience toggles, which set the field themselves
+        // rather than going back through setMariner.
+        self.saveMariner();
         self.render_size_scale = if (self.mariner.size_scale == 0) 1.0 else @floatCast(self.mariner.size_scale);
         self.style_dirty = true;
         self.markDirty();
@@ -2671,6 +2938,9 @@ pub const Lookout = struct {
         const prof = self.frame_prof != null;
         const t0 = if (prof) clock.ticksUs() else 0;
         self.prepareFrame();
+        // The pose, on its own cadence and only when it moved. A crash or a
+        // force-quit never reaches close, so it cannot only be written there.
+        self.saveView(false);
         const t1 = if (prof) clock.ticksUs() else 0;
         self.serviceTrim();
         const t2 = if (prof) clock.ticksUs() else 0;
@@ -2880,7 +3150,40 @@ pub const Lookout = struct {
         var arena = std.heap.ArenaAllocator.init(self.alloc);
         defer arena.deinit();
         const a = arena.allocator();
+        const kept = self.rankedFeatures(a, lon, lat);
 
+        // The engine composes each feature's page. The page and the raw
+        // payload travel together as {"report":...,"s57":...}: the report
+        // for the shell to render, the raw payload for the source fold and
+        // the clipboard. Depths convert before the compose, so the report
+        // reads in the mariner's unit and the source keeps the cell's
+        // metres. When the compose fails, the core emits the raw payload
+        // alone and the shell still shows the fold.
+        const feet = self.mariner.depth_unit == cc.TILE57_DEPTH_FEET;
+        if (cb.feature) |emit| {
+            for (kept) |f| {
+                const converted = pick_rules.depthsInUnit(a, f.s57, feet);
+                const raw: []const u8 = if (f.s57.len > 0) f.s57 else "{}";
+                var rep: ?[*]u8 = null;
+                var rep_len: usize = 0;
+                var terr: cc.tile57_error = undefined;
+                const payload: []const u8 = blk: {
+                    if (cc.tile57_s57_report(f.cls.ptr, f.cls.len, f.chart.ptr, f.chart.len, converted.ptr, converted.len, &rep, &rep_len, &terr) == cc.TILE57_OK and rep != null and rep_len > 0) {
+                        defer cc.tile57_free(rep);
+                        break :blk std.fmt.allocPrint(a, "{{\"report\":{s},\"s57\":{s}}}", .{ rep.?[0..rep_len], raw }) catch f.s57;
+                    }
+                    break :blk f.s57;
+                };
+                emit(cb.ctx, f.cls.ptr, f.cls.len, payload.ptr, payload.len, f.chart.ptr, f.chart.len);
+            }
+        }
+    }
+
+    /// The features under a point that a pick should report, without the ones
+    /// it reports twice, best first. Allocated in `a`. Both `pickRanked` and
+    /// `pickRead` start here, so the two answer with the same objects in the
+    /// same order.
+    fn rankedFeatures(self: *Lookout, a: std.mem.Allocator, lon: f64, lat: f64) []pick_rules.Feature {
         var collected = std.ArrayList(pick_rules.Feature).empty;
         const Collect = struct {
             list: *std.ArrayList(pick_rules.Feature),
@@ -2917,33 +3220,44 @@ pub const Lookout = struct {
             if (!seen) kept.append(a, f) catch {};
         }
         pick_rules.order(kept.items);
-
-        // The engine composes each feature's page. The page and the raw
-        // payload travel together as {"report":...,"s57":...}: the report
-        // for the shell to render, the raw payload for the source fold and
-        // the clipboard. Depths convert before the compose, so the report
-        // reads in the mariner's unit and the source keeps the cell's
-        // metres. When the compose fails, the core emits the raw payload
-        // alone and the shell still shows the fold.
-        const feet = self.mariner.depth_unit == cc.TILE57_DEPTH_FEET;
-        if (cb.feature) |emit| {
-            for (kept.items) |f| {
-                const converted = pick_rules.depthsInUnit(a, f.s57, feet);
-                const raw: []const u8 = if (f.s57.len > 0) f.s57 else "{}";
-                var rep: ?[*]u8 = null;
-                var rep_len: usize = 0;
-                var terr: cc.tile57_error = undefined;
-                const payload: []const u8 = blk: {
-                    if (cc.tile57_s57_report(f.cls.ptr, f.cls.len, f.chart.ptr, f.chart.len, converted.ptr, converted.len, &rep, &rep_len, &terr) == cc.TILE57_OK and rep != null and rep_len > 0) {
-                        defer cc.tile57_free(rep);
-                        break :blk std.fmt.allocPrint(a, "{{\"report\":{s},\"s57\":{s}}}", .{ rep.?[0..rep_len], raw }) catch f.s57;
-                    }
-                    break :blk f.s57;
-                };
-                emit(cb.ctx, f.cls.ptr, f.cls.len, payload.ptr, payload.len, f.chart.ptr, f.chart.len);
-            }
-        }
+        return kept.items;
     }
+
+    /// The same pick, as structs: the composed page beside the payload the
+    /// cell states. The read holds one arena and the caller frees it.
+    pub fn pickRead(self: *Lookout, lon: f64, lat: f64) !*pick_rules.Read {
+        const out = try pick_rules.Read.init(self.alloc);
+        errdefer out.free();
+        const a = out.alloc();
+
+        var scratch = std.heap.ArenaAllocator.init(self.alloc);
+        defer scratch.deinit();
+        const sa = scratch.allocator();
+        const kept = self.rankedFeatures(sa, lon, lat);
+
+        const feet = self.mariner.depth_unit == cc.TILE57_DEPTH_FEET;
+        const recs = try a.alloc(pick_rules.ReportRec, kept.len);
+        for (kept, recs) |f, *rec| {
+            // Depths convert before the compose, so the page reads in the
+            // mariner's unit and the fold keeps the cell's metres.
+            const converted = pick_rules.depthsInUnit(sa, f.s57, feet);
+            const raw: []const u8 = if (f.s57.len > 0) f.s57 else "{}";
+            var rep: ?[*]u8 = null;
+            var rep_len: usize = 0;
+            var terr: cc.tile57_error = undefined;
+            const page: []const u8 = blk: {
+                if (cc.tile57_s57_report(f.cls.ptr, f.cls.len, f.chart.ptr, f.chart.len, converted.ptr, converted.len, &rep, &rep_len, &terr) == cc.TILE57_OK and rep != null and rep_len > 0) {
+                    break :blk sa.dupe(u8, rep.?[0..rep_len]) catch "{}";
+                }
+                break :blk "{}";
+            };
+            if (rep) |p| cc.tile57_free(p);
+            rec.* = try pick_rules.record(a, sa, f, raw, page);
+        }
+        out.rows = try pick_rules.published(pick_rules.ReportRec, "report", a, recs);
+        return out;
+    }
+
 
     // ---- the raster underlay --------------------------------------------------
     //
@@ -3218,6 +3532,9 @@ test {
     _ = craster;
     // The baked license manifest, whose tests check what the shells decode.
     _ = @import("licenses.zig");
+    // The bake job, which needs the engine's headers and so cannot be a test
+    // root of its own.
+    _ = bakejob;
 }
 
 test "camera roundtrip" {
@@ -3491,4 +3808,232 @@ test "the style mariner keeps the mariner's own switches" {
     // And the two the style build does own are still stamped.
     try t.expectEqual(base.scheme, m.scheme);
     try t.expectEqual(@as(f64, 1.0), m.size_scale);
+}
+
+// ---- what the engine persists -------------------------------------------------
+
+/// A store in a temp directory of its own, for the tests below.
+const StoreFixture = struct {
+    tmp: std.testing.TmpDir,
+    dir: []u8,
+    store: *settings.Store,
+
+    fn init() !StoreFixture {
+        const a = std.testing.allocator;
+        const tmp = std.testing.tmpDir(.{});
+        const dir = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+        const io = std.Io.Threaded.global_single_threaded.io();
+        return .{ .tmp = tmp, .dir = dir, .store = try settings.Store.open(a, io, dir) };
+    }
+
+    fn deinit(self: *StoreFixture) void {
+        self.store.close();
+        std.testing.allocator.free(self.dir);
+        self.tmp.cleanup();
+    }
+};
+
+test "the pose goes into the store and comes back" {
+    const t = std.testing;
+    var f = try StoreFixture.init();
+    defer f.deinit();
+
+    try t.expect(Lookout.readView(f.store) == null);
+    Lookout.writeView(f.store, .{ .lon = -76.482, .lat = 38.9763, .zoom = 14.5, .rotation_deg = 37 });
+    const v = Lookout.readView(f.store).?;
+    try t.expectEqual(@as(f64, -76.482), v.lon);
+    try t.expectEqual(@as(f64, 38.9763), v.lat);
+    try t.expectEqual(@as(f64, 14.5), v.zoom);
+    try t.expectEqual(@as(f64, 37), v.rotation_deg);
+}
+
+test "half a pose is no pose, and one with no rotation opens north up" {
+    const t = std.testing;
+    var f = try StoreFixture.init();
+    defer f.deinit();
+    const g = settings.group_view;
+
+    f.store.setNumber(g, "lon", -76.0);
+    f.store.setNumber(g, "lat", 38.0);
+    try t.expect(Lookout.readView(f.store) == null);
+
+    // With the zoom there, it is a pose, and the rotation defaults to north up.
+    f.store.setNumber(g, "zoom", 12.0);
+    const v = Lookout.readView(f.store).?;
+    try t.expectEqual(@as(f64, 0), v.rotation_deg);
+}
+
+test "a camera that has not moved is not written down again" {
+    const t = std.testing;
+    const v = View{ .lon = -76.482, .lat = 38.9763, .zoom = 14.5, .rotation_deg = 37 };
+    try t.expect(Lookout.viewMoved(null, v));
+    try t.expect(!Lookout.viewMoved(v, v));
+
+    // Every field counts as a move.
+    var moved = v;
+    moved.lon += 0.000001;
+    try t.expect(Lookout.viewMoved(v, moved));
+    moved = v;
+    moved.lat += 0.000001;
+    try t.expect(Lookout.viewMoved(v, moved));
+    moved = v;
+    moved.zoom += 0.000001;
+    try t.expect(Lookout.viewMoved(v, moved));
+    moved = v;
+    moved.rotation_deg += 0.000001;
+    try t.expect(Lookout.viewMoved(v, moved));
+}
+
+test "the mariner settings go into the store field for field" {
+    const t = std.testing;
+    var f = try StoreFixture.init();
+    defer f.deinit();
+
+    // Every field the engine persists, each set away from its default, so a
+    // field left out of writeMariner or restoreMariner fails here.
+    var m: Mariner = undefined;
+    cc.tile57_mariner_defaults(&m);
+    m.scheme = cc.TILE57_SCHEME_NIGHT;
+    m.depth_unit = cc.TILE57_DEPTH_FEET;
+    m.shallow_contour = 3;
+    m.safety_contour = 7;
+    m.deep_contour = 22;
+    m.safety_depth = 6;
+    m.four_shade_water = false;
+    m.display_base = true;
+    m.display_standard = true;
+    m.display_other = true;
+    m.soundings = 2;
+    m.text_names = false;
+    m.show_light_descriptions = false;
+    m.text_other = false;
+    m.simplified_points = true;
+    m.boundary_style = cc.TILE57_BOUNDARY_PLAIN;
+    m.show_full_sector_lines = true;
+    m.data_quality = true;
+    m.show_isolated_dangers_shallow = true;
+    m.show_inform_callouts = true;
+    m.show_meta_bounds = true;
+    m.show_overscale = false;
+    m.size_scale = 1.25;
+    m.text_size_scale = 0.75;
+    m.sounding_size_scale = 1.5;
+    m.date_dependent = false;
+    m.highlight_date_dependent = true;
+    _ = std.fmt.bufPrintZ(&m.date_view, "20260401", .{}) catch unreachable;
+    Lookout.writeMariner(f.store, m);
+
+    var got: Mariner = undefined;
+    cc.tile57_mariner_defaults(&got);
+    Lookout.restoreMariner(f.store, &got);
+    try t.expectEqual(m.scheme, got.scheme);
+    try t.expectEqual(m.depth_unit, got.depth_unit);
+    try t.expectEqual(@as(f64, 3), got.shallow_contour);
+    try t.expectEqual(@as(f64, 7), got.safety_contour);
+    try t.expectEqual(@as(f64, 22), got.deep_contour);
+    try t.expectEqual(@as(f64, 6), got.safety_depth);
+    try t.expect(!got.four_shade_water);
+    try t.expect(got.display_base);
+    try t.expect(got.display_standard);
+    try t.expect(got.display_other);
+    try t.expectEqual(@as(u8, 2), got.soundings);
+    try t.expect(!got.text_names);
+    try t.expect(!got.show_light_descriptions);
+    try t.expect(!got.text_other);
+    try t.expect(got.simplified_points);
+    try t.expectEqual(m.boundary_style, got.boundary_style);
+    try t.expect(got.show_full_sector_lines);
+    try t.expect(got.data_quality);
+    try t.expect(got.show_isolated_dangers_shallow);
+    try t.expect(got.show_inform_callouts);
+    try t.expect(got.show_meta_bounds);
+    try t.expect(!got.show_overscale);
+    try t.expectEqual(@as(f64, 1.25), got.size_scale);
+    try t.expectEqual(@as(f64, 0.75), got.text_size_scale);
+    try t.expectEqual(@as(f64, 1.5), got.sounding_size_scale);
+    try t.expect(!got.date_dependent);
+    try t.expect(got.highlight_date_dependent);
+    try t.expectEqualStrings("20260401", std.mem.sliceTo(&got.date_view, 0));
+}
+
+test "an empty date reads as today, whatever was saved before" {
+    const t = std.testing;
+    var f = try StoreFixture.init();
+    defer f.deinit();
+
+    var m: Mariner = undefined;
+    cc.tile57_mariner_defaults(&m);
+    _ = std.fmt.bufPrintZ(&m.date_view, "20260401", .{}) catch unreachable;
+    Lookout.writeMariner(f.store, m);
+    @memset(&m.date_view, 0);
+    Lookout.writeMariner(f.store, m);
+
+    var got: Mariner = undefined;
+    cc.tile57_mariner_defaults(&got);
+    _ = std.fmt.bufPrintZ(&got.date_view, "20251231", .{}) catch unreachable;
+    Lookout.restoreMariner(f.store, &got);
+    try t.expectEqualStrings("", std.mem.sliceTo(&got.date_view, 0));
+}
+
+test "a key the store does not hold leaves the field alone" {
+    const t = std.testing;
+    var f = try StoreFixture.init();
+    defer f.deinit();
+
+    var m: Mariner = undefined;
+    cc.tile57_mariner_defaults(&m);
+    m.safety_contour = 7.5;
+    m.text_names = false;
+    // Nothing was ever written, so nothing is overlaid.
+    Lookout.restoreMariner(f.store, &m);
+    try t.expectEqual(@as(f64, 7.5), m.safety_contour);
+    try t.expect(!m.text_names);
+
+    // One key, and only that field moves.
+    f.store.setNumber(settings.group_mariner, "safety_contour", 3.0);
+    Lookout.restoreMariner(f.store, &m);
+    try t.expectEqual(@as(f64, 3.0), m.safety_contour);
+    try t.expect(!m.text_names);
+}
+
+test "a zero scale never lands on the mariner" {
+    const t = std.testing;
+    var f = try StoreFixture.init();
+    defer f.deinit();
+    const g = settings.group_mariner;
+
+    var m: Mariner = undefined;
+    cc.tile57_mariner_defaults(&m);
+    m.size_scale = 2;
+    m.text_size_scale = 2;
+    m.sounding_size_scale = 2;
+    // A zero is an unset field, which the engine reads as 1.0. Overlaying it
+    // would turn every symbol on the chart into nothing.
+    f.store.setNumber(g, "size_scale", 0);
+    f.store.setNumber(g, "text_size_scale", 0);
+    f.store.setNumber(g, "sounding_size_scale", 0);
+    Lookout.restoreMariner(f.store, &m);
+    try t.expectEqual(@as(f64, 2), m.size_scale);
+    try t.expectEqual(@as(f64, 2), m.text_size_scale);
+    try t.expectEqual(@as(f64, 2), m.sounding_size_scale);
+}
+
+test "what the engine does not persist stays out of the store" {
+    const t = std.testing;
+    var f = try StoreFixture.init();
+    defer f.deinit();
+
+    var m: Mariner = undefined;
+    cc.tile57_mariner_defaults(&m);
+    m.device_scale = 2;
+    m.ignore_scamin = true;
+    m.scamin_filter_gate = true;
+    Lookout.writeMariner(f.store, m);
+
+    // The device scale and the two debug toggles belong to the run.
+    const g = settings.group_mariner;
+    try t.expect(!f.store.has(g, "device_scale"));
+    try t.expect(!f.store.has(g, "ignore_scamin"));
+    try t.expect(!f.store.has(g, "scamin_filter_gate"));
+    try t.expect(!f.store.has(g, "viewing_groups_off"));
 }

@@ -1,81 +1,26 @@
-// The licence manifest's model: reading one document, and the labels the two
-// screens put on a row. See lk_licenses.h. Where the document comes from is
-// lk_licenses_baked.cpp — this file knows nothing about the core, and no
-// WinRT, so the manifest's shape can be tested.
+// The licence manifest's model: the shape of one entry, and the labels the two
+// screens put on a row. See lk_licenses.h. Where the entries come from is
+// lk_licenses_baked.cpp — this file calls no core function, and no WinRT, so
+// the labels can be tested.
 #include "lk_licenses.h"
 
 #include <algorithm>
 
-#include "lk_json.h"
-
-namespace
-{
-    using lkw::json::Kind;
-    using lkw::json::Value;
-
-    // Which builds carry this entry. One manifest serves every shell, so a
-    // shell draws the entries that name it and no others.
-    bool CarriedHere(Value const &o)
-    {
-        for (auto const &s : o["shells"].Items())
-            if (s.String() == "windows")
-                return true;
-        return false;
-    }
-
-    lkw::LicenseComponent ReadComponent(Value const &o)
-    {
-        lkw::LicenseComponent c;
-        c.id = o.MemberString("id");
-        c.name = o.MemberString("name");
-        c.group = o.MemberString("group");
-        c.summary = o.MemberString("summary");
-        c.license = o.MemberString("license");
-        c.license_short = o.MemberString("license_short");
-        c.license_note = o.MemberString("license_note");
-        c.version = o.MemberString("version");
-        c.commit = o.MemberString("commit");
-        c.pinned_in = o.MemberString("pinned_in");
-        c.copyright = o.MemberString("copyright");
-        c.url = o.MemberString("url");
-        c.text = o.MemberString("text");
-        c.notice = o.MemberString("notice");
-        return c;
-    }
-}
-
 namespace lkw
 {
-    LicenseManifest ParseLicenses(std::string_view json)
+    LicenseComponent::LicenseComponent(lookout_license const &c)
+        : id{ c.id }, name{ c.name }, group{ c.group }, summary{ c.summary },
+          license{ c.license }, license_short{ c.license_short },
+          license_note{ c.license_note }, version{ c.version }, commit{ c.commit },
+          pinned_in{ c.pinned_in }, copyright{ c.copyright }, url{ c.url },
+          text{ c.text }, notice{ c.notice }
     {
-        LicenseManifest m;
-        auto doc = json::Parse(json);
-        if (!doc || doc->kind() != Kind::Object)
-            return m;
-        Value const &obj = *doc;
+    }
 
-        Value const &a = obj["app"];
-        if (a.kind() == Kind::Object)
-        {
-            m.app.name = a.MemberString("name");
-            m.app.summary = a.MemberString("summary");
-            m.app.license = a.MemberString("license");
-            m.app.copyright = a.MemberString("copyright");
-            m.app.url = a.MemberString("url");
-            m.app.text = a.MemberString("text");
-        }
-
-        for (auto const &entry : obj["components"].Items())
-        {
-            if (entry.kind() != Kind::Object || !CarriedHere(entry))
-                continue;
-            m.components.push_back(ReadComponent(entry));
-        }
-
-        // An app entry that did not parse leaves nothing to show, and a build
-        // with no components would say this one carries none.
-        m.ok = !m.app.name.empty() && !m.components.empty();
-        return m;
+    LicenseApp::LicenseApp(lookout_license const &a)
+        : name{ a.name }, summary{ a.summary }, license{ a.license },
+          copyright{ a.copyright }, url{ a.url }, text{ a.text }
+    {
     }
 
     std::string LicenseComponent::PinLabel() const

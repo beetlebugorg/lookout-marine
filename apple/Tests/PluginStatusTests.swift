@@ -9,15 +9,13 @@ final class PluginStatusTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
-        plugins = PluginSettings.registry(Fixture.text("plugins")) ?? []
+        plugins = PluginFixture.shipped
     }
 
     private func plugin(_ id: String) -> PluginInfo? { plugins.first { $0.id == id } }
 
     private func info(status: String, live: Bool = true) -> PluginInfo {
-        PluginSettings.registry("""
-            {"plugins":[{"id":"p","live":\(live),"status":\(PluginSettings.jsonString(status))}]}
-            """)!.first!
+        PluginFixture.plugin("p", "P", status: status, live: live)
     }
 
     func testTheStateWordAndTheDetailAreJoined() {
@@ -63,35 +61,6 @@ final class PluginStatusTests: XCTestCase {
         XCTAssertNotEqual(one, PluginStatus(#"{"state":"running","detail":"45 msg/s"}"#))
     }
 
-    // MARK: Reading the poll without building the registry
-
-    /// The poll wants one string per plugin. Building the whole registry for
-    /// that allocated every settings field, list schema and declared row once a
-    /// second and threw them all away.
-    func testTheStatusesAreReadWithoutTheRegistry() {
-        let got = PluginSettings.statuses(Fixture.text("plugins"))
-        XCTAssertEqual(got?.count, 5)
-        XCTAssertEqual(got?["org.beetlebug.ais"],
-                       #"{"state":"degraded","detail":"0 targets, no own position: no CPA"}"#)
-        // The same documents the registry carries, so the poll and a full read
-        // cannot disagree.
-        for p in plugins {
-            XCTAssertEqual(got?[p.id], p.status.raw, p.id)
-        }
-    }
-
-    /// Nil for the same reasons the registry answers nil, so a poll that cannot
-    /// read leaves the last good status on screen.
-    func testStatusesIsNilWhenThereIsNoRegistry() {
-        XCTAssertNil(PluginSettings.statuses(nil))
-        XCTAssertNil(PluginSettings.statuses("not json"))
-        XCTAssertNil(PluginSettings.statuses("{}"))
-        XCTAssertEqual(PluginSettings.statuses(#"{"plugins":[]}"#)?.count, 0)
-    }
-
-    func testAPluginWithNoStatusReadsAsAnEmptyOne() {
-        XCTAssertEqual(PluginSettings.statuses(#"{"plugins":[{"id":"p"}]}"#), ["p": ""])
-    }
 
     // MARK: The rows of a list
 

@@ -1,7 +1,7 @@
 //  PluginRegistryTests.swift — the registry the settings window is built from.
 //
-//  The fixture is the core's own output over the five bundled plugins. See
-//  Fixtures/README.md.
+//  What the CORE puts in a read is checked in Zig, over the shipped manifests.
+//  What the SHELL does with one is checked here, over PluginFixture.
 
 import XCTest
 @testable import LookoutMarine
@@ -11,37 +11,11 @@ final class PluginRegistryTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
-        plugins = PluginSettings.registry(Fixture.text("plugins")) ?? []
+        plugins = PluginFixture.shipped
     }
 
     private func plugin(_ id: String) -> PluginInfo? { plugins.first { $0.id == id } }
 
-    // MARK: Nil is not an empty registry
-
-    /// The distinction this whole window depends on. `lookout_plugins_json`
-    /// answers NULL with no chart open and in a build with no plugin layer; a
-    /// core holding no plugins answers `{"plugins":[]}`. Reading the two the
-    /// same way emptied Vessels, Alarms, Connections and every plugin row the
-    /// moment one read came back nil.
-    func testNilIsNotAnEmptyRegistry() {
-        XCTAssertNil(PluginSettings.registry(nil))
-        XCTAssertNil(PluginSettings.registry("not json"))
-        XCTAssertNil(PluginSettings.registry("{}"))
-        XCTAssertNil(PluginSettings.registry("[]"))
-        XCTAssertEqual(PluginSettings.registry(#"{"plugins":[]}"#)?.count, 0)
-    }
-
-    /// `parse` is the caller with nothing to fall back on, so it flattens both
-    /// to an empty list.
-    func testParseFlattensNilToEmpty() {
-        XCTAssertEqual(PluginSettings.parse(nil).count, 0)
-        XCTAssertEqual(PluginSettings.parse(#"{"plugins":[]}"#).count, 0)
-    }
-
-    func testAPluginWithNoIdIsDropped() {
-        let one = PluginSettings.registry(#"{"plugins":[{"name":"x"},{"id":"y"}]}"#)
-        XCTAssertEqual(one?.map(\.id), ["y"])
-    }
 
     // MARK: The shipped set
 
@@ -83,34 +57,12 @@ final class PluginRegistryTests: XCTestCase {
         XCTAssertEqual(f.defaultValue, 1)
     }
 
-    /// A schema with no label, group or section still renders: the key names the
-    /// control and the core puts it in the fallback section.
-    func testAFieldWithNothingDeclaredStillRenders() {
-        let one = PluginSettings.registry(
-            #"{"plugins":[{"id":"p","settings":[{"key":"k","kind":"toggle"}]}]}"#)
-        let f = one?.first?.fields.first
-        XCTAssertEqual(f?.key, "k")
-        XCTAssertEqual(f?.label, "k")
-        XCTAssertEqual(f?.desc, "")
-        XCTAssertEqual(f?.group, "")
-        XCTAssertEqual(f?.tab, "advanced")
-    }
-
-    func testAFieldOfAKindThisBuildDoesNotKnowIsDropped() {
-        let one = PluginSettings.registry(
-            #"{"plugins":[{"id":"p","settings":[{"key":"k","kind":"colour"},{"key":"j","kind":"toggle"}]}]}"#)
-        XCTAssertEqual(one?.first?.fields.map(\.key), ["j"])
-    }
 
     /// The increment follows the range: metres of CPA move in tens, minutes and
     /// knots one at a time.
     func testTheStepSuitsTheRange() {
         let step = { (lo: Double, hi: Double) -> Double in
-            PluginSettings.registry(
-                """
-                {"plugins":[{"id":"p","settings":[
-                  {"key":"k","kind":"number","min":\(lo),"max":\(hi)}]}]}
-                """)?.first?.fields.first?.step ?? -1
+            PluginFixture.number("k", "K", tab: "advanced", min: lo, max: hi, lo).step
         }
         XCTAssertEqual(step(93, 9260), 10)
         XCTAssertEqual(step(1, 60), 1)
@@ -179,35 +131,13 @@ final class PluginRegistryTests: XCTestCase {
     /// A list that declared no Add label gets the generic wording rather than a
     /// noun invented for it.
     func testAListWithNoAddLabelUsesGenericWording() {
-        let one = PluginSettings.registry(
-            #"{"plugins":[{"id":"p","lists":[{"key":"k"}]}]}"#)
-        let list = one?.first?.lists.first
-        XCTAssertEqual(list?.itemNoun, "")
-        XCTAssertEqual(list?.newLabel, "New item")
-        XCTAssertEqual(list?.removeLabel, "Remove")
-        XCTAssertEqual(list?.tab, "advanced")
-        XCTAssertEqual(list?.maxRows, 0)
+        let list = PluginFixture.list("p", "k", group: "", tab: "advanced",
+                                      fields: [], addLabel: "")
+        XCTAssertEqual(list.itemNoun, "")
+        XCTAssertEqual(list.newLabel, "New item")
+        XCTAssertEqual(list.removeLabel, "Remove")
     }
 
-    func testARowMissingACellUsesTheSchemaDefault() {
-        let one = PluginSettings.registry("""
-            {"plugins":[{"id":"p","lists":[{"key":"k","item_fields":[
-              {"key":"port","kind":"number","default":10110},
-              {"key":"on","kind":"toggle","default":true},
-              {"key":"name","kind":"text","default":"gateway"}],
-              "rows":[{"id":"r"}]}]}]}
-            """)
-        let row = one?.first?.rows["k"]?.first
-        XCTAssertEqual(row?.number("port"), 10110)
-        XCTAssertTrue(row?.isOn("on") == true)
-        XCTAssertEqual(row?.text("name"), "gateway")
-    }
-
-    func testARowWithNoIdIsDropped() {
-        let one = PluginSettings.registry(
-            #"{"plugins":[{"id":"p","lists":[{"key":"k","rows":[{},{"id":"r"}]}]}]}"#)
-        XCTAssertEqual(one?.first?.rows["k"]?.map(\.id), ["r"])
-    }
 
     // MARK: Capabilities
 
@@ -218,17 +148,9 @@ final class PluginRegistryTests: XCTestCase {
                        ["vessel.publish", "ais.publish", "bus.publish", "net.tcp-client"])
         XCTAssertEqual(caps.first?.sentence, "Provide instrument values to the chart.")
         XCTAssertTrue(caps.allSatisfy(\.granted))
-        // Parsed and shown nowhere on any shell. Kept so the decision is
-        // explicit; see specs/apple-review.md.
+        // The allowlist the mariner consented to. Shown nowhere on any shell;
+        // kept so the decision to show it is one somebody makes.
         XCTAssertEqual(caps.first { $0.cap == "net.tcp-client" }?.hosts, ["local"])
     }
 
-    /// A grant with no state declared is granted: the consent sheet already
-    /// asked, so a missing field must not silently revoke.
-    func testAGrantWithNoStateIsGranted() {
-        let one = PluginSettings.registry(
-            #"{"plugins":[{"id":"p","capabilities":[{"cap":"c"}]}]}"#)
-        XCTAssertTrue(one?.first?.capabilities.first?.granted == true)
-        XCTAssertEqual(one?.first?.capabilities.first?.sentence, "c")
-    }
 }

@@ -5,6 +5,7 @@ import org.beetlebug.lookout.plugins.rowFrom
 import org.beetlebug.lookout.plugins.rowsJson
 
 import org.beetlebug.lookout.plugins.DiscoveredService
+import org.beetlebug.lookout.plugins.PluginDiscover
 import org.beetlebug.lookout.plugins.PluginListSchema
 import org.beetlebug.lookout.plugins.PluginRegistry
 import org.beetlebug.lookout.plugins.PluginRow
@@ -31,7 +32,7 @@ import org.robolectric.RobolectricTestRunner
 @RunWith(RobolectricTestRunner::class)
 class PluginListWriteTest {
 
-    private val registry = PluginRegistry.parse(Fixtures.registry)
+    private val registry = PluginRegistry(PluginFixture.shipped)
     private val nmea = registry.lists("connections").first { it.key == "connections" }
     private val signalk = registry.lists("connections").first { it.key == "servers" }
 
@@ -91,11 +92,11 @@ class PluginListWriteTest {
     /** A `set` naming a column the schema does not declare is ignored rather
      *  than written into a cell nothing will read. */
     @Test fun aSetForAnUndeclaredColumnIsIgnored() {
-        val schema = PluginRegistry.parse(
-            """{"plugins":[{"id":"x","lists":[{"key":"k","tab":"connections",
-               "discover":[{"service":"_s._tcp","set":{"nosuch":true}}],
-               "item_fields":[{"key":"host","label":"H","kind":"text","default":""}]}]}]}"""
-        ).lists("connections").single()
+        val schema = PluginFixture.list(
+            "x", "k", group = "", addLabel = "Add",
+            fields = listOf(PluginFixture.text("host", "H")),
+            discover = listOf(PluginDiscover("_s._tcp", mapOf("nosuch" to "true"))),
+        )
         val row = schema.rowFrom(DiscoveredService("_s._tcp", "n", "h", 1))
         assertTrue("nosuch" !in row.cells)
     }
@@ -125,10 +126,11 @@ class PluginListWriteTest {
     }
 
     @Test fun aFractionalNumberKeepsItsFraction() {
-        val schema = PluginRegistry.parse(
-            """{"plugins":[{"id":"x","lists":[{"key":"k","tab":"connections","item_fields":[
-               {"key":"gain","label":"G","kind":"number","min":0,"max":10,"default":1}]}]}]}"""
-        ).lists("connections").single()
+        val schema = PluginFixture.list(
+            "x", "k", group = "", addLabel = "Add",
+            fields = listOf(PluginFixture.number("gain", "G", tab = "connections",
+                min = 0.0, max = 10.0, value = 1.0)),
+        )
         val row = PluginRow("r", mapOf("gain" to "2.5"))
         assertEquals(2.5, written(schema, listOf(row)).getJSONObject(0).getDouble("gain"), 0.0)
     }

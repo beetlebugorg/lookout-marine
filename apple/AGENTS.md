@@ -70,9 +70,10 @@ A test that persists anything subclasses `ShellTestCase`, which puts a defaults
 suite of its own in `Store.shared`. Nothing in the shell reads
 `UserDefaults.standard` directly.
 
-The fixtures under `apple/Tests/Fixtures/` are the core's own output, captured
-with `LOOKOUT_DUMP_JSON=<dir>`; see the README beside them. Capture them again
-when the core changes what it sends.
+A test that needs what the core hands over builds it: `PluginFixture.swift` for
+the plugins, and the helpers at the top of `PluginAlertTests` and
+`PluginTableTests` for the alerts and the tables. The core's typed reads are C
+structs, so a test writes the struct rather than a captured document.
 
 The UI tests open the baked cell this repository carries for the Android build,
 through `ChartFixture`. `$LOOKOUT_TEST_CHART` overrides it. CI does not run

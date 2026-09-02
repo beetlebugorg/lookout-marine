@@ -6,10 +6,9 @@
  * chart problem gets reported. The GTK twin of PickReport.swift (macOS, iOS)
  * and PickReport.kt (Android).
  *
- * The ENGINE composes the report. The core emits {"report":…,"s57":…} per
- * feature — the decoded page beside the raw payload — and this parses it.
- * Nothing here decides what a mariner reads. tile57_s57_report does that once,
- * for every shell.
+ * The ENGINE composes the report. lookout_picks_read hands over the page and
+ * the source fold as structs, and this copies them into the widgets. Nothing
+ * here decides what a mariner reads.
  */
 #pragma once
 
@@ -21,49 +20,45 @@ G_BEGIN_DECLS
 
 /* ---- the decode --------------------------------------------------------- */
 
-/* One row of the engine's report: both halves already in chart language. */
+/* One row of a report: the page's rows and the source fold's rows have the
+ * same shape, as they do in the core. `depth` indents a sub-attribute under
+ * its heading. */
 typedef struct {
   char    *label;
   char    *value;
   int      depth;
   gboolean file;    /* the value names a file beside the chart */
   gboolean picture; /* …and that file is an image */
-} LkReportRow;
+} LkPickRow;
 
-/* One row of the payload as the cell states it, for the fold and the
- * clipboard. A container contributes a heading row with an empty value. */
+/* One picked feature, copied out of a core read so the card can outlive it.
+ * Every string is set; a field the page states nothing for is empty. */
 typedef struct {
-  char *name;
-  char *value;
-  int   depth;
-} LkRawRow;
-
-/* Why the body has nothing to read, when it does not. */
-typedef enum {
-  LK_PICK_BODY_FULL,
-  LK_PICK_BODY_NO_ATTRIBUTES,
-  LK_PICK_BODY_SOURCE_ONLY,
-} LkPickBody;
-
-typedef struct {
+  char      *cls;      /* S-57 object-class acronym, e.g. "LIGHTS" */
+  char      *chart;    /* source cell name */
   char      *title;
-  char      *subtitle; /* NULL when the object has none */
+  char      *subtitle; /* empty when the object has none */
   char      *chip;
   char      *footnote;
-  GPtrArray *notes;    /* char *       — INFORM, promoted above the rows */
-  GPtrArray *rows;     /* LkReportRow * */
-  GPtrArray *raw_rows; /* LkRawRow *   */
-  LkPickBody body;
+  char      *raw;      /* the payload in METRES, as the cell states it */
+  GPtrArray *notes;    /* char *      — INFORM, promoted above the rows */
+  GPtrArray *rows;     /* LkPickRow * — the page */
+  GPtrArray *source;   /* LkPickRow * — the fold */
+  lookout_pick_empty empty;
 } LkPickDecoded;
 
-LkPickDecoded *lk_pick_decoded_new (const LkPickFeature *feature);
+LkPickDecoded *lk_pick_decoded_new (const lookout_pick_feature *feature);
 void           lk_pick_decoded_free (LkPickDecoded *decoded);
 
 G_DEFINE_AUTOPTR_CLEANUP_FUNC (LkPickDecoded, lk_pick_decoded_free)
 
-/* The report as plain text: the raw payload, out of the envelope when there is
- * one, so a chart problem is reported in the cell's own words. */
-char *lk_pick_plain_text (const LkPickFeature *feature);
+/* Every feature of a read, best first, as the card holds them. Transfer full;
+ * the array frees its rows. Never NULL. */
+GPtrArray *lk_pick_decoded_list (const lookout_picks *picks);
+
+/* The report as plain text: the payload as the cell states it, so a chart
+ * problem is reported in the cell's own words. */
+char *lk_pick_plain_text (const LkPickDecoded *decoded);
 
 /* ---- the card ----------------------------------------------------------- */
 

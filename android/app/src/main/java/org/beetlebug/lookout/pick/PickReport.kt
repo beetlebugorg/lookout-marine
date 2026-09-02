@@ -63,7 +63,7 @@ import androidx.compose.ui.unit.dp
  */
 @Composable
 fun PickReportCard(
-    results: List<PickFeature>,
+    results: List<PickDecoded>,
     selected: Int,
     onSelect: (Int) -> Unit,
     onDismiss: () -> Unit,
@@ -72,8 +72,7 @@ fun PickReportCard(
     modifier: Modifier = Modifier,
     onAuxFile: (cell: String, name: String) -> Unit = { _, _ -> },
 ) {
-    val feature = results.getOrNull(selected) ?: return
-    val decoded = remember(feature) { PickDecoded(feature) }
+    val decoded = results.getOrNull(selected) ?: return
     val context = LocalContext.current
     // The fold is per pick, not per object: an opened fold that survived the
     // selection would open on an object the mariner never asked to unfold.
@@ -103,14 +102,14 @@ fun PickReportCard(
                 VerticalRule()
             }
             Column(Modifier.weight(1f)) {
-                Header(decoded, onCopy = { copy(context, feature) }, onDismiss = onDismiss)
+                Header(decoded, onCopy = { copy(context, decoded) }, onDismiss = onDismiss)
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 Column(
                     Modifier
                         .weight(1f, fill = false)
                         .verticalScroll(rememberScrollState()),
                 ) {
-                    Body(decoded, onFile = { name -> onAuxFile(feature.chart, name) })
+                    Body(decoded, onFile = { name -> onAuxFile(decoded.chart, name) })
                     if (foldOpen) RawRows(decoded)
                 }
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -253,7 +252,7 @@ private fun NoteCallout(text: String) {
 /** The pick's objects as a column, the object on show held selected. */
 @Composable
 private fun ObjectList(
-    results: List<PickFeature>,
+    results: List<PickDecoded>,
     selected: Int,
     onSelect: (Int) -> Unit,
     modifier: Modifier = Modifier,
@@ -271,7 +270,7 @@ private fun ObjectList(
             modifier = Modifier.padding(start = 14.dp, top = 14.dp, end = 10.dp, bottom = 6.dp),
         )
         results.forEachIndexed { i, f ->
-            val d = remember(f) { PickDecoded(f) }
+            val d = f
             val isSelected = i == selected
             Column(
                 Modifier
@@ -366,7 +365,7 @@ private fun RawRows(decoded: PickDecoded) {
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text(
-                    text = if (row.value.isEmpty()) row.name else "${row.name}:",
+                    text = if (row.value.isEmpty()) row.label else "${row.label}:",
                     style = MaterialTheme.typography.labelSmall,
                     fontFamily = FontFamily.Monospace,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -393,9 +392,9 @@ private fun VerticalRule() {
     )
 }
 
-private fun copy(context: Context, feature: PickFeature) {
+private fun copy(context: Context, feature: PickDecoded) {
     val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
-    cm.setPrimaryClip(ClipData.newPlainText("Pick report", S57.plainText(feature)))
+    cm.setPrimaryClip(ClipData.newPlainText("Pick report", feature.plainText))
 }
 
 /** The object column's width. The detail column takes the rest. */

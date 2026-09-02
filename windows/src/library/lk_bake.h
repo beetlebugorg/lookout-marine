@@ -2,33 +2,29 @@
  *
  * A cell as a hydrographic office publishes it is an S-57 dataset: the survey,
  * not a picture of it. The app draws baked archives, so a folder or an archive
- * of .000 cells is baked once on the way in. tile57 does the work; this chooses
- * the order, runs it off the UI thread, reports where it has got to, and stops
- * when the mariner says stop.
+ * of .000 cells is baked once on the way in.
  *
- * ORDER IS THE POINT. The list goes coarse band first: Overview, General,
- * Coastal, then the harbor detail. A mariner who cancels half way then has
- * charts that cover the whole passage at a usable scale. The other order gives
- * them every berth in one river and nothing between rivers.
+ * THE ENGINE RUNS IT (lookout_bake_start): the coarse-band-first order, the
+ * worker cap, the three phases, where each prepared chart is written, and the
+ * cancel. What is left here is what the import PANEL shows: the phase it is
+ * in, how long there is to go, and which of what landed is a picture.
  *
  * THE CHART OPENS ONCE, AT THE END. Handing each batch to the open library as
  * it finished put a chart on screen sooner and cost about half the machine:
  * every batch rebuilt the ownership partition over a growing library and
  * re-tessellated, against a bake that only gets half the cores to begin with.
  *
- * THE UI POLLS RATHER THAN BEING CALLED. tile57's progress callback fires from
- * worker threads, out of order, and a XAML element may only be touched on the
- * UI thread. Rather than marshal every step across, the job keeps one
- * mutex-guarded snapshot and the panel reads it on a timer — which also throttles
- * a 7,000 cell import to the handful of updates an eye can follow.
+ * THE UI POLLS RATHER THAN BEING CALLED. No callback crosses back out of the
+ * engine, and a XAML element may only be touched on the UI thread anyway, so
+ * the panel reads one snapshot on a timer — which also throttles a 7,000 cell
+ * import to the handful of updates an eye can follow.
  */
 #pragma once
 
-#include <atomic>
-#include <mutex>
 #include <string>
-#include <thread>
 #include <vector>
+
+#include "lookout.h"
 
 namespace lkw
 {
@@ -66,13 +62,17 @@ namespace lkw
     {
         std::string path;
         std::string name;
-        std::string kind; /* "baked" (draws now), "source" (bakes first), "raster_source", "raster" */
+        /* What the file is, as the engine classified it. */
+        lookout_file_kind kind = LOOKOUT_FILE_OTHER;
         int band = 0;
         /* `path` is an entry inside the archive: even a chart that draws now
          * has to come out before the engine can be handed it. */
         bool archived = false;
 
-        bool NeedsPrepare() const { return archived || kind == "source" || kind == "raster_source"; }
+        bool NeedsPrepare() const
+        {
+            return archived || kind == LOOKOUT_FILE_SOURCE || kind == LOOKOUT_FILE_RASTER_SOURCE;
+        }
     };
 
     struct ScanResult
@@ -90,8 +90,9 @@ namespace lkw
      * archive's central directory — nothing is inflated and nothing is written. */
     ScanResult ScanCharts(std::string const &path);
 
-    /* One bake, running on its own thread. Construct, Start, poll Snapshot, and
-     * either let it finish or Cancel. Destroying it joins the thread. */
+    /* One bake, running on the ENGINE's own thread. Construct, Start, poll
+     * Snapshot, and either let it finish or Cancel. Destroying it cancels and
+     * joins. */
     class BakeJob
     {
     public:
@@ -104,7 +105,7 @@ namespace lkw
          * sheets into `raster_out_dir` — separate roots, because the vector
          * open globs the chart library for .pmtiles and a picture archive it
          * swallowed would join the composed chart library. False when there is
-         * nothing to bake, in which case no thread starts. */
+         * nothing to bake, in which case no bake starts. */
         bool Start(ScanResult const &scan, std::string const &source, std::string const &out_dir,
                    std::string const &raster_out_dir);
 
@@ -114,7 +115,7 @@ namespace lkw
         void Cancel();
 
         BakeProgress Snapshot() const;
-        bool Running() const { return running_.load(); }
+        bool Running() const;
         /* Why an import produced nothing, one sentence ready to show. Empty on
          * success, on cancel, and on a partial result (what landed is a
          * library). Valid once Running() is false. */
@@ -122,34 +123,22 @@ namespace lkw
         /* Every VECTOR chart archive that finished — what the open takes.
          * Valid once Running() is false. */
         std::vector<std::string> Finished() const;
+        /* What landed, of one kind. */
+        std::vector<std::string> Landed(bool raster) const;
         /* Every baked raster sheet — these belong to the raster underlay
          * (lookout_raster_add), never to the vector open. */
         std::vector<std::string> FinishedRasters() const;
 
-        /* tile57 calls these from its workers; public only so the C callbacks
-         * can reach them. */
-        bool OnProgress(unsigned done, unsigned total);
-        void OnLabel(unsigned index);
-
     private:
-        void Run(std::string source, std::string out_dir);
-
-        mutable std::mutex mu_;
-        BakeProgress p_;
-        std::string error_;
+        /* The paths the bake was given, in the order the engine runs them, and
+         * whether each is a picture. What landed is read off the disk when the
+         * bake stops: the engine counts charts, and which of them are pictures
+         * is the shell's question. */
         std::vector<std::string> out_paths_;
-        std::vector<std::string> finished_;
-        std::vector<std::string> finished_rasters_;
-        /* Where the phase now running starts in out_paths_, and the whole job's
-         * count: the engine is called once per kind and counts from zero each
-         * time, while the mariner is watching one job. */
-        unsigned offset_ = 0;
-        unsigned job_total_ = 0;
-
-        std::vector<ScannedCell> ordered_;
-        std::atomic<bool> cancel_{ false };
-        std::atomic<bool> running_{ false };
-        std::thread thread_;
+        std::vector<char> is_raster_;
+        std::string source_name_;
         long long started_ms_ = 0;
+        bool cancelled_ = false;
+        lookout_bake *job_ = nullptr;
     };
 }

@@ -1,7 +1,5 @@
 #include "ui/chrome/licenses.h"
 
-#include "util/json.h"
-
 #include <lookout.h>
 #include <string.h>
 
@@ -13,11 +11,6 @@
 
 /* The manifest names one shell per build. Ours is this one. */
 #define LK_SHELL "linux"
-
-/* The search field appears above this many components and not below: a list
- * shorter than that is read, not searched. The Mac draws the line at the same
- * number (apple/LookoutMarine/Licenses.swift). */
-#define LK_LICENSES_SEARCHABLE 12
 
 /* The window at its own width. A license is hard-wrapped at 80 columns and is
  * not to be wrapped again, so the pane is wide enough to hold one and the list
@@ -38,33 +31,10 @@
 
 /* ---- the manifest ------------------------------------------------------- */
 
-/* Read once and kept for the process. The tree owns a copy of every string in
- * it, so the rows below hand out pointers into it and nothing here is freed. */
-static LkJson      *lk_manifest;
-static LkLicenseApp lk_app;
-static gboolean     lk_app_read;
-static GPtrArray   *lk_components; /* LkLicenseComponent * */
-
-/* A member as text. Absent, null and empty all read the same way: empty. */
-static const char *
-lk_member_text (const LkJson *node, const char *name)
-{
-  const char *text = lk_json_string (lk_json_member (node, name));
-
-  return text != NULL ? text : "";
-}
-
-/* Whether an entry's `shells` array names this build. */
-static gboolean
-lk_shells_name_this_build (const LkJson *shells)
-{
-  for (guint i = 0; i < lk_json_length (shells); i++)
-    {
-      if (g_strcmp0 (lk_json_string (lk_json_at (shells, i)), LK_SHELL) == 0)
-        return TRUE;
-    }
-  return FALSE;
-}
+/* Read once and kept for the process. The read owns every string in it, so the
+ * rows below hand out pointers into it and nothing here is freed. */
+static lookout_licenses *lk_read;
+static GPtrArray        *lk_components; /* const lookout_license * */
 
 static void
 lk_licenses_read (void)
@@ -74,72 +44,27 @@ lk_licenses_read (void)
   if (done)
     return;
   done = TRUE;
-  lk_components = g_ptr_array_new_with_free_func (g_free);
+  lk_components = g_ptr_array_new ();
 
-  size_t length = 0;
-  const char *json = lookout_licenses_json (&length);
-
-  if (json == NULL || length == 0)
+  lk_read = lookout_licenses_read (LK_SHELL);
+  if (lk_read == NULL)
     {
-      g_warning ("this build carries no license list");
+      g_warning ("the baked license list could not be read");
       return;
     }
 
-  /* The core hands over a pointer and a length; the reader takes a string. */
-  g_autofree char *text = g_strndup (json, length);
+  size_t count = 0;
+  const lookout_license *const *rows = lookout_licenses_all (lk_read, &count);
 
-  lk_manifest = lk_json_parse (text);
-  if (lk_manifest == NULL)
-    {
-      g_warning ("the baked license list will not parse");
-      return;
-    }
-
-  const LkJson *app = lk_json_member (lk_manifest, "app");
-  if (app != NULL)
-    {
-      lk_app.name = lk_member_text (app, "name");
-      lk_app.summary = lk_member_text (app, "summary");
-      lk_app.license = lk_member_text (app, "license");
-      lk_app.copyright = lk_member_text (app, "copyright");
-      lk_app.url = lk_member_text (app, "url");
-      lk_app.text = lk_member_text (app, "text");
-      lk_app_read = TRUE;
-    }
-
-  const LkJson *components = lk_json_member (lk_manifest, "components");
-  for (guint i = 0; i < lk_json_length (components); i++)
-    {
-      const LkJson *node = lk_json_at (components, i);
-
-      if (!lk_shells_name_this_build (lk_json_member (node, "shells")))
-        continue;
-
-      LkLicenseComponent *component = g_new0 (LkLicenseComponent, 1);
-
-      component->id = lk_member_text (node, "id");
-      component->name = lk_member_text (node, "name");
-      component->group = lk_member_text (node, "group");
-      component->summary = lk_member_text (node, "summary");
-      component->license = lk_member_text (node, "license");
-      component->license_short = lk_member_text (node, "license_short");
-      component->license_note = lk_member_text (node, "license_note");
-      component->version = lk_member_text (node, "version");
-      component->commit = lk_member_text (node, "commit");
-      component->pinned_in = lk_member_text (node, "pinned_in");
-      component->copyright = lk_member_text (node, "copyright");
-      component->url = lk_member_text (node, "url");
-      component->text = lk_member_text (node, "text");
-      component->notice = lk_member_text (node, "notice");
-      g_ptr_array_add (lk_components, component);
-    }
+  for (size_t i = 0; i < count; i++)
+    g_ptr_array_add (lk_components, (gpointer) rows[i]);
 }
 
-const LkLicenseApp *
+const lookout_license *
 lk_licenses_app (void)
 {
   lk_licenses_read ();
-  return lk_app_read ? &lk_app : NULL;
+  return lk_read != NULL ? lookout_licenses_app (lk_read) : NULL;
 }
 
 const GPtrArray *
@@ -149,14 +74,14 @@ lk_licenses_components (void)
   return lk_components;
 }
 
-const LkLicenseComponent *
+const lookout_license *
 lk_licenses_component (const char *id)
 {
   const GPtrArray *components = lk_licenses_components ();
 
   for (guint i = 0; id != NULL && i < components->len; i++)
     {
-      const LkLicenseComponent *component = g_ptr_array_index (components, i);
+      const lookout_license *component = g_ptr_array_index (components, i);
 
       if (g_strcmp0 (component->id, id) == 0)
         return component;
@@ -171,7 +96,7 @@ lk_licenses_app_version (void)
 }
 
 char *
-lk_licenses_pin (const LkLicenseComponent *component)
+lk_licenses_pin (const lookout_license *component)
 {
   if (component == NULL)
     return g_strdup ("");
@@ -183,7 +108,7 @@ lk_licenses_pin (const LkLicenseComponent *component)
 /* What a detail pane says the terms are. An entry whose terms could not be
  * determined says so rather than showing nothing. */
 static const char *
-lk_licenses_label (const LkLicenseComponent *component)
+lk_licenses_label (const lookout_license *component)
 {
   return component->license[0] != '\0' ? component->license : "Not resolved";
 }
@@ -191,7 +116,7 @@ lk_licenses_label (const LkLicenseComponent *component)
 /* What a ROW says: the same terms in short, because the column is narrow. A
  * manifest that names no short form falls back to the long one. */
 static const char *
-lk_licenses_short_label (const LkLicenseComponent *component)
+lk_licenses_short_label (const lookout_license *component)
 {
   if (component->license[0] == '\0')
     return "Not resolved";
@@ -419,7 +344,7 @@ lk_licenses_pane (void)
 
 /* This app's own terms. */
 static GtkWidget *
-lk_licenses_app_pane (const LkLicenseApp *app)
+lk_licenses_app_pane (const lookout_license *app)
 {
   GtkWidget *pane = lk_licenses_pane ();
   GtkWidget *facts = lk_licenses_facts ();
@@ -437,7 +362,7 @@ lk_licenses_app_pane (const LkLicenseApp *app)
 
 /* One component: what it is, how it is pinned, and its terms. */
 static GtkWidget *
-lk_licenses_component_pane (const LkLicenseComponent *component)
+lk_licenses_component_pane (const lookout_license *component)
 {
   GtkWidget *pane = lk_licenses_pane ();
   GtkWidget *facts = lk_licenses_facts ();
@@ -596,14 +521,14 @@ lk_licenses_show (LkLicensesWindow *self, const char *id)
 
   if (id != NULL && id[0] != '\0')
     {
-      const LkLicenseComponent *component = lk_licenses_component (id);
+      const lookout_license *component = lk_licenses_component (id);
 
       if (component != NULL)
         pane = lk_licenses_component_pane (component);
     }
   else
     {
-      const LkLicenseApp *app = lk_licenses_app ();
+      const lookout_license *app = lk_licenses_app ();
 
       if (app != NULL)
         pane = lk_licenses_app_pane (app);
@@ -751,7 +676,7 @@ lk_licenses_key_pressed (GtkEventControllerKey *controller, guint keyval, guint 
 static void
 lk_licenses_fill_list (LkLicensesWindow *self)
 {
-  const LkLicenseApp *app = lk_licenses_app ();
+  const lookout_license *app = lk_licenses_app ();
   const GPtrArray *components = lk_licenses_components ();
 
   if (app != NULL)
@@ -765,7 +690,7 @@ lk_licenses_fill_list (LkLicensesWindow *self)
 
   for (guint i = 0; i < components->len; i++)
     {
-      const LkLicenseComponent *c = g_ptr_array_index (components, i);
+      const lookout_license *c = g_ptr_array_index (components, i);
       g_autofree char *pin = lk_licenses_pin (c);
       g_autofree char *haystack = g_strjoin (" ", c->name, c->id, c->summary,
                                              c->license, NULL);
@@ -837,7 +762,7 @@ lk_licenses_window_new (GtkWindow *parent)
   g_signal_connect (self->list, "row-selected", G_CALLBACK (lk_licenses_row_selected), self);
 
   /* Searching a list this short costs more than reading it. */
-  if (components->len > LK_LICENSES_SEARCHABLE)
+  if (components->len > LOOKOUT_LICENSES_GROUP_ABOVE)
     {
       g_autofree char *prompt = g_strdup_printf ("Search %u components", components->len);
 

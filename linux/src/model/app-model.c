@@ -2,10 +2,9 @@
 
 #include "library/scan.h"
 #include "library/sets.h"
-#include "model/coord.h"
 #include "model/store.h"
+#include "ui/chart/pick-report.h"
 
-#include <math.h>
 #include <string.h>
 
 struct _LkAppModel {
@@ -24,6 +23,9 @@ struct _LkAppModel {
   LkChartBake   *bake;
   char          *pending_open_source;
   LkBakeProgress bake_progress;
+  /* The set name the progress borrows. Owned here, for the pill to keep
+   * reading between posts. */
+  char          *bake_name;
   gboolean       baking;
   GStrv    recents;
 
@@ -50,9 +52,9 @@ struct _LkAppModel {
   int      fix_state;
   double   fix_lon, fix_lat;
 
-  /* The chart library: the sets aboard, which are switched off, and what the
+  /* The chart library: the installed sets, which are switched off, and what the
    * background metadata scans have learned about each. */
-  LkChartSets *chart_sets; /* the library: what is aboard, and what is on */
+  LkChartSets *chart_sets; /* the library: what is installed, and what is on */
 
   /* The raster charts the mariner installed, and the state the engine reports
    * for them over the water in view. */
@@ -167,8 +169,7 @@ lk_app_model_dispose (GObject *object)
   g_clear_pointer (&self->chart_path, g_free);
   g_clear_pointer (&self->open_error, g_free);
   g_clear_pointer (&self->pending_open_source, g_free);
-  g_clear_pointer (&self->bake_progress.name, g_free);
-  g_clear_pointer (&self->bake_progress.cell, g_free);
+  g_clear_pointer (&self->bake_name, g_free);
   g_clear_pointer (&self->recents, g_strfreev);
   g_clear_pointer (&self->overlay_pin, g_free);
   g_clear_pointer (&self->pick_results, g_ptr_array_unref);
@@ -300,7 +301,7 @@ lk_app_model_init (LkAppModel *self)
    * says so through this callback. */
   self->chart_sets = lk_chart_sets_new (lk_app_model_sets_changed, G_OBJECT (self));
   self->overscale = 1.0;
-  self->pick_results = g_ptr_array_new_with_free_func ((GDestroyNotify) lk_pick_feature_free);
+  self->pick_results = g_ptr_array_new_with_free_func ((GDestroyNotify) lk_pick_decoded_free);
 
   self->raster_charts = lk_raster_charts_new ();
   self->raster_state = lk_raster_state_new ();
@@ -411,8 +412,8 @@ lk_app_model_initial_chart_paths (LkAppModel *self)
     }
 
   /* The library: every set switched on, as one chart. */
-  const char *const *aboard = lk_chart_sets_paths (self->chart_sets);
-  if (aboard != NULL && aboard[0] != NULL)
+  const char *const *installed = lk_chart_sets_paths (self->chart_sets);
+  if (installed != NULL && installed[0] != NULL)
     {
       char **cells = lk_chart_sets_compose (self->chart_sets);
       if (g_strv_length (cells) > 0)
@@ -473,11 +474,11 @@ lk_app_model_open_chart (LkAppModel *self, const char *path)
     }
 
   /* A single cell is a set of one. It joins the library like a folder does,
-   * so it survives a restart and composes with what is already aboard. */
+   * so it survives a restart and composes with what is already installed. */
   lk_app_model_open_prepared (self, path);
 }
 
-/* Open the LIBRARY with `source` aboard: the source goes on the set list,
+/* Open the LIBRARY with `source` added: the source goes on the set list,
  * switched on, and the chart opens as the union of every set switched on —
  * what is ready in each folder, plus anything a bake put in its prepared
  * directory. A second folder composes with the first instead of replacing
@@ -503,11 +504,10 @@ lk_app_model_bake_progress (const LkBakeProgress *progress, gpointer user_data)
 {
   LkAppModel *self = user_data;
 
-  g_free (self->bake_progress.name);
-  g_free (self->bake_progress.cell);
+  g_free (self->bake_name);
+  self->bake_name = g_strdup (progress->name);
   self->bake_progress = *progress;
-  self->bake_progress.name = g_strdup (progress->name);
-  self->bake_progress.cell = g_strdup (progress->cell);
+  self->bake_progress.name = self->bake_name;
   g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_BAKING]);
 }
 
@@ -683,10 +683,8 @@ lk_app_model_north_up (LkAppModel *self)
   lk_chart_controller_reset_rotation (self->controller);
 }
 
-/* Zoom to a 1:N scale. At one latitude the denominator is C·cos(lat)/2^zoom,
- * so a wanted scale is a zoom delta: the engine's own zoom does the work and
- * keeps its limits and its easing. It agrees with zoomDeltaForScale (Android)
- * and AppModel.zoomToScale (macOS, iOS). */
+/* Zoom to a 1:N scale. A wanted scale is a zoom delta, so the engine's own zoom
+ * does the work and keeps its limits and its easing. */
 void
 lk_app_model_zoom_to_scale (LkAppModel *self, double denominator)
 {
@@ -695,8 +693,9 @@ lk_app_model_zoom_to_scale (LkAppModel *self, double denominator)
   if (denominator <= 0 || self->scale_denominator <= 0)
     return;
 
-  lk_chart_controller_zoom_centered (self->controller,
-                                     log2 (self->scale_denominator / denominator));
+  lk_chart_controller_zoom_centered (
+      self->controller,
+      lookout_zoom_delta_for_scale (self->scale_denominator, denominator));
 }
 
 /* A menu scheme change must persist just like one from the settings form.
@@ -711,8 +710,6 @@ lk_app_model_cycle_scheme (LkAppModel *self)
     return;
 
   lk_chart_controller_cycle_scheme (self->controller);
-  tile57_mariner mariner = lk_chart_controller_get_mariner (self->controller);
-  lk_store_save_mariner (&mariner);
 }
 
 void
@@ -726,7 +723,6 @@ lk_app_model_set_scheme (LkAppModel *self, int scheme)
   tile57_mariner mariner = lk_chart_controller_get_mariner (self->controller);
   mariner.scheme = (tile57_scheme) scheme;
   lk_chart_controller_set_mariner (self->controller, mariner);
-  lk_store_save_mariner (&mariner);
 }
 
 void
@@ -1026,7 +1022,7 @@ lk_app_model_go_to_coordinate (LkAppModel *self, const char *text)
   g_return_val_if_fail (LK_IS_APP_MODEL (self), FALSE);
 
   double lat, lon;
-  if (!lk_coordinate_parse (text, &lat, &lon))
+  if (!lookout_parse_position (text, &lat, &lon))
     return FALSE;
 
   lookout_view current = lk_chart_controller_get_view (self->controller);
@@ -1304,7 +1300,7 @@ lk_app_model_clear_pick (LkAppModel *self)
     return;
 
   g_clear_pointer (&self->pick_results, g_ptr_array_unref);
-  self->pick_results = g_ptr_array_new_with_free_func ((GDestroyNotify) lk_pick_feature_free);
+  self->pick_results = g_ptr_array_new_with_free_func ((GDestroyNotify) lk_pick_decoded_free);
   self->pick_valid = FALSE;
   self->pick_index = 0;
   g_signal_emit (self, signals[SIGNAL_PICK_RESULTS], 0);

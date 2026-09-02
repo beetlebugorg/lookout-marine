@@ -9,15 +9,16 @@
  *
  * Write:
  *
- *   LK_CASE("a decimal pair, latitude first");
- *   LK_EQ(lk_coord_parse("38.9, -76.4", &lat, &lon), 1);
- *   LK_NEAR(lat, 38.9, 1e-9);
+ *   LK_CASE("a row with no id is dropped");
+ *   LK_EQ(rows.size(), 2u);
+ *   LK_NEAR(rows[0].cog_deg, 38.9, 1e-9);
  */
 #pragma once
 
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <type_traits>
 
 namespace lktest
 {
@@ -59,6 +60,14 @@ namespace lktest
         char buf[64];
         std::snprintf(buf, sizeof buf, "%.10g", v);
         return buf;
+    }
+
+    /* A core enum shows as its number. The header names the values and the
+     * number is what a mismatch is read back against. */
+    template <typename E, typename = std::enable_if_t<std::is_enum_v<E>>>
+    std::string Show(E v)
+    {
+        return std::to_string((long long)v);
     }
 
     inline std::string Show(std::string const &v) { return "\"" + v + "\""; }

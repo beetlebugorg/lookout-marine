@@ -7,26 +7,37 @@
 
 import Foundation
 
+/// The link list and the state beside it, as the core hands it over. One read,
+/// because a resolve finishing on a fetch thread could free a borrowed field
+/// under this shell.
+struct ChartLinkSnapshot {
+    var links: [ChartLinksModel.ChartLink]
+    /// The picked link's url; nil draws the built-in chart.
+    var active: String?
+    var attribution: String
+    var error: String
+    var busy: Bool
+}
+
 @MainActor
 @Observable
 final class ChartLinksModel {
     /// One chart the mariner added by link, as the core reports it. Picking it
     /// renders that publisher's style INSTEAD of the built-in chart — Lookout's
     /// own chart is just the default entry in the same list.
-    struct ChartLink: Decodable, Identifiable, Hashable {
+    struct ChartLink: Identifiable, Hashable {
         var url: String
         var name: String
         var id: String { url }
-    }
 
-    /// The snapshot, as one document. One document because a resolve finishing
-    /// on a fetch thread could free a borrowed field under this shell.
-    private struct Snapshot: Decodable {
-        var links: [ChartLink]
-        var active: String?
-        var attribution: String
-        var error: String
-        var busy: Bool
+        init(url: String, name: String) {
+            self.url = url
+            self.name = name
+        }
+
+        init(_ l: lookout_chart_link) {
+            self.init(url: String(cString: l.url), name: String(cString: l.name))
+        }
     }
 
     var list: [ChartLink] = []
@@ -44,30 +55,32 @@ final class ChartLinksModel {
     private static let listKey = "lookout.chartlinks"
     private static let activeKey = "lookout.chartlinks.active"
 
-    /// Hand the old UserDefaults list to the core, once, and then drop it.
+    /// Hand the mariner's old UserDefaults list to the core, once, and then
+    /// drop it. This reads UserDefaults directly, and is the last thing in the
+    /// shell that does: the list was never a settings value, it was a document
+    /// the core owns, so it is handed over rather than copied into the store.
     ///
     /// The core ignores the import when it already has a list of its own, so
     /// the window between handing it over and deleting the defaults replays
     /// harmlessly if the app dies in it.
     func migrate() {
-        guard let data = Store.shared.data(Self.listKey) else { return }
+        let defaults = UserDefaults.standard
+        guard let data = defaults.data(forKey: Self.listKey) else { return }
         var doc: [String: Any] = [:]
         if let old = try? JSONSerialization.jsonObject(with: data) { doc["links"] = old }
-        doc["active"] = Store.shared.string(Self.activeKey) ?? NSNull()
+        doc["active"] = defaults.string(forKey: Self.activeKey) ?? NSNull()
         guard let out = try? JSONSerialization.data(withJSONObject: doc),
               let json = String(data: out, encoding: .utf8) else { return }
         lkLog("chart links: handing \(data.count) B of the old store to the core")
         engine?.importChartLinks(json)
-        Store.shared.remove(Self.listKey)
-        Store.shared.remove(Self.activeKey)
+        defaults.removeObject(forKey: Self.listKey)
+        defaults.removeObject(forKey: Self.activeKey)
     }
 
     /// Take the core's snapshot, if it changed. Called once per readout tick:
     /// the changed flag has one consumer.
     func poll() {
-        guard let json = engine?.chartLinksSnapshot(),
-              let data = json.data(using: .utf8),
-              let snap = try? JSONDecoder().decode(Snapshot.self, from: data) else { return }
+        guard let snap = engine?.chartLinksSnapshot() else { return }
         if list != snap.links { list = snap.links }
         if active != snap.active { active = snap.active }
         if busy != snap.busy { busy = snap.busy }

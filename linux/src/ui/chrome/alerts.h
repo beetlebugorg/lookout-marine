@@ -1,7 +1,7 @@
 /* ui/chrome/alerts.h — the alerts the plugins raise, on screen and out loud.
  *
  * A plugin raises an alert with a severity, a title and a body. The core keeps
- * it and hands it over through lookout_plugin_alerts_json, already ordered:
+ * it and hands it over through lookout_alerts_read, already ordered:
  * what nobody has answered first, then the loudest, then the oldest. This
  * shows it, sounds the alarms, and acknowledges one when the mariner asks.
  *

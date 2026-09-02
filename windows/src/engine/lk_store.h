@@ -1,44 +1,54 @@
-/* lk_store — persistence for the Windows shell.
+/* lk_store — what the shell keeps across launches.
  *
- * Mirrors linux/src/lk-store.c: camera pose, recents, the full mariner state
- * (saved field-by-field, never raw struct bytes), and the DMS HUD pref. Stored
- * as an INI at %APPDATA%\lookout-marine\settings.ini via the Win32 profile
- * API, except the raster library, which lives in rasters.list beside it — the
- * profile API truncates a section read at 32,767 chars, a fifth of the sheet
- * bundles the store is sized for. The mariner overlay applies each key only
- * when present, so an older file leaves newer fields at engine defaults.
+ * The CORE owns the file: one JSON object of groups at
+ * %APPDATA%\lookout-marine\settings.json, with coalesced writes, one lock over
+ * the file, and a set-aside copy when a file will not parse (see
+ * lookout-shell.h). The group and key names are the core's, so a setting means
+ * the same thing on every shell.
  *
- * Thread-safe: one lock inside serializes every entry point, because the
- * render thread saves the pose while the UI thread writes settings. */
+ * THE CAMERA POSE AND THE MARINER SETTINGS ARE NOT HERE. The engine keeps both
+ * in the same store once lk_store_handle() is passed to lookout_set_store.
+ * The INSTALLED SETS are not here either: lookout_chart_sets keeps them, in
+ * this same store. This holds what the SHELL alone knows about: the recents,
+ * the window frames, the raster charts, the chart links and the plugin
+ * configs.
+ *
+ * A mariner arriving from a build that wrote settings.ini keeps their settings:
+ * that file and the four lists beside it are read once, into the same groups
+ * and key names, and left on disk.
+ */
 #ifndef LK_STORE_H
 #define LK_STORE_H
 
-#include <lookout.h> /* lookout_view, tile57_mariner */
+#include <lookout.h> /* lookout_store, lookout_view, tile57_mariner */
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+/* The store itself, for lookout_set_store and for the settings form's
+ * chartless read. Opened on the first call and kept for the process. NULL
+ * only when it cannot be opened. */
+lookout_store *lk_store_handle(void);
+
+/* Write anything waiting and close. Call it once, as the app shuts down. */
+void lk_store_shutdown(void);
+
 /* Where the store lives. The app never calls this: it defaults to
  * %APPDATA%\lookout-marine, which is the only place a mariner's settings
  * belong. It exists so a test can point the store at a directory it may
- * write, and it must be called before the first read or write — the paths
- * are worked out once and kept. */
+ * write, and it must be called before the first read or write. */
 void lk_store_set_dir(const char *dir);
 
-/* Camera pose. load returns 1 if a saved pose exists. */
-int  lk_store_load_view(lookout_view *out);
-void lk_store_save_view(const lookout_view *view);
+/* 1 when a camera pose has been saved. The ENGINE restores it; the shell asks
+ * only because the answer decides whether it wants an opening view. */
+int lk_store_has_saved_view(void);
 
 /* Recents (most-recent-first, capped, deduped). Returns a NULL-terminated array
  * of malloc'd strings the caller frees with lk_store_free_recents. */
 char **lk_store_load_recents(void);
 void   lk_store_note_recent(const char *path);
 void   lk_store_free_recents(char **recents);
-
-/* Mariner state, saved/overlaid field-by-field. */
-void lk_store_save_mariner(const tile57_mariner *m);
-void lk_store_apply_saved_mariner(tile57_mariner *m);
 
 /* The settings window's client size, so it opens where it was left. load
  * returns 1 when a size was saved. */
@@ -85,21 +95,9 @@ void   lk_store_save_hidden_sets(const char *const *names, int n);
 int    lk_store_chart_hidden(void);
 void   lk_store_set_chart_hidden(int hidden);
 
-/* Chart sets: the folders of charts the mariner has aboard, each with an
- * on/off switch (switched off, not removed, when its water is not today's).
- * load returns a NULL-terminated array of malloc'd paths freed with
- * lk_store_free_rasters (same shape); *on_out (optional) receives a malloc'd
- * flag per path. note appends switched on (an existing entry keeps its
- * switch); forget removes. */
-char **lk_store_load_chartsets(int **on_out);
-void   lk_store_note_chartset(const char *path);
-void   lk_store_forget_chartset(const char *path);
-void   lk_store_set_chartset_on(const char *path, int on);
-
 /* Chart links (an online map AS the chart): the whole list as one JSON text
  * the UI layer owns the shape of, plus the picked link's url. load returns a
- * malloc'd NUL-terminated string or NULL; caller frees. Written whole through
- * a temp file, like the raster library. */
+ * malloc'd NUL-terminated string or NULL; caller frees. */
 char *lk_store_load_chartlinks(void);
 void  lk_store_save_chartlinks(const char *json);
 /* The active link's url, or "" for the built-in chart. */
@@ -118,8 +116,8 @@ void  lk_store_save_chartlink_active(const char *url);
  *
  * each_saved hands every stored object over, which is where a mariner's
  * connections come back from at every open. The store does not push them
- * itself: what a lookout handle is, is the controller's business, and a store
- * that knew would be a store no test could link (lk_controller.c). */
+ * itself: what a lookout handle is, is the controller's business
+ * (lk_controller.c). */
 void lk_store_save_plugin_config(const char *plugin_id, const char *json);
 void lk_store_each_plugin_config(void (*fn)(void *user, const char *id, const char *json),
                                  void *user);

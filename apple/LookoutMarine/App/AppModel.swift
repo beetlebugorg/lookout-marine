@@ -62,6 +62,9 @@ final class AppModel {
     }
 
     init() {
+        // What the mariner already has, out of the defaults domain and into
+        // the core store. Once, before anything reads a setting.
+        Store.shared.importDefaults()
         charts = ChartsModel(raster: raster)
         // Anything a previous run renamed on its way to being deleted.
         ChartBake.sweepTrash()
@@ -141,12 +144,10 @@ final class AppModel {
         }
     }
 
-    /// Scheme changes from the MENU must persist like ones from the settings
-    /// form (the form saves in its own apply path).
+    /// Scheme changes from the MENU persist like ones from the settings form:
+    /// the engine writes every mariner change down.
     func cycleScheme() {
-        guard let c = controller else { return }
-        c.cycleScheme()
-        MarinerSettings.save(c.getMariner())
+        controller?.cycleScheme()
     }
 
     /// Set the color scheme directly (0 day / 1 dusk / 2 night).
@@ -155,7 +156,6 @@ final class AppModel {
         var m = c.getMariner()
         m.scheme = tile57_scheme(UInt32(s))
         c.setMariner(m)
-        MarinerSettings.save(m)
     }
 
     /// Parse the search text as a coordinate and recenter. True when it was a
@@ -225,11 +225,11 @@ final class AppModel {
 
     /// Zoom to a 1:N display scale, about the view centre.
     ///
-    /// At one latitude the denominator is C·cos(lat)/2^zoom. A scale is
-    /// therefore a zoom delta, and the engine zoom can do the work. The engine
+    /// A scale is a zoom delta, and the engine zoom does the work. The engine
     /// keeps its zoom limits and eases the movement.
     func zoomToScale(_ denominator: Double) {
         guard let controller, denominator > 0, readouts.scaleDenominator > 0 else { return }
-        controller.zoomCentered(log2(readouts.scaleDenominator / denominator))
+        controller.zoomCentered(
+            lookout_zoom_delta_for_scale(readouts.scaleDenominator, denominator))
     }
 }

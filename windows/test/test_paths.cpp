@@ -135,45 +135,6 @@ void TestPaths()
         LK_EQ(CellsFor("Z:\\no\\such\\chart.pmtiles").size(), (size_t)0);
     }
 
-    Suite("lk_paths: naming a raster set");
-
-    /* Longest first, so "OpenSeaMap" is not reported as "OSM". */
-    LK_CASE("a producer the file name carries");
-    {
-        LK_EQ(RasterSetNameFor("C:\\r\\OpenSeaMap-west.mbtiles"), std::string("OpenSeaMap"));
-        LK_EQ(RasterSetNameFor("C:\\r\\navionics_2024.mbtiles"), std::string("Navionics"));
-        /* Case does not matter: one spelling of each in the table. */
-        LK_EQ(RasterSetNameFor("C:\\r\\ESRI-world.mbtiles"), std::string("Esri"));
-        LK_EQ(RasterSetNameFor("C:\\r\\esri-world.mbtiles"), std::string("Esri"));
-    }
-
-    /* Longest first, so a name that carries two is reported as the longer:
-     * "OpenSeaMap" over "OSM", "Imagery" over "Esri". */
-    LK_CASE("a name that carries two producers takes the longer");
-    {
-        LK_EQ(RasterSetNameFor("C:\\r\\OSM-OpenSeaMap.mbtiles"), std::string("OpenSeaMap"));
-        LK_EQ(RasterSetNameFor("C:\\r\\ESRI-imagery.mbtiles"), std::string("Imagery"));
-    }
-
-    LK_CASE("a file that names no producer keeps its own stem");
-    {
-        LK_EQ(RasterSetNameFor("C:\\r\\13207.mbtiles"), std::string("13207"));
-        LK_EQ(RasterSetNameFor("C:\\r\\Chesapeake.mbtiles"), std::string("Chesapeake"));
-    }
-
-    /* The bake writes <root>/<stem>/<stem>.pmtiles: a sheet belongs to its
-     * bake, and the bake's own name is the set's. */
-    LK_CASE("a baked sheet takes the name of the bake it came out of");
-    {
-        LK_EQ(RasterSetNameFor("C:\\r\\NOAA-BSB\\13207\\13207.pmtiles"), std::string("NOAA-BSB"));
-        LK_EQ(RasterSetNameFor("C:\\r\\OpenSeaMap\\13207\\13207.pmtiles"),
-              std::string("OpenSeaMap"));
-        /* Upper case is the same layout. */
-        LK_EQ(RasterSetNameFor("C:\\r\\NOAA-BSB\\13207\\13207.PMTILES"), std::string("NOAA-BSB"));
-        /* Not that layout: the stem stands for itself. */
-        LK_EQ(RasterSetNameFor("C:\\r\\loose\\13207.pmtiles"), std::string("13207"));
-    }
-
     Suite("lk_paths: naming a chart set");
 
     LK_CASE("the office whose producer code every cell carries");

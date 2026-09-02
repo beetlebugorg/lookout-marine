@@ -192,12 +192,9 @@
     <ClCompile Include="src\hud\ui\Overlay.cpp" />
     <ClCompile Include="src\hud\ui\Scale.cpp" />
     <ClCompile Include="src\hud\ui\lk_format.cpp" />
-    <ClCompile Include="src\hud\lk_text.cpp">
-      <PrecompiledHeader>NotUsing</PrecompiledHeader>
-    </ClCompile>
   </ItemGroup>
 
-  <!-- library: the charts aboard — sets, raster, the bake, charts by link. -->
+  <!-- library: the installed charts — sets, raster, the bake, charts by link. -->
   <ItemGroup>
     <ClCompile Include="src\library\ui\ChartSets.cpp" />
     <ClCompile Include="src\library\ui\ChartLinks.cpp" />
@@ -265,9 +262,6 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="src\util\lk_utf8.cpp">
-      <PrecompiledHeader>NotUsing</PrecompiledHeader>
-    </ClCompile>
-    <ClCompile Include="src\util\lk_coord.c">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
   </ItemGroup>

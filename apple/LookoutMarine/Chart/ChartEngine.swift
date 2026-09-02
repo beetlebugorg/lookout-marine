@@ -41,7 +41,7 @@ protocol ChartLinkEngine: AnyObject {
     func removeChartLink(_ url: String)
     func selectChartLink(_ url: String?)
     func importChartLinks(_ json: String)
-    func chartLinksSnapshot() -> String?
+    func chartLinksSnapshot() -> ChartLinkSnapshot?
 }
 
 /// What PluginsModel asks the chart for.
@@ -82,7 +82,7 @@ protocol ChartOpenEngine: AnyObject {
 protocol OverlayEngine: AnyObject {
     func geo(atPoint pt: CGPoint) -> (lon: Double, lat: Double)?
     func screenPoint(forGeoLon lon: Double, lat: Double) -> CGPoint
-    func pick(lon: Double, lat: Double) -> [PickFeature]
+    func pick(lon: Double, lat: Double) -> [PickDecoded]
     func reveal(lon: Double, lat: Double) -> OverlayPin?
     func panRevealingPick(dxPt: CGFloat, dyPt: CGFloat)
     func markers() -> [ChartMarker]

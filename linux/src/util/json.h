@@ -1,11 +1,13 @@
-/* util/json.h — a small JSON reader for the pick payload.
+/* util/json.h — a small JSON reader for the documents the core hands over as
+ * text.
  *
- * The engine hands each picked feature a JSON string: {"report":…,"s57":…},
- * the decoded page beside the raw payload. The other shells parse it with the
- * platform's own reader (JSONSerialization, org.json). GLib has none, and
- * json-glib is not a GTK dependency — pulling it in would add a build
- * prerequisite to every packager for one string per pick. So this reads the
- * subset JSON actually is: objects, arrays, strings, numbers, booleans, null.
+ * Most of the C API answers in structs. Three payloads do not, because their
+ * content is not the core's to shape: the status document a plugin writes, the
+ * pick payload the plugin overlay attaches to a symbol, and what
+ * lookout_plugin_inspect says about a package. The other shells parse those
+ * with the platform's own reader (JSONSerialization, org.json). GLib has none,
+ * and json-glib only writes here, so this reads the subset JSON actually is:
+ * objects, arrays, strings, numbers, booleans, null.
  *
  * A node owns its children. Free the root and the tree goes with it. Every
  * accessor tolerates NULL, so a walk down a missing branch reads as absent

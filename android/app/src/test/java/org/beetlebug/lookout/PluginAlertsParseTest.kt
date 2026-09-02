@@ -24,7 +24,7 @@ import org.robolectric.RobolectricTestRunner
 @RunWith(RobolectricTestRunner::class)
 class PluginAlertsParseTest {
 
-    private val set = requireNotNull(PluginAlertSet.parse(Fixtures.alerts))
+    private val set = requireNotNull(PluginAlertSet.decode(PluginFixture.alertSet))
 
     @Test fun theSetCarriesItsSeqAndEveryAlert() {
         assertEquals(47L, set.seq)
@@ -70,9 +70,8 @@ class PluginAlertsParseTest {
      * something a newer plugin meant to be heard.
      */
     @Test fun anUnknownSeverityIsAnAlarm() {
-        assertEquals(PluginAlertSeverity.ALARM, PluginAlertSeverity.parse("catastrophe"))
-        assertEquals(PluginAlertSeverity.ALARM, PluginAlertSeverity.parse(""))
-        assertEquals(PluginAlertSeverity.ALARM, PluginAlertSeverity.parse(null))
+        assertEquals(PluginAlertSeverity.ALARM, PluginAlertSeverity.of(7))
+        assertEquals(PluginAlertSeverity.ALARM, PluginAlertSeverity.of(-1))
     }
 
     // ---- what it refuses ----------------------------------------------------
@@ -82,35 +81,39 @@ class PluginAlertsParseTest {
      * sampling. An empty list would mean the alarms had cleared, which would
      * take a sounding alarm off the chart because a read failed once.
      */
-    @Test fun anUnreadablePayloadIsNullAndNotAnEmptySet() {
-        assertNull(PluginAlertSet.parse(null))
-        assertNull(PluginAlertSet.parse(""))
-        assertNull(PluginAlertSet.parse("{"))
-        assertNull(PluginAlertSet.parse("not json"))
+    @Test fun anUnreadableReadIsNullAndNotAnEmptySet() {
+        assertNull(PluginAlertSet.decode(null))
+        assertNull(PluginAlertSet.decode(emptyArray()))
+        assertNull(PluginAlertSet.decode(arrayOf("not a seq")))
     }
 
     /** A readable payload with nothing in it IS an empty set. */
     @Test fun anEmptySetIsReadAsEmpty() {
-        val empty = requireNotNull(PluginAlertSet.parse("""{"seq":0,"alerts":[]}"""))
+        val empty = requireNotNull(PluginAlertSet.decode(PluginFixture.alerts(0)))
         assertEquals(0L, empty.seq)
         assertTrue(empty.alerts.isEmpty())
     }
 
     /** An alert with no words is not an alert. */
     @Test fun anAlertWithNoTitleIsSkipped() {
-        val s = PluginAlertSet.parse(
-            """{"seq":1,"alerts":[{"id":1,"title":""},{"id":2,"title":"Real"}]}"""
-        )!!
+        val s = PluginAlertSet.decode(PluginFixture.alerts(
+            1,
+            PluginFixture.alert(1, "x", PluginFixture.SEVERITY_ALARM, ""),
+            PluginFixture.alert(2, "x", PluginFixture.SEVERITY_ALARM, "Real"),
+        ))!!
         assertEquals(listOf(2L), s.alerts.map { it.id })
     }
 
-    /** No seq at all is never a seq the core reports, so the caller rebuilds. */
-    @Test fun aMissingSeqIsNegativeOne() {
-        assertEquals(-1L, PluginAlertSet.parse("""{"alerts":[]}""")!!.seq)
+    /** A row cut short is dropped rather than read across the next alert. */
+    @Test fun aShortRowIsDropped() {
+        val flat = PluginFixture.alertSet.copyOfRange(0, 12)
+        assertEquals(listOf(9001L), PluginAlertSet.decode(flat)!!.alerts.map { it.id })
     }
 
-    @Test fun aMissingBodyIsEmptyNotNull() {
-        val s = PluginAlertSet.parse("""{"seq":1,"alerts":[{"id":1,"title":"T"}]}""")!!
+    @Test fun anAlertWithNoBodyReadsAsEmpty() {
+        val s = PluginAlertSet.decode(PluginFixture.alerts(
+            1, PluginFixture.alert(1, "x", PluginFixture.SEVERITY_ALARM, "T"),
+        ))!!
         assertEquals("", s.alerts.single().body)
         assertFalse(s.alerts.single().acknowledged)
     }

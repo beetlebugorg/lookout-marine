@@ -401,6 +401,25 @@ pub fn build(b: *std.Build) void {
     };
     const cfg = Cfg{ .b = b, .tile57_inc = tile57_inc, .tile57_lib = tile57_lib, .charttable_mod = charttable_mod, .android = is_android, .build_opts_mod = build_opts_mod, .plugins = plugins, .wamr_dir = wamr_dir, .vk_loader = is_android or is_linux };
 
+    // A read's arena and its publishing helpers. Both the plugin shapes and
+    // src/pick.zig hang off it, and a file belongs to one module, so it is a
+    // module rather than an import by path.
+    const owned_mod = b.createModule(.{
+        .root_source_file = b.path("src/owned.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // What a shell reads about the plugins. host.zig and broker.zig import
+    // nothing above src/plugin/, so the part that fills a read gets the shapes
+    // as a module.
+    const plugins_mod = b.createModule(.{
+        .root_source_file = b.path("src/plugins.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    plugins_mod.addImport("owned", owned_mod);
+
     // ---- the core: static library (C ABI in capi.zig -> include/lookout.h) ----
     const lib_mod = b.createModule(.{
         .root_source_file = b.path("src/capi.zig"),
@@ -413,11 +432,17 @@ pub fn build(b: *std.Build) void {
         // export — strip so the panic path never pulls it in.
         .strip = target.result.os.tag == .ios,
     });
+    lib_mod.addImport("plugins", plugins_mod);
+    lib_mod.addImport("owned", owned_mod);
     cfg.apply(lib_mod, is_apple);
     const lib = b.addLibrary(.{ .name = "lookout_marine", .linkage = .static, .root_module = lib_mod });
     if (android_libc) |libc| lib.setLibCFile(libc); // NDK sysroot for the C deps
 
     lib.installHeader(b.path("include/lookout.h"), "lookout.h");
+    // lookout.h includes these three, so they install beside it.
+    lib.installHeader(b.path("include/lookout-library.h"), "lookout-library.h");
+    lib.installHeader(b.path("include/lookout-plugins.h"), "lookout-plugins.h");
+    lib.installHeader(b.path("include/lookout-shell.h"), "lookout-shell.h");
     // tile57.h rides along (lookout.h includes it), so the app's header search
     // path is just <prefix>/include.
     lib.installHeader(tile57_dep.path("include/tile57.h"), "tile57.h");
@@ -492,6 +517,38 @@ pub fn build(b: *std.Build) void {
             "plugin-dev: the harness drives the wasm plugin host, so it cannot be built with -Dplugins=false.").step);
     }
 
+    // ---- the bake, over a real archive ----
+    // A raw S-57 cell is 300 KB of survey and the repository holds none, so
+    // this bakes an exchange set the mariner already has, named by
+    // $LOOKOUT_BAKE_ARCHIVE, and skips without it. A step of its own so that
+    // `zig build test` on a machine with no archive still runs clean.
+    const bake_host_mod = b.createModule(.{
+        .root_source_file = b.path("test/bake_host.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    const bake_core_mod = b.createModule(.{
+        .root_source_file = b.path("src/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    bake_core_mod.addImport("plugins", plugins_mod);
+    bake_core_mod.addImport("owned", owned_mod);
+    cfg.apply(bake_core_mod, is_apple);
+    bake_host_mod.addImport("lookout", bake_core_mod);
+    // The cells travel with the test rather than by path: a test binary's
+    // working directory is the build runner's business, and CI's is not the
+    // repository root.
+    for ([_][]const u8{ "US3CU1EF", "US4TE3W0", "US5OR2XF" }) |cell| {
+        bake_host_mod.addAnonymousImport(b.fmt("cell_{s}", .{cell}), .{
+            .root_source_file = b.path(b.fmt("test/cells/{s}.000", .{cell})),
+        });
+    }
+    const bake_host_run = b.addRunArtifact(b.addTest(.{ .root_module = bake_host_mod }));
+    b.step("bake-host", "Bake a few cells out of $LOOKOUT_BAKE_ARCHIVE").dependOn(&bake_host_run.step);
+
     // ---- unit tests ----
     const test_mod = b.createModule(.{
         .root_source_file = b.path("src/root.zig"),
@@ -499,6 +556,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
+    test_mod.addImport("plugins", plugins_mod);
+    test_mod.addImport("owned", owned_mod);
     cfg.apply(test_mod, true);
     const tests = b.addTest(.{ .root_module = test_mod });
     const test_step = b.step("test", "Run unit tests");
@@ -509,6 +568,13 @@ pub fn build(b: *std.Build) void {
     // phase gate runs and what an agent runs by hand are the same compilation.
     // These do not need tile57 or a GPU, so they skip cfg.apply.
     const pure_test_roots = [_][]const u8{
+        "src/owned.zig",
+        "src/shell/format.zig",
+        "src/shell/bake.zig",
+        "src/shell/frame.zig",
+        "src/settings.zig",
+        "src/chartsets.zig",
+        "src/plugins.zig",
         "src/plugin/store.zig",
         "src/plugin/aisstore.zig",
         "src/overlay.zig",
@@ -570,6 +636,9 @@ pub fn build(b: *std.Build) void {
         // world space, so they take its camera. Cheap for the roots that do
         // not: an unimported module is not analysed.
         mod.addImport("charttable", cfg.charttable_mod);
+        // src/plugins.zig hangs its shapes off the read arena; cheap for the
+        // roots that do not, because an unimported module is not analysed.
+        mod.addImport("owned", owned_mod);
         if (cfg.vk_loader) mod.linkSystemLibrary("vulkan", .{});
         test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = mod })).step);
     }
@@ -741,6 +810,8 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .link_libc = true,
         });
+        host_mod.addImport("plugins", plugins_mod);
+        host_mod.addImport("owned", owned_mod);
         host_mod.addIncludePath(b.path(b.fmt("{s}/include", .{wamr_dir})));
         host_mod.addObjectFile(b.path(b.fmt("{s}/lib/libvmlib.a", .{wamr_dir})));
         test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = host_mod })).step);
@@ -767,6 +838,8 @@ pub fn build(b: *std.Build) void {
                 .optimize = optimize,
                 .link_libc = true,
             });
+            host_smoke_mod.addImport("plugins", plugins_mod);
+            host_smoke_mod.addImport("owned", owned_mod);
             host_smoke_mod.addImport("host", host_mod);
             host_smoke_mod.addImport("overlay", ov_mod);
             host_smoke_mod.addAnonymousImport("echo_plugin_wasm", .{ .root_source_file = bin });
@@ -795,6 +868,8 @@ pub fn build(b: *std.Build) void {
                         .optimize = optimize,
                         .link_libc = true,
                     });
+                    nmea_mod.addImport("plugins", plugins_mod);
+                    nmea_mod.addImport("owned", owned_mod);
                     nmea_mod.addImport("host", host_mod);
                     nmea_mod.addAnonymousImport("nmea_plugin_wasm", .{ .root_source_file = nbin });
                     nmea_mod.addAnonymousImport("nmea_manifest", .{ .root_source_file = b.path("plugins/nmea0183/manifest.json") });
@@ -815,6 +890,8 @@ pub fn build(b: *std.Build) void {
                         .optimize = optimize,
                         .link_libc = true,
                     });
+                    sk_mod.addImport("plugins", plugins_mod);
+                    sk_mod.addImport("owned", owned_mod);
                     sk_mod.addImport("host", host_mod);
                     sk_mod.addAnonymousImport("signalk_plugin_wasm", .{ .root_source_file = sbin });
                     sk_mod.addAnonymousImport("signalk_manifest", .{ .root_source_file = b.path("plugins/signalk/manifest.json") });
@@ -837,6 +914,8 @@ pub fn build(b: *std.Build) void {
                     .optimize = optimize,
                     .link_libc = true,
                 });
+                alarm_mod.addImport("plugins", plugins_mod);
+                alarm_mod.addImport("owned", owned_mod);
                 alarm_mod.addImport("host", host_mod);
                 alarm_mod.addImport("overlay", ov_mod);
                 alarm_mod.addAnonymousImport("ais_plugin_wasm", .{ .root_source_file = abin });
@@ -857,6 +936,8 @@ pub fn build(b: *std.Build) void {
                     .optimize = optimize,
                     .link_libc = true,
                 });
+                install_mod.addImport("plugins", plugins_mod);
+                install_mod.addImport("owned", owned_mod);
                 install_mod.addImport("host", host_mod);
                 install_mod.addImport("overlay", ov_mod);
                 install_mod.addAnonymousImport("windline_plugin_wasm", .{ .root_source_file = wbin });
@@ -884,6 +965,8 @@ pub fn build(b: *std.Build) void {
                 .optimize = optimize,
                 .link_libc = true,
             });
+            isolation_mod.addImport("plugins", plugins_mod);
+            isolation_mod.addImport("owned", owned_mod);
             isolation_mod.addImport("host", host_mod);
             isolation_mod.addImport("overlay", ov_mod);
             isolation_mod.addAnonymousImport("echo_plugin_wasm", .{ .root_source_file = bin });
@@ -913,6 +996,8 @@ pub fn build(b: *std.Build) void {
                 .optimize = optimize,
                 .link_libc = true,
             });
+            restart_mod.addImport("plugins", plugins_mod);
+            restart_mod.addImport("owned", owned_mod);
             restart_mod.addImport("host", host_mod);
             restart_mod.addImport("overlay", ov_mod);
             restart_mod.addAnonymousImport("echo_plugin_wasm", .{ .root_source_file = bin });
@@ -937,6 +1022,9 @@ pub fn build(b: *std.Build) void {
         "src/root.zig",
         "src/licenses.zig",
         "src/pick.zig",
+        // The bake job @cImports tile57, so it cannot be a root of its own:
+        // only a compilation with the engine's include path analyses it.
+        "src/bakejob.zig",
         "src/ct/host.zig",
         "src/ct/style.zig",
         "src/ct/tiles.zig",
@@ -951,6 +1039,7 @@ pub fn build(b: *std.Build) void {
         "src/plugin/host/install.zig",
         "src/plugin/host/manifest.zig",
         "src/plugin/host/settings_json.zig",
+        "src/plugin/host/read.zig",
         "src/plugin/broker/alerts.zig",
         "src/plugin/broker/budgets.zig",
         "src/plugin/broker/caps.zig",
@@ -973,6 +1062,9 @@ pub fn build(b: *std.Build) void {
         "test/host_isolation.zig",
         "test/host_restart.zig",
         "test/ais_alarm.zig",
+        // Rooted by the bake-host step. It needs an exchange set, so it skips
+        // without $LOOKOUT_BAKE_ARCHIVE rather than running as part of `test`.
+        "test/bake_host.zig",
     };
     checkTestCoverage(b, test_step, &pure_test_roots, &reached_test_files);
 }

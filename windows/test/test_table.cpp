@@ -1,9 +1,12 @@
 /* The plugin tables and their units.
  *
- * The plugin sends SI; the shell converts. Every shell converts the same way,
- * so these are the numbers a mariner reads off an AIS table and calls on the
- * radio — and the dash that says a value was never heard, which on a collision
- * table is not the same as zero.
+ * The plugin sends SI and the CORE orders the rows; the shell converts. Every
+ * shell converts the same way, so these are the numbers a mariner reads off an
+ * AIS table and calls on the radio, and the dash that says a value was never
+ * heard, which on a collision table is not the same as zero.
+ *
+ * Reading the arrays out of a live read is the window's call, so the pieces
+ * below are built the way plugins/ui/Tables.cpp hands them over.
  */
 #include "lk_test.h"
 
@@ -14,25 +17,88 @@ using namespace lkw;
 
 namespace
 {
-    /* An AIS Targets declaration, as the ais plugin writes it. */
-    char const *kTables = R"({"tables":[
-      {"plugin":"org.beetlebug.ais","key":"targets","title":"AIS Targets",
-       "at":true,
-       "sort":{"key":"cpa","ascending":true},
-       "columns":[
-         {"key":"flag","label":"","type":"flag"},
-         {"key":"name","label":"Name","type":"text"},
-         {"key":"cpa","label":"CPA","type":"distance"},
-         {"key":"tcpa","label":"TCPA","type":"duration"},
-         {"key":"sog","label":"SOG","type":"speed"},
-         {"key":"brg","label":"Bearing","type":"bearing"},
-         {"key":"mmsi","label":"MMSI","type":"number"}
-       ]}]})";
-
-    TableSpec Spec()
+    lookout_table_column Column(char const *key, char const *label, lookout_column_type type)
     {
-        auto tables = ReadTables(kTables);
-        return tables && !tables->empty() ? (*tables)[0] : TableSpec{};
+        lookout_table_column c{};
+        c.key = key;
+        c.label = label;
+        c.type = type;
+        return c;
+    }
+
+    /* An AIS Targets declaration, as the ais plugin writes it. */
+    TableSpec Spec(bool locatable = true)
+    {
+        lookout_table t{};
+        t.plugin = "org.beetlebug.ais";
+        t.key = "targets";
+        t.title = "AIS Targets";
+        t.menu = "Vessels";
+        t.sort_key = "cpa";
+        t.sort_ascending = 1;
+        t.at_lat = locatable ? "lat" : "";
+        t.at_lon = locatable ? "lon" : "";
+        t.open = 1;
+        t.rows = 0;
+        t.seq = 0;
+
+        std::vector<lookout_table_column> raw{
+            Column("flag", "", LOOKOUT_COLUMN_FLAG),
+            Column("name", "Name", LOOKOUT_COLUMN_TEXT),
+            Column("cpa", "CPA", LOOKOUT_COLUMN_DISTANCE),
+            Column("tcpa", "TCPA", LOOKOUT_COLUMN_DURATION),
+            Column("sog", "SOG", LOOKOUT_COLUMN_SPEED),
+            Column("brg", "Bearing", LOOKOUT_COLUMN_BEARING),
+            Column("mmsi", "MMSI", LOOKOUT_COLUMN_NUMBER),
+        };
+        std::vector<TableColumn> cols;
+        for (auto const &c : raw)
+            cols.emplace_back(c);
+        return TableSpec{ t, std::move(cols) };
+    }
+
+    lookout_table_cell Number(lookout_column_type type, double v)
+    {
+        lookout_table_cell c{};
+        c.type = type;
+        c.kind = LOOKOUT_TABLE_CELL_NUMBER;
+        c.number = v;
+        c.text = "";
+        return c;
+    }
+
+    lookout_table_cell Words(lookout_column_type type, char const *v)
+    {
+        lookout_table_cell c{};
+        c.type = type;
+        c.kind = LOOKOUT_TABLE_CELL_TEXT;
+        c.text = v;
+        return c;
+    }
+
+    lookout_table_cell Absent(lookout_column_type type)
+    {
+        lookout_table_cell c{};
+        c.type = type;
+        c.kind = LOOKOUT_TABLE_CELL_ABSENT;
+        c.text = "";
+        return c;
+    }
+
+    /* One row out of the cells the read hands over. */
+    TableRow Row(TableSpec const &spec, std::vector<lookout_table_cell> const &cells,
+                 bool located, double lon = 0, double lat = 0)
+    {
+        lookout_table_row r{};
+        r.id = "367123456";
+        r.band = 0;
+        r.located = located ? 1 : 0;
+        r.lon = lon;
+        r.lat = lat;
+        std::vector<lookout_table_cell const *> ptrs;
+        for (auto const &c : cells)
+            ptrs.push_back(&c);
+        return TableRow{ r, spec, ptrs.data(), ptrs.size() };
     }
 }
 
@@ -85,11 +151,7 @@ void TestTable()
 
     LK_CASE("a table declaration");
     {
-        auto tables = ReadTables(kTables);
-        LK_CHECK(tables.has_value());
-        if (!tables || tables->empty())
-            return;
-        auto const &spec = (*tables)[0];
+        TableSpec spec = Spec();
         LK_EQ(spec.plugin, std::string("org.beetlebug.ais"));
         LK_EQ(spec.key, std::string("targets"));
         LK_EQ(spec.title, std::string("AIS Targets"));
@@ -98,64 +160,42 @@ void TestTable()
         LK_EQ(spec.sort_ascending, true);
         LK_EQ(spec.columns.size(), (size_t)7);
         LK_EQ(spec.columns[2].key, std::string("cpa"));
-        LK_EQ(spec.columns[2].type, std::string("distance"));
+        LK_EQ(spec.columns[2].label, std::string("CPA"));
+        LK_EQ(spec.columns[2].type, LOOKOUT_COLUMN_DISTANCE);
     }
 
     /* A row can only be revealed on the chart when the DECLARATION says its
-     * rows carry a position. */
-    LK_CASE("a table with no at is not locatable");
+     * rows carry a position. Both keys are set together. */
+    LK_CASE("a table that names no position keys is not locatable");
     {
-        auto tables = ReadTables(R"({"tables":[{"plugin":"p","key":"k","title":"T"}]})");
-        LK_CHECK(tables.has_value());
-        if (tables && !tables->empty())
-        {
-            LK_EQ((*tables)[0].locatable, false);
-            LK_EQ((*tables)[0].sort_ascending, true); /* the default */
-        }
-    }
-
-    LK_CASE("a column that names no type is text");
-    {
-        auto tables = ReadTables(R"({"tables":[{"key":"k","columns":[{"key":"c"}]}]})");
-        LK_CHECK(tables.has_value());
-        if (tables && !tables->empty())
-            LK_EQ((*tables)[0].columns[0].type, std::string("text"));
-    }
-
-    LK_CASE("no tables, and no readable answer, are different");
-    {
-        auto none = ReadTables(R"({"tables":[]})");
-        LK_CHECK(none.has_value());
-        if (none)
-            LK_EQ(none->size(), (size_t)0);
-        LK_CHECK(!ReadTables("").has_value());
-        LK_CHECK(!ReadTables("junk").has_value());
+        LK_EQ(Spec(false).locatable, false);
     }
 
     LK_CASE("the layout facts follow from the type");
     {
-        LK_EQ(NumericColumn("distance"), true);
-        LK_EQ(NumericColumn("duration"), true);
-        LK_EQ(NumericColumn("number"), true);
-        LK_EQ(NumericColumn("text"), false);
-        LK_EQ(NumericColumn("flag"), false);
-        LK_NEAR(ColumnWidth("text"), 150, 0);
-        LK_NEAR(ColumnWidth("distance"), 84, 0);
+        LK_EQ(NumericColumn(LOOKOUT_COLUMN_DISTANCE), true);
+        LK_EQ(NumericColumn(LOOKOUT_COLUMN_DURATION), true);
+        LK_EQ(NumericColumn(LOOKOUT_COLUMN_NUMBER), true);
+        LK_EQ(NumericColumn(LOOKOUT_COLUMN_TEXT), false);
+        LK_EQ(NumericColumn(LOOKOUT_COLUMN_FLAG), false);
+        LK_NEAR(ColumnWidth(LOOKOUT_COLUMN_TEXT), 150, 0);
+        LK_NEAR(ColumnWidth(LOOKOUT_COLUMN_DISTANCE), 84, 0);
     }
 
     Suite("lk_table: rows");
 
-    LK_CASE("a batch of rows in the mariner's units");
+    LK_CASE("a row in the mariner's units");
     {
-        auto batch = ReadTableRows(R"({"seq":42,"rows":[
-            {"cells":["alarm","VICTORY",120,-65,5.144,7,367123456],
-             "at":[-76.48,38.97]}]})",
-                                   Spec());
-        LK_CHECK(batch.has_value());
-        if (!batch || batch->rows.empty())
-            return;
-        LK_EQ(batch->seq, (long long)42);
-        auto const &row = batch->rows[0];
+        TableSpec spec = Spec();
+        TableRow row = Row(spec,
+                           { Words(LOOKOUT_COLUMN_FLAG, "alarm"),
+                             Words(LOOKOUT_COLUMN_TEXT, "VICTORY"),
+                             Number(LOOKOUT_COLUMN_DISTANCE, 120),
+                             Number(LOOKOUT_COLUMN_DURATION, -65),
+                             Number(LOOKOUT_COLUMN_SPEED, 5.144),
+                             Number(LOOKOUT_COLUMN_BEARING, 7),
+                             Number(LOOKOUT_COLUMN_NUMBER, 367123456) },
+                           true, -76.48, 38.97);
         LK_EQ(row.cells.size(), (size_t)7);
         LK_EQ(row.cells[0].text, std::string("ALARM")); /* a flag is shown upper case */
         LK_EQ(row.cells[1].text, std::string("VICTORY"));
@@ -170,83 +210,73 @@ void TestTable()
      * anyone can read back to a coastguard. */
     LK_CASE("a plain number is written whole when it is whole");
     {
-        auto batch = ReadTableRows(R"({"seq":1,"rows":[{"cells":["","",0,0,0,0,2.5]}]})", Spec());
-        LK_CHECK(batch.has_value());
-        if (batch && !batch->rows.empty())
-            LK_EQ(batch->rows[0].cells[6].text, std::string("2.5"));
+        LK_EQ(FormatCell(Number(LOOKOUT_COLUMN_NUMBER, 2.5)).text, std::string("2.5"));
+        LK_EQ(FormatCell(Number(LOOKOUT_COLUMN_NUMBER, 367123456)).text,
+              std::string("367123456"));
     }
 
-    /* The flag tints the row, in the plugin's own word — not the upper-cased
-     * one on screen. */
+    /* A plugin may send a string for a numeric column, and the string is what
+     * the mariner sees. */
+    LK_CASE("a string in a numeric column stays a string");
+    {
+        LK_EQ(FormatCell(Words(LOOKOUT_COLUMN_DISTANCE, "over the horizon")).text,
+              std::string("over the horizon"));
+    }
+
+    /* The flag tints the row, in the plugin's own word rather than the
+     * upper-cased one on screen. */
     LK_CASE("the flag that tints the row keeps the core's word");
     {
-        auto batch = ReadTableRows(R"({"seq":1,"rows":[{"cells":["warning","X"]}]})", Spec());
-        LK_CHECK(batch.has_value());
-        if (batch && !batch->rows.empty())
-        {
-            LK_EQ(batch->rows[0].flag, std::string("warning"));
-            LK_EQ(batch->rows[0].cells[0].text, std::string("WARNING"));
-        }
+        TableSpec spec = Spec();
+        TableRow row = Row(spec,
+                           { Words(LOOKOUT_COLUMN_FLAG, "warning"),
+                             Words(LOOKOUT_COLUMN_TEXT, "X") },
+                           false);
+        LK_EQ(row.flag, std::string("warning"));
+        LK_EQ(row.cells[0].text, std::string("WARNING"));
+    }
+
+    /* A row with nothing wrong with it is not a row nobody has heard from. */
+    LK_CASE("an empty flag is not a flag");
+    {
+        TableSpec spec = Spec();
+        TableRow row = Row(spec, { Words(LOOKOUT_COLUMN_FLAG, "") }, false);
+        LK_EQ(row.flag, std::string(""));
+        LK_EQ(row.cells[0].text, std::string(""));
+        LK_EQ(row.cells[0].missing, false);
     }
 
     /* Never heard and heard as zero are different values. */
     LK_CASE("a cell the plugin did not send is a dash, not a zero");
     {
-        auto batch = ReadTableRows(R"({"seq":1,"rows":[{"cells":["","NAMED",null,0]}]})", Spec());
-        LK_CHECK(batch.has_value());
-        if (!batch || batch->rows.empty())
-            return;
-        auto const &row = batch->rows[0];
+        TableSpec spec = Spec();
+        TableRow row = Row(spec,
+                           { Words(LOOKOUT_COLUMN_FLAG, ""),
+                             Words(LOOKOUT_COLUMN_TEXT, "NAMED"),
+                             Absent(LOOKOUT_COLUMN_DISTANCE),
+                             Number(LOOKOUT_COLUMN_DURATION, 0) },
+                           false);
         LK_EQ(row.cells[2].text, std::string("\xe2\x80\x94"));
         LK_EQ(row.cells[2].missing, true);
         LK_EQ(row.cells[3].text, std::string("0:00")); /* heard as zero */
         LK_EQ(row.cells[3].missing, false);
-        /* Short of the declared columns: the tail is missing, not absent. */
-        LK_EQ(row.cells.size(), (size_t)7);
-        LK_EQ(row.cells[6].missing, true);
     }
 
     LK_CASE("a position a row carries");
     {
-        auto batch = ReadTableRows(
-            R"({"seq":1,"rows":[{"cells":[],"at":[-76.48,38.97]},{"cells":[]}]})", Spec());
-        LK_CHECK(batch.has_value());
-        if (!batch || batch->rows.size() < 2)
-            return;
-        LK_EQ(batch->rows[0].has_at, true);
-        LK_NEAR(batch->rows[0].lon, -76.48, 1e-9);
-        LK_NEAR(batch->rows[0].lat, 38.97, 1e-9);
-        LK_EQ(batch->rows[1].has_at, false);
+        TableSpec spec = Spec();
+        TableRow here = Row(spec, {}, true, -76.48, 38.97);
+        LK_EQ(here.has_at, true);
+        LK_NEAR(here.lon, -76.48, 1e-9);
+        LK_NEAR(here.lat, 38.97, 1e-9);
+
+        TableRow nowhere = Row(spec, {}, false);
+        LK_EQ(nowhere.has_at, false);
     }
 
     LK_CASE("a position on a table that is not locatable is not a reveal");
     {
-        TableSpec flat = Spec();
-        flat.locatable = false;
-        auto batch = ReadTableRows(R"({"seq":1,"rows":[{"cells":[],"at":[-76.48,38.97]}]})", flat);
-        LK_CHECK(batch.has_value());
-        if (batch && !batch->rows.empty())
-            LK_EQ(batch->rows[0].has_at, false);
-    }
-
-    LK_CASE("a half-written position is no position");
-    {
-        auto batch = ReadTableRows(R"({"seq":1,"rows":[{"cells":[],"at":[-76.48]}]})", Spec());
-        LK_CHECK(batch.has_value());
-        if (batch && !batch->rows.empty())
-            LK_EQ(batch->rows[0].has_at, false);
-    }
-
-    LK_CASE("an empty table, and an unreadable batch, are different");
-    {
-        auto empty = ReadTableRows(R"({"seq":9,"rows":[]})", Spec());
-        LK_CHECK(empty.has_value());
-        if (empty)
-        {
-            LK_EQ(empty->seq, (long long)9);
-            LK_EQ(empty->rows.size(), (size_t)0);
-        }
-        LK_CHECK(!ReadTableRows("", Spec()).has_value());
-        LK_CHECK(!ReadTableRows("{\"seq\":1,", Spec()).has_value());
+        TableSpec flat = Spec(false);
+        LK_EQ(Row(flat, {}, true, -76.48, 38.97).has_at, false);
     }
 }

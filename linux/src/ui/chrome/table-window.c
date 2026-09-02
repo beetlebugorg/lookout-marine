@@ -1,7 +1,5 @@
 #include "ui/chrome/table-window.h"
 
-#include "util/json.h"
-
 #include <math.h>
 
 /* How often the rows are re-read. The plugins feed a table at their status
@@ -16,20 +14,10 @@
  * tells a mariner far less than "124 m". */
 #define LK_TABLE_METRES_BELOW 185.2
 
-typedef enum {
-  LK_COLUMN_TEXT,
-  LK_COLUMN_NUMBER,
-  LK_COLUMN_DISTANCE,
-  LK_COLUMN_SPEED,
-  LK_COLUMN_BEARING,
-  LK_COLUMN_DURATION,
-  LK_COLUMN_FLAG,
-} LkColumnType;
-
 typedef struct {
-  char        *key;
-  char        *label;
-  LkColumnType type;
+  char               *key;
+  char               *label;
+  lookout_column_type type;
 } LkTableColumn;
 
 typedef struct {
@@ -77,30 +65,12 @@ lk_table_column_free (gpointer data)
   g_free (column);
 }
 
-static LkColumnType
-lk_column_type_parse (const char *word)
-{
-  if (g_strcmp0 (word, "distance") == 0)
-    return LK_COLUMN_DISTANCE;
-  if (g_strcmp0 (word, "speed") == 0)
-    return LK_COLUMN_SPEED;
-  if (g_strcmp0 (word, "bearing") == 0)
-    return LK_COLUMN_BEARING;
-  if (g_strcmp0 (word, "duration") == 0)
-    return LK_COLUMN_DURATION;
-  if (g_strcmp0 (word, "number") == 0)
-    return LK_COLUMN_NUMBER;
-  if (g_strcmp0 (word, "flag") == 0)
-    return LK_COLUMN_FLAG;
-  return LK_COLUMN_TEXT;
-}
-
 /* A number is what the mariner scans down a column of, so it is right
  * aligned. */
 static gboolean
-lk_column_is_numeric (LkColumnType type)
+lk_column_is_numeric (lookout_column_type type)
 {
-  return type != LK_COLUMN_TEXT && type != LK_COLUMN_FLAG;
+  return type != LOOKOUT_COLUMN_TEXT && type != LOOKOUT_COLUMN_FLAG;
 }
 
 /* ---- what a cell says, in the units of the sea --------------------------- */
@@ -119,40 +89,38 @@ lk_table_duration (double seconds)
   return g_strdup_printf ("%s%d:%02d", sign, total / 60, total % 60);
 }
 
+/* `type` says how to format the value, `kind` which of the cell's two fields
+ * holds it. A plugin may send a string for a numeric column, and the string is
+ * what the mariner reads. */
 static char *
-lk_table_cell_text (const LkJson *cell, LkColumnType type)
+lk_table_cell_text (const lookout_table_cell *cell)
 {
-  LkJsonKind kind = lk_json_kind (cell);
-
-  if (cell == NULL || kind == LK_JSON_NULL)
+  if (cell->kind == LOOKOUT_TABLE_CELL_ABSENT)
     return g_strdup (LK_TABLE_MISSING);
 
-  if (kind == LK_JSON_STRING)
-    {
-      const char *text = lk_json_string (cell);
+  if (cell->kind == LOOKOUT_TABLE_CELL_TEXT)
+    return cell->type == LOOKOUT_COLUMN_FLAG ? g_ascii_strup (cell->text, -1)
+                                             : g_strdup (cell->text);
 
-      return type == LK_COLUMN_FLAG ? g_ascii_strup (text, -1) : g_strdup (text);
-    }
-
-  double value = lk_json_number (cell, 0);
+  double value = cell->number;
   if (!isfinite (value))
     return g_strdup (LK_TABLE_MISSING);
 
-  switch (type)
+  switch (cell->type)
     {
-    case LK_COLUMN_DISTANCE:
+    case LOOKOUT_COLUMN_DISTANCE:
       return value < LK_TABLE_METRES_BELOW
                  ? g_strdup_printf ("%d m", (int) (value + 0.5))
                  : g_strdup_printf ("%.2f nm", value / 1852.0);
-    case LK_COLUMN_SPEED:
+    case LOOKOUT_COLUMN_SPEED:
       return g_strdup_printf ("%.1f kn", value * 3600.0 / 1852.0);
-    case LK_COLUMN_BEARING:
+    case LOOKOUT_COLUMN_BEARING:
       {
         double degrees = fmod (value, 360.0);
 
         return g_strdup_printf ("%03.0f°", degrees < 0 ? degrees + 360.0 : degrees);
       }
-    case LK_COLUMN_DURATION:
+    case LOOKOUT_COLUMN_DURATION:
       return lk_table_duration (value);
     default:
       return g_strdup_printf ("%g", value);
@@ -184,32 +152,25 @@ lk_table_specs (LkAppModel *model)
 
   g_return_val_if_fail (LK_IS_APP_MODEL (model), specs);
 
-  g_autofree char *json =
-      lk_chart_controller_tables_json (lk_app_model_get_controller (model));
-  g_autoptr (LkJson) root = json == NULL ? NULL : lk_json_parse (json);
-  const LkJson *list = lk_json_member (root, "tables");
+  lookout_tables *read = lk_chart_controller_tables_read (lk_app_model_get_controller (model));
+  size_t count = 0;
+  const lookout_table *const *list = lookout_tables_all (read, &count);
 
-  for (guint i = 0; i < lk_json_length (list); i++)
+  for (size_t i = 0; i < count; i++)
     {
-      const LkJson *node = lk_json_at (list, i);
-      const char *plugin = lk_json_member_string (node, "plugin");
-      const char *key = lk_json_member_string (node, "key");
-
-      if (plugin == NULL || key == NULL)
-        continue;
-
       LkTableSpec *spec = g_new0 (LkTableSpec, 1);
 
-      spec->plugin = g_strdup (plugin);
-      spec->key = g_strdup (key);
-      spec->title = g_strdup (lk_json_member_string (node, "title") ?: key);
-      spec->menu = g_strdup (lk_json_member_string (node, "menu") ?: "Vessels");
+      spec->plugin = g_strdup (list[i]->plugin);
+      spec->key = g_strdup (list[i]->key);
+      spec->title = g_strdup (list[i]->title);
+      spec->menu = g_strdup (list[i]->menu);
       /* `at` names two row keys carrying a position. A table that declared none
        * has no rows to find on the chart. */
-      spec->locatable = lk_json_member (node, "at") != NULL;
+      spec->locatable = list[i]->at_lat[0] != '\0';
       g_ptr_array_add (specs, spec);
     }
 
+  lookout_tables_free (read);
   return specs;
 }
 
@@ -221,42 +182,35 @@ lk_table_read_columns (LkAppModel *model, const LkTableSpec *spec,
                        char **out_sort_key, gboolean *out_ascending)
 {
   GPtrArray *columns = g_ptr_array_new_with_free_func (lk_table_column_free);
-  g_autofree char *json =
-      lk_chart_controller_tables_json (lk_app_model_get_controller (model));
-  g_autoptr (LkJson) root = json == NULL ? NULL : lk_json_parse (json);
-  const LkJson *list = lk_json_member (root, "tables");
+  lookout_tables *read = lk_chart_controller_tables_read (lk_app_model_get_controller (model));
+  size_t count = 0;
+  const lookout_table *const *list = lookout_tables_all (read, &count);
 
-  for (guint i = 0; i < lk_json_length (list); i++)
+  for (size_t i = 0; i < count; i++)
     {
-      const LkJson *node = lk_json_at (list, i);
-
-      if (g_strcmp0 (lk_json_member_string (node, "plugin"), spec->plugin) != 0 ||
-          g_strcmp0 (lk_json_member_string (node, "key"), spec->key) != 0)
+      if (g_strcmp0 (list[i]->plugin, spec->plugin) != 0 ||
+          g_strcmp0 (list[i]->key, spec->key) != 0)
         continue;
 
-      const LkJson *declared = lk_json_member (node, "columns");
-      for (guint c = 0; c < lk_json_length (declared); c++)
+      size_t declared = 0;
+      const lookout_table_column *const *entries = lookout_table_columns (list[i], &declared);
+
+      for (size_t c = 0; c < declared; c++)
         {
-          const LkJson *entry = lk_json_at (declared, c);
-          const char *key = lk_json_member_string (entry, "key");
-
-          if (key == NULL)
-            continue;
-
           LkTableColumn *column = g_new0 (LkTableColumn, 1);
 
-          column->key = g_strdup (key);
-          column->label = g_strdup (lk_json_member_string (entry, "label") ?: key);
-          column->type = lk_column_type_parse (lk_json_member_string (entry, "type"));
+          column->key = g_strdup (entries[c]->key);
+          column->label = g_strdup (entries[c]->label);
+          column->type = entries[c]->type;
           g_ptr_array_add (columns, column);
         }
 
-      const LkJson *sort = lk_json_member (node, "sort");
-      *out_sort_key = g_strdup (lk_json_member_string (sort, "key"));
-      *out_ascending = lk_json_member_bool (sort, "ascending", TRUE);
+      *out_sort_key = g_strdup (list[i]->sort_key);
+      *out_ascending = list[i]->sort_ascending != 0;
       break;
     }
 
+  lookout_tables_free (read);
   return columns;
 }
 
@@ -265,13 +219,12 @@ lk_table_read_columns (LkAppModel *model, const LkTableSpec *spec,
 static void
 lk_table_reload (LkTableWindow *self, gboolean force)
 {
-  g_autofree char *json =
-      lk_chart_controller_table_rows (lk_app_model_get_controller (self->model),
-                                      self->spec->plugin, self->spec->key,
-                                      self->sort_key, self->ascending);
-  g_autoptr (LkJson) root = json == NULL ? NULL : lk_json_parse (json);
+  lookout_table_rows *read =
+      lk_chart_controller_table_rows_read (lk_app_model_get_controller (self->model),
+                                           self->spec->plugin, self->spec->key,
+                                           self->sort_key, self->ascending);
 
-  if (root == NULL)
+  if (read == NULL)
     {
       /* The plugin has gone, and the table with it. An empty window beats a
        * picture nobody is keeping up to date. Clear it once, then hold: redoing
@@ -287,28 +240,32 @@ lk_table_reload (LkTableWindow *self, gboolean force)
 
   /* seq bumps on every accepted batch. The rows are rebuilt only when it moves,
    * so a table nobody is feeding does not flicker once a second. */
-  gint64 seq = (gint64) lk_json_number (lk_json_member (root, "seq"), 0);
+  gint64 seq = (gint64) lookout_table_rows_seq (read);
   if (!force && seq == self->seq)
-    return;
+    {
+      lookout_table_rows_free (read);
+      return;
+    }
   self->seq = seq;
 
   gtk_list_box_remove_all (GTK_LIST_BOX (self->rows));
 
-  const LkJson *list = lk_json_member (root, "rows");
-  guint count = lk_json_length (list);
+  size_t count = 0;
+  const lookout_table_row *const *list = lookout_table_rows_all (read, &count);
 
-  for (guint i = 0; i < count; i++)
+  for (size_t i = 0; i < count; i++)
     {
-      const LkJson *node = lk_json_at (list, i);
-      const LkJson *cells = lk_json_member (node, "cells");
+      size_t cell_count = 0;
+      const lookout_table_cell *const *cells = lookout_table_row_cells (list[i], &cell_count);
       GtkWidget *line = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 10);
       const char *tint = NULL;
 
       for (guint c = 0; c < self->columns->len; c++)
         {
           const LkTableColumn *column = g_ptr_array_index (self->columns, c);
-          const LkJson *cell = lk_json_at (cells, c);
-          g_autofree char *text = lk_table_cell_text (cell, column->type);
+          const lookout_table_cell *cell = c < cell_count ? cells[c] : NULL;
+          g_autofree char *text = cell != NULL ? lk_table_cell_text (cell)
+                                               : g_strdup (LK_TABLE_MISSING);
           GtkWidget *label = gtk_label_new (text);
 
           gtk_label_set_xalign (GTK_LABEL (label),
@@ -318,11 +275,11 @@ lk_table_reload (LkTableWindow *self, gboolean force)
 
           /* A cell the plugin never sent is greyed, so the mariner can tell a
            * value that is missing from one that is small. */
-          if (lk_json_kind (cell) == LK_JSON_NULL || cell == NULL)
+          if (cell == NULL || cell->kind == LOOKOUT_TABLE_CELL_ABSENT)
             gtk_widget_add_css_class (label, "dim-label");
-          else if (column->type == LK_COLUMN_FLAG)
+          else if (column->type == LOOKOUT_COLUMN_FLAG)
             {
-              const char *flag = lk_table_flag_class (lk_json_string (cell));
+              const char *flag = lk_table_flag_class (cell->text);
 
               if (flag != NULL)
                 {
@@ -346,19 +303,19 @@ lk_table_reload (LkTableWindow *self, gboolean force)
 
       /* Where the row is, for the activation below. A table that declared `at`
        * may still hold a row nobody has heard a position from. */
-      const LkJson *at = lk_json_member (node, "at");
-      if (lk_json_length (at) == 2)
+      if (list[i]->located)
         {
           double *point = g_new (double, 2);
 
-          point[0] = lk_json_number (lk_json_at (at, 0), 0);
-          point[1] = lk_json_number (lk_json_at (at, 1), 0);
+          point[0] = list[i]->lon;
+          point[1] = list[i]->lat;
           g_object_set_data_full (G_OBJECT (row), "lk-table-at", point, g_free);
         }
 
       gtk_list_box_append (GTK_LIST_BOX (self->rows), row);
     }
 
+  lookout_table_rows_free (read);
   gtk_widget_set_visible (self->empty, count == 0);
 }
 

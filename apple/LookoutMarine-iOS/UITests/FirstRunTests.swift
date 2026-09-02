@@ -1,5 +1,5 @@
 //  FirstRunTests.swift — the empty state, which is the whole app until a
-//  chart is aboard.
+//  chart is installed.
 
 import XCTest
 

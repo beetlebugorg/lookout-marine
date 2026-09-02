@@ -1,7 +1,6 @@
 /* ui/hud/scale-entry.c — type a scale, or pick a band. */
 #include "ui/hud/scale-entry.h"
 #include "ui/hud/hud.h"
-#include "model/coord.h"
 
 #include <math.h>
 
@@ -42,7 +41,7 @@ lk_scale_entry_refresh (LkScaleEntry *entry)
 {
   const char *text = gtk_editable_get_text (GTK_EDITABLE (entry->entry));
   double denominator = 0;
-  gboolean valid = lk_scale_parse (text, &denominator);
+  gboolean valid = lookout_parse_scale (text, &denominator);
 
   gtk_widget_set_sensitive (entry->go, valid);
 
@@ -50,7 +49,7 @@ lk_scale_entry_refresh (LkScaleEntry *entry)
     {
       g_autofree char *hint =
           g_strdup_printf ("%s band. The chart holds the nearest scale it has.",
-                           lk_format_band (denominator));
+                           lookout_band_name (denominator));
       gtk_label_set_text (GTK_LABEL (entry->hint), hint);
     }
   else
@@ -71,7 +70,7 @@ lk_scale_entry_submit (LkScaleEntry *entry)
 {
   double denominator = 0;
 
-  if (!lk_scale_parse (gtk_editable_get_text (GTK_EDITABLE (entry->entry)), &denominator))
+  if (!lookout_parse_scale (gtk_editable_get_text (GTK_EDITABLE (entry->entry)), &denominator))
     return;
 
   lk_app_model_zoom_to_scale (entry->model, denominator);
@@ -107,7 +106,8 @@ lk_scale_entry_shown (GtkPopover *popover, gpointer user_data)
 {
   LkScaleEntry *entry = user_data;
   double denominator = lk_app_model_get_scale_denominator (entry->model);
-  g_autofree char *scale = lk_format_scale (denominator);
+  char scale[LOOKOUT_SCALE_MAX];
+  lookout_fmt_scale (denominator, scale, sizeof scale);
   g_autofree char *now = g_strconcat ("now ", scale, NULL);
 
   if (denominator > 0)
@@ -119,7 +119,7 @@ lk_scale_entry_shown (GtkPopover *popover, gpointer user_data)
 
   /* The band the view is in is marked, so the panel says where the chart
    * stands before it asks where to go. */
-  const char *band = lk_format_band (denominator);
+  const char *band = lookout_band_name (denominator);
   for (gsize i = 0; i < G_N_ELEMENTS (LK_SCALE_PRESETS); i++)
     {
       if (g_str_equal (LK_SCALE_PRESETS[i].band, band))

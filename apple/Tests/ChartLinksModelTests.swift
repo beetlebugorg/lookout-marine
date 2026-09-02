@@ -18,16 +18,18 @@ final class ChartLinksModelTests: ShellTestCase {
         return m
     }
 
-    private let snapshot = """
-    {"links":[{"url":"https://a/style.json","name":"A"},
-              {"url":"https://b/style.json","name":"B"}],
-     "active":"https://b/style.json",
-     "attribution":"© A publisher","error":"","busy":false}
-    """
+    /// A read as the core hands it over.
+    private let snapshot = ChartLinkSnapshot(
+        links: [ChartLinksModel.ChartLink(url: "https://a/style.json", name: "A"),
+                ChartLinksModel.ChartLink(url: "https://b/style.json", name: "B")],
+        active: "https://b/style.json",
+        attribution: "© A publisher",
+        error: "",
+        busy: false)
 
     func testPollRendersTheSnapshot() {
         let m = model()
-        engine.linksJSON = snapshot
+        engine.links = snapshot
         m.poll()
         XCTAssertEqual(m.list.map(\.name), ["A", "B"])
         XCTAssertEqual(m.active, "https://b/style.json")
@@ -40,7 +42,8 @@ final class ChartLinksModelTests: ShellTestCase {
     /// the chrome tests for nil.
     func testEmptyStringsBecomeNothing() {
         let m = model()
-        engine.linksJSON = #"{"links":[],"active":null,"attribution":"","error":"","busy":false}"#
+        engine.links = ChartLinkSnapshot(links: [], active: nil, attribution: "",
+                                         error: "", busy: false)
         m.attribution = "stale"
         m.error = "stale"
         m.poll()
@@ -48,11 +51,13 @@ final class ChartLinksModelTests: ShellTestCase {
         XCTAssertNil(m.error)
     }
 
-    func testNothingReadableLeavesTheListAlone() {
+    /// The changed flag has one consumer, so a poll with no change returns
+    /// nil and the list stands.
+    func testNothingNewLeavesTheListAlone() {
         let m = model()
-        engine.linksJSON = snapshot
+        engine.links = snapshot
         m.poll()
-        engine.linksJSON = nil
+        engine.links = nil
         m.poll()
         XCTAssertEqual(m.list.count, 2)
     }
@@ -111,15 +116,21 @@ final class ChartLinksModelTests: ShellTestCase {
     }
 
     /// The old UserDefaults list is handed to the core once and then dropped.
+    /// It reads UserDefaults directly, so the test does too.
     func testTheOldStoreIsHandedOverAndForgotten() {
         let m = model()
+        let d = UserDefaults.standard
         let old = try! JSONSerialization.data(withJSONObject: [["url": "https://a", "name": "A"]])
-        Store.shared.set(old, "lookout.chartlinks")
-        Store.shared.set("https://a", "lookout.chartlinks.active")
+        d.set(old, forKey: "lookout.chartlinks")
+        d.set("https://a", forKey: "lookout.chartlinks.active")
+        defer {
+            d.removeObject(forKey: "lookout.chartlinks")
+            d.removeObject(forKey: "lookout.chartlinks.active")
+        }
         m.migrate()
         XCTAssertTrue(engine.calls.contains("importChartLinks"))
-        XCTAssertNil(Store.shared.data("lookout.chartlinks"))
-        XCTAssertNil(Store.shared.string("lookout.chartlinks.active"))
+        XCTAssertNil(d.data(forKey: "lookout.chartlinks"))
+        XCTAssertNil(d.string(forKey: "lookout.chartlinks.active"))
     }
 
     func testNothingToMigrateAsksNothing() {

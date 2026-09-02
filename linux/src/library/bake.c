@@ -1,70 +1,26 @@
 #include "library/bake.h"
 
-#include <tile57.h>
-
 #include <glib/gstdio.h>
 #include <string.h>
 
-/* The name a chart directory takes while it is being thrown away. Dotted so it
- * cannot be read as a set's own directory, and unique so two removals cannot
- * collide. */
-#define LK_TRASH_PREFIX ".removing-"
-
-/* A 7,000 cell import would otherwise post 7,000 times and lay the panel out
- * 7,000 times, on a machine with nothing spare. */
-#define LK_BAKE_POST_INTERVAL_US (G_USEC_PER_SEC / 5)
-
-/* A memory bound, not a speed dial: each worker holds a whole cell's working
- * set, so this is what stops a big set from filling memory. */
-#define LK_BAKE_MAX_WORKERS 8
-
-/* What has to happen to one chart before the app can draw it. The calls are
- * separate because the work is: a cell is parsed and portrayed from the
- * survey, a sheet is decoded and warped from a picture, and something that is
- * already a chart is only lifted out of the archive. */
-typedef enum {
-  LK_PREPARE_CELL = 0,
-  LK_PREPARE_SHEET = 1,
-  LK_PREPARE_LIFT = 2,
-} LkPrepare;
+/* How often the panel is laid out again. A 7,000 cell import would otherwise
+ * post 7,000 times, on a machine with nothing spare. */
+#define LK_BAKE_POLL_MS 200
 
 struct _LkChartBake {
-  GThread *thread;
+  /* The core's job: the worker, the phases, the counters and the cancel. */
+  lookout_bake *job;
 
-  char *source;
   char *out_dir;
   char *name;
-  gboolean archive;
-
-  GPtrArray *in_paths;  /* char*, owned */
-  GPtrArray *out_paths; /* char*, owned */
-  GPtrArray *labels;    /* char*, owned; the name to report per index */
-  int cell_count;
-  int sheet_count;
-  int lift_count;
-
-  /* Read by the engine's progress callback on its worker threads. */
-  gint cancelled;
-  /* Progress posts queued on the main loop and not yet run. Incremented on
-   * the worker, decremented on the main loop. */
-  gint posts_pending;
-  /* Destroyed while posts were still queued; the last one frees the job. */
-  gboolean orphaned;
-
-  GMutex lock;
-  int phase_offset; /* the engine counts from zero per call; put it back */
-  int job_total;
-  int done;
-  char *last_cell;
   gint64 started_us;
-  gint64 last_post_us;
+
+  guint poll_id;
+  int   posted_done; /* the last count handed to on_progress */
 
   LkBakeProgressFunc on_progress;
   LkBakeDoneFunc on_done;
   gpointer user_data;
-
-  guint baked;
-  gboolean ok;
 };
 
 /* ---- progress ------------------------------------------------------------ */
@@ -108,13 +64,6 @@ lk_bake_progress_remaining (const LkBakeProgress *p)
   return g_strdup_printf ("about %.1f h left", left / 3600);
 }
 
-static void
-lk_bake_progress_clear (LkBakeProgress *p)
-{
-  g_free (p->name);
-  g_free (p->cell);
-}
-
 /* ---- where prepared charts live ------------------------------------------ */
 
 const char *
@@ -133,36 +82,19 @@ lk_chart_bake_root (void)
 gboolean
 lk_chart_bake_is_derived (const char *path)
 {
-  const char *root = lk_chart_bake_root ();
-
-  if (path == NULL || root == NULL)
+  if (path == NULL)
     return FALSE;
-  if (g_strcmp0 (path, root) == 0)
-    return TRUE;
-
-  g_autofree char *prefix = g_strconcat (root, G_DIR_SEPARATOR_S, NULL);
-  return g_str_has_prefix (path, prefix);
+  return lookout_bake_is_derived (lk_chart_bake_root (), path) != 0;
 }
 
 char *
 lk_chart_bake_prepared_dir (const char *source)
 {
-  const char *root = lk_chart_bake_root ();
+  char name[512];
 
-  if (source == NULL || root == NULL)
+  if (source == NULL || lookout_bake_prepared_name (source, name, sizeof name) == 0)
     return NULL;
-
-  g_autofree char *base = g_path_get_basename (source);
-  /* An archive names its directory without the .zip: what comes out of
-     All_ENCs.zip is charts, and "All_ENCs.zip/" full of them reads like a
-     mistake. */
-  if (lk_chart_scan_is_archive (source))
-    {
-      char *dot = g_strrstr (base, ".");
-      if (dot != NULL)
-        *dot = '\0';
-    }
-  return g_build_filename (root, base, NULL);
+  return g_build_filename (lk_chart_bake_root (), name, NULL);
 }
 
 static char *
@@ -235,7 +167,7 @@ lk_chart_bake_delete_derived (const char *path)
      this returns, and a set added straight back writes into a fresh directory
      instead of racing the delete. */
   g_autofree char *uuid = g_uuid_string_random ();
-  g_autofree char *leaf = g_strconcat (LK_TRASH_PREFIX, uuid, NULL);
+  g_autofree char *leaf = g_strconcat (lookout_bake_trash_prefix (), uuid, NULL);
   g_autofree char *trash = g_build_filename (root, leaf, NULL);
 
   if (g_rename (path, trash) != 0)
@@ -263,7 +195,7 @@ lk_chart_bake_sweep_trash (void)
   const char *name;
   while ((name = g_dir_read_name (dir)) != NULL)
     {
-      if (!g_str_has_prefix (name, LK_TRASH_PREFIX))
+      if (!lookout_bake_is_trash (name))
         continue;
       GThread *t = g_thread_new ("lk-trash", lk_trash_worker,
                                  g_build_filename (root, name, NULL));
@@ -273,242 +205,19 @@ lk_chart_bake_sweep_trash (void)
 
 /* ---- the bake ------------------------------------------------------------ */
 
-static LkPrepare
+/* The core runs the bake: the order, the worker cap, the three phases, the
+ * counters and the cancel are all lookout_bake's. What is left here is the
+ * directory the shell prepares into, the poll that feeds the pill, and the
+ * wording that pill reads. */
+
+static lookout_prepare
 lk_prepare_for (const LkScannedCell *cell)
 {
-  if (g_strcmp0 (cell->kind, "source") == 0)
-    return LK_PREPARE_CELL;
-  if (g_strcmp0 (cell->kind, "raster_source") == 0)
-    return LK_PREPARE_SHEET;
-  return LK_PREPARE_LIFT;
-}
-
-/* Coarse first, then by name so a run is repeatable. Sheets after the survey,
- * because that is what a mariner needs to sail and a picture is what they
- * compare it against, and anything only being lifted out of an archive last:
- * it is the cheapest and the least urgent. */
-static int
-lk_cell_order (gconstpointer a, gconstpointer b)
-{
-  const LkScannedCell *x = *(const LkScannedCell *const *) a;
-  const LkScannedCell *y = *(const LkScannedCell *const *) b;
-  LkPrepare px = lk_prepare_for (x);
-  LkPrepare py = lk_prepare_for (y);
-
-  if (px != py)
-    return px < py ? -1 : 1;
-  if (x->band != y->band)
-    return x->band < y->band ? -1 : 1;
-  return g_strcmp0 (x->name, y->name);
-}
-
-/* Every prepared chart goes in a directory of its own name, the layout
- * tile57's own bake writes and the layout an exchange set uses. Two things
- * depend on it: the raster layer reads a provider from the directory ABOVE, so
- * sheets written flat become one provider each, and a cell carries the text
- * and pictures it references beside it, which the engine only writes when the
- * chart has a directory to hold them.
- *
- * From an archive the output MIRRORS the entry's own path, so what comes out
- * is laid out like what went in. Imagery keeps its own name: an .mbtiles is a
- * chart already, and renaming it to .pmtiles would be a lie about the file. */
-static char *
-lk_bake_out_path (const LkChartBake *bake, const LkScannedCell *cell)
-{
-  g_autofree char *stem = g_strdup (cell->name);
-  char *dot = g_strrstr (stem, ".");
-  if (dot != NULL)
-    *dot = '\0';
-
-  g_autofree char *base = NULL;
-  if (bake->archive)
-    {
-      g_autofree char *parent = g_path_get_dirname (cell->path);
-      base = g_strcmp0 (parent, ".") == 0 ? g_strdup (bake->out_dir)
-                                          : g_build_filename (bake->out_dir, parent, NULL);
-    }
-  else
-    {
-      base = g_strdup (bake->out_dir);
-    }
-
-  LkPrepare prepare = lk_prepare_for (cell);
-  g_autofree char *base_leaf = g_path_get_basename (base);
-  /* Unless the mirrored path IS the chart's directory already, which it is for
-     every exchange set: appending it again gives US1EEZ3M/US1EEZ3M/... */
-  g_autofree char *dir = (prepare == LK_PREPARE_LIFT || g_strcmp0 (base_leaf, stem) == 0)
-                             ? g_strdup (base)
-                             : g_build_filename (base, stem, NULL);
-
-  g_autofree char *leaf = NULL;
-  if (prepare == LK_PREPARE_LIFT)
-    leaf = g_path_get_basename (cell->path);
-  else
-    leaf = g_strconcat (stem, ".pmtiles", NULL);
-
-  return g_build_filename (dir, leaf, NULL);
-}
-
-static void lk_chart_bake_free (LkChartBake *bake);
-
-typedef struct {
-  LkChartBake   *bake;
-  LkBakeProgress progress;
-} LkBakePost;
-
-static gboolean
-lk_bake_post_idle (gpointer data)
-{
-  LkBakePost *post = data;
-  LkChartBake *bake = post->bake;
-
-  if (bake->on_progress != NULL)
-    bake->on_progress (&post->progress, bake->user_data);
-
-  lk_bake_progress_clear (&post->progress);
-  g_free (post);
-  /* The last queued post frees an orphaned job: destroy ran on this same
-     loop while we sat queued, so it could not free under us. */
-  if (g_atomic_int_dec_and_test (&bake->posts_pending) && bake->orphaned)
-    lk_chart_bake_free (bake);
-  return G_SOURCE_REMOVE;
-}
-
-/* Called on tile57's worker threads, out of order, so everything it touches is
- * behind the lock. Returning false CANCELS the bake. */
-static bool
-lk_bake_progress_cb (void *ctx, uint32_t done, uint32_t total)
-{
-  LkChartBake *bake = ctx;
-  gint64 now = g_get_monotonic_time ();
-  gboolean post = FALSE;
-
-  g_mutex_lock (&bake->lock);
-  bake->done = bake->phase_offset + (int) done;
-  if (now - bake->last_post_us >= LK_BAKE_POST_INTERVAL_US ||
-      bake->done >= bake->job_total)
-    {
-      bake->last_post_us = now;
-      post = TRUE;
-    }
-  LkBakePost *msg = NULL;
-  if (post)
-    {
-      msg = g_new0 (LkBakePost, 1);
-      msg->bake = bake;
-      msg->progress.done = bake->done;
-      msg->progress.total = bake->job_total;
-      msg->progress.name = g_strdup (bake->name);
-      msg->progress.cell = g_strdup (bake->last_cell);
-      msg->progress.elapsed = (double) (now - bake->started_us) / G_USEC_PER_SEC;
-    }
-  g_mutex_unlock (&bake->lock);
-
-  (void) total;
-  if (msg != NULL)
-    {
-      g_atomic_int_inc (&bake->posts_pending);
-      g_idle_add (lk_bake_post_idle, msg);
-    }
-
-  return g_atomic_int_get (&bake->cancelled) == 0;
-}
-
-/* Names the chart that just finished, by its index into the caller's paths for
- * THIS call, which is why the phase offset goes back on. */
-static void
-lk_bake_label_cb (void *ctx, uint32_t index)
-{
-  LkChartBake *bake = ctx;
-
-  g_mutex_lock (&bake->lock);
-  guint at = bake->phase_offset + index;
-  if (at < bake->labels->len)
-    {
-      g_free (bake->last_cell);
-      bake->last_cell = g_strdup (g_ptr_array_index (bake->labels, at));
-    }
-  g_mutex_unlock (&bake->lock);
-}
-
-/* The engine names and counts from zero for each call; the job puts them back
- * on the mariner's scale. */
-static void
-lk_bake_begin_phase (LkChartBake *bake, int offset)
-{
-  g_mutex_lock (&bake->lock);
-  bake->phase_offset = offset;
-  g_mutex_unlock (&bake->lock);
-}
-
-static gboolean
-lk_bake_done_idle (gpointer data)
-{
-  LkChartBake *bake = data;
-
-  if (bake->on_done != NULL)
-    bake->on_done (bake->ok ? bake->out_dir : NULL, bake->baked, bake->user_data);
-  return G_SOURCE_REMOVE;
-}
-
-/* Run each kind of work through the engine call that does it, and report the
- * lot as one job. From an archive each input is an ENTRY NAME and the engine
- * reads it where it lies: nothing is unzipped, so importing NOAA's 788 MB
- * All_ENCs.zip never costs the 2.0 GiB of source it holds. */
-static gpointer
-lk_bake_worker (gpointer data)
-{
-  LkChartBake *bake = data;
-  const char *const *ins = (const char *const *) bake->in_paths->pdata;
-  const char *const *outs = (const char *const *) bake->out_paths->pdata;
-  uint32_t workers = (uint32_t) CLAMP (g_get_num_processors (), 1, LK_BAKE_MAX_WORKERS);
-  tile57_error err = { 0 };
-  tile57_status st = TILE57_OK;
-  uint32_t total = 0;
-  uint32_t n = 0;
-
-  if (bake->cell_count > 0)
-    {
-      lk_bake_begin_phase (bake, 0);
-      st = bake->archive
-               ? tile57_bake_zip_charts (bake->source, ins, outs, bake->cell_count, workers,
-                                         lk_bake_progress_cb, lk_bake_label_cb, bake, &n, &err)
-               : tile57_bake_files (ins, outs, bake->cell_count, workers,
-                                    lk_bake_progress_cb, lk_bake_label_cb, bake, &n, &err);
-      total += n;
-    }
-
-  if (st == TILE57_OK && bake->sheet_count > 0)
-    {
-      int off = bake->cell_count;
-      lk_bake_begin_phase (bake, off);
-      n = 0;
-      st = bake->archive
-               ? tile57_bake_zip_rasters (bake->source, ins + off, outs + off, bake->sheet_count,
-                                          workers, lk_bake_progress_cb, lk_bake_label_cb, bake, &n, &err)
-               : tile57_bake_rasters (ins + off, outs + off, bake->sheet_count, workers,
-                                      lk_bake_progress_cb, lk_bake_label_cb, bake, &n, &err);
-      total += n;
-    }
-
-  /* Only an archive has anything to lift: in a folder these files are already
-     where the engine can read them. */
-  if (st == TILE57_OK && bake->archive && bake->lift_count > 0)
-    {
-      int off = bake->cell_count + bake->sheet_count;
-      lk_bake_begin_phase (bake, off);
-      n = 0;
-      st = tile57_zip_extract (bake->source, ins + off, outs + off, bake->lift_count,
-                               lk_bake_progress_cb, bake, &n, &err);
-      total += n;
-    }
-
-  bake->baked = total;
-  /* A cancelled bake is TILE57_OK, not a failure: whatever landed is a usable
-     library, so the caller still gets the directory. */
-  bake->ok = (st == TILE57_OK);
-  g_idle_add (lk_bake_done_idle, bake);
-  return NULL;
+  if (cell->kind == LOOKOUT_FILE_SOURCE)
+    return LOOKOUT_PREPARE_CELL;
+  if (cell->kind == LOOKOUT_FILE_RASTER_SOURCE)
+    return LOOKOUT_PREPARE_SHEET;
+  return LOOKOUT_PREPARE_LIFT;
 }
 
 static void
@@ -516,15 +225,50 @@ lk_chart_bake_free (LkChartBake *bake)
 {
   if (bake == NULL)
     return;
-  g_clear_pointer (&bake->in_paths, g_ptr_array_unref);
-  g_clear_pointer (&bake->out_paths, g_ptr_array_unref);
-  g_clear_pointer (&bake->labels, g_ptr_array_unref);
-  g_free (bake->source);
+  g_clear_handle_id (&bake->poll_id, g_source_remove);
+  if (bake->job != NULL)
+    {
+      lookout_bake_cancel (bake->job);
+      lookout_bake_free (bake->job);
+    }
   g_free (bake->out_dir);
   g_free (bake->name);
-  g_free (bake->last_cell);
-  g_mutex_clear (&bake->lock);
   g_free (bake);
+}
+
+/* One look at the job, on the main loop. The pill wants a fraction and a time
+ * left; the done callback wants the directory and how many landed. */
+static gboolean
+lk_chart_bake_poll (gpointer data)
+{
+  LkChartBake *bake = data;
+  lookout_bake_progress got;
+
+  lookout_bake_poll (bake->job, &got);
+
+  if (bake->on_progress != NULL && (int) got.done != bake->posted_done)
+    {
+      gint64 now = g_get_monotonic_time ();
+      LkBakeProgress progress = {
+        .done = (int) got.done,
+        .total = (int) got.total,
+        .name = bake->name,
+        .elapsed = (double) (now - bake->started_us) / G_USEC_PER_SEC,
+      };
+
+      bake->posted_done = (int) got.done;
+      bake->on_progress (&progress, bake->user_data);
+    }
+
+  if (got.running)
+    return G_SOURCE_CONTINUE;
+
+  /* A cancelled bake reports ok: whatever landed is a usable library, so the
+   * caller still gets the directory. */
+  bake->poll_id = 0;
+  if (bake->on_done != NULL)
+    bake->on_done (got.ok ? bake->out_dir : NULL, got.baked, bake->user_data);
+  return G_SOURCE_REMOVE;
 }
 
 LkChartBake *
@@ -537,113 +281,113 @@ lk_chart_bake_start (const char        *source,
   if (source == NULL || set == NULL || set->cells == NULL)
     return NULL;
 
-  g_autoptr (GPtrArray) ordered = g_ptr_array_new ();
+  g_autoptr (GArray) items = g_array_new (FALSE, FALSE, sizeof (lookout_bake_item));
   for (guint i = 0; i < set->cells->len; i++)
     {
-      LkScannedCell *cell = g_ptr_array_index (set->cells, i);
-      if (lk_scanned_cell_needs_prepare (cell))
-        g_ptr_array_add (ordered, cell);
-    }
-  if (ordered->len == 0)
-    return NULL;
-  g_ptr_array_sort (ordered, lk_cell_order);
+      const LkScannedCell *cell = g_ptr_array_index (set->cells, i);
 
-  char *out_dir = lk_chart_bake_output_dir (source);
+      if (!lk_scanned_cell_needs_prepare (cell))
+        continue;
+
+      lookout_bake_item item = {
+        .path = cell->path,
+        .name = cell->name,
+        .band = cell->band,
+        .work = lk_prepare_for (cell),
+      };
+      g_array_append_val (items, item);
+    }
+  if (items->len == 0)
+    return NULL;
+
+  /* Coarse band first, sheets after the survey, lifts last, by name within
+   * that. A mariner who cancels half way then has charts covering the whole
+   * passage at a usable scale. */
+  lookout_bake_order ((lookout_bake_item *) items->data, items->len);
+
+  g_autofree char *out_dir = lk_chart_bake_output_dir (source);
   if (out_dir == NULL)
     return NULL;
 
-  LkChartBake *bake = g_new0 (LkChartBake, 1);
-  g_mutex_init (&bake->lock);
-  bake->source = g_strdup (source);
-  bake->out_dir = out_dir;
-  bake->name = g_path_get_basename (source);
-  bake->archive = lk_chart_scan_is_archive (source);
-  bake->in_paths = g_ptr_array_new_with_free_func (g_free);
-  bake->out_paths = g_ptr_array_new_with_free_func (g_free);
-  bake->labels = g_ptr_array_new_with_free_func (g_free);
-  bake->on_progress = on_progress;
-  bake->on_done = on_done;
-  bake->user_data = user_data;
-  bake->started_us = g_get_monotonic_time ();
+  gboolean archive = lk_chart_scan_is_archive (source);
+  g_autoptr (GPtrArray) ins = g_ptr_array_new_with_free_func (g_free);
+  g_autoptr (GPtrArray) outs = g_ptr_array_new_with_free_func (g_free);
+  size_t cells = 0, sheets = 0, lifts = 0;
 
-  for (guint i = 0; i < ordered->len; i++)
+  for (guint i = 0; i < items->len; i++)
     {
-      const LkScannedCell *cell = g_ptr_array_index (ordered, i);
-      LkPrepare prepare = lk_prepare_for (cell);
-      g_autofree char *out = lk_bake_out_path (bake, cell);
+      const lookout_bake_item *item = &g_array_index (items, lookout_bake_item, i);
+      char path[2048];
+
+      if (lookout_bake_output_path (out_dir, source, item, path, sizeof path) == 0)
+        {
+          /* Nowhere to write it that fits. Say so rather than leaving one
+             chart quietly out of the library. */
+          g_warning ("no output path for %s under %s", item->name, out_dir);
+          continue;
+        }
 
       /* Already made. A source always reports its cells as needing preparing —
          a .zip of raw cells says so however many times it is opened — so
          without this every reopen bakes the whole set again. Re-importing one
          chart must not re-bake the rest. */
-      if (g_file_test (out, G_FILE_TEST_EXISTS))
+      if (g_file_test (path, G_FILE_TEST_EXISTS))
         continue;
 
       /* Only now is the chart's own directory worth making. */
-      g_autofree char *dir = g_path_get_dirname (out);
+      g_autofree char *dir = g_path_get_dirname (path);
       g_mkdir_with_parents (dir, 0755);
 
-      g_ptr_array_add (bake->in_paths, g_strdup (cell->path));
-      g_ptr_array_add (bake->out_paths, g_steal_pointer (&out));
-      g_ptr_array_add (bake->labels, g_strdup (cell->name));
-
-      switch (prepare)
+      g_ptr_array_add (ins, g_strdup (item->path));
+      g_ptr_array_add (outs, g_strdup (path));
+      switch (item->work)
         {
-        case LK_PREPARE_CELL:  bake->cell_count++;  break;
-        case LK_PREPARE_SHEET: bake->sheet_count++; break;
-        case LK_PREPARE_LIFT:  bake->lift_count++;  break;
+        case LOOKOUT_PREPARE_CELL:  cells++;  break;
+        case LOOKOUT_PREPARE_SHEET: sheets++; break;
+        case LOOKOUT_PREPARE_LIFT:  lifts++;  break;
         }
     }
 
-  if (bake->in_paths->len == 0)
+  /* Every cell was prepared already: the caller opens what is there. */
+  if (ins->len == 0)
+    return NULL;
+
+  g_ptr_array_add (ins, NULL);
+  g_ptr_array_add (outs, NULL);
+
+  LkChartBake *bake = g_new0 (LkChartBake, 1);
+
+  bake->out_dir = g_steal_pointer (&out_dir);
+  bake->name = g_path_get_basename (source);
+  bake->started_us = g_get_monotonic_time ();
+  bake->posted_done = -1;
+  bake->on_progress = on_progress;
+  bake->on_done = on_done;
+  bake->user_data = user_data;
+  bake->job = lookout_bake_start (source, (const char *const *) ins->pdata,
+                                  (const char *const *) outs->pdata,
+                                  cells, sheets, lifts, archive ? 1 : 0);
+  if (bake->job == NULL)
     {
-      /* Every cell was prepared already: the caller opens what is there. */
       lk_chart_bake_free (bake);
       return NULL;
     }
-  bake->job_total = (int) bake->in_paths->len;
 
-  bake->thread = g_thread_new ("lk-chart-bake", lk_bake_worker, bake);
+  bake->poll_id = g_timeout_add (LK_BAKE_POLL_MS, lk_chart_bake_poll, bake);
   return bake;
 }
 
 void
 lk_chart_bake_cancel (LkChartBake *bake)
 {
-  if (bake != NULL)
-    g_atomic_int_set (&bake->cancelled, 1);
+  if (bake != NULL && bake->job != NULL)
+    lookout_bake_cancel (bake->job);
 }
 
 void
 lk_chart_bake_destroy (LkChartBake *bake)
 {
-  if (bake == NULL)
-    return;
-
-  /* A finished worker joins at once; a running one exits at the next chart
-     boundary once cancelled. */
-  g_atomic_int_set (&bake->cancelled, 1);
-  if (bake->thread != NULL)
-    {
-      g_thread_join (bake->thread);
-      bake->thread = NULL;
-    }
-
-  /* The done idle holds the job as its data; it must not fire after this.
-     Calling from inside that idle is fine — a dispatching source removes
-     cleanly. */
-  while (g_source_remove_by_user_data (bake))
-    ;
-
-  /* Progress posts already queued on this loop still point at the job.
-     Disarm them and let the last one free it; freeing here would be a
-     use-after-free the moment the loop turns. */
-  bake->on_progress = NULL;
-  bake->on_done = NULL;
-  if (g_atomic_int_get (&bake->posts_pending) > 0)
-    {
-      bake->orphaned = TRUE;
-      return;
-    }
+  /* lookout_bake_free cancels and joins, so a running bake stops at the next
+   * chart boundary and nothing outlives this call. */
   lk_chart_bake_free (bake);
 }

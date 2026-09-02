@@ -6,10 +6,9 @@
  * main thread, reports where it has got to, and stops when the mariner says
  * stop.
  *
- * ORDER IS THE POINT. Coarse band first: Overview, General, Coastal, then the
- * harbour detail. A mariner who cancels half way then has charts covering the
- * whole passage at a usable scale. The other order gives them every berth in
- * one river and nothing between rivers.
+ * The core runs it: lookout_bake owns the order, the worker cap, the three
+ * phases and the cancel. What is here is the directory this app prepares into,
+ * a poll that feeds the pill, and the words that pill reads.
  *
  * The source is never written to: it may be a read-only disc or a drive that
  * goes away. Everything prepared lands under this app's own data directory,
@@ -23,11 +22,10 @@
 #include <glib.h>
 
 typedef struct {
-  int        done;
-  int        total;
-  char      *name;    /* the set being worked on */
-  char      *cell;    /* the chart that finished last */
-  double     elapsed; /* seconds since the work started */
+  int         done;
+  int         total;
+  const char *name;   /* the set being worked on; borrowed for the call */
+  double      elapsed; /* seconds since the work started */
 } LkBakeProgress;
 
 /* The fraction done, 0 when nothing is known yet. */

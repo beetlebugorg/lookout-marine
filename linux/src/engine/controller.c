@@ -17,30 +17,14 @@ struct _LkChartController {
   LkAppModel *model; /* pushed live readouts; not owned */
 
   guint    tick_id;
-  gint64   last_frame_us;
-  int      idle_ticks;
-
-  /* Kicks the tick loop back awake for the plugins (see the idle poll below). */
-  guint    plugin_poll_id;
+  /* The one-shot the core asked for with LOOKOUT_FRAME_WAIT. */
+  guint    wake_id;
 
   gint64 last_readouts_us;
-  gint64 last_view_saved_us;
-  /* The pose as last written, so an unchanged one is not re-written. */
-  lookout_view last_saved_view;
 };
 
 G_DEFINE_FINAL_TYPE (LkChartController, lk_chart_controller, G_TYPE_OBJECT)
 
-void
-lk_pick_feature_free (LkPickFeature *feature)
-{
-  if (feature == NULL)
-    return;
-  g_free (feature->cls);
-  g_free (feature->chart);
-  g_free (feature->s57);
-  g_free (feature);
-}
 
 static void
 lk_chart_controller_dispose (GObject *object)
@@ -130,19 +114,21 @@ lk_chart_controller_push_readouts (LkChartController *self)
         lk_app_model_move_pick (self->model, sx, sy);
     }
 
-  /* Persist periodically — but only a pose that moved: AIS-driven redraws
-   * with a stationary camera were writing the disk every three seconds for
-   * nothing, and a boat computer's flash pays for that. */
-  if (now - self->last_view_saved_us >= 3 * G_USEC_PER_SEC &&
-      memcmp (&view, &self->last_saved_view, sizeof view) != 0)
-    {
-      self->last_view_saved_us = now;
-      self->last_saved_view = view;
-      lk_store_save_view (&view);
-    }
 }
 
 /* ---- the on-demand render loop ------------------------------------------ */
+
+/* The loop is the CORE's: lookout_frame_next measures its own gap, advances the
+ * fling, adopts the chart-link answers waiting, asks the store whether its
+ * coalesce window has passed, and says whether to draw. What is left here is
+ * the platform timer, on or off.
+ *
+ * Three verdicts. RENDER draws. WAIT keeps the frame clock, or takes the loop
+ * off it and sets a one-shot when a rate comes with it — that is the slow beat
+ * a plugin layer needs, because traffic arrives with no gesture behind it.
+ * IDLE stops the loop until something kicks it. */
+
+static void lk_chart_controller_schedule_wake (LkChartController *self, int ms);
 
 static gboolean
 lk_chart_controller_tick (GtkWidget     *widget,
@@ -150,6 +136,7 @@ lk_chart_controller_tick (GtkWidget     *widget,
                           gpointer       user_data)
 {
   LkChartController *self = user_data;
+  lookout_frame frame;
 
   if (self->handle == NULL)
     {
@@ -157,27 +144,18 @@ lk_chart_controller_tick (GtkWidget     *widget,
       return G_SOURCE_REMOVE;
     }
 
-  gint64 now = gdk_frame_clock_get_frame_time (clock);
-  double dt = self->last_frame_us == 0 ? 0.0 : (now - self->last_frame_us) / (double) G_USEC_PER_SEC;
-  self->last_frame_us = now;
-  if (dt > 0.05)
-    dt = 0.05; /* cap after an idle gap, so a resumed fling doesn't teleport */
+  lookout_frame_next (self->handle, &frame);
 
-  gboolean animating = lookout_animating (self->handle) != 0;
-  if (animating)
-    lookout_tick_anim (self->handle, dt);
-
-  gboolean building = lookout_is_building (self->handle) != 0;
   if (self->model != NULL)
     {
-      lk_app_model_set_building (self->model, building);
+      lk_app_model_set_building (self->model, frame.building != 0);
       /* The chart-link list, the credit and the error, from the core. A
        * landing answer raises needs-redraw, so a resolve keeps this ticking
        * until it is done. */
       lk_app_model_poll_chart_links (self->model);
     }
 
-  if (animating || lookout_needs_redraw (self->handle) != 0)
+  if (frame.verdict == LOOKOUT_FRAME_RENDER)
     {
       if (lookout_render (self->handle))
         {
@@ -190,26 +168,58 @@ lk_chart_controller_tick (GtkWidget     *widget,
             lk_app_model_set_first_build_done (self->model, TRUE);
         }
       lk_chart_controller_push_readouts (self);
-      self->idle_ticks = 0;
+      return G_SOURCE_CONTINUE;
     }
-  else if (building)
-    {
-      self->idle_ticks = 0; /* keep ticking while a background tessellation fills in */
-    }
-  else
-    {
-      /* Static — the first scene has rendered, which retires the spinner. */
-      if (self->model != NULL)
-        lk_app_model_set_first_build_done (self->model, TRUE);
 
-      if (++self->idle_ticks > 2)
-        {
-          self->tick_id = 0;
-          return G_SOURCE_REMOVE; /* idle costs nothing until something kicks us */
-        }
+  /* Not a frame, so one has already gone out: retire the spinner. */
+  if (self->model != NULL)
+    lk_app_model_set_first_build_done (self->model, TRUE);
+
+  if (frame.verdict == LOOKOUT_FRAME_IDLE)
+    {
+      self->tick_id = 0;
+      return G_SOURCE_REMOVE; /* idle costs nothing until something kicks us */
+    }
+
+  if (frame.wait_ms > 0)
+    {
+      lk_chart_controller_schedule_wake (self, frame.wait_ms);
+      self->tick_id = 0;
+      return G_SOURCE_REMOVE;
     }
 
   return G_SOURCE_CONTINUE;
+}
+
+/* Back on the frame clock, WITHOUT lookout_frame_kick. A timer firing is not a
+ * change the shell made. Kicking here resets the engine's count of ticks since
+ * a change, which costs three frame-clock ticks per beat of the slow poll:
+ * 0.7% idle CPU against 0.2%. */
+static void
+lk_chart_controller_resume (LkChartController *self)
+{
+  if (self->tick_id != 0 || self->view == NULL || self->handle == NULL)
+    return;
+  self->tick_id = gtk_widget_add_tick_callback (self->view, lk_chart_controller_tick,
+                                                self, NULL);
+}
+
+static gboolean
+lk_chart_controller_wake (gpointer user_data)
+{
+  LkChartController *self = user_data;
+
+  self->wake_id = 0;
+  lk_chart_controller_resume (self);
+  return G_SOURCE_REMOVE;
+}
+
+/* Ask again in `ms`. The core sets the rate and the shell runs the timer. */
+static void
+lk_chart_controller_schedule_wake (LkChartController *self, int ms)
+{
+  g_clear_handle_id (&self->wake_id, g_source_remove);
+  self->wake_id = g_timeout_add ((guint) ms, lk_chart_controller_wake, self);
 }
 
 void
@@ -217,67 +227,19 @@ lk_chart_controller_kick (LkChartController *self)
 {
   g_return_if_fail (LK_IS_CHART_CONTROLLER (self));
 
-  self->idle_ticks = 0;
-  if (self->tick_id != 0 || self->view == NULL || self->handle == NULL)
-    return;
-
-  self->last_frame_us = 0;
-  self->tick_id = gtk_widget_add_tick_callback (self->view, lk_chart_controller_tick,
-                                                self, NULL);
+  g_clear_handle_id (&self->wake_id, g_source_remove);
+  if (self->handle != NULL)
+    lookout_frame_kick (self->handle);
+  lk_chart_controller_resume (self);
 }
 
 static void
 lk_chart_controller_stop_tick (LkChartController *self)
 {
+  g_clear_handle_id (&self->wake_id, g_source_remove);
   if (self->tick_id != 0 && self->view != NULL)
     gtk_widget_remove_tick_callback (self->view, self->tick_id);
   self->tick_id = 0;
-}
-
-/* ---- the plugin idle poll ----------------------------------------------- */
-
-/* The tick loop takes itself off the frame clock once the chart is static, and
- * only input puts it back. A plugin posts geometry from its own thread with no
- * gesture behind it, so while plugins are loaded a timer asks whether anything
- * moved and re-arms the loop when it did. Without it AIS traffic freezes until
- * the mariner touches the trackpad.
- *
- * 4 Hz: the AIS store coalesces to 2 Hz, and this is twice that. It costs one
- * cheap call per beat while nothing is happening. */
-#define LK_PLUGIN_POLL_MS 250
-
-static gboolean
-lk_chart_controller_plugin_poll (gpointer user_data)
-{
-  LkChartController *self = user_data;
-
-  if (self->handle == NULL)
-    {
-      self->plugin_poll_id = 0;
-      return G_SOURCE_REMOVE;
-    }
-
-  if (lookout_needs_redraw (self->handle) != 0)
-    lk_chart_controller_kick (self);
-  return G_SOURCE_CONTINUE;
-}
-
-static void
-lk_chart_controller_start_plugin_poll (LkChartController *self)
-{
-  if (self->plugin_poll_id != 0 || self->handle == NULL)
-    return;
-  if (lookout_plugins_active (self->handle) == 0)
-    return;
-
-  self->plugin_poll_id = g_timeout_add (LK_PLUGIN_POLL_MS,
-                                        lk_chart_controller_plugin_poll, self);
-}
-
-static void
-lk_chart_controller_stop_plugin_poll (LkChartController *self)
-{
-  g_clear_handle_id (&self->plugin_poll_id, g_source_remove);
 }
 
 /* ---- the plugin set ------------------------------------------------------ */
@@ -367,19 +329,14 @@ lk_chart_controller_plugins_active (LkChartController *self)
   return self->handle != NULL && lookout_plugins_active (self->handle) != 0;
 }
 
-char *
-lk_chart_controller_plugins_json (LkChartController *self)
+lookout_plugins *
+lk_chart_controller_plugins_read (LkChartController *self)
 {
   g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), NULL);
 
   if (self->handle == NULL)
     return NULL;
-
-  gsize length = 0;
-  const char *json = lookout_plugins_json (self->handle, &length);
-
-  /* Borrowed until the next plugin query, so it is copied out here. */
-  return json == NULL || length == 0 ? NULL : g_strndup (json, length);
+  return lookout_plugins_read (self->handle);
 }
 
 gboolean
@@ -412,18 +369,14 @@ lk_chart_controller_copy_borrowed (const char *text, gsize length)
   return text == NULL || length == 0 ? NULL : g_strndup (text, length);
 }
 
-char *
-lk_chart_controller_alerts_json (LkChartController *self)
+lookout_alerts *
+lk_chart_controller_alerts_read (LkChartController *self)
 {
   g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), NULL);
 
   if (self->handle == NULL)
     return NULL;
-
-  gsize length = 0;
-  const char *json = lookout_plugin_alerts_json (self->handle, &length);
-
-  return lk_chart_controller_copy_borrowed (json, length);
+  return lookout_alerts_read (self->handle);
 }
 
 gboolean
@@ -436,37 +389,29 @@ lk_chart_controller_alert_ack (LkChartController *self, guint64 id)
   return lookout_plugin_alert_ack (self->handle, id) == 0;
 }
 
-char *
-lk_chart_controller_tables_json (LkChartController *self)
+lookout_tables *
+lk_chart_controller_tables_read (LkChartController *self)
 {
   g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), NULL);
 
   if (self->handle == NULL)
     return NULL;
-
-  gsize length = 0;
-  const char *json = lookout_plugin_tables_json (self->handle, &length);
-
-  return lk_chart_controller_copy_borrowed (json, length);
+  return lookout_tables_read (self->handle);
 }
 
-char *
-lk_chart_controller_table_rows (LkChartController *self,
-                                const char        *plugin,
-                                const char        *key,
-                                const char        *sort_key,
-                                gboolean           ascending)
+lookout_table_rows *
+lk_chart_controller_table_rows_read (LkChartController *self,
+                                     const char        *plugin,
+                                     const char        *key,
+                                     const char        *sort_key,
+                                     gboolean           ascending)
 {
   g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), NULL);
 
   if (self->handle == NULL || plugin == NULL || key == NULL)
     return NULL;
-
-  gsize length = 0;
-  const char *json = lookout_plugin_table_rows (self->handle, plugin, key,
-                                                sort_key, ascending ? 1 : 0, &length);
-
-  return lk_chart_controller_copy_borrowed (json, length);
+  return lookout_table_rows_read (self->handle, plugin, key, sort_key,
+                                  ascending ? 1 : 0);
 }
 
 void
@@ -512,7 +457,6 @@ lk_chart_controller_plugin_install (LkChartController *self, const char *path)
     return g_strdup (problem);
 
   /* It loaded hot, so it may already be drawing. */
-  lk_chart_controller_start_plugin_poll (self);
   lk_chart_controller_kick (self);
   if (self->model != NULL)
     lk_app_model_notify_plugins_changed (self->model);
@@ -881,11 +825,18 @@ lk_chart_controller_open (LkChartController *self,
   lookout_set_pixel_density (handle, (float) gtk_widget_get_scale_factor (view));
   lookout_resize (handle, width, height);
 
-  /* Reopen where we left off, or the engine's default view when nothing is saved. */
-  lookout_view view_pose;
-  if (!lk_store_load_view (&view_pose))
-    lookout_default_view (handle, &view_pose);
-  lookout_set_view (handle, &view_pose);
+  /* The engine keeps the pose and the mariner settings in the store from here:
+   * it restores both now, writes the pose down as the mariner moves, and
+   * writes both again at close. With nothing saved it holds the view it opened
+   * on, so the shell asks for the opening one. */
+  lookout_set_store (handle, lk_store_handle ());
+  if (!lk_store_has_saved_view ())
+    {
+      lookout_view opening;
+
+      lookout_default_view (handle, &opening);
+      lookout_set_view (handle, &opening);
+    }
 
   /* $LOOKOUT_VIEW="lon,lat,zoom[,rot]" pins the opening camera (screenshots). */
   const char *spec = g_getenv ("LOOKOUT_VIEW");
@@ -917,19 +868,15 @@ lk_chart_controller_open (LkChartController *self,
         }
     }
 
-  /* device_scale (physical symbol/text size) is the host's to state. */
+  /* device_scale (physical symbol/text size) is the host's to state. It is set
+   * after the restore above, because it is the device's and not the
+   * mariner's. */
   lk_chart_controller_sync_device_scale (self);
-
-  /* Saved settings overlay the defaults, so the chart reopens as left. */
-  tile57_mariner mariner = lk_chart_controller_get_mariner (self);
-  lk_store_apply_saved_mariner (&mariner);
-  lk_chart_controller_set_mariner (self, mariner);
 
   /* The plugins belong to the handle the open just made, so they are loaded
    * per open and the poll that keeps their geometry moving starts with them. */
   lk_chart_controller_load_plugins (self);
   lk_plugins_apply_saved (self);
-  lk_chart_controller_start_plugin_poll (self);
 
   lk_chart_controller_kick (self);
   self->last_readouts_us = 0;
@@ -957,7 +904,6 @@ lk_chart_controller_close (LkChartController *self)
   g_return_if_fail (LK_IS_CHART_CONTROLLER (self));
 
   lk_chart_controller_stop_tick (self);
-  lk_chart_controller_stop_plugin_poll (self);
 
   if (self->handle == NULL)
     return;
@@ -968,10 +914,8 @@ lk_chart_controller_close (LkChartController *self)
    * can ask for anything — a new handle reuses the old one's request ids. */
   lookout_set_http_provider (self->handle, NULL, NULL, NULL);
 
-  lookout_view view;
-  lookout_get_view (self->handle, &view); /* the pose to reopen on, before the handle dies */
-  lk_store_save_view (&view);
-
+  /* lookout_close writes the pose and the mariner settings down on its way
+   * out, so the chart reopens where it was left. */
   lookout_close (self->handle);
   self->handle = NULL;
 
@@ -1058,22 +1002,14 @@ lk_chart_controller_chart_links_import (LkChartController *self, const char *jso
   lookout_chart_links_import (self->handle, json);
 }
 
-char *
-lk_chart_controller_chart_links_changed_json (LkChartController *self)
+lookout_links *
+lk_chart_controller_chart_links_read (LkChartController *self)
 {
   if (!LK_IS_CHART_CONTROLLER (self) || self->handle == NULL)
     return NULL;
   if (lookout_chart_links_changed (self->handle) == 0)
     return NULL;
-
-  char *owned = lookout_chart_links_json (self->handle);
-  if (owned == NULL)
-    return NULL;
-  /* lookout and GLib need not share a malloc, so the bytes are copied out and
-   * handed back to the allocator they came from. */
-  char *copy = g_strdup (owned);
-  lookout_string_free (owned);
-  return copy;
+  return lookout_links_read (self->handle);
 }
 
 /* ---- view --------------------------------------------------------------- */
@@ -1260,12 +1196,11 @@ lk_chart_controller_get_mariner (LkChartController *self)
     lookout_get_mariner (self->handle, &mariner);
   else
     {
-      /* No handle: the defaults with the mariner's saved choices on top. A
-       * chartless read must never answer values the mariner did not set —
-       * callers save what they read back, and bare defaults here would wipe
-       * the saved settings. */
+      /* No handle: the defaults with the mariner's saved choices on top. The
+       * settings form is reachable before a chart is open, and it must show
+       * what the mariner set rather than what the engine ships with. */
       lookout_mariner_defaults (&mariner);
-      lk_store_apply_saved_mariner (&mariner);
+      lookout_store_read_mariner (lk_store_handle (), &mariner);
     }
 
   return mariner;
@@ -1473,39 +1408,20 @@ lk_chart_controller_chart_hidden (LkChartController *self)
 
 /* ---- pick --------------------------------------------------------------- */
 
-static void
-lk_pick_feature_cb (void       *ctx,
-                    const char *cls, size_t cls_len,
-                    const char *s57, size_t s57_len,
-                    const char *chart, size_t chart_len)
-{
-  GPtrArray *results = ctx;
-  LkPickFeature *feature = g_new0 (LkPickFeature, 1);
-
-  feature->cls = g_strndup (cls != NULL ? cls : "", cls_len);
-  feature->s57 = g_strndup (s57 != NULL ? s57 : "", s57_len);
-  feature->chart = g_strndup (chart != NULL ? chart : "", chart_len);
-  g_ptr_array_add (results, feature);
-}
-
-GPtrArray *
+lookout_picks *
 lk_chart_controller_pick (LkChartController *self, double lon, double lat)
 {
-  GPtrArray *results = g_ptr_array_new_with_free_func ((GDestroyNotify) lk_pick_feature_free);
-
-  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), results);
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), NULL);
 
   if (self->handle == NULL)
-    return results;
+    return NULL;
 
-  tile57_query_cb cb = { .ctx = results, .feature = lk_pick_feature_cb };
   /* The ranked pick, not the raw one: the engine's own list is in draw order,
    * which puts the land area before the light that was tapped. The core drops
    * the meta objects that say nothing, demotes a feature the cell gave no
    * attributes, and states depths in the mariner's unit — once, for every
    * shell. */
-  lookout_pick_ranked (self->handle, lon, lat, &cb);
-  return results;
+  return lookout_picks_read (self->handle, lon, lat);
 }
 
 void

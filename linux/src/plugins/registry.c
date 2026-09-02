@@ -1,7 +1,7 @@
 #include "plugins/registry.h"
 
-#include "util/json.h"
 #include "model/store.h"
+#include "util/json.h"
 
 #include <math.h>
 
@@ -15,19 +15,13 @@
 
 static const char lk_empty[] = "";
 
-static const char *
-lk_or_empty (const char *text)
-{
-  return text != NULL ? text : lk_empty;
-}
-
 /* ---- one row of a list --------------------------------------------------- */
 
 typedef struct {
-  LkPluginFieldKind kind;
-  double            number;
-  gboolean          toggle;
-  char             *text;
+  lookout_plugin_setting_kind kind;
+  double                      number;
+  gboolean                    toggle;
+  char                       *text;
 } LkCell;
 
 typedef struct {
@@ -96,9 +90,9 @@ typedef struct {
 struct _LkPlugins {
   LkChartController *controller; /* not owned */
 
-  /* The parsed registry. Every borrowed string below points into it, so it
-   * outlives them and is replaced only by a whole reload. */
-  LkJson     *registry;
+  /* The read. Every borrowed string below points into it, so it outlives them
+   * and is replaced only by a whole reload. */
+  lookout_plugins *read;
   GPtrArray  *plugins; /* LkPluginState*, owned */
   GHashTable *by_id;   /* the id -> LkPluginState*, not owning */
 
@@ -125,7 +119,7 @@ lk_plugin_list_free (gpointer data)
   g_free (list);
 }
 
-/* `cap` and `sentence` borrow from the registry; `hosts` is joined here. */
+/* `name` and `sentence` borrow from the read; `hosts` is joined here. */
 static void
 lk_plugin_capability_free (gpointer data)
 {
@@ -163,99 +157,137 @@ lk_plugins_find (LkPlugins *self, const char *plugin_id)
 
 /* ---- reading the schema -------------------------------------------------- */
 
-/* One control out of the schema, borrowing every string from `node`. NULL for
- * an entry this shell cannot draw — no key, no kind, or a kind from a newer
- * core than this build. Skipping one field leaves the rest of its group
+/* The settings section a field lands in. The core names the section; these are
+ * the ids the settings window files its own pages under. */
+static const char *
+lk_plugin_tab_name (lookout_section section)
+{
+  switch (section)
+    {
+    case LOOKOUT_SECTION_DISPLAY:     return "display";
+    case LOOKOUT_SECTION_DEPTHS:      return "depths";
+    case LOOKOUT_SECTION_TEXT:        return "text";
+    case LOOKOUT_SECTION_CHARTS:      return "charts";
+    case LOOKOUT_SECTION_VESSELS:     return "vessels";
+    case LOOKOUT_SECTION_ALARMS:      return "alarms";
+    case LOOKOUT_SECTION_CONNECTIONS: return "connections";
+    case LOOKOUT_SECTION_ADVANCED:
+    default:                          return LK_PLUGIN_DEFAULT_TAB;
+    }
+}
+
+/* One control, borrowing every string from the read. NULL for a kind from a
+ * newer core than this build. Skipping one field leaves the rest of its group
  * drawable, which is better than dropping the group. */
 static LkPluginField *
-lk_plugin_field_read (const LkJson *node)
+lk_plugin_field_read (const lookout_plugin_setting *setting)
 {
-  const char *key = lk_json_member_string (node, "key");
-  const char *kind = lk_json_member_string (node, "kind");
-
-  if (key == NULL || kind == NULL)
-    return NULL;
-
-  LkPluginFieldKind parsed;
-  if (g_strcmp0 (kind, "number") == 0)
-    parsed = LK_PLUGIN_FIELD_NUMBER;
-  else if (g_strcmp0 (kind, "toggle") == 0)
-    parsed = LK_PLUGIN_FIELD_TOGGLE;
-  else if (g_strcmp0 (kind, "text") == 0)
-    parsed = LK_PLUGIN_FIELD_TEXT;
-  else
-    return NULL;
+  switch (setting->kind)
+    {
+    case LOOKOUT_PLUGIN_SETTING_NUMBER:
+    case LOOKOUT_PLUGIN_SETTING_TOGGLE:
+    case LOOKOUT_PLUGIN_SETTING_TEXT:
+      break;
+    default:
+      return NULL;
+    }
 
   LkPluginField *field = g_new0 (LkPluginField, 1);
-  const LkJson *fallback = lk_json_member (node, "default");
 
-  field->kind = parsed;
-  field->key = key;
-  field->label = lk_json_member_string (node, "label");
-  if (field->label == NULL)
-    field->label = key;
-  field->desc = lk_or_empty (lk_json_member_string (node, "desc"));
-  field->unit = lk_or_empty (lk_json_member_string (node, "unit"));
-  /* An absent bound is wide, not tight. A max defaulting to 1 clamped every
-     larger plugin value down to 1; the field is unbounded unless the schema
-     says otherwise. */
-  field->min = lk_json_number (lk_json_member (node, "min"), 0);
-  field->max = lk_json_number (lk_json_member (node, "max"), 1e9);
-  field->optional = lk_json_member_bool (node, "optional", FALSE);
-  field->placeholder = lk_or_empty (lk_json_member_string (node, "placeholder"));
-  field->fallback_text = lk_empty;
-
-  switch (field->kind)
-    {
-    case LK_PLUGIN_FIELD_TOGGLE:
-      field->fallback = lk_json_bool (fallback, FALSE) ? 1 : 0;
-      break;
-    case LK_PLUGIN_FIELD_TEXT:
-      field->fallback_text = lk_or_empty (lk_json_string (fallback));
-      break;
-    case LK_PLUGIN_FIELD_NUMBER:
-    default:
-      field->fallback = lk_json_number (fallback, 0);
-      break;
-    }
+  field->kind = setting->kind;
+  field->key = setting->key;
+  field->label = setting->label;
+  field->desc = setting->desc;
+  field->unit = setting->unit;
+  field->min = setting->min;
+  field->max = setting->max;
+  field->optional = setting->optional != 0;
+  field->placeholder = setting->placeholder;
+  field->fallback_text = setting->default_text;
+  field->fallback = setting->kind == LOOKOUT_PLUGIN_SETTING_TOGGLE
+                        ? (setting->default_number != 0 ? 1 : 0)
+                        : setting->default_number;
   return field;
 }
 
-/* The value the core says is in force, which is what the model starts from. */
-static double
-lk_plugin_field_live_value (const LkJson *node, const LkPluginField *field)
-{
-  const LkJson *value = lk_json_member (node, "value");
-
-  if (field->kind == LK_PLUGIN_FIELD_TOGGLE)
-    return lk_json_bool (value, field->fallback != 0) ? 1 : 0;
-  return lk_json_number (value, field->fallback);
-}
-
-/* One cell of one row, out of the registry or off the column's default. A NULL
- * row node is a row the mariner just added, which is all defaults. */
+/* One cell of one row on its column's own default, which is what a row the
+ * mariner just added holds. */
 static LkCell *
-lk_cell_read (const LkJson *row_node, const LkPluginField *field)
+lk_cell_default (const LkPluginField *field)
 {
   LkCell *cell = g_new0 (LkCell, 1);
-  const LkJson *value = lk_json_member (row_node, field->key);
 
   cell->kind = field->kind;
   switch (field->kind)
     {
-    case LK_PLUGIN_FIELD_TOGGLE:
-      cell->toggle = lk_json_bool (value, field->fallback != 0);
+    case LOOKOUT_PLUGIN_SETTING_TOGGLE:
+      cell->toggle = field->fallback != 0;
       break;
-    case LK_PLUGIN_FIELD_TEXT:
-      cell->text = g_strdup (value != NULL ? lk_or_empty (lk_json_string (value))
-                                           : field->fallback_text);
+    case LOOKOUT_PLUGIN_SETTING_TEXT:
+      cell->text = g_strdup (field->fallback_text);
       break;
-    case LK_PLUGIN_FIELD_NUMBER:
     default:
-      cell->number = lk_json_number (value, field->fallback);
+      cell->number = field->fallback;
       break;
     }
   return cell;
+}
+
+/* The same cell out of an item the core is holding. A field the item omits
+ * reads as that field's default, which the core applies itself. */
+static LkCell *
+lk_cell_of_item (const lookout_plugin_item *item, const LkPluginField *field)
+{
+  LkCell *cell = g_new0 (LkCell, 1);
+
+  cell->kind = field->kind;
+  switch (field->kind)
+    {
+    case LOOKOUT_PLUGIN_SETTING_TOGGLE:
+      cell->toggle = lookout_plugin_item_flag (item, field->key) != 0;
+      break;
+    case LOOKOUT_PLUGIN_SETTING_TEXT:
+      cell->text = g_strdup (lookout_plugin_item_text (item, field->key));
+      break;
+    default:
+      cell->number = lookout_plugin_item_number (item, field->key);
+      break;
+    }
+  return cell;
+}
+
+/* The same cell out of what a service announcement says a row of this list
+ * takes. A column the service does not name falls back to its own default. */
+static LkCell *
+lk_cell_of_service (const lookout_plugin_service *service, const LkPluginField *field)
+{
+  size_t count = 0;
+  const lookout_plugin_value *const *values =
+      service != NULL ? lookout_plugin_service_values (service, &count) : NULL;
+
+  for (size_t i = 0; i < count; i++)
+    {
+      if (g_strcmp0 (values[i]->key, field->key) != 0)
+        continue;
+
+      LkCell *cell = g_new0 (LkCell, 1);
+
+      cell->kind = field->kind;
+      switch (field->kind)
+        {
+        case LOOKOUT_PLUGIN_SETTING_TOGGLE:
+          cell->toggle = values[i]->number != 0;
+          break;
+        case LOOKOUT_PLUGIN_SETTING_TEXT:
+          cell->text = g_strdup (values[i]->text);
+          break;
+        default:
+          cell->number = values[i]->number;
+          break;
+        }
+      return cell;
+    }
+  return lk_cell_default (field);
 }
 
 static void
@@ -291,152 +323,130 @@ lk_plugin_state_group_for (LkPluginState *state, const char *tab, const char *ti
   return group;
 }
 
-/* The scalar controls of one plugin: the registry's flat `settings` array,
- * each entry naming the section and heading it belongs under. */
+/* One repeating group, and the rows the core is holding for it. The rows become
+ * the shell's the moment they are read: it is the shell that assigns row ids
+ * and sends the whole array back on every edit. */
 static void
-lk_plugin_state_read_fields (LkPluginState *state, const LkJson *node)
+lk_plugin_state_read_list (LkPluginState                *state,
+                           const lookout_plugin_setting *setting,
+                           const char                   *tab,
+                           const char                   *title)
 {
-  const LkJson *settings = lk_json_member (node, "settings");
-  guint n = lk_json_length (settings);
+  LkPluginList *list = g_new0 (LkPluginList, 1);
 
-  for (guint i = 0; i < n; i++)
+  list->plugin_id = state->id;
+  list->key = setting->key;
+  list->tab = tab;
+  list->title = title;
+  list->footer = setting->footer;
+  list->empty = setting->empty[0] != '\0' ? setting->empty : "Nothing here yet.";
+  list->add_label = setting->add_label[0] != '\0' ? setting->add_label : "Add";
+  list->switch_key = setting->switch_key;
+  list->max_rows = (int) setting->max_items;
+  list->item_fields = g_ptr_array_new_with_free_func (g_free);
+  list->discover = g_ptr_array_new_with_free_func (g_free);
+
+  /* What to browse the boat's network for. The core carries the declaration;
+   * finding anything is the shell's own job. */
+  size_t count = 0;
+  const lookout_plugin_service *const *services =
+      lookout_plugin_setting_services (setting, &count);
+
+  for (size_t i = 0; i < count; i++)
     {
-      const LkJson *entry = lk_json_at (settings, i);
-      LkPluginField *field = lk_plugin_field_read (entry);
+      LkPluginDiscover *want = g_new0 (LkPluginDiscover, 1);
+
+      want->service = services[i]->type;
+      want->values = services[i];
+      g_ptr_array_add (list->discover, want);
+    }
+
+  const lookout_plugin_setting *const *columns =
+      lookout_plugin_setting_fields (setting, &count);
+
+  for (size_t c = 0; c < count; c++)
+    {
+      LkPluginField *field = lk_plugin_field_read (columns[c]);
+
+      if (field != NULL)
+        g_ptr_array_add (list->item_fields, field);
+    }
+
+  /* A list with no switch column named takes its first toggle, which is what a
+   * list with one toggle wants. */
+  if (list->switch_key[0] == '\0')
+    {
+      for (guint c = 0; c < list->item_fields->len; c++)
+        {
+          const LkPluginField *field = g_ptr_array_index (list->item_fields, c);
+
+          if (field->kind == LOOKOUT_PLUGIN_SETTING_TOGGLE)
+            {
+              list->switch_key = field->key;
+              break;
+            }
+        }
+    }
+
+  g_ptr_array_add (state->lists, list);
+
+  GPtrArray *rows = g_ptr_array_new_with_free_func (lk_row_free);
+  const lookout_plugin_item *const *items = lookout_plugin_setting_items (setting, &count);
+
+  for (size_t r = 0; r < count; r++)
+    {
+      LkRow *row = lk_row_new (items[r]->id);
+
+      for (guint c = 0; c < list->item_fields->len; c++)
+        {
+          const LkPluginField *field = g_ptr_array_index (list->item_fields, c);
+
+          g_hash_table_insert (row->cells, g_strdup (field->key),
+                               lk_cell_of_item (items[r], field));
+        }
+      g_ptr_array_add (rows, row);
+    }
+  g_hash_table_insert (state->rows, g_strdup (setting->key), rows);
+}
+
+/* The settings of one plugin: a flat array, each entry naming the section and
+ * the heading it belongs under, and each LIST a repeating group. */
+static void
+lk_plugin_state_read_settings (LkPluginState *state, const lookout_plugin *plugin)
+{
+  size_t count = 0;
+  const lookout_plugin_setting *const *settings = lookout_plugin_settings (plugin, &count);
+
+  for (size_t i = 0; i < count; i++)
+    {
+      const lookout_plugin_setting *setting = settings[i];
+      const char *tab = lk_plugin_tab_name (setting->section);
+      const char *title = setting->group[0] != '\0' ? setting->group : state->name;
+
+      if (setting->kind == LOOKOUT_PLUGIN_SETTING_LIST)
+        {
+          lk_plugin_state_read_list (state, setting, tab, title);
+          continue;
+        }
+
+      LkPluginField *field = lk_plugin_field_read (setting);
 
       if (field == NULL)
         continue;
 
       /* A text field is only ever a column of a list; the core refuses a scalar
        * one, so there is nothing to draw for it here. */
-      if (field->kind == LK_PLUGIN_FIELD_TEXT)
+      if (field->kind == LOOKOUT_PLUGIN_SETTING_TEXT)
         {
           g_free (field);
           continue;
         }
 
-      const char *tab = lk_json_member_string (entry, "tab");
-      const char *title = lk_json_member_string (entry, "group");
-
       g_ptr_array_add (state->fields, field);
-      lk_plugins_set_double (state->values, field->key,
-                             lk_plugin_field_live_value (entry, field));
+      lk_plugins_set_double (state->values, field->key, setting->value);
 
-      LkPluginGroup *group = lk_plugin_state_group_for (state,
-                                                        tab != NULL ? tab : LK_PLUGIN_DEFAULT_TAB,
-                                                        title != NULL ? title : state->name);
+      LkPluginGroup *group = lk_plugin_state_group_for (state, tab, title);
       g_ptr_array_add (group->fields, field);
-    }
-}
-
-/* The repeating groups of one plugin, and the rows the core is holding for
- * each. The rows become the shell's the moment they are read: it is the shell
- * that assigns row ids and sends the whole array back on every edit. */
-static void
-lk_plugin_state_read_lists (LkPluginState *state, const LkJson *node)
-{
-  const LkJson *lists = lk_json_member (node, "lists");
-  guint n = lk_json_length (lists);
-
-  for (guint i = 0; i < n; i++)
-    {
-      const LkJson *entry = lk_json_at (lists, i);
-      const char *key = lk_json_member_string (entry, "key");
-
-      if (key == NULL)
-        continue;
-
-      LkPluginList *list = g_new0 (LkPluginList, 1);
-      const char *tab = lk_json_member_string (entry, "tab");
-      const char *title = lk_json_member_string (entry, "group");
-
-      list->plugin_id = state->id;
-      list->key = key;
-      list->tab = tab != NULL ? tab : LK_PLUGIN_DEFAULT_TAB;
-      list->title = title != NULL ? title : state->name;
-      list->footer = lk_or_empty (lk_json_member_string (entry, "footer"));
-      list->empty = lk_json_member_string (entry, "empty");
-      if (list->empty == NULL)
-        list->empty = "Nothing here yet.";
-      list->add_label = lk_json_member_string (entry, "add_label");
-      if (list->add_label == NULL)
-        list->add_label = "Add";
-      list->switch_key = lk_or_empty (lk_json_member_string (entry, "switch_key"));
-      list->max_rows = lk_json_member_int (entry, "max_rows", 0);
-      list->item_fields = g_ptr_array_new_with_free_func (g_free);
-      list->discover = g_ptr_array_new_with_free_func (g_free);
-
-      /* What to browse the boat's network for. The core carries the
-       * declaration; finding anything is the shell's own job. */
-      const LkJson *services = lk_json_member (entry, "discover");
-      guint services_n = lk_json_length (services);
-      for (guint d = 0; d < services_n; d++)
-        {
-          const LkJson *service_node = lk_json_at (services, d);
-          const char *service = lk_json_member_string (service_node, "service");
-
-          if (service == NULL)
-            continue;
-
-          LkPluginDiscover *want = g_new0 (LkPluginDiscover, 1);
-
-          want->service = service;
-          want->set = lk_json_member (service_node, "set");
-          g_ptr_array_add (list->discover, want);
-        }
-
-      const LkJson *columns = lk_json_member (entry, "item_fields");
-      guint columns_n = lk_json_length (columns);
-      for (guint c = 0; c < columns_n; c++)
-        {
-          LkPluginField *field = lk_plugin_field_read (lk_json_at (columns, c));
-
-          if (field != NULL)
-            g_ptr_array_add (list->item_fields, field);
-        }
-
-      /* A list with no switch column named takes its first toggle, which is
-       * what a list with one toggle wants. */
-      if (list->switch_key[0] == '\0')
-        {
-          for (guint c = 0; c < list->item_fields->len; c++)
-            {
-              const LkPluginField *field = g_ptr_array_index (list->item_fields, c);
-
-              if (field->kind == LK_PLUGIN_FIELD_TOGGLE)
-                {
-                  list->switch_key = field->key;
-                  break;
-                }
-            }
-        }
-
-      g_ptr_array_add (state->lists, list);
-
-      GPtrArray *rows = g_ptr_array_new_with_free_func (lk_row_free);
-      const LkJson *row_nodes = lk_json_member (entry, "rows");
-      guint rows_n = lk_json_length (row_nodes);
-
-      for (guint r = 0; r < rows_n; r++)
-        {
-          const LkJson *row_node = lk_json_at (row_nodes, r);
-          const char *row_id = lk_json_member_string (row_node, "id");
-
-          if (row_id == NULL)
-            continue;
-
-          LkRow *row = lk_row_new (row_id);
-
-          for (guint c = 0; c < list->item_fields->len; c++)
-            {
-              const LkPluginField *field = g_ptr_array_index (list->item_fields, c);
-
-              g_hash_table_insert (row->cells, g_strdup (field->key),
-                                   lk_cell_read (row_node, field));
-            }
-          g_ptr_array_add (rows, row);
-        }
-      g_hash_table_insert (state->rows, g_strdup (key), rows);
     }
 }
 
@@ -450,74 +460,73 @@ lk_plugin_state_read_lists (LkPluginState *state, const LkJson *node)
  * do here. The broker answers a revoked call -1 and the plugin keeps running.
  *
  * The file types ride along, because that is what an open dialog names in its
- * prompt when it offers to hand a file to a plugin. */
+ * prompt when it offers to hand a file to a plugin. They are the `files`
+ * capability's own allowlist. */
 static void
-lk_plugin_state_read_caps (LkPluginState *state, const LkJson *node)
+lk_plugin_state_read_caps (LkPluginState *state, const lookout_plugin *plugin)
 {
-  const LkJson *caps = lk_json_member (node, "capabilities");
+  size_t count = 0;
+  const lookout_plugin_capability *const *caps =
+      lookout_plugin_capabilities (plugin, &count);
 
-  for (guint i = 0; i < lk_json_length (caps); i++)
+  for (size_t i = 0; i < count; i++)
     {
-      const LkJson *entry = lk_json_at (caps, i);
-      const char *name = lk_json_member_string (entry, "cap");
-
-      if (name == NULL)
-        continue;
-
       LkPluginCapability *cap = g_new0 (LkPluginCapability, 1);
-      cap->cap = name;
-      cap->sentence = lk_or_empty (lk_json_member_string (entry, "sentence"));
-      cap->granted = lk_json_member_bool (entry, "granted", TRUE);
+      size_t allowed = 0;
+      const char *const *allows = lookout_plugin_capability_allows (caps[i], &allowed);
 
-      /* net.http and net.ws carry the hosts they asked for. The mariner needs
-       * to read WHERE a plugin talks to, not only that it talks. */
-      const LkJson *hosts = lk_json_member (entry, "hosts");
-      if (lk_json_length (hosts) > 0)
+      cap->name = caps[i]->name;
+      cap->sentence = caps[i]->sentence;
+      cap->granted = caps[i]->granted != 0;
+
+      /* The `files` capability's allowlist is the extensions the plugin
+       * reads. Everything else lists where it talks to, and the mariner needs
+       * to read WHERE a plugin talks, not only that it talks. */
+      if (g_strcmp0 (cap->name, "files") == 0)
+        {
+          for (size_t h = 0; h < allowed; h++)
+            g_ptr_array_add (state->types, (gpointer) allows[h]);
+        }
+      else if (allowed > 0)
         {
           g_autoptr (GString) joined = g_string_new (NULL);
 
-          for (guint h = 0; h < lk_json_length (hosts); h++)
+          for (size_t h = 0; h < allowed; h++)
             {
               if (joined->len > 0)
                 g_string_append (joined, ", ");
-              g_string_append (joined, lk_json_text (lk_json_at (hosts, h)));
+              g_string_append (joined, allows[h]);
             }
           cap->hosts = g_string_free (g_steal_pointer (&joined), FALSE);
         }
 
       g_ptr_array_add (state->caps, cap);
     }
+}
 
-  const LkJson *types = lk_json_member (node, "file_types");
-  for (guint i = 0; i < lk_json_length (types); i++)
+static const char *
+lk_plugin_origin_name (lookout_plugin_origin origin)
+{
+  switch (origin)
     {
-      const char *type = lk_json_string (lk_json_at (types, i));
-
-      if (type != NULL)
-        g_ptr_array_add (state->types, (gpointer) type);
+    case LOOKOUT_ORIGIN_INSTALLED: return "installed";
+    case LOOKOUT_ORIGIN_DEVELOPER: return "developer";
+    case LOOKOUT_ORIGIN_BUNDLED:
+    default:                       return "bundled";
     }
 }
 
 static LkPluginState *
-lk_plugin_state_read (const LkJson *node)
+lk_plugin_state_read (const lookout_plugin *plugin)
 {
-  const char *id = lk_json_member_string (node, "id");
-
-  if (id == NULL)
-    return NULL;
-
   LkPluginState *state = g_new0 (LkPluginState, 1);
 
-  state->id = id;
-  state->name = lk_json_member_string (node, "name");
-  if (state->name == NULL)
-    state->name = id;
-  state->version = lk_or_empty (lk_json_member_string (node, "version"));
-  state->origin = lk_json_member_string (node, "origin");
-  if (state->origin == NULL)
-    state->origin = "bundled";
-  state->live = lk_json_member_bool (node, "live", FALSE);
-  state->status = g_strdup (lk_or_empty (lk_json_member_string (node, "status")));
+  state->id = plugin->id;
+  state->name = plugin->name[0] != '\0' ? plugin->name : plugin->id;
+  state->version = plugin->version;
+  state->origin = lk_plugin_origin_name (plugin->origin);
+  state->live = plugin->live != 0;
+  state->status = g_strdup (plugin->status);
   state->status_tree = lk_json_parse (state->status);
 
   state->fields = g_ptr_array_new_with_free_func (g_free);
@@ -529,9 +538,8 @@ lk_plugin_state_read (const LkJson *node)
   state->rows = g_hash_table_new_full (g_str_hash, g_str_equal, g_free,
                                        (GDestroyNotify) g_ptr_array_unref);
 
-  lk_plugin_state_read_fields (state, node);
-  lk_plugin_state_read_lists (state, node);
-  lk_plugin_state_read_caps (state, node);
+  lk_plugin_state_read_settings (state, plugin);
+  lk_plugin_state_read_caps (state, plugin);
   return state;
 }
 
@@ -539,22 +547,19 @@ lk_plugin_state_read (const LkJson *node)
  * WHICH plugins are loaded. FALSE when the core did not answer, which leaves
  * the last good registry in place.
  *
- * AN UNREADABLE REGISTRY IS NOT AN EMPTY ONE. lookout_plugins_json answers NULL
+ * AN UNREADABLE REGISTRY IS NOT AN EMPTY ONE. lookout_plugins_read answers NULL
  * with no chart open and in a build with no plugin host; a core holding no
- * plugins answers {"plugins":[]} instead. Reading the two the same way would
+ * plugins answers a read with no rows in it. Reading the two the same way would
  * empty the whole settings window the moment one read came back short. */
 static gboolean
 lk_plugins_reload (LkPlugins *self)
 {
   g_return_val_if_fail (self != NULL, FALSE);
 
-  g_autofree char *json = lk_chart_controller_plugins_json (self->controller);
-  LkJson *registry = json != NULL ? lk_json_parse (json) : NULL;
-  const LkJson *entries = lk_json_member (registry, "plugins");
+  lookout_plugins *read = lk_chart_controller_plugins_read (self->controller);
 
-  if (registry == NULL || lk_json_kind (entries) != LK_JSON_ARRAY)
+  if (read == NULL)
     {
-      lk_json_free (registry);
       if (!self->registry_unread)
         {
           self->registry_unread = TRUE;
@@ -564,25 +569,24 @@ lk_plugins_reload (LkPlugins *self)
       return FALSE;
     }
 
+  size_t count = 0;
+  const lookout_plugin *const *entries = lookout_plugins_all (read, &count);
+
   if (self->registry_unread)
     {
       self->registry_unread = FALSE;
-      g_message ("plugins: the registry is readable again, %u plugin(s)",
-                 lk_json_length (entries));
+      g_message ("plugins: the registry is readable again, %zu plugin(s)", count);
     }
 
   g_ptr_array_set_size (self->plugins, 0);
   g_hash_table_remove_all (self->by_id);
-  g_clear_pointer (&self->registry, lk_json_free);
-  self->registry = registry;
+  g_clear_pointer (&self->read, lookout_plugins_free);
+  self->read = read;
 
-  guint n = lk_json_length (entries);
-  for (guint i = 0; i < n; i++)
+  for (size_t i = 0; i < count; i++)
     {
-      LkPluginState *state = lk_plugin_state_read (lk_json_at (entries, i));
+      LkPluginState *state = lk_plugin_state_read (entries[i]);
 
-      if (state == NULL)
-        continue;
       g_ptr_array_add (self->plugins, state);
       g_hash_table_insert (self->by_id, (gpointer) state->id, state);
     }
@@ -594,27 +598,24 @@ lk_plugins_refresh_status (LkPlugins *self)
 {
   g_return_val_if_fail (self != NULL, FALSE);
 
-  g_autofree char *json = lk_chart_controller_plugins_json (self->controller);
-  g_autoptr (LkJson) fresh = json != NULL ? lk_json_parse (json) : NULL;
-  const LkJson *entries = lk_json_member (fresh, "plugins");
+  lookout_plugins *fresh = lk_chart_controller_plugins_read (self->controller);
 
-  if (lk_json_kind (entries) != LK_JSON_ARRAY)
+  if (fresh == NULL)
     return FALSE;
 
   gboolean moved = FALSE;
-  guint n = lk_json_length (entries);
+  size_t count = 0;
+  const lookout_plugin *const *entries = lookout_plugins_all (fresh, &count);
 
-  for (guint i = 0; i < n; i++)
+  for (size_t i = 0; i < count; i++)
     {
-      const LkJson *entry = lk_json_at (entries, i);
-      const char *id = lk_json_member_string (entry, "id");
-      LkPluginState *state = lk_plugins_find (self, id);
+      LkPluginState *state = lk_plugins_find (self, entries[i]->id);
 
       if (state == NULL)
         continue;
 
-      const char *status = lk_or_empty (lk_json_member_string (entry, "status"));
-      gboolean live = lk_json_member_bool (entry, "live", FALSE);
+      const char *status = entries[i]->status;
+      gboolean live = entries[i]->live != 0;
 
       if (live == state->live && g_strcmp0 (status, state->status) == 0)
         continue;
@@ -626,6 +627,8 @@ lk_plugins_refresh_status (LkPlugins *self)
       state->status_tree = lk_json_parse (state->status);
       moved = TRUE;
     }
+
+  lookout_plugins_free (fresh);
   return moved;
 }
 
@@ -659,7 +662,7 @@ lk_plugins_free (LkPlugins *self)
     }
   g_ptr_array_unref (self->plugins);
   g_hash_table_unref (self->by_id);
-  g_clear_pointer (&self->registry, lk_json_free);
+  g_clear_pointer (&self->read, lookout_plugins_free);
   g_free (self);
 }
 
@@ -714,13 +717,13 @@ lk_append_cell (GString *out, const LkCell *cell)
 
   switch (cell->kind)
     {
-    case LK_PLUGIN_FIELD_TOGGLE:
+    case LOOKOUT_PLUGIN_SETTING_TOGGLE:
       g_string_append (out, cell->toggle ? "true" : "false");
       break;
-    case LK_PLUGIN_FIELD_TEXT:
+    case LOOKOUT_PLUGIN_SETTING_TEXT:
       lk_append_string (out, cell->text);
       break;
-    case LK_PLUGIN_FIELD_NUMBER:
+    case LOOKOUT_PLUGIN_SETTING_NUMBER:
     default:
       lk_append_number (out, cell->number);
       break;
@@ -748,7 +751,7 @@ lk_plugin_state_config_json (LkPluginState *state)
 
       lk_append_string (out, field->key);
       g_string_append_c (out, ':');
-      if (field->kind == LK_PLUGIN_FIELD_TOGGLE)
+      if (field->kind == LOOKOUT_PLUGIN_SETTING_TOGGLE)
         g_string_append (out, (value != NULL && *value != 0) ? "true" : "false");
       else
         lk_append_number (out, value != NULL ? *value : field->fallback);
@@ -937,7 +940,7 @@ lk_plugins_set_value (LkPlugins *self, const char *plugin_id, const char *key, d
 
   /* The core clamps too. Doing it here as well keeps the control and the value
    * it shows in step without a round trip. */
-  double clamped = field->kind == LK_PLUGIN_FIELD_TOGGLE
+  double clamped = field->kind == LOOKOUT_PLUGIN_SETTING_TOGGLE
                        ? (value != 0 ? 1 : 0)
                        : CLAMP (value, field->min, field->max);
 
@@ -1051,7 +1054,7 @@ lk_plugins_add_row (LkPlugins *self, const LkPluginList *list)
     {
       const LkPluginField *field = g_ptr_array_index (list->item_fields, i);
 
-      g_hash_table_insert (row->cells, g_strdup (field->key), lk_cell_read (NULL, field));
+      g_hash_table_insert (row->cells, g_strdup (field->key), lk_cell_default (field));
     }
   g_ptr_array_add (rows, row);
   lk_plugins_edited (self);
@@ -1070,7 +1073,7 @@ lk_plugins_add_row_from (LkPlugins          *self,
   if (rows == NULL || lk_plugins_list_is_full (self, list))
     return;
 
-  const LkJson *set = NULL;
+  const lookout_plugin_service *found = NULL;
 
   for (guint i = 0; i < list->discover->len; i++)
     {
@@ -1078,7 +1081,7 @@ lk_plugins_add_row_from (LkPlugins          *self,
 
       if (g_strcmp0 (want->service, service) == 0)
         {
-          set = want->set;
+          found = want->values;
           break;
         }
     }
@@ -1093,7 +1096,7 @@ lk_plugins_add_row_from (LkPlugins          *self,
     {
       const LkPluginField *field = g_ptr_array_index (list->item_fields, i);
 
-      g_hash_table_insert (row->cells, g_strdup (field->key), lk_cell_read (set, field));
+      g_hash_table_insert (row->cells, g_strdup (field->key), lk_cell_of_service (found, field));
     }
   g_ptr_array_add (rows, row);
 
@@ -1372,7 +1375,7 @@ lk_plugins_set_granted (LkPlugins  *self,
     {
       LkPluginCapability *entry = g_ptr_array_index (caps, i);
 
-      if (g_strcmp0 (entry->cap, cap) == 0)
+      if (g_strcmp0 (entry->name, cap) == 0)
         entry->granted = granted;
     }
   return TRUE;

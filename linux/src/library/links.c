@@ -138,7 +138,7 @@ lk_links_read_done (GObject *source_object, GAsyncResult *result, gpointer user_
 }
 
 /* The path a local url names, or NULL when it names a host. A mariner's own
- * style.json is a real way to get a chart aboard — offline, or one they wrote
+ * style.json is a real way to install a chart — offline, or one they wrote
  * themselves. */
 static const char *
 lk_links_local_path (const char *url)
@@ -233,65 +233,35 @@ lk_links_cancel_all (LkChartLinks *self)
   g_hash_table_remove_all (self->in_flight);
 }
 
-/* ---- the snapshot -------------------------------------------------------- */
-
-static const char *
-lk_links_member_string (JsonObject *object, const char *name, const char *fallback)
-{
-  JsonNode *node = json_object_get_member (object, name);
-
-  if (node == NULL || !JSON_NODE_HOLDS_VALUE (node) ||
-      json_node_get_value_type (node) != G_TYPE_STRING)
-    return fallback;
-  return json_node_get_string (node);
-}
+/* ---- the read ------------------------------------------------------------ */
 
 static void
-lk_links_adopt (LkChartLinks *self, const char *json)
+lk_links_adopt (LkChartLinks *self, const lookout_links *read)
 {
-  g_autoptr (JsonParser) parser = json_parser_new ();
-
-  if (!json_parser_load_from_data (parser, json, -1, NULL))
-    return;
-
-  JsonNode *root = json_parser_get_root (parser);
-  if (root == NULL || !JSON_NODE_HOLDS_OBJECT (root))
-    return;
-  JsonObject *top = json_node_get_object (root);
+  const lookout_link_state *state = lookout_links_state (read);
+  size_t count = 0;
+  const lookout_chart_link *const *all = lookout_links_all (read, &count);
 
   g_ptr_array_set_size (self->links, 0);
-  JsonNode *list = json_object_get_member (top, "links");
-  if (list != NULL && JSON_NODE_HOLDS_ARRAY (list))
+  for (size_t i = 0; i < count; i++)
     {
-      JsonArray *array = json_node_get_array (list);
-      for (guint i = 0; i < json_array_get_length (array); i++)
-        {
-          JsonNode *element = json_array_get_element (array, i);
-          if (!JSON_NODE_HOLDS_OBJECT (element))
-            continue;
-          JsonObject *object = json_node_get_object (element);
-          const char *url = lk_links_member_string (object, "url", "");
-          if (url[0] == '\0')
-            continue;
-          LkChartLink *link = g_new0 (LkChartLink, 1);
-          link->url = g_strdup (url);
-          link->name = g_strdup (lk_links_member_string (object, "name", url));
-          g_ptr_array_add (self->links, link);
-        }
+      LkChartLink *link = g_new0 (LkChartLink, 1);
+
+      link->url = g_strdup (all[i]->url);
+      link->name = g_strdup (all[i]->name[0] != '\0' ? all[i]->name : all[i]->url);
+      g_ptr_array_add (self->links, link);
     }
 
+  /* An EMPTY active url is lookout's own chart, and a url is never empty. */
   g_clear_pointer (&self->active, g_free);
-  JsonNode *active = json_object_get_member (top, "active");
-  if (active != NULL && JSON_NODE_HOLDS_VALUE (active) &&
-      json_node_get_value_type (active) == G_TYPE_STRING)
-    self->active = g_strdup (json_node_get_string (active));
+  if (state->active[0] != '\0')
+    self->active = g_strdup (state->active);
 
   g_free (self->attribution);
-  self->attribution = g_strdup (lk_links_member_string (top, "attribution", ""));
+  self->attribution = g_strdup (state->attribution);
   g_free (self->error);
-  self->error = g_strdup (lk_links_member_string (top, "error", ""));
-  self->busy = json_object_has_member (top, "busy") &&
-               json_object_get_boolean_member (top, "busy");
+  self->error = g_strdup (state->error);
+  self->busy = state->busy != 0;
 
   g_signal_emit (self, signals[SIGNAL_CHANGED], 0);
 }
@@ -301,10 +271,12 @@ lk_chart_links_poll (LkChartLinks *self)
 {
   g_return_if_fail (LK_IS_CHART_LINKS (self));
 
-  g_autofree char *json = lk_chart_controller_chart_links_changed_json (self->controller);
-  if (json == NULL)
+  lookout_links *read = lk_chart_controller_chart_links_read (self->controller);
+
+  if (read == NULL)
     return;
-  lk_links_adopt (self, json);
+  lk_links_adopt (self, read);
+  lookout_links_free (read);
 }
 
 /* ---- migration ----------------------------------------------------------- */

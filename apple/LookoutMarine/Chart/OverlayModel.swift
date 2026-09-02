@@ -19,7 +19,7 @@ import Foundation
 final class OverlayModel {
     /// The cursor pick: the features under the last tap, where it happened (in
     /// the chrome's coordinate space), and which one the report is showing.
-    var pickResults: [PickFeature] = []
+    var pickResults: [PickDecoded] = []
     var pickPoint: CGPoint?
     var pickIndex = 0
     /// Where on the CHART the pick was taken. The mark belongs to the object,
@@ -95,7 +95,7 @@ final class OverlayModel {
     ///
     /// The order and the filtering belong to the core (lookout_pick_ranked), so
     /// the shells cannot drift apart on what a pick reports.
-    func showPick(_ results: [PickFeature], at point: CGPoint) {
+    func showPick(_ results: [PickDecoded], at point: CGPoint) {
         pickResults = results
         pickPoint = results.isEmpty ? nil : point
         pickIndex = 0

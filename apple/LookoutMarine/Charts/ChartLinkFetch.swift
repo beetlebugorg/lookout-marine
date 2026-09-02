@@ -129,7 +129,7 @@ final class ChartLinkFetch: @unchecked Sendable {
         if live { task.resume() } else { answer(id, nil, 0) }
     }
 
-    /// A style file the mariner has aboard. Read off the main thread: a file
+    /// A style file on the device. Read off the main thread: a file
     /// read on a sandboxed volume can take long enough to be felt as a freeze.
     private func readFile(id: UInt64, url: URL) {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in

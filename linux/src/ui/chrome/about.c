@@ -37,8 +37,8 @@ lk_about_key_pressed (GtkEventControllerKey *controller, guint keyval, guint key
 static GtkWidget *
 lk_about_window_new (GtkWindow *parent)
 {
-  const LkLicenseApp *app = lk_licenses_app ();
-  const LkLicenseComponent *engine = lk_licenses_component (LK_ENGINE_ID);
+  const lookout_license *app = lk_licenses_app ();
+  const lookout_license *engine = lk_licenses_component (LK_ENGINE_ID);
   const char *name = app != NULL ? app->name : "Lookout Marine";
   GtkWidget *window = gtk_window_new ();
   GtkWidget *box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 14);

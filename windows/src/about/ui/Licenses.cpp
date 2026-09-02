@@ -390,7 +390,7 @@ namespace winrt::LookoutMarine::implementation
             ++shown;
         };
 
-        if (m.components.size() > 12)
+        if (m.components.size() > LOOKOUT_LICENSES_GROUP_ABOVE)
         {
             for (auto const &g : m.Groups())
             {
@@ -600,7 +600,7 @@ namespace winrt::LookoutMarine::implementation
 
             // Search sits above twelve entries and not below: under that the
             // box is more chrome than the list it filters.
-            if (m.components.size() > 12)
+            if (m.components.size() > LOOKOUT_LICENSES_GROUP_ABOVE)
             {
                 Controls::AutoSuggestBox search;
                 search.QueryIcon(Controls::SymbolIcon{ Controls::Symbol::Find });

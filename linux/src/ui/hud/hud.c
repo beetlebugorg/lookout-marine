@@ -11,29 +11,6 @@
 
 /* ---- readout formatting ------------------------------------------------- */
 
-/* Degrees and decimal minutes with a hemisphere. The longitude has three
- * degree digits, so a pair keeps its column width. It agrees with
- * CoordFormat.dm (macOS and iOS), lkw::FormatCoord (Windows) and Hud.kt
- * (Android). Each host prints the same string. */
-char *
-lk_coord_format_dm (double value, gboolean is_lat)
-{
-  const char *hemi = is_lat ? (value >= 0 ? "N" : "S") : (value >= 0 ? "E" : "W");
-  double magnitude = fabs (value);
-  int degrees = (int) magnitude;
-  double minutes = (magnitude - degrees) * 60.0;
-
-  /* Carry the rounding. 59.9996' prints as 60.000', the next degree. */
-  if (llround (minutes * 1000.0) >= 60000)
-    {
-      minutes = 0.0;
-      degrees++;
-    }
-
-  return g_strdup_printf (is_lat ? "%02d°%06.3f'%s" : "%03d°%06.3f'%s",
-                          degrees, minutes, hemi);
-}
-
 /* Append the digits of `plain` to `out` with a comma every three from the
  * right: "13267" becomes "13,267". The separator is a comma on every shell — a
  * chart scale and a chart count both read the same way whatever the locale
@@ -49,35 +26,6 @@ lk_append_grouped (GString *out, const char *plain)
         g_string_append_c (out, ',');
       g_string_append_c (out, plain[i]);
     }
-}
-
-/* The full 1:N with group separators: 1:13,267. */
-char *
-lk_format_scale (double denominator)
-{
-  if (denominator <= 0)
-    return g_strdup ("1:—");
-
-  g_autofree char *plain = g_strdup_printf ("%" G_GINT64_FORMAT, (gint64) llround (denominator));
-  g_autoptr (GString) grouped = g_string_new ("1:");
-
-  lk_append_grouped (grouped, plain);
-  return g_string_free (g_steal_pointer (&grouped), FALSE);
-}
-
-/* The S-52 navigational purpose band for a display scale. It agrees with
- * CoordFormat.band (macOS and iOS), lkw::BandForDenom (Windows) and
- * bandString (Android). */
-const char *
-lk_format_band (double denominator)
-{
-  if (denominator < 0.001)     return "—";
-  if (denominator < 5000)      return "Berthing";
-  if (denominator < 25000)     return "Harbor";
-  if (denominator < 75000)     return "Approach";
-  if (denominator < 300000)    return "Coastal";
-  if (denominator < 1500000)   return "General";
-  return "Overview";
 }
 
 /* ---- the readouts capsule ----------------------------------------------- */
@@ -151,10 +99,9 @@ lk_hud_update_coord (LkHudCapsule *capsule)
 
   if (lk_app_model_get_fix (capsule->model, &lon, &lat))
     {
-      g_autofree char *lat_s = lk_coord_format_dm (lat, TRUE);
-      g_autofree char *lon_s = lk_coord_format_dm (lon, FALSE);
-      g_autofree char *text = g_strdup_printf ("%s %s", lat_s, lon_s);
+      char text[LOOKOUT_POSITION_MAX];
 
+      lookout_fmt_position (lat, lon, text, sizeof text);
       gtk_label_set_text (GTK_LABEL (capsule->coord), text);
       gtk_widget_set_visible (capsule->coord, TRUE);
       return;
@@ -167,10 +114,11 @@ static void
 lk_hud_update_scale (LkHudCapsule *capsule)
 {
   double denominator = lk_app_model_get_scale_denominator (capsule->model);
-  g_autofree char *text = lk_format_scale (denominator);
+  char text[LOOKOUT_SCALE_MAX];
 
+  lookout_fmt_scale (denominator, text, sizeof text);
   gtk_label_set_text (GTK_LABEL (capsule->scale), text);
-  gtk_label_set_text (GTK_LABEL (capsule->band), lk_format_band (denominator));
+  gtk_label_set_text (GTK_LABEL (capsule->band), lookout_band_name (denominator));
 }
 
 static void

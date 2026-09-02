@@ -1,6 +1,6 @@
 # The shell's test suites. Two tiers:
 #
-# - unit: pure logic (formatting, parsers, JSON, the store). No display.
+# - unit: pure logic (readout geometry, JSON, the store). No display.
 # - widget: real GTK widgets driven headless. Each test binary skips itself
 #   (exit 77) when no display can be opened; run-headless.sh supplies Xvfb
 #   with the cairo renderer where the session has none.
@@ -8,7 +8,7 @@
 # Every test links the same objects the app links, so what a test proves is
 # what the app runs.
 
-unit_tests = ['format', 'parse', 'json', 'store', 'pick']
+unit_tests = ['format', 'import', 'json', 'store', 'pick']
 
 foreach name : unit_tests
   exe = executable('test-' + name,

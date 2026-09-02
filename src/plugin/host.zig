@@ -79,6 +79,7 @@ pub const webio = @import("webio.zig");
 const manifest_mod = @import("host/manifest.zig");
 const install = @import("host/install.zig");
 const settings_json = @import("host/settings_json.zig");
+pub const read = @import("host/read.zig");
 const testing = @import("host/testing.zig");
 
 comptime {
@@ -89,6 +90,7 @@ comptime {
     _ = manifest_mod;
     _ = install;
     _ = settings_json;
+    _ = read;
 }
 
 const io = std.Io.Threaded.global_single_threaded.io();

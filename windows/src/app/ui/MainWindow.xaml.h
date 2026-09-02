@@ -7,6 +7,7 @@
 #include "lk_pick.h"
 #include "lk_discovery.h"
 #include "lk_plugin_model.h"
+#include "lk_table.h"
 
 #include <atomic>
 #include <map>
@@ -79,6 +80,7 @@ namespace winrt::LookoutMarine::implementation
         // shape, the config object and the status lines are model code, in
         // plugins/lk_plugin_registry.h; what is left here is the drawing.
         bool ReadPluginRegistry(std::vector<lkw::PluginInfo> &out);
+        void ReadPluginSetting(lkw::PluginInfo &info, lookout_plugin_setting const &s);
         void ReloadPlugins();
         bool RefreshPluginStatus();
         void StartPluginStatusPoll();
@@ -255,24 +257,33 @@ namespace winrt::LookoutMarine::implementation
         void ApplyTableTheme(Microsoft::UI::Xaml::ElementTheme want);   // plugins/ui/Tables.cpp
         void ThemeSettingsPane(Microsoft::UI::Xaml::ElementTheme want); // settings/ui/Settings.cpp
 
-        // ---- chart sets (the folders of charts aboard) ----------------------
+        // ---- chart sets (the folders of installed charts) ----------------------
         // A set is a folder — the baked library, a folder of .pmtiles, a
         // folder of pictures — with an on/off switch. What opens is the UNION
-        // of the switched-on sets. Mirrors the macOS "sets aboard" model.
+        // of the switched-on sets. Mirrors the macOS "installed sets" model.
         struct ChartSetRow
         {
             std::string path;
             bool on{ true };
-            std::vector<std::string> cells;
-            std::vector<std::string> rasters;
+            // 0 until the background scan has read the folder, and every
+            // count below is 0 until then.
+            bool scanned{ false };
+            size_t charts{ 0 };
+            size_t pictures{ 0 };
             std::string title; // the agency whose charts these are, else the folder
         };
+        lookout_chart_sets *ChartSetsModel();
         void LoadChartSets(std::function<void()> then);
-        std::vector<std::string> ChartSetOpenPaths() const;
+        void PollChartSets();
+        /* True while any installed set is still waiting for its scan. */
+        bool ChartSetsScanning() const;
+        void CloseChartSets();
+        std::vector<std::string> ChartSetOpenPaths();
         void AdoptChartSet(std::string const &path);
         void SetChartSetOn(std::string const &path, bool on);
         void RemoveChartSet(std::string const &path);
         std::vector<ChartSetRow> chart_sets;
+        lookout_chart_sets *chart_sets_model{ nullptr };
 
         // ---- charts by link (an online map AS the chart) --------------------
         // One chart added by link: a MapLibre style url. Picking it renders
@@ -470,7 +481,6 @@ namespace winrt::LookoutMarine::implementation
         long long last_sample_qpc{ 0 };
 
         // pick report state
-        lk_pick_feature *pick_feats{ nullptr }; // freed with lk_controller_pick_free
         int pick_count{ 0 };
         std::vector<lkw::PickDecoded> pick_decoded;
         int pick_index{ -1 };

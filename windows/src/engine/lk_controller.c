@@ -10,7 +10,6 @@
 struct lk_controller {
     lookout *handle;          /* NULL until a chart is open */
     unsigned width, height;   /* logical points */
-    unsigned long long last_view_saved_ms;
 };
 
 /* The render thread parks between frames (lk_controller_wait); any mutation
@@ -57,11 +56,23 @@ lk_controller_wait(int ms)
     HANDLE h = wake_event();
     if (h == NULL) {
         /* No event to park on: sleep short, so a kick that cannot be
-         * delivered costs a few milliseconds rather than the whole timeout. */
-        Sleep(ms > 8 ? 8 : (DWORD)ms);
+         * delivered costs a few milliseconds rather than the whole timeout,
+         * and an idle park does not stop the thread for good. */
+        Sleep(ms > 8 || ms == LK_WAIT_IDLE ? 8 : (DWORD)ms);
         return;
     }
-    WaitForSingleObject(h, (DWORD)ms);
+    WaitForSingleObject(h, ms == LK_WAIT_IDLE ? INFINITE : (DWORD)ms);
+}
+
+/* Every mutating call kicks: the render thread's park ends now, so the frame
+ * that shows the change starts at once, and the engine's frame loop counts
+ * from a change this shell made rather than from where it had stopped. */
+static void
+kick(lk_controller *self)
+{
+    if (self != NULL && self->handle != NULL)
+        lookout_frame_kick(self->handle);
+    lk_controller_kick();
 }
 
 /* $LOOKOUT_VIEW="lon,lat,zoom[,rot]" pins the opening camera (screenshots). */
@@ -172,30 +183,18 @@ lk_controller_plugins_active(lk_controller *self)
     return lookout_plugins_active(self->handle) != 0;
 }
 
-char *
-lk_controller_plugins_json(lk_controller *self)
+lookout_plugins *
+lk_controller_plugins_read(lk_controller *self)
 {
     if (!lk_controller_is_open(self))
         return NULL;
-
-    size_t len = 0;
-    const char *json = lookout_plugins_json(self->handle, &len);
-    if (json == NULL || len == 0)
-        return NULL;
-
-    /* Borrowed until the next plugin query, so it is copied out here. */
-    char *copy = (char *)malloc(len + 1);
-    if (copy == NULL)
-        return NULL;
-    memcpy(copy, json, len);
-    copy[len] = '\0';
-    return copy;
+    return lookout_plugins_read(self->handle);
 }
 
 int
 lk_controller_set_plugin_config(lk_controller *self, const char *id, const char *json)
 {
-    lk_controller_kick();
+    kick(self);
     if (!lk_controller_is_open(self) || id == NULL || json == NULL)
         return 0;
     if (lookout_plugin_config_set(self->handle, id, json) != 0)
@@ -207,7 +206,8 @@ lk_controller_set_plugin_config(lk_controller *self, const char *id, const char 
 
 /* Every const char* a plugin query returns is borrowed into ONE shared scratch
  * buffer, invalidated by the next query — whichever query that is. So every
- * wrapper copies out before it returns. */
+ * wrapper that still hands back a string copies out before it returns. A read
+ * owns its own arena and needs none of this. */
 static char *
 copy_out(const char *s, size_t len)
 {
@@ -221,51 +221,38 @@ copy_out(const char *s, size_t len)
     return copy;
 }
 
-char *
-lk_controller_alerts_json(lk_controller *self)
+lookout_alerts *
+lk_controller_alerts_read(lk_controller *self)
 {
     if (!lk_controller_is_open(self))
         return NULL;
-    size_t len = 0;
-    const char *json = lookout_plugin_alerts_json(self->handle, &len);
-    if (json == NULL || len == 0)
-        return NULL;
-    return copy_out(json, len);
+    return lookout_alerts_read(self->handle);
 }
 
 int
 lk_controller_alert_ack(lk_controller *self, unsigned long long id)
 {
-    lk_controller_kick();
+    kick(self);
     if (!lk_controller_is_open(self))
         return 0;
     return lookout_plugin_alert_ack(self->handle, (uint64_t)id) == 0;
 }
 
-char *
-lk_controller_tables_json(lk_controller *self)
+lookout_tables *
+lk_controller_tables_read(lk_controller *self)
 {
     if (!lk_controller_is_open(self))
         return NULL;
-    size_t len = 0;
-    const char *json = lookout_plugin_tables_json(self->handle, &len);
-    if (json == NULL || len == 0)
-        return NULL;
-    return copy_out(json, len);
+    return lookout_tables_read(self->handle);
 }
 
-char *
-lk_controller_table_rows(lk_controller *self, const char *plugin, const char *key,
-                         const char *sort_key, int ascending)
+lookout_table_rows *
+lk_controller_table_rows_read(lk_controller *self, const char *plugin, const char *key,
+                              const char *sort_key, int ascending)
 {
     if (!lk_controller_is_open(self) || plugin == NULL || key == NULL)
         return NULL;
-    size_t len = 0;
-    const char *json = lookout_plugin_table_rows(self->handle, plugin, key,
-                                                 sort_key, ascending, &len);
-    if (json == NULL || len == 0)
-        return NULL;
-    return copy_out(json, len);
+    return lookout_table_rows_read(self->handle, plugin, key, sort_key, ascending);
 }
 
 void
@@ -290,7 +277,7 @@ lk_controller_plugin_inspect(lk_controller *self, const char *path)
 char *
 lk_controller_plugin_install(lk_controller *self, const char *path)
 {
-    lk_controller_kick();
+    kick(self);
     if (!lk_controller_is_open(self) || path == NULL)
         return _strdup("No chart is open.");
     const char *err = lookout_plugin_install(self->handle, path);
@@ -305,7 +292,7 @@ lk_controller_plugin_install(lk_controller *self, const char *path)
 int
 lk_controller_plugin_uninstall(lk_controller *self, const char *id)
 {
-    lk_controller_kick();
+    kick(self);
     if (!lk_controller_is_open(self) || id == NULL)
         return 0;
     if (lookout_plugin_uninstall(self->handle, id) != 0)
@@ -317,7 +304,7 @@ lk_controller_plugin_uninstall(lk_controller *self, const char *id)
 int
 lk_controller_plugin_grant_set(lk_controller *self, const char *id, const char *cap, int on)
 {
-    lk_controller_kick();
+    kick(self);
     if (!lk_controller_is_open(self) || id == NULL || cap == NULL)
         return 0;
     if (lookout_plugin_grant_set(self->handle, id, cap, on) != 0)
@@ -329,7 +316,7 @@ lk_controller_plugin_grant_set(lk_controller *self, const char *id, const char *
 int
 lk_controller_open_file(lk_controller *self, const char *path)
 {
-    lk_controller_kick();
+    kick(self);
     if (!lk_controller_is_open(self) || path == NULL)
         return 0;
     return lookout_open_file(self->handle, path);
@@ -346,7 +333,7 @@ lk_controller_own_ship(lk_controller *self, double *lon, double *lat)
 void
 lk_controller_follow_set(lk_controller *self, int on)
 {
-    lk_controller_kick();
+    kick(self);
     if (lk_controller_is_open(self))
         lookout_follow_set(self->handle, on);
 }
@@ -362,7 +349,7 @@ lk_controller_follow_active(lk_controller *self)
 void
 lk_controller_course_up_set(lk_controller *self, int on)
 {
-    lk_controller_kick();
+    kick(self);
     if (lk_controller_is_open(self))
         lookout_course_up_set(self->handle, on);
 }
@@ -478,23 +465,27 @@ lk_controller_open(lk_controller *self, const char *const *paths, int n,
     lookout_set_pixel_density(h, density);
     lookout_resize(h, width_pt, height_pt);
 
-    /* Reopen where we left off; a first run (no saved pose) takes the core's
-     * default view, not fit_chart: fitting a big library lands on an
-     * arbitrary harbor cell, and the default keeps that centre but pulls back
-     * to an overview (the one piece of this policy the core keeps in one
-     * place — see lookout.h). */
-    lookout_view v;
-    if (!lk_store_load_view(&v))
+    /* The engine keeps the pose and the mariner's settings in the store from
+     * here: it restores both now, writes the pose down as the mariner moves,
+     * and writes both at close. */
+    lookout_set_store(h, lk_store_handle());
+
+    /* A first run (no saved pose) takes the core's default view, not
+     * fit_chart: fitting a big library lands on an arbitrary harbor cell, and
+     * the default keeps that centre but pulls back to an overview (the one
+     * piece of this policy the core keeps in one place — see lookout.h). */
+    if (!lk_store_has_saved_view()) {
+        lookout_view v;
         lookout_default_view(h, &v);
-    lookout_set_view(h, &v);
+        lookout_set_view(h, &v);
+    }
     apply_env_view(h);
 
-    /* device_scale (physical symbol/text size) is the host's to state. */
+    /* device_scale (physical symbol/text size) is the host's to state, and is
+     * the one field the store leaves alone. */
     tile57_mariner m;
     lookout_get_mariner(h, &m);
     m.device_scale = density;
-    /* Saved settings overlay the defaults, so the chart reopens as left. */
-    lk_store_apply_saved_mariner(&m);
     lookout_set_mariner(h, &m);
 
     /* The plugins belong to the handle this open just made, so they are loaded
@@ -503,7 +494,6 @@ lk_controller_open(lk_controller *self, const char *const *paths, int n,
     load_plugins(h);
     lk_store_each_plugin_config(push_saved_plugin_config, h);
 
-    self->last_view_saved_ms = GetTickCount64();
     return 1;
 }
 
@@ -518,7 +508,7 @@ lk_controller_swapchain(lk_controller *self)
 void
 lk_controller_invalidate(lk_controller *self)
 {
-    lk_controller_kick();
+    kick(self);
     if (!lk_controller_is_open(self))
         return;
     lookout_view v;
@@ -532,11 +522,8 @@ lk_controller_close(lk_controller *self)
     if (self == NULL || self->handle == NULL)
         return;
 
-    /* Persist the pose to reopen on, before the handle dies. */
-    lookout_view v;
-    lookout_get_view(self->handle, &v);
-    lk_store_save_view(&v);
-
+    /* lookout_close writes the pose and the mariner's settings on the way
+     * out, so the store the handle was given is what reopens it. */
     lookout_close(self->handle);
     self->handle = NULL;
 }
@@ -544,47 +531,35 @@ lk_controller_close(lk_controller *self)
 /* ---- render loop -------------------------------------------------------- */
 
 int
-lk_controller_needs_tick(lk_controller *self)
+lk_controller_tick(lk_controller *self, int *wait_ms)
 {
-    if (!lk_controller_is_open(self))
-        return 0;
-    return lookout_animating(self->handle) || lookout_needs_redraw(self->handle) ||
-           lookout_is_building(self->handle);
-}
-
-int
-lk_controller_tick(lk_controller *self, double dt)
-{
+    if (wait_ms != NULL)
+        *wait_ms = LK_WAIT_IDLE;
     if (!lk_controller_is_open(self))
         return 0;
 
-    if (dt > 0.05)
-        dt = 0.05; /* cap after an idle gap so a resumed fling doesn't teleport */
+    lookout_frame f;
+    lookout_frame_next(self->handle, &f);
 
-    int animating = lookout_animating(self->handle);
-    if (animating)
-        lookout_tick_anim(self->handle, dt);
-
-    int drew = 0;
-    if (animating || lookout_needs_redraw(self->handle)) {
-        drew = lookout_render(self->handle);
-
-        /* Persist periodically: a crash never reaches close(). */
-        unsigned long long now = GetTickCount64();
-        if (now - self->last_view_saved_ms >= 3000) {
-            self->last_view_saved_ms = now;
-            lookout_view v;
-            lookout_get_view(self->handle, &v);
-            lk_store_save_view(&v);
+    if (wait_ms != NULL) {
+        switch (f.verdict) {
+        /* The present paces a drawn frame, so the loop comes straight back. A
+         * wait of zero is the next display tick, which is the same thing on a
+         * thread with no display link to hang off. */
+        case LOOKOUT_FRAME_RENDER: *wait_ms = 0; break;
+        case LOOKOUT_FRAME_WAIT:   *wait_ms = f.wait_ms; break;
+        default:                   *wait_ms = LK_WAIT_IDLE; break;
         }
     }
-    return drew;
+    if (f.verdict != LOOKOUT_FRAME_RENDER)
+        return 0;
+    return lookout_render(self->handle);
 }
 
 void
 lk_controller_resize(lk_controller *self, unsigned width_pt, unsigned height_pt)
 {
-    lk_controller_kick();
+    kick(self);
     if (!lk_controller_is_open(self) || width_pt == 0 || height_pt == 0)
         return;
     self->width = width_pt;
@@ -595,7 +570,7 @@ lk_controller_resize(lk_controller *self, unsigned width_pt, unsigned height_pt)
 void
 lk_controller_set_density(lk_controller *self, float density)
 {
-    lk_controller_kick();
+    kick(self);
     if (!lk_controller_is_open(self) || density <= 0)
         return;
     lookout_set_pixel_density(self->handle, density);
@@ -610,7 +585,7 @@ lk_controller_set_density(lk_controller *self, float density)
 void
 lk_controller_pan(lk_controller *self, double dx, double dy)
 {
-    lk_controller_kick();
+    kick(self);
     if (lk_controller_is_open(self))
         lookout_pan_logical(self->handle, (float)dx, (float)dy);
 }
@@ -618,7 +593,7 @@ lk_controller_pan(lk_controller *self, double dx, double dy)
 void
 lk_controller_zoom_at(lk_controller *self, double dzoom, double x, double y)
 {
-    lk_controller_kick();
+    kick(self);
     if (lk_controller_is_open(self))
         lookout_zoom_at_logical(self->handle, dzoom, (float)x, (float)y);
 }
@@ -626,7 +601,7 @@ lk_controller_zoom_at(lk_controller *self, double dzoom, double x, double y)
 void
 lk_controller_zoom_centered(lk_controller *self, double dzoom, unsigned w_px, unsigned h_px)
 {
-    lk_controller_kick();
+    kick(self);
     if (lk_controller_is_open(self))
         lookout_zoom_at_logical(self->handle, dzoom, (float)w_px / 2.0f, (float)h_px / 2.0f);
 }
@@ -634,7 +609,7 @@ lk_controller_zoom_centered(lk_controller *self, double dzoom, unsigned w_px, un
 void
 lk_controller_rotate_drag(lk_controller *self, double x0, double y0, double x1, double y1)
 {
-    lk_controller_kick();
+    kick(self);
     if (lk_controller_is_open(self))
         lookout_rotate_drag_logical(self->handle, (float)x0, (float)y0, (float)x1, (float)y1);
 }
@@ -642,7 +617,7 @@ lk_controller_rotate_drag(lk_controller *self, double x0, double y0, double x1, 
 void
 lk_controller_reset_rotation(lk_controller *self)
 {
-    lk_controller_kick();
+    kick(self);
     if (lk_controller_is_open(self))
         lookout_reset_rotation(self->handle);
 }
@@ -650,7 +625,7 @@ lk_controller_reset_rotation(lk_controller *self)
 void
 lk_controller_fling_start(lk_controller *self, double vx, double vy)
 {
-    lk_controller_kick();
+    kick(self);
     if (lk_controller_is_open(self))
         lookout_fling_start(self->handle, vx, vy);
 }
@@ -683,7 +658,7 @@ lk_controller_screen_of(lk_controller *self, double lon, double lat, double *x, 
 void
 lk_controller_fit_chart(lk_controller *self)
 {
-    lk_controller_kick();
+    kick(self);
     if (!lk_controller_is_open(self))
         return;
     lookout_view v;
@@ -694,7 +669,7 @@ lk_controller_fit_chart(lk_controller *self)
 void
 lk_controller_set_center(lk_controller *self, double lon, double lat)
 {
-    lk_controller_kick();
+    kick(self);
     if (!lk_controller_is_open(self))
         return;
     lookout_view v;
@@ -713,49 +688,57 @@ lk_controller_get_mariner(lk_controller *self, tile57_mariner *out)
 {
     if (out == NULL)
         return;
-    if (lk_controller_is_open(self))
+    if (lk_controller_is_open(self)) {
         lookout_get_mariner(self->handle, out);
-    else
-        lookout_mariner_defaults(out);
+        return;
+    }
+    /* The settings window opens before a chart does and after one closes, and
+     * what it shows there is the mariner's own choices either way. The read
+     * overlays the defaults, so a field the store never held is left alone. */
+    lookout_mariner_defaults(out);
+    lookout_store_read_mariner(lk_store_handle(), out);
 }
 
 void
 lk_controller_set_mariner(lk_controller *self, const tile57_mariner *m)
 {
-    lk_controller_kick();
-    if (lk_controller_is_open(self) && m != NULL)
+    kick(self);
+    if (m == NULL)
+        return;
+    /* With a chart open the engine writes the settings down itself. With none
+     * open there is no engine to do it, and a choice made at the settings
+     * window still has to be there at the next one. */
+    if (lk_controller_is_open(self))
         lookout_set_mariner(self->handle, m);
+    else
+        lookout_store_write_mariner(lk_store_handle(), m);
 }
 
 void
 lk_controller_set_scheme(lk_controller *self, int scheme)
 {
-    lk_controller_kick();
+    kick(self);
     if (!lk_controller_is_open(self))
         return;
     tile57_mariner m;
     lookout_get_mariner(self->handle, &m);
     m.scheme = (tile57_scheme)scheme;
     lookout_set_mariner(self->handle, &m);
-    lk_store_save_mariner(&m);
 }
 
 void
 lk_controller_cycle_scheme(lk_controller *self)
 {
-    lk_controller_kick();
+    kick(self);
     if (!lk_controller_is_open(self))
         return;
     lookout_cycle_scheme(self->handle);
-    tile57_mariner m;
-    lookout_get_mariner(self->handle, &m);
-    lk_store_save_mariner(&m);
 }
 
 void
 lk_controller_toggle_text(lk_controller *self)
 {
-    lk_controller_kick();
+    kick(self);
     if (lk_controller_is_open(self))
         lookout_toggle_text(self->handle);
 }
@@ -763,7 +746,7 @@ lk_controller_toggle_text(lk_controller *self)
 void
 lk_controller_toggle_soundings(lk_controller *self)
 {
-    lk_controller_kick();
+    kick(self);
     if (lk_controller_is_open(self))
         lookout_toggle_soundings(self->handle);
 }
@@ -771,7 +754,7 @@ lk_controller_toggle_soundings(lk_controller *self)
 void
 lk_controller_toggle_other_category(lk_controller *self)
 {
-    lk_controller_kick();
+    kick(self);
     if (lk_controller_is_open(self))
         lookout_toggle_other_category(self->handle);
 }
@@ -781,7 +764,7 @@ lk_controller_toggle_other_category(lk_controller *self)
 int
 lk_controller_raster_add(lk_controller *self, const char *path)
 {
-    lk_controller_kick();
+    kick(self);
     if (!lk_controller_is_open(self) || path == NULL || path[0] == '\0')
         return 0;
     return lookout_raster_add(self->handle, path);
@@ -790,7 +773,7 @@ lk_controller_raster_add(lk_controller *self, const char *path)
 void
 lk_controller_raster_cycle(lk_controller *self)
 {
-    lk_controller_kick();
+    kick(self);
     if (lk_controller_is_open(self))
         lookout_raster_cycle(self->handle);
 }
@@ -798,7 +781,7 @@ lk_controller_raster_cycle(lk_controller *self)
 void
 lk_controller_raster_select(lk_controller *self, int index)
 {
-    lk_controller_kick();
+    kick(self);
     if (lk_controller_is_open(self))
         lookout_raster_select(self->handle, index);
 }
@@ -863,7 +846,7 @@ lk_controller_raster_active_index(lk_controller *self)
 int
 lk_controller_raster_set_enabled(lk_controller *self, const char *path, int enabled)
 {
-    lk_controller_kick();
+    kick(self);
     if (!lk_controller_is_open(self) || path == NULL)
         return 0;
     return lookout_raster_set_enabled(self->handle, path, enabled);
@@ -892,7 +875,7 @@ lk_controller_raster_shown(lk_controller *self, unsigned i)
 void
 lk_controller_raster_set_shown(lk_controller *self, unsigned i, int on)
 {
-    lk_controller_kick();
+    kick(self);
     if (lk_controller_is_open(self))
         lookout_raster_set_shown(self->handle, i, on);
 }
@@ -900,7 +883,7 @@ lk_controller_raster_set_shown(lk_controller *self, unsigned i, int on)
 void
 lk_controller_set_chart_hidden(lk_controller *self, int hidden)
 {
-    lk_controller_kick();
+    kick(self);
     if (lk_controller_is_open(self))
         lookout_set_chart_hidden(self->handle, hidden);
 }
@@ -946,7 +929,7 @@ lk_controller_http_respond(lk_controller *self, unsigned long long req_id,
     /* An answer is adopted at the top of a frame, and the render loop stands
      * down when nothing is moving, so a resolve landing with no gesture behind
      * it needs someone to ask for the next frame. */
-    lk_controller_kick();
+    kick(self);
 }
 
 void
@@ -955,7 +938,7 @@ lk_controller_chart_link_add(lk_controller *self, const char *link)
     if (!lk_controller_is_open(self) || link == NULL)
         return;
     lookout_chart_link_add(self->handle, link);
-    lk_controller_kick();
+    kick(self);
 }
 
 void
@@ -964,7 +947,7 @@ lk_controller_chart_link_select(lk_controller *self, const char *url)
     if (!lk_controller_is_open(self))
         return;
     lookout_chart_link_select(self->handle, url);
-    lk_controller_kick();
+    kick(self);
 }
 
 void
@@ -973,7 +956,7 @@ lk_controller_chart_link_remove(lk_controller *self, const char *url)
     if (!lk_controller_is_open(self) || url == NULL)
         return;
     lookout_chart_link_remove(self->handle, url);
-    lk_controller_kick();
+    kick(self);
 }
 
 void
@@ -982,7 +965,7 @@ lk_controller_chart_link_refresh(lk_controller *self, const char *url)
     if (!lk_controller_is_open(self) || url == NULL)
         return;
     lookout_chart_link_refresh(self->handle, url);
-    lk_controller_kick();
+    kick(self);
 }
 
 void
@@ -993,20 +976,14 @@ lk_controller_chart_links_import(lk_controller *self, const char *json)
     lookout_chart_links_import(self->handle, json);
 }
 
-char *
-lk_controller_chart_links_changed_json(lk_controller *self)
+lookout_links *
+lk_controller_chart_links_changed_read(lk_controller *self)
 {
     if (!lk_controller_is_open(self))
         return NULL;
     if (!lookout_chart_links_changed(self->handle))
         return NULL;
-    return lookout_chart_links_json(self->handle);
-}
-
-void
-lk_controller_string_free(char *s)
-{
-    lookout_string_free(s);
+    return lookout_links_read(self->handle);
 }
 
 /* ---- markers ------------------------------------------------------------- */
@@ -1030,7 +1007,7 @@ copy_marker(const lookout_marker *in, lk_marker *out)
 uint64_t
 lk_controller_marker_add(lk_controller *self, double lon, double lat)
 {
-    lk_controller_kick();
+    kick(self);
     if (!lk_controller_is_open(self))
         return 0;
     return lookout_marker_add(self->handle, lon, lat);
@@ -1051,7 +1028,7 @@ lk_controller_marker_at(lk_controller *self, double x_pt, double y_pt, lk_marker
 int
 lk_controller_marker_rename(lk_controller *self, uint64_t id, const char *name)
 {
-    lk_controller_kick();
+    kick(self);
     if (!lk_controller_is_open(self) || name == NULL)
         return -1;
     return lookout_marker_rename(self->handle, id, name);
@@ -1060,7 +1037,7 @@ lk_controller_marker_rename(lk_controller *self, uint64_t id, const char *name)
 int
 lk_controller_marker_remove(lk_controller *self, uint64_t id)
 {
-    lk_controller_kick();
+    kick(self);
     if (!lk_controller_is_open(self))
         return -1;
     return lookout_marker_remove(self->handle, id);
@@ -1069,7 +1046,7 @@ lk_controller_marker_remove(lk_controller *self, uint64_t id)
 void
 lk_controller_toggle_chart(lk_controller *self)
 {
-    lk_controller_kick();
+    kick(self);
     if (lk_controller_is_open(self))
         lookout_toggle_chart(self->handle);
 }
@@ -1084,85 +1061,15 @@ lk_controller_chart_hidden(lk_controller *self)
 
 /* ---- pick --------------------------------------------------------------- */
 
-typedef struct {
-    lk_pick_feature *feats;
-    int count, cap;
-} pick_ctx;
-
-static char *
-pick_dup(const char *s, size_t len)
+lookout_picks *
+lk_controller_picks_read(lk_controller *self, double x, double y)
 {
-    char *out = (char *)malloc(len + 1);
-    if (out == NULL)
-        return NULL;
-    memcpy(out, s ? s : "", s ? len : 0);
-    out[s ? len : 0] = '\0';
-    return out;
-}
-
-static void
-pick_cb(void *ctx, const char *cls, size_t cls_len, const char *s57, size_t s57_len,
-        const char *chart, size_t chart_len)
-{
-    pick_ctx *pc = (pick_ctx *)ctx;
-    if (pc->count == pc->cap) {
-        int cap = pc->cap == 0 ? 8 : pc->cap * 2;
-        lk_pick_feature *grown =
-            (lk_pick_feature *)realloc(pc->feats, (size_t)cap * sizeof *grown);
-        if (grown == NULL)
-            return;
-        pc->feats = grown;
-        pc->cap = cap;
-    }
-    lk_pick_feature *f = &pc->feats[pc->count];
-    f->cls = pick_dup(cls, cls_len);
-    f->json = pick_dup(s57, s57_len);
-    f->chart = pick_dup(chart, chart_len);
-    if (f->cls == NULL || f->json == NULL || f->chart == NULL) {
-        free(f->cls);
-        free(f->json);
-        free(f->chart);
-        return;
-    }
-    pc->count++;
-}
-
-int
-lk_controller_pick_at(lk_controller *self, double x, double y, lk_pick_feature **out)
-{
-    if (out == NULL)
-        return 0;
-    *out = NULL;
     if (!lk_controller_is_open(self))
-        return 0;
+        return NULL;
 
     double lon, lat;
     lookout_screen_to_geo(self->handle, (float)x, (float)y, &lon, &lat);
-
-    pick_ctx pc = { NULL, 0, 0 };
-    tile57_query_cb cb;
-    cb.ctx = &pc;
-    cb.feature = pick_cb;
-    lookout_pick_ranked(self->handle, lon, lat, &cb);
-    if (pc.count == 0) {
-        free(pc.feats);
-        return 0;
-    }
-    *out = pc.feats;
-    return pc.count;
-}
-
-void
-lk_controller_pick_free(lk_pick_feature *feats, int n)
-{
-    if (feats == NULL)
-        return;
-    for (int i = 0; i < n; ++i) {
-        free(feats[i].cls);
-        free(feats[i].json);
-        free(feats[i].chart);
-    }
-    free(feats);
+    return lookout_picks_read(self->handle, lon, lat);
 }
 
 int

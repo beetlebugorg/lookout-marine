@@ -52,28 +52,34 @@ extension ChartController {
     // CADisplayLink fires on the main run loop; assume main-actor isolation.
     // MARK: - Cursor pick
 
-    func pick(lon: Double, lat: Double) -> [PickFeature] {
-        guard let h = handle else { return [] }
-        var results: [PickFeature] = []
-        withUnsafeMutablePointer(to: &results) { ctx in
-            var cb = tile57_query_cb(
-                ctx: UnsafeMutableRawPointer(ctx),
-                feature: { c, cls, clsLen, s57, s57Len, chart, chartLen in
-                    guard let c else { return }
-                    let arr = c.assumingMemoryBound(to: [PickFeature].self)
-                    func str(_ p: UnsafePointer<CChar>?, _ n: Int) -> String {
-                        guard let p, n > 0 else { return "" }
-                        return String(decoding: UnsafeRawBufferPointer(start: p, count: n), as: UTF8.self)
-                    }
-                    arr.pointee.append(PickFeature(cls: str(cls, clsLen),
-                                                   chart: str(chart, chartLen),
-                                                   s57: str(s57, s57Len)))
-                })
-            // The core decides what a pick reports and in what order (pick.zig),
-            // so every shell shows the same thing.
-            lookout_pick_ranked(h, lon, lat, &cb)
+    /// What the chart holds under a point, decoded. The core decides what a
+    /// pick reports, in what order, and what each page says (pick.zig), so
+    /// every shell shows the same thing.
+    func pick(lon: Double, lat: Double) -> [PickDecoded] {
+        guard let h = handle, let read = lookout_picks_read(h, lon, lat) else { return [] }
+        defer { lookout_picks_free(read) }
+        var n = 0
+        guard let all = lookout_picks_all(read, &n) else { return [] }
+        return (0..<n).compactMap { i in
+            guard let f = all[i] else { return nil }
+            var count = 0
+            var notes: [String] = []
+            if let ns = lookout_pick_notes(f, &count) {
+                notes = (0..<count).compactMap { ns[$0].map { String(cString: $0) } }
+            }
+            let rows = lookout_pick_rows(f, &count)
+            let page = Self.rows(rows, count)
+            let src = lookout_pick_source(f, &count)
+            let fold = Self.rows(src, count)
+            return PickDecoded(f.pointee, notes: notes, rows: page, source: fold)
         }
-        return results
+    }
+
+    /// One of a feature's row arrays, copied out of the read.
+    private static func rows(_ p: UnsafePointer<UnsafePointer<lookout_pick_row>?>?,
+                             _ n: Int) -> [PickDecoded.Row] {
+        guard let p else { return [] }
+        return (0..<n).compactMap { p[$0].map { PickDecoded.Row($0.pointee) } }
     }
 
     /// A file a picked feature points at, by the cell it came from and the name

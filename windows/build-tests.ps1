@@ -1,8 +1,9 @@
 # build-tests.ps1 — build and run the Windows shell's tests.
 #
-# The suite covers the shell's MODEL: the parsers, the formatters, the geometry
-# and the store. Not the WinUI layer — that needs a XAML host — and not the
-# core, which has its own `zig build test`.
+# The suite covers the shell's MODEL: the decoders, the geometry and the store.
+# Not the WinUI layer, which needs a XAML host, and not the core, which has its
+# own `zig build test`. What a mariner types and the strings a mariner reads are
+# the core's format kit and are tested there.
 #
 # It builds with zig rather than MSVC on purpose. zig is already a prerequisite
 # of this shell (build-core.ps1 needs it), so the tests run for anyone who can
@@ -34,19 +35,20 @@ $sourceDirs = @('app\ui', 'chart', 'chart\ui', 'hud', 'hud\ui', 'library', 'libr
     'plugins', 'plugins\ui', 'settings\ui', 'about', 'about\ui', 'engine', 'util') |
     ForEach-Object { "-I$PSScriptRoot\src\$_" }
 
-# The core's headers, for the TYPES the store and the paths speak in
-# (lookout_view, tile57_mariner). Headers only: nothing here links the core,
-# and a test that needed a lookout_* symbol would be testing the core.
+# The core's headers, for the TYPES the model speaks in (lookout_view,
+# tile57_mariner, and every struct and enum a typed read hands over). Headers
+# only: nothing here links the core, and a test that needed a lookout_* symbol
+# would be testing the core. Reading an array out of a live read is therefore
+# the UI's call, and what it hands over is what these files shape.
 $coreInclude = Join-Path (Split-Path $PSScriptRoot -Parent) 'zig-out\include'
 if (Test-Path $coreInclude) { $sourceDirs += "-I$coreInclude" }
 else { Write-Warning "no core headers at $coreInclude; run windows\build-core.ps1 first" }
 
 # The shell's own sources under test. A new module goes in one of the first two
 # lists, its suite in the third, and main.cpp names the suite function.
-$cSources = @(
-    'src\util\lk_coord.c',
-    'src\engine\lk_store.c'
-)
+# No C model file at the moment: lk_store.c speaks to the core store and
+# lk_coord.c is the core's format kit. A new one goes here.
+$cSources = @()
 $cppSources = @(
     'src\util\lk_json.cpp',
     'src\util\lk_utf8.cpp',
@@ -56,12 +58,10 @@ $cppSources = @(
     'src\plugins\lk_plugin_registry.cpp',
     'src\plugins\lk_alerts.cpp',
     'src\plugins\lk_table.cpp',
-    'src\hud\lk_text.cpp',
     'src\library\lk_paths.cpp'
 )
 $suites = @(
     'test\main.cpp',
-    'test\test_coord.cpp',
     'test\test_json.cpp',
     'test\test_utf8.cpp',
     'test\test_pick.cpp',
@@ -70,9 +70,7 @@ $suites = @(
     'test\test_plugin_registry.cpp',
     'test\test_alerts.cpp',
     'test\test_table.cpp',
-    'test\test_text.cpp',
-    'test\test_paths.cpp',
-    'test\test_store.cpp'
+    'test\test_paths.cpp'
 )
 
 New-Item -ItemType Directory -Force $out | Out-Null

@@ -24,7 +24,7 @@ import org.robolectric.RobolectricTestRunner
 @RunWith(RobolectricTestRunner::class)
 class PluginRegistryTest {
 
-    private val reg = PluginRegistry.parse(Fixtures.registry)
+    private val reg = PluginRegistry(PluginFixture.shipped)
 
     private fun plugin(id: String) =
         reg.plugins.first { it.id == id }
@@ -53,12 +53,6 @@ class PluginRegistryTest {
         assertEquals(listOf("org.example.grib", "org.example.routes"), reg.managed.map { it.id })
         assertTrue(plugin("org.beetlebug.ais").bundled)
         assertFalse(plugin("org.example.grib").bundled)
-    }
-
-    @Test fun aPluginWithNoOriginIsTreatedAsBundled() {
-        val one = PluginRegistry.parse("""{"plugins":[{"id":"x","name":"X"}]}""").plugins.single()
-        assertEquals("bundled", one.origin)
-        assertTrue(one.bundled)
     }
 
     // ---- the sections -------------------------------------------------------
@@ -137,15 +131,6 @@ class PluginRegistryTest {
         assertEquals(1.0, legs.defaultValue, 0.0)
     }
 
-    /** A schema that declares no label still renders: the key names it. */
-    @Test fun anUnlabelledFieldFallsBackToItsKey() {
-        val one = PluginRegistry.parse(
-            """{"plugins":[{"id":"x","settings":[{"key":"gain","kind":"number"}]}]}"""
-        ).plugins.single().fields.single()
-        assertEquals("gain", one.label)
-        assertEquals("advanced", one.tab)
-    }
-
     // ---- the connection lists -----------------------------------------------
 
     @Test fun bothConnectionListsLandOnTheConnectionsSection() {
@@ -183,12 +168,13 @@ class PluginRegistryTest {
         assertTrue("NMEA declares only the standard four", nmea.extraFields.isEmpty())
     }
 
-    /** With no `switch_key`, the first toggle takes the part. */
+    /** With no named switch, the first toggle takes the part. */
     @Test fun withNoNamedSwitchTheFirstToggleIsUsed() {
-        val schema = PluginRegistry.parse(
-            """{"plugins":[{"id":"x","lists":[{"key":"k","tab":"connections","item_fields":[
-               {"key":"on","label":"On","kind":"toggle","default":true}]}]}]}"""
-        ).lists("connections").single()
+        val schema = PluginFixture.list(
+            "x", "k", group = "", switchKey = "",
+            fields = listOf(PluginFixture.toggle("on", "On", tab = "connections", on = true)),
+            addLabel = "Add",
+        )
         assertEquals("on", schema.switchField?.key)
     }
 
@@ -199,13 +185,6 @@ class PluginRegistryTest {
         assertEquals("No connections yet.", nmea.empty)
         assertEquals("Connections", nmea.group)
         assertTrue(nmea.footer.startsWith("Give the address"))
-    }
-
-    @Test fun aListWithNoRowCapTakesTheHostsDefault() {
-        val schema = PluginRegistry.parse(
-            """{"plugins":[{"id":"x","lists":[{"key":"k","tab":"connections","item_fields":[]}]}]}"""
-        ).lists("connections").single()
-        assertEquals(8, schema.maxRows)
     }
 
     // ---- discovery ----------------------------------------------------------
@@ -236,11 +215,10 @@ class PluginRegistryTest {
         assertEquals("", rows[1].text("name"))
     }
 
+    /** A list nobody in the registry holds reads as empty. */
     @Test fun aListWithNoRowsReadsAsEmptyRatherThanMissing() {
-        val schema = PluginRegistry.parse(
-            """{"plugins":[{"id":"x","lists":[{"key":"k","tab":"connections","item_fields":[]}]}]}"""
-        ).lists("connections").single()
-        assertTrue(PluginRegistry.parse(Fixtures.registry).rows(schema).isEmpty())
+        val schema = PluginFixture.list("x", "k", group = "", fields = emptyList(), addLabel = "Add")
+        assertTrue(reg.rows(schema).isEmpty())
     }
 
     // ---- what a plugin says about each row ----------------------------------
@@ -304,42 +282,4 @@ class PluginRegistryTest {
         assertFalse("the mariner revoked this one", caps[3].granted)
     }
 
-    /** Absent means granted: a manifest's capability is in force until the
-     *  mariner switches it off. */
-    @Test fun aCapabilityWithNoGrantFlagIsGranted() {
-        val cap = PluginRegistry.parse(
-            """{"plugins":[{"id":"x","capabilities":[{"cap":"overlay.draw"}]}]}"""
-        ).plugins.single().capabilities.single()
-        assertTrue(cap.granted)
-        assertEquals("the sentence falls back to the name", "overlay.draw", cap.sentence)
-    }
-
-    // ---- what it refuses to fall over on ------------------------------------
-
-    @Test fun nothingAtAllIsAnEmptyRegistry() {
-        assertTrue(PluginRegistry.parse(null).plugins.isEmpty())
-        assertTrue(PluginRegistry.parse("").plugins.isEmpty())
-    }
-
-    /** A null read is the plugin layer mid-restart. It must not throw. */
-    @Test fun malformedJsonIsAnEmptyRegistry() {
-        assertTrue(PluginRegistry.parse("{").plugins.isEmpty())
-        assertTrue(PluginRegistry.parse("not json at all").plugins.isEmpty())
-        assertTrue(PluginRegistry.parse("""{"plugins":"nope"}""").plugins.isEmpty())
-    }
-
-    /** A plugin with no id is not a plugin. */
-    @Test fun anEntryWithNoIdIsSkipped() {
-        val r = PluginRegistry.parse("""{"plugins":[{"name":"No id"},{"id":"ok"}]}""")
-        assertEquals(listOf("ok"), r.plugins.map { it.id })
-    }
-
-    /** A field of a kind this build does not know is dropped, not guessed at. */
-    @Test fun anUnknownFieldKindIsDropped() {
-        val p = PluginRegistry.parse(
-            """{"plugins":[{"id":"x","settings":[
-               {"key":"a","kind":"colour"},{"key":"b","kind":"toggle","default":false}]}]}"""
-        ).plugins.single()
-        assertEquals(listOf("b"), p.fields.map { it.key })
-    }
 }

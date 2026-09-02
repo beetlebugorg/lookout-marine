@@ -239,7 +239,7 @@ lk_build_plugins_page (LkSettings *settings)
           gtk_widget_set_valign (sw, GTK_ALIGN_CENTER);
           gtk_switch_set_active (GTK_SWITCH (sw), cap->granted);
           g_object_set_data_full (G_OBJECT (sw), "lk-plugin-id", g_strdup (id), g_free);
-          g_object_set_data_full (G_OBJECT (sw), "lk-plugin-cap", g_strdup (cap->cap), g_free);
+          g_object_set_data_full (G_OBJECT (sw), "lk-plugin-cap", g_strdup (cap->name), g_free);
           g_signal_connect (sw, "notify::active", G_CALLBACK (lk_plugins_grant_toggled),
                             settings);
           lk_row (body, title, sw);

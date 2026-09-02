@@ -74,6 +74,13 @@ The day-run bar passes when there is **exactly one CPA alarm** (MMSI
 `zig build` alone does NOT rebuild plugin wasm. Run `zig build plugins`. A
 stale wasm has sent this project chasing a phantom bug more than once.
 
+The bake has a gate of its own, `zig build bake-host`. It bakes the three cells
+in `test/cells/`, one each from bands 3, 4 and 5 and 13.8 KB for all three, and
+checks the order, the counters, the cancel and where each chart landed.
+
+`LOOKOUT_BAKE_ARCHIVE=<exchange-set.zip>` adds the archive path: entry names,
+the mirrored output, nothing unzipped. That test skips without it.
+
 macOS: `xcodebuild -project apple/LookoutMarine.xcodeproj -scheme LookoutMarine
 -configuration Debug -derivedDataPath apple/build-mac`.
 

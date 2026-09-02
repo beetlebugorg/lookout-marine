@@ -1,7 +1,7 @@
-//  ChartsSection.swift — the charts aboard, in the settings form.
+//  ChartsSection.swift — the installed charts, in the settings form.
 //
 //  Which chart is DRAWN (Lookout's own, or a publisher's style by link), the
-//  sets aboard with a switch each, the work while it runs, and the way to add
+//  installed sets with a switch each, the work while it runs, and the way to add
 //  more. A picture and a survey are not different kinds of thing to ADD: they
 //  arrive in the same folders and are switched on the same way.
 
@@ -10,7 +10,7 @@ import SwiftUI
 
 // MARK: - Charts
 
-/// Chart selection: the sets aboard, and the picker. iOS imports via
+/// Chart selection: the installed sets, and the picker. iOS imports via
 /// the form's OWN file importers (SettingsView attaches them, so they present
 /// over the sheet); macOS uses the shared NSOpenPanel.
 struct ChartsSections: View {
@@ -34,7 +34,7 @@ struct ChartsSections: View {
                                  picked: model.chartLinks.active == link.url) { model.chartLinks.select(link.url) }
                     Spacer(minLength: 4)
                     // Every chart can be re-read: a link goes back to the
-                    // publisher, and a style file the mariner has aboard goes
+                    // publisher, and a style file on the device goes
                     // back to the path it came from. What a refresh brings is
                     // the publisher's edits — moved tiles, a wider zoom band, a
                     // changed credit.
@@ -98,8 +98,8 @@ struct ChartsSections: View {
             .foregroundStyle(.secondary)
         }
 
-        // The sets aboard. A set is a folder the mariner added; switching one
-        // off keeps it aboard and takes it out of the chart. Every set here
+        // The installed sets. A set is a folder the mariner added; switching one
+        // off keeps it installed and takes it out of the chart. Every set here
         // has been looked through and holds charts, so none of them is a dead
         // entry the mariner has to discover by clicking it.
         Section {

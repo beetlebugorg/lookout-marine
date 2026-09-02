@@ -8,6 +8,7 @@
 //! A shell keeps the entries whose `shells` array names it.
 
 const std = @import("std");
+const owned = @import("owned");
 
 /// The list, in the binary.
 pub const json: []const u8 = @embedFile("licenses_json");
@@ -46,6 +47,113 @@ const Manifest = struct {
 
 fn parse(alloc: std.mem.Allocator) !std.json.Parsed(Manifest) {
     return std.json.parseFromSlice(Manifest, alloc, json, .{});
+}
+
+// ---- the read a shell draws ---------------------------------------------------
+
+/// Above this many components a screen groups the rows under their headings and
+/// offers a search. Below it the headings outnumber the rows.
+pub const group_above: usize = 12;
+
+/// One component, or this app's own terms. The app entry sets `name`,
+/// `summary`, `license`, `copyright`, `url` and `text`, and leaves the rest
+/// empty: it is not a component.
+pub const Entry = extern struct {
+    id: [*:0]const u8,
+    name: [*:0]const u8,
+    group: [*:0]const u8,
+    summary: [*:0]const u8,
+    license: [*:0]const u8,
+    license_short: [*:0]const u8,
+    license_note: [*:0]const u8,
+    version: [*:0]const u8,
+    commit: [*:0]const u8,
+    pinned_in: [*:0]const u8,
+    copyright: [*:0]const u8,
+    url: [*:0]const u8,
+    text: [*:0]const u8,
+    notice: [*:0]const u8,
+};
+
+/// The components, plus this app's own entry beside them.
+pub const Read = struct {
+    inner: owned.Owned(Entry),
+    app: *const Entry,
+
+    pub fn free(self: *Read) void {
+        const gpa = self.inner.arena.child_allocator;
+        self.inner.arena.deinit();
+        gpa.destroy(self);
+    }
+
+    pub fn rows(self: *const Read) []const *const Entry {
+        return self.inner.rows;
+    }
+};
+
+/// The components `shell` ships with, and this app's terms. `shell` is one of
+/// `shell_ids`. A shell the manifest never names gets the app entry and no
+/// components.
+pub fn read(gpa: std.mem.Allocator, shell: []const u8) !*Read {
+    const self = try gpa.create(Read);
+    errdefer gpa.destroy(self);
+    self.* = .{
+        .inner = .{ .arena = std.heap.ArenaAllocator.init(gpa) },
+        .app = undefined,
+    };
+    errdefer self.inner.arena.deinit();
+    const a = self.inner.arena.allocator();
+
+    const parsed = try std.json.parseFromSliceLeaky(Manifest, a, json, .{});
+    const none = try owned.str(a, "");
+
+    const app = try a.create(Entry);
+    app.* = .{
+        .id = none,
+        .name = try owned.str(a, parsed.app.name),
+        .group = none,
+        .summary = try owned.str(a, parsed.app.summary),
+        .license = try owned.str(a, parsed.app.license),
+        .license_short = none,
+        .license_note = none,
+        .version = none,
+        .commit = none,
+        .pinned_in = none,
+        .copyright = try owned.str(a, parsed.app.copyright),
+        .url = try owned.str(a, parsed.app.url),
+        .text = try owned.str(a, parsed.app.text),
+        .notice = none,
+    };
+    self.app = app;
+
+    var kept = std.ArrayList(*const Entry).empty;
+    for (parsed.components) |c| {
+        var carries = false;
+        for (c.shells) |s| {
+            if (std.mem.eql(u8, s, shell)) carries = true;
+        }
+        if (!carries) continue;
+        const e = try a.create(Entry);
+        e.* = .{
+            .id = try owned.str(a, c.id),
+            .name = try owned.str(a, c.name),
+            .group = try owned.str(a, c.group),
+            .summary = try owned.str(a, c.summary),
+            .license = try owned.str(a, c.license),
+            .license_short = try owned.str(a, c.license_short),
+            .license_note = try owned.str(a, c.license_note),
+            .version = try owned.str(a, c.version),
+            .commit = try owned.str(a, c.commit),
+            .pinned_in = try owned.str(a, c.pinned_in),
+            .copyright = try owned.str(a, c.copyright),
+            .url = try owned.str(a, c.url),
+            .text = try owned.str(a, c.text),
+            .notice = try owned.str(a, c.notice),
+        };
+        try kept.append(a, e);
+    }
+    self.inner.rows = kept.items;
+    return self;
 }
 
 test "the baked manifest parses into the shape the shells decode" {
@@ -156,4 +264,82 @@ test "ids are unique" {
             try std.testing.expect(!std.mem.eql(u8, c.id, d.id));
         }
     }
+}
+
+test "a read holds the components one shell ships with and no others" {
+    const a = std.testing.allocator;
+    const p = try parse(a);
+    defer p.deinit();
+
+    for (shell_ids) |id| {
+        const r = try read(a, id);
+        defer r.free();
+        var want: usize = 0;
+        for (p.value.components) |c| {
+            for (c.shells) |s| {
+                if (std.mem.eql(u8, s, id)) want += 1;
+            }
+        }
+        try std.testing.expectEqual(want, r.rows().len);
+        for (r.rows()) |e| try std.testing.expect(std.mem.span(e.id).len > 0);
+    }
+}
+
+test "a read says what the manifest says, field for field" {
+    const a = std.testing.allocator;
+    const p = try parse(a);
+    defer p.deinit();
+    const r = try read(a, "macos");
+    defer r.free();
+
+    var seen: usize = 0;
+    for (p.value.components) |c| {
+        var carries = false;
+        for (c.shells) |s| {
+            if (std.mem.eql(u8, s, "macos")) carries = true;
+        }
+        if (!carries) continue;
+        const e = r.rows()[seen];
+        seen += 1;
+        try std.testing.expectEqualStrings(c.id, std.mem.span(e.id));
+        try std.testing.expectEqualStrings(c.name, std.mem.span(e.name));
+        try std.testing.expectEqualStrings(c.group, std.mem.span(e.group));
+        try std.testing.expectEqualStrings(c.summary, std.mem.span(e.summary));
+        try std.testing.expectEqualStrings(c.license, std.mem.span(e.license));
+        try std.testing.expectEqualStrings(c.license_short, std.mem.span(e.license_short));
+        try std.testing.expectEqualStrings(c.license_note, std.mem.span(e.license_note));
+        try std.testing.expectEqualStrings(c.version, std.mem.span(e.version));
+        try std.testing.expectEqualStrings(c.commit, std.mem.span(e.commit));
+        try std.testing.expectEqualStrings(c.pinned_in, std.mem.span(e.pinned_in));
+        try std.testing.expectEqualStrings(c.copyright, std.mem.span(e.copyright));
+        try std.testing.expectEqualStrings(c.url, std.mem.span(e.url));
+        try std.testing.expectEqualStrings(c.text, std.mem.span(e.text));
+        try std.testing.expectEqualStrings(c.notice, std.mem.span(e.notice));
+    }
+    try std.testing.expectEqual(seen, r.rows().len);
+}
+
+test "this app's own entry rides beside the components, out of the count" {
+    const a = std.testing.allocator;
+    const p = try parse(a);
+    defer p.deinit();
+    const r = try read(a, "macos");
+    defer r.free();
+
+    try std.testing.expectEqualStrings(p.value.app.name, std.mem.span(r.app.name));
+    try std.testing.expectEqualStrings(p.value.app.license, std.mem.span(r.app.license));
+    try std.testing.expectEqualStrings(p.value.app.text, std.mem.span(r.app.text));
+    // The fields only a component has are empty on the app entry.
+    try std.testing.expectEqualStrings("", std.mem.span(r.app.id));
+    try std.testing.expectEqualStrings("", std.mem.span(r.app.group));
+    for (r.rows()) |e| try std.testing.expect(e != r.app);
+}
+
+test "a shell the manifest never names carries nothing" {
+    const a = std.testing.allocator;
+    const r = try read(a, "amiga");
+    defer r.free();
+    try std.testing.expectEqual(@as(usize, 0), r.rows().len);
+    // The app's own terms still ship.
+    try std.testing.expect(std.mem.span(r.app.name).len > 0);
 }

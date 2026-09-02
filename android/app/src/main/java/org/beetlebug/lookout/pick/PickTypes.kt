@@ -9,9 +9,6 @@ import androidx.compose.ui.geometry.Offset
 // and `chart` import each other, which said the two were one thing when they
 // are not.
 
-/** One feature under the cursor: S-57 object class, its acronym, source cell. */
-data class PickFeature(val cls: String, val s57: String, val chart: String)
-
 /**
  * What a plugin overlay symbol says about itself — an AIS target's name, MMSI,
  * speed and closest approach, say. Decoded from the JSON the core's overlay

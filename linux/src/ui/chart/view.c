@@ -1,6 +1,7 @@
 #include "ui/chart/view.h"
 
 #include "model/app-model.h"
+#include "ui/chart/pick-report.h"
 #include "ui/hud/hud.h"
 #include "util/json.h"
 
@@ -446,10 +447,13 @@ lk_chart_menu_pick (GtkButton *button, gpointer user_data)
   LkChartView *self = user_data;
 
   lk_chart_view_close_menu (self);
-  lk_app_model_set_pick (self->model,
-                         lk_chart_controller_pick (self->controller,
-                                                   self->menu_lon, self->menu_lat),
+
+  lookout_picks *picks = lk_chart_controller_pick (self->controller,
+                                                   self->menu_lon, self->menu_lat);
+
+  lk_app_model_set_pick (self->model, lk_pick_decoded_list (picks),
                          self->menu_x, self->menu_y, self->menu_lon, self->menu_lat);
+  lookout_picks_free (picks);
 }
 
 /* THE DROP NEVER WAITS FOR TYPING. The core places the mark and names it in one
@@ -482,10 +486,9 @@ static void
 lk_chart_menu_copy_position (GtkButton *button, gpointer user_data)
 {
   LkChartView *self = user_data;
-  g_autofree char *lat = lk_coord_format_dm (self->menu_lat, TRUE);
-  g_autofree char *lon = lk_coord_format_dm (self->menu_lon, FALSE);
-  g_autofree char *text = g_strdup_printf ("%s %s", lat, lon);
+  char text[LOOKOUT_POSITION_MAX];
 
+  lookout_fmt_position (self->menu_lat, self->menu_lon, text, sizeof text);
   lk_chart_view_close_menu (self);
   gdk_clipboard_set_text (gtk_widget_get_clipboard (GTK_WIDGET (self)), text);
 }
@@ -550,8 +553,11 @@ lk_chart_view_open_menu (LkChartView *self, double x, double y)
       gtk_label_set_xalign (GTK_LABEL (title), 0.0);
       gtk_box_append (GTK_BOX (box), title);
     }
-  g_autofree char *hlat = lk_coord_format_dm (lat, TRUE);
-  g_autofree char *hlon = lk_coord_format_dm (lon, FALSE);
+  /* Two spaces, not the kit's one: the header sets the pair wider than the
+     clipboard line does. */
+  char hlat[LOOKOUT_COORD_MAX], hlon[LOOKOUT_COORD_MAX];
+  lookout_fmt_coord_dm (lat, TRUE, hlat, sizeof hlat);
+  lookout_fmt_coord_dm (lon, FALSE, hlon, sizeof hlon);
   g_autofree char *coord = g_strdup_printf ("%s  %s", hlat, hlon);
   GtkWidget *header = gtk_label_new (coord);
   gtk_widget_add_css_class (header, "dim-label");

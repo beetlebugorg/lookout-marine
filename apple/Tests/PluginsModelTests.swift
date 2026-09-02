@@ -17,10 +17,10 @@ final class PluginsModelTests: ShellTestCase {
         return m
     }
 
-    private func alert(_ id: UInt64, _ severity: String = "alarm",
+    private func alert(_ id: UInt64, _ severity: PluginAlertSeverity = .alarm,
                        acknowledged: Bool = false) -> PluginAlert {
-        PluginAlert(["id": NSNumber(value: id), "title": "Shallow water",
-                     "severity": severity, "acknowledged": acknowledged])!
+        PluginAlert(id: id, severity: severity, title: "Shallow water",
+                    acknowledged: acknowledged)
     }
 
     // MARK: Alerts

@@ -3,6 +3,7 @@ package org.beetlebug.lookout
 import org.beetlebug.lookout.chart.ChartController
 import org.beetlebug.lookout.chart.ChartScreen
 import org.beetlebug.lookout.charts.ChartsModel
+import org.beetlebug.lookout.store.Store
 import org.beetlebug.lookout.engine.LookoutView
 import org.beetlebug.lookout.hud.LookoutTheme
 import org.beetlebug.lookout.settings.Scheme
@@ -60,6 +61,10 @@ class LookoutActivity : ComponentActivity() {
         // every launch (~1s), having no cache path in the environment.
         Lookout.setCacheDir(cacheDir.absolutePath)
 
+        // Before anything reads a setting. The first launch after the move out
+        // of SharedPreferences copies what the mariner already had.
+        Store.open(applicationContext)
+
         // Tiles are the one thing this app fetches in bulk (a chart link's
         // sources). The response cache spares the pan back over water already
         // crossed and survives a relaunch on the same chart — the reference
@@ -83,7 +88,7 @@ class LookoutActivity : ComponentActivity() {
         }
 
         // The bundled cell is the last resort, extracted once; the model prefers
-        // a chosen library, then anything pushed into our external files dir.
+        // the installed sets, then anything pushed into our external files dir.
         charts = ChartsModel(applicationContext, extractAsset(CHART_ASSET, CHART_NAME))
         if (charts.chartPaths.isEmpty()) {
             Log.e(TAG, "no charts: none chosen, none pushed, asset extraction failed")
@@ -91,6 +96,9 @@ class LookoutActivity : ComponentActivity() {
             return
         }
         controller = ChartController(applicationContext)
+        // The set scans run on the core's own worker; this is what tells the
+        // panel a folder's counts have arrived.
+        controller.onSetsScanned = { charts.pullSets() }
         // The plugin set rides in the APK as assets, which have no filesystem
         // path — the host loads a DIRECTORY, so extract it to one first. Done
         // here rather than on the render thread: it is half a megabyte of wasm,

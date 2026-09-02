@@ -1,7 +1,5 @@
 #include "ui/chart/pick-report.h"
 
-#include "util/json.h"
-
 #include <math.h>
 
 /* The object column's width, and the detail column's. A report needs the room
@@ -12,7 +10,7 @@
 /* ---- the decode --------------------------------------------------------- */
 
 static void
-lk_report_row_free (LkReportRow *row)
+lk_pick_row_free (LkPickRow *row)
 {
   if (row == NULL)
     return;
@@ -21,136 +19,54 @@ lk_report_row_free (LkReportRow *row)
   g_free (row);
 }
 
-static void
-lk_raw_row_free (LkRawRow *row)
+/* One collection of core rows, copied. The page and the fold share a row type
+ * in the core, so they share one here. */
+static GPtrArray *
+lk_pick_rows_copy (const lookout_pick_row *const *rows, size_t count)
 {
-  if (row == NULL)
-    return;
-  g_free (row->name);
-  g_free (row->value);
-  g_free (row);
-}
+  GPtrArray *out = g_ptr_array_new_with_free_func ((GDestroyNotify) lk_pick_row_free);
 
-/* The payload flattened depth-first, keys sorted, so the fold reads the same
- * here as it does on the other shells. A container becomes a heading row and
- * its parts indent under it — S-101 nests where S-57 was flat. */
-static void
-lk_raw_rows_append (const LkJson *node, const char *name, int depth, GPtrArray *out)
-{
-  switch (lk_json_kind (node))
+  for (size_t i = 0; i < count; i++)
     {
-    case LK_JSON_OBJECT:
-      {
-        if (name != NULL)
-          {
-            LkRawRow *row = g_new0 (LkRawRow, 1);
-            row->name = g_strdup (name);
-            row->value = g_strdup ("");
-            row->depth = depth;
-            g_ptr_array_add (out, row);
-          }
+      LkPickRow *row = g_new0 (LkPickRow, 1);
 
-        g_autoptr (GPtrArray) names = lk_json_member_names (node);
-        for (guint i = 0; i < names->len; i++)
-          {
-            const char *key = g_ptr_array_index (names, i);
-            lk_raw_rows_append (lk_json_member (node, key), key,
-                                name == NULL ? depth : depth + 1, out);
-          }
-        return;
-      }
-
-    case LK_JSON_ARRAY:
-      {
-        if (name != NULL)
-          {
-            LkRawRow *row = g_new0 (LkRawRow, 1);
-            row->name = g_strdup (name);
-            row->value = g_strdup ("");
-            row->depth = depth;
-            g_ptr_array_add (out, row);
-          }
-
-        for (guint i = 0; i < lk_json_length (node); i++)
-          lk_raw_rows_append (lk_json_at (node, i), NULL, depth + 1, out);
-        return;
-      }
-
-    default:
-      {
-        LkRawRow *row = g_new0 (LkRawRow, 1);
-        row->name = g_strdup (name != NULL ? name : "");
-        row->value = g_strdup (lk_json_text (node));
-        row->depth = depth;
-        g_ptr_array_add (out, row);
-        return;
-      }
+      row->label = g_strdup (rows[i]->label);
+      row->value = g_strdup (rows[i]->value);
+      row->depth = rows[i]->depth;
+      row->file = rows[i]->file != 0;
+      row->picture = rows[i]->picture != 0;
+      g_ptr_array_add (out, row);
     }
-}
-
-/* The envelope's raw half, or the whole payload when there is no envelope —
- * the core's fallback when a compose fails. The fold still shows everything. */
-static const LkJson *
-lk_pick_raw_half (const LkJson *root)
-{
-  if (lk_json_member (root, "report") != NULL)
-    return lk_json_member (root, "s57");
-  return root;
+  return out;
 }
 
 LkPickDecoded *
-lk_pick_decoded_new (const LkPickFeature *feature)
+lk_pick_decoded_new (const lookout_pick_feature *feature)
 {
   g_return_val_if_fail (feature != NULL, NULL);
 
   LkPickDecoded *decoded = g_new0 (LkPickDecoded, 1);
+  size_t count = 0;
+
+  decoded->cls = g_strdup (feature->cls);
+  decoded->chart = g_strdup (feature->chart);
+  decoded->title = g_strdup (feature->title);
+  decoded->subtitle = g_strdup (feature->subtitle);
+  decoded->chip = g_strdup (feature->chip);
+  decoded->footnote = g_strdup (feature->footnote);
+  decoded->raw = g_strdup (feature->raw);
+  decoded->empty = feature->empty;
+
   decoded->notes = g_ptr_array_new_with_free_func (g_free);
-  decoded->rows = g_ptr_array_new_with_free_func ((GDestroyNotify) lk_report_row_free);
-  decoded->raw_rows = g_ptr_array_new_with_free_func ((GDestroyNotify) lk_raw_row_free);
+  const char *const *notes = lookout_pick_notes (feature, &count);
+  for (size_t i = 0; i < count; i++)
+    g_ptr_array_add (decoded->notes, g_strdup (notes[i]));
 
-  g_autoptr (LkJson) root = lk_json_parse (feature->s57);
-  const LkJson *report = lk_json_member (root, "report");
+  const lookout_pick_row *const *rows = lookout_pick_rows (feature, &count);
+  decoded->rows = lk_pick_rows_copy (rows, count);
 
-  const char *title = lk_json_member_string (report, "title");
-  const char *chip = lk_json_member_string (report, "chip");
-  const char *footnote = lk_json_member_string (report, "footnote");
-
-  decoded->title = g_strdup (title != NULL ? title : feature->cls);
-  decoded->subtitle = g_strdup (lk_json_member_string (report, "subtitle"));
-  decoded->chip = g_strdup (chip != NULL ? chip : feature->cls);
-  decoded->footnote = g_strdup (footnote != NULL ? footnote : feature->chart);
-
-  const LkJson *notes = lk_json_member (report, "notes");
-  for (guint i = 0; i < lk_json_length (notes); i++)
-    {
-      const char *note = lk_json_string (lk_json_at (notes, i));
-      if (note != NULL && note[0] != '\0')
-        g_ptr_array_add (decoded->notes, g_strdup (note));
-    }
-
-  const LkJson *rows = lk_json_member (report, "rows");
-  for (guint i = 0; i < lk_json_length (rows); i++)
-    {
-      const LkJson *item = lk_json_at (rows, i);
-      if (lk_json_kind (item) != LK_JSON_OBJECT)
-        continue;
-
-      LkReportRow *row = g_new0 (LkReportRow, 1);
-      row->label = g_strdup (lk_json_text (lk_json_member (item, "label")));
-      row->value = g_strdup (lk_json_text (lk_json_member (item, "value")));
-      row->depth = lk_json_member_int (item, "depth", 0);
-      row->file = lk_json_member_bool (item, "file", FALSE);
-      row->picture = lk_json_member_bool (item, "picture", FALSE);
-      g_ptr_array_add (decoded->rows, row);
-    }
-
-  const char *empty = lk_json_member_string (report, "empty");
-  if (g_strcmp0 (empty, "none") == 0)
-    decoded->body = LK_PICK_BODY_NO_ATTRIBUTES;
-  else if (g_strcmp0 (empty, "source") == 0)
-    decoded->body = LK_PICK_BODY_SOURCE_ONLY;
-
-  lk_raw_rows_append (lk_pick_raw_half (root), NULL, 0, decoded->raw_rows);
+  const lookout_pick_row *const *source = lookout_pick_source (feature, &count);
+  decoded->source = lk_pick_rows_copy (source, count);
   return decoded;
 }
 
@@ -160,37 +76,49 @@ lk_pick_decoded_free (LkPickDecoded *decoded)
   if (decoded == NULL)
     return;
 
+  g_free (decoded->cls);
+  g_free (decoded->chart);
   g_free (decoded->title);
   g_free (decoded->subtitle);
   g_free (decoded->chip);
   g_free (decoded->footnote);
+  g_free (decoded->raw);
   g_ptr_array_unref (decoded->notes);
   g_ptr_array_unref (decoded->rows);
-  g_ptr_array_unref (decoded->raw_rows);
+  g_ptr_array_unref (decoded->source);
   g_free (decoded);
 }
 
-char *
-lk_pick_plain_text (const LkPickFeature *feature)
+GPtrArray *
+lk_pick_decoded_list (const lookout_picks *picks)
 {
-  g_return_val_if_fail (feature != NULL, NULL);
+  GPtrArray *out = g_ptr_array_new_with_free_func ((GDestroyNotify) lk_pick_decoded_free);
+  size_t count = 0;
+  const lookout_pick_feature *const *features = lookout_picks_all (picks, &count);
 
-  g_autoptr (LkJson) root = lk_json_parse (feature->s57);
-  g_autoptr (GPtrArray) rows = g_ptr_array_new_with_free_func ((GDestroyNotify) lk_raw_row_free);
+  for (size_t i = 0; i < count; i++)
+    g_ptr_array_add (out, lk_pick_decoded_new (features[i]));
+  return out;
+}
+
+char *
+lk_pick_plain_text (const LkPickDecoded *decoded)
+{
+  g_return_val_if_fail (decoded != NULL, NULL);
+
   g_autoptr (GString) text = g_string_new (NULL);
 
-  g_string_append_printf (text, "%s  %s\n", feature->cls, feature->chart);
-  lk_raw_rows_append (lk_pick_raw_half (root), NULL, 0, rows);
+  g_string_append_printf (text, "%s  %s\n", decoded->cls, decoded->chart);
 
-  for (guint i = 0; i < rows->len; i++)
+  for (guint i = 0; i < decoded->source->len; i++)
     {
-      const LkRawRow *row = g_ptr_array_index (rows, i);
+      const LkPickRow *row = g_ptr_array_index (decoded->source, i);
       g_autofree char *indent = g_strnfill ((gsize) row->depth * 2, ' ');
 
       if (row->value[0] == '\0')
-        g_string_append_printf (text, "%s%s:\n", indent, row->name);
+        g_string_append_printf (text, "%s%s:\n", indent, row->label);
       else
-        g_string_append_printf (text, "%s%s: %s\n", indent, row->name, row->value);
+        g_string_append_printf (text, "%s%s: %s\n", indent, row->label, row->value);
     }
 
   return g_string_free (g_steal_pointer (&text), FALSE);
@@ -290,9 +218,9 @@ typedef struct {
  * the sounding data — so it is not the object under the cursor and does not
  * belong among the objects that are. */
 static gboolean
-lk_pick_is_note (const LkPickFeature *feature)
+lk_pick_is_note (const LkPickDecoded *decoded)
 {
-  return feature->cls != NULL && g_str_has_prefix (feature->cls, "M_");
+  return g_str_has_prefix (decoded->cls, "M_");
 }
 
 static void lk_pick_card_show (LkPickCard *card, guint index);
@@ -437,7 +365,7 @@ lk_pick_aux_widget (LkPickCard *card, const char *cell, const char *name, gboole
  * only lays them out. The value owns the width, because a note or a name is
  * the reading matter. */
 static GtkWidget *
-lk_pick_row_widget (LkPickCard *card, const LkReportRow *row, const char *cell)
+lk_pick_row_widget (LkPickCard *card, const LkPickRow *row, const char *cell)
 {
   GtkWidget *box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 12);
   GtkWidget *label = gtk_label_new (row->label);
@@ -499,14 +427,14 @@ lk_pick_note_widget (const char *text)
 
 /* The payload as the cell states it. Nothing the decode did is applied here. */
 static void
-lk_pick_append_raw_rows (GtkWidget *body, const LkPickDecoded *decoded)
+lk_pick_append_source_rows (GtkWidget *body, const LkPickDecoded *decoded)
 {
-  for (guint i = 0; i < decoded->raw_rows->len; i++)
+  for (guint i = 0; i < decoded->source->len; i++)
     {
-      const LkRawRow *row = g_ptr_array_index (decoded->raw_rows, i);
+      const LkPickRow *row = g_ptr_array_index (decoded->source, i);
       GtkWidget *box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
-      g_autofree char *name = row->value[0] == '\0' ? g_strdup (row->name)
-                                                    : g_strconcat (row->name, ":", NULL);
+      g_autofree char *name = row->value[0] == '\0' ? g_strdup (row->label)
+                                                    : g_strconcat (row->label, ":", NULL);
       GtkWidget *name_label = gtk_label_new (name);
       GtkWidget *value_label = gtk_label_new (row->value);
 
@@ -586,9 +514,8 @@ lk_pick_flat_button (const char *icon_name, const char *tooltip)
 /* The detail column for one object: the header, the body that scrolls, and
  * the provenance and the fold pinned under it — a control keeps its place. */
 static GtkWidget *
-lk_pick_detail_new (LkPickCard *card, const LkPickFeature *feature)
+lk_pick_detail_new (LkPickCard *card, const LkPickDecoded *decoded)
 {
-  g_autoptr (LkPickDecoded) decoded = lk_pick_decoded_new (feature);
   GtkWidget *column = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
 
   /* ---- header ---- */
@@ -598,7 +525,7 @@ lk_pick_detail_new (LkPickCard *card, const LkPickFeature *feature)
   /* The subtitle line is kept even when empty, so the header is the same
    * height for every object and the rows below cannot shift as the selection
    * moves. */
-  GtkWidget *subtitle = gtk_label_new (decoded->subtitle != NULL ? decoded->subtitle : " ");
+  GtkWidget *subtitle = gtk_label_new (decoded->subtitle[0] != '\0' ? decoded->subtitle : " ");
 
   gtk_label_set_xalign (GTK_LABEL (title), 0);
   gtk_label_set_ellipsize (GTK_LABEL (title), PANGO_ELLIPSIZE_END);
@@ -639,10 +566,10 @@ lk_pick_detail_new (LkPickCard *card, const LkPickFeature *feature)
 
   /* The engine's verdict. A body with nothing to read says why, because a
    * blank body reads as a defect. */
-  if (decoded->body != LK_PICK_BODY_FULL)
+  if (decoded->empty != LOOKOUT_PICK_READS)
     {
       GtkWidget *empty = gtk_label_new (
-          decoded->body == LK_PICK_BODY_NO_ATTRIBUTES
+          decoded->empty == LOOKOUT_PICK_NO_ATTRIBUTES
               ? "The cell carries no attributes for this object."
               : "The cell carries only source data for this object.");
       gtk_label_set_xalign (GTK_LABEL (empty), 0);
@@ -658,10 +585,10 @@ lk_pick_detail_new (LkPickCard *card, const LkPickFeature *feature)
   for (guint i = 0; i < decoded->rows->len; i++)
     gtk_box_append (GTK_BOX (body),
                     lk_pick_row_widget (card, g_ptr_array_index (decoded->rows, i),
-                                        feature->chart));
+                                        decoded->chart));
 
   if (card->fold_open)
-    lk_pick_append_raw_rows (body, decoded);
+    lk_pick_append_source_rows (body, decoded);
 
   GtkWidget *scroller = gtk_scrolled_window_new ();
   gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scroller), body);
@@ -682,8 +609,7 @@ lk_pick_detail_new (LkPickCard *card, const LkPickFeature *feature)
   /* The provenance as one muted line, not a table: the mariner reads it once,
    * to decide how much to trust the rows above it. A cell that states none
    * gets no line at all — an empty strip under a rule reads as a defect. */
-  g_autofree char *footnote_text =
-      g_strstrip (g_strdup (decoded->footnote != NULL ? decoded->footnote : ""));
+  g_autofree char *footnote_text = g_strstrip (g_strdup (decoded->footnote));
   if (footnote_text[0] != '\0')
     {
       GtkWidget *footnote = gtk_label_new (footnote_text);
@@ -700,7 +626,7 @@ lk_pick_detail_new (LkPickCard *card, const LkPickFeature *feature)
     }
 
   g_autofree char *fold_text =
-      g_strdup_printf ("S-57 source attributes (%u)", decoded->raw_rows->len);
+      g_strdup_printf ("S-57 source attributes (%u)", decoded->source->len);
   GtkWidget *fold_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 5);
   GtkWidget *chevron = gtk_image_new_from_icon_name (card->fold_open ? "pan-down-symbolic"
                                                                     : "pan-end-symbolic");
@@ -891,9 +817,8 @@ lk_pick_column_heading (const char *text)
 /* A note reads as a different kind of thing from an object: the book mark, the
  * chip rather than the title, and no subtitle under it. */
 static GtkWidget *
-lk_pick_list_row (const LkPickFeature *feature, gboolean note)
+lk_pick_list_row (const LkPickDecoded *decoded, gboolean note)
 {
-  g_autoptr (LkPickDecoded) decoded = lk_pick_decoded_new (feature);
   GtkWidget *box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 7);
   GtkWidget *lines = gtk_box_new (GTK_ORIENTATION_VERTICAL, 2);
   GtkWidget *title = gtk_label_new (note ? decoded->chip : decoded->title);
@@ -914,7 +839,7 @@ lk_pick_list_row (const LkPickFeature *feature, gboolean note)
   gtk_widget_add_css_class (title, note ? "dim-label" : "heading");
   gtk_box_append (GTK_BOX (lines), title);
 
-  if (!note && decoded->subtitle != NULL)
+  if (!note && decoded->subtitle[0] != '\0')
     {
       GtkWidget *subtitle = gtk_label_new (decoded->subtitle);
       gtk_label_set_xalign (GTK_LABEL (subtitle), 0);
@@ -943,13 +868,13 @@ lk_pick_list_box (LkPickCard *card, GPtrArray *results, gboolean notes)
 
   for (guint i = 0; i < results->len; i++)
     {
-      const LkPickFeature *feature = g_ptr_array_index (results, i);
+      const LkPickDecoded *decoded = g_ptr_array_index (results, i);
 
-      if (lk_pick_is_note (feature) != notes)
+      if (lk_pick_is_note (decoded) != notes)
         continue;
 
       GtkWidget *row = gtk_list_box_row_new ();
-      gtk_list_box_row_set_child (GTK_LIST_BOX_ROW (row), lk_pick_list_row (feature, notes));
+      gtk_list_box_row_set_child (GTK_LIST_BOX_ROW (row), lk_pick_list_row (decoded, notes));
       g_object_set_data (G_OBJECT (row), "lk-index", GUINT_TO_POINTER (i));
       gtk_list_box_append (GTK_LIST_BOX (list), row);
     }

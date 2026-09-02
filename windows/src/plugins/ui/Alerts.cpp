@@ -52,19 +52,19 @@ namespace
     }
 
 
-    winrt::Windows::UI::Color SeverityColor(int severity)
+    winrt::Windows::UI::Color SeverityColor(lookout_alert_severity severity)
     {
-        return severity >= lkw::kSeverityAlarm     ? kAlarm
-               : severity == lkw::kSeverityWarning ? kWarning
+        return severity >= LOOKOUT_ALERT_ALARM     ? kAlarm
+               : severity == LOOKOUT_ALERT_WARNING ? kWarning
                                                    : kNotice;
     }
 
-    wchar_t const *SeverityGlyph(int severity)
+    wchar_t const *SeverityGlyph(lookout_alert_severity severity)
     {
         // Warning triangle for an alarm, exclamation circle for a warning,
         // info circle for a notice.
-        return severity >= lkw::kSeverityAlarm     ? L"\uE7BA"
-               : severity == lkw::kSeverityWarning ? L"\uE783"
+        return severity >= LOOKOUT_ALERT_ALARM     ? L"\uE7BA"
+               : severity == LOOKOUT_ALERT_WARNING ? L"\uE783"
                                                    : L"\uE946";
     }
 }
@@ -96,8 +96,8 @@ namespace winrt::LookoutMarine::implementation
 
     void MainWindow::RefreshAlerts()
     {
-        char *json = lk_controller_alerts_json(controller);
-        if (json == nullptr)
+        lookout_alerts *read = lk_controller_alerts_read(controller);
+        if (read == nullptr)
         {
             // Unreadable is not "no alerts", but nothing readable means
             // nothing showable: clear, silence, keep watching.
@@ -111,15 +111,21 @@ namespace winrt::LookoutMarine::implementation
             return;
         }
 
-        // A malformed read changes nothing; the next second answers again.
+        // The set is rebuilt only when the core's sequence moves, else a strip
+        // nobody is feeding flickers once a second.
         bool changed = false;
-        if (auto set = lkw::ReadAlerts(json); set && set->seq != alert_seq)
+        if (long long seq = (long long)lookout_alerts_seq(read); seq != alert_seq)
         {
-            alert_seq = set->seq;
-            alerts = std::move(set->alerts);
+            size_t n = 0;
+            lookout_alert const *const *all = lookout_alerts_all(read, &n);
+            alerts.clear();
+            alerts.reserve(n);
+            for (size_t i = 0; i < n; ++i)
+                alerts.emplace_back(*all[i]);
+            alert_seq = seq;
             changed = true;
         }
-        free(json);
+        lookout_alerts_free(read);
 
         if (changed)
             RebuildAlertStrip();

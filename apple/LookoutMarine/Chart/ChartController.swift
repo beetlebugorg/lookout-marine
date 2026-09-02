@@ -30,14 +30,6 @@ import UIKit
 #endif
 import QuartzCore
 
-/// One S-57 feature returned by a cursor pick.
-struct PickFeature: Identifiable, Hashable {
-    let id = UUID()
-    let cls: String     // S-57 object-class acronym (e.g. "LIGHTS", "DEPARE")
-    let chart: String   // source cell name
-    let s57: String     // full S-57 attribute JSON (unused in the HUD line)
-}
-
 /// One overlay object the mariner pinned: which object it is, what it says
 /// now, and where it draws now. Re-read from the core every render tick.
 struct OverlayPin: Equatable {
@@ -83,11 +75,13 @@ final class ChartController: NSObject {
     weak var model: AppModel?
 
     private var displayLink: CADisplayLink?
+    /// The link's own timestamp, for the frame profiler's gap. The gap the
+    /// engine advances by is its own, measured in lookout_frame_next.
     private var lastTimestamp: CFTimeInterval = 0
-    private var idleTicks = 0
     /// Runs only while the display link is paused and plugins are loaded.
     /// See "Idle poll" below.
-    private var idlePoll: Timer?
+    /// The one-shot the core asked for with LOOKOUT_FRAME_WAIT.
+    private var wake: Timer?
     /// Rendering runs OFF the main thread so UIKit gesture bursts can never
     /// delay a frame slot (the 120Hz budget is 8.3ms). The display link stays
     /// on main as the pacemaker; each tick hands one render to this queue.
@@ -203,16 +197,20 @@ final class ChartController: NSObject {
         // lands a moment later than the rest of the replay.
         model?.chartDidOpen()
 
-        // Reopen where we left off. With nothing saved the opening view is the
-        // engine's own (lookout_default_view) — the same policy every host gets,
-        // rather than each shell inventing its own idea of "the initial view".
+        // The shell's settings file. The engine restores the pose and the
+        // mariner's settings out of it, writes the pose down as the mariner
+        // moves, and writes both at close.
+        lookout_set_store(h, Store.shared.handle)
+
+        // With nothing saved the opening view is the engine's own
+        // (lookout_default_view) — the same policy every host gets, rather than
+        // each shell inventing its own idea of "the initial view".
         var v = lookout_view()
-        if let saved = ViewState.load() {
-            v = saved
-        } else {
+        if !ViewState.hasSaved() {
             lookout_default_view(h, &v)
+            lookout_set_view(h, &v)
         }
-        lookout_set_view(h, &v)
+        lookout_get_view(h, &v)
 
         // Dev hook, mirroring $LOOKOUT_OPEN: $LOOKOUT_VIEW="lon,lat,zoom[,rot]"
         // replaces the fit view at open — deterministic framing for dev runs
@@ -250,13 +248,6 @@ final class ChartController: NSObject {
         // but the mariner's device_scale (symbol/text physical size) is set from the
         // backing scale factor here in the bridge, per the app spec.
         syncDeviceScale()
-
-        // Saved mariner settings (contours, scheme, toggles) overlay the engine
-        // defaults — the settings form saves on every applied edit, so the
-        // chart reopens exactly as the mariner left it.
-        var mm = getMariner()
-        MarinerSettings.applySavedOverlay(&mm)
-        setMariner(mm)
 
         // The plugin sets, in the order that decides an id collision: whatever
         // LOOKOUT_PLUGINS brought up inside lookout_open loaded first, so a
@@ -343,12 +334,9 @@ final class ChartController: NSObject {
         let h = handle
         handle = nil
         renderQueue.sync {}
-        if let h {
-            var v = lookout_view()
-            lookout_get_view(h, &v) // the pose to reopen on, before the handle dies
-            ViewState.save(v)
-            lookout_close(h)
-        }
+        // lookout_close writes the pose down itself, out of the store the
+        // shell handed over.
+        if let h { lookout_close(h) }
     }
 
     /// How many vector charts are open. Zero is a library of pictures alone.
@@ -366,14 +354,14 @@ final class ChartController: NSObject {
                                             selector: #selector(displayLinkFired(_:)))
         link.add(to: .main, forMode: .common)
         lastTimestamp = 0
-        idleTicks = 0
         displayLink = link
     }
 
     private func stopDisplayLink() {
         displayLink?.invalidate()
         displayLink = nil
-        stopIdlePoll()
+        wake?.invalidate()
+        wake = nil
     }
 
     /// A pick report and the chart menu both belong to the view they were
@@ -390,8 +378,9 @@ final class ChartController: NSObject {
 
     /// Resume ticking after any state change (mutating calls funnel through here).
     func kick() {
-        stopIdlePoll()
-        idleTicks = 0
+        wake?.invalidate()
+        wake = nil
+        if let h = handle { lookout_frame_kick(h) }
         if let link = displayLink {
             if link.isPaused { lastTimestamp = 0; link.isPaused = false }
         } else {
@@ -399,32 +388,14 @@ final class ChartController: NSObject {
         }
     }
 
-    // MARK: - Idle poll
-    //
-    // The display link pauses when nothing is moving, and only input restarts
-    // it. A plugin posts geometry with no input behind it, so while plugins
-    // are loaded a timer polls needs-redraw and kicks the link when it answers
-    // yes. Without it, AIS traffic froze until the mariner touched the
-    // trackpad.
-
-    /// Poll rate while paused. The AIS store coalesces to 2 Hz; this is twice
-    /// that.
-    private static let idlePollInterval: TimeInterval = 0.25
-
-    private func startIdlePoll() {
-        guard idlePoll == nil, let h = handle, lookout_plugins_active(h) != 0 else { return }
-        idlePoll = Timer.scheduledTimer(withTimeInterval: Self.idlePollInterval,
-                                        repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self, let h = self.handle else { return }
-                if lookout_needs_redraw(h) != 0 { self.kick() }
-            }
+    /// Ask again in `ms`, for a LOOKOUT_FRAME_WAIT with a rate on it. The core
+    /// sets the rate and the shell runs the timer.
+    private func scheduleWake(after ms: Int32) {
+        wake?.invalidate()
+        wake = Timer.scheduledTimer(withTimeInterval: Double(ms) / 1000,
+                                    repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.kick() }
         }
-    }
-
-    private func stopIdlePoll() {
-        idlePoll?.invalidate()
-        idlePoll = nil
     }
 
     @objc private nonisolated func displayLinkFired(_ link: CADisplayLink) {
@@ -476,9 +447,9 @@ final class ChartController: NSObject {
         // thread, and with it the display link and every queued gesture, for
         // the length of someone else's frame.
         //
-        // Skipping is safe for the animation: `dt` is measured from the last
-        // tick that RAN, so the next one advances by the whole elapsed time
-        // rather than losing it.
+        // Skipping is safe for the animation: the engine measures its gap from
+        // the last tick that RAN, so the next one advances by the whole elapsed
+        // time.
         guard renderGate.wait(timeout: .now()) == .success else {
             frameProf?.tick(gap: link.timestamp - lastTimestamp, dispatched: false,
                             dropped: true, building: true, zoom: 0)
@@ -487,15 +458,15 @@ final class ChartController: NSObject {
         var slotHeld = true
         defer { if slotHeld { renderGate.signal() } }
 
-        let now = link.timestamp
-        var dt = lastTimestamp == 0 ? 0 : now - lastTimestamp
-        lastTimestamp = now
-        if dt > 0.05 { dt = 0.05 } // cap after an idle gap
+        let gap = lastTimestamp == 0 ? 0 : link.timestamp - lastTimestamp
+        lastTimestamp = link.timestamp
 
-        let animating = lookout_animating(h) != 0
-        if animating { lookout_tick_anim(h, dt) }
+        // The core measures its own gap, advances the fling, adopts the
+        // chart-link answers waiting, and says what to do.
+        var f = lookout_frame()
+        lookout_frame_next(h, &f)
 
-        let building = lookout_is_building(h) != 0
+        let building = f.building != 0
         if model?.readouts.isBuilding != building { model?.readouts.isBuilding = building }
 
         gestureBench?.step(self)
@@ -507,9 +478,9 @@ final class ChartController: NSObject {
             zoomNow = v.zoom
         }
 
-        if animating || lookout_needs_redraw(h) != 0 {
+        if f.verdict == LOOKOUT_FRAME_RENDER {
             let prof = frameProf
-            prof?.tick(gap: dt, dispatched: true, dropped: false, building: building, zoom: zoomNow)
+            prof?.tick(gap: gap, dispatched: true, dropped: false, building: building, zoom: zoomNow)
             // The slot passes to the render; it signals the gate when done.
             slotHeld = false
             renderQueue.async { [weak self] in
@@ -522,26 +493,25 @@ final class ChartController: NSObject {
                     self?.pushReadouts()
                 }
             }
-            idleTicks = 0
             // The first scene is up once a frame has gone out with no build
             // outstanding. Own ship moves between fixes, so with plugins
-            // running the loop may never reach the idle branch below.
+            // running the loop may never stop.
             if !building, model?.charts.firstBuildDone == false { model?.charts.firstBuildDone = true }
-        } else if building {
-            // A background tessellation is filling in — keep ticking so it appears.
-            idleTicks = 0
-        } else {
-            // Static: pause after a couple of quiet ticks so idle is ~0% CPU.
-            // Reaching idle also means the first scene after an open has
-            // rendered — retire the startup loader.
-            if model?.charts.firstBuildDone == false { model?.charts.firstBuildDone = true }
-            idleTicks += 1
-            // A gesture bench drives from this tick, so pausing would strand it
-            // in whatever phase it had reached.
-            if idleTicks > 2 && gestureBench == nil {
-                link.isPaused = true
-                startIdlePoll()
-            }
+            return
+        }
+
+        // The verdict is not RENDER, so a frame has already gone out. Retire
+        // the startup loader.
+        if model?.charts.firstBuildDone == false { model?.charts.firstBuildDone = true }
+
+        // A gesture bench drives from this tick, so pausing would strand it in
+        // whatever phase it had reached.
+        guard gestureBench == nil else { return }
+        if f.verdict == LOOKOUT_FRAME_IDLE {
+            link.isPaused = true
+        } else if f.wait_ms > 0 {
+            link.isPaused = true
+            scheduleWake(after: f.wait_ms)
         }
     }
 
@@ -755,15 +725,11 @@ final class ChartController: NSObject {
     // MARK: - Push live readouts to the UI
 
     private var lastReadoutsAt: TimeInterval = 0
-    private var lastViewSavedAt: TimeInterval = 0
-    /// The pose last written down, so an unmoved camera is not written again.
-    private var lastSavedView: lookout_view?
     /// Internal, not private: the raster and chart-link calls push a readout
     /// after a change the frame loop would not otherwise see.
     ///
     /// Each model reads its own values off this controller through its seam.
-    /// What is left here is the throttle and the camera pose, which are the
-    /// render loop's business and no model's.
+    /// The throttle stays here, because it belongs to the render loop.
     func pushReadouts() {
         guard let model, handle != nil else { return }
         // The readouts are human-readable text, so 10Hz is as fast as they can
@@ -779,28 +745,16 @@ final class ChartController: NSObject {
         // landing answer raises needs-redraw, so a resolve keeps this ticking
         // until it is done.
         model.chartLinks.poll()
+        // A set's background scan landing is the core's only unprompted
+        // change, and the flag has one consumer.
+        if ChartSetStore.changed() { model.charts.pullChartSets() }
 
-        saveViewIfMoved(now)
-    }
-
-    /// Write the camera pose down periodically: a crash or a force-quit never
-    /// reaches close(). Only when it has moved — frames keep coming while a
-    /// plugin moves own ship, so a boat at anchor wrote the same pose every
-    /// three seconds for as long as it lay there.
-    private func saveViewIfMoved(_ now: TimeInterval) {
-        guard now - lastViewSavedAt >= 3 else { return }
-        let v = currentView
-        guard lastSavedView.map({ ViewState.differs(v, from: $0) }) ?? true else { return }
-        lastViewSavedAt = now
-        lastSavedView = v
-        ViewState.save(v)
     }
 
     // MARK: - Fixture capture
 
-    /// $LOOKOUT_DUMP_JSON=<dir>: write every document this shell parses out of
-    /// the core, then quit. The parser tests read the result, so a fixture is
-    /// the core's own output and can be captured again when the core changes:
+    /// $LOOKOUT_DUMP_JSON=<dir>: write every JSON document this shell reads out
+    /// of the core, then quit. It is for reading a real registry by hand:
     ///
     ///     LOOKOUT_MULTI=1 LOOKOUT_CLEAN=1 \
     ///     LOOKOUT_OPEN=<chart.pmtiles> LOOKOUT_DUMP_JSON=<dir> \

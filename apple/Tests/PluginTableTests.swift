@@ -3,22 +3,110 @@
 //
 //  The plugin sends SI and the shell converts: distance metres, speed metres
 //  per second, bearing degrees true, duration seconds.
+//
+//  The core hands the declaration and the rows over as structs, so the
+//  fixtures here are the C structs a read holds.
 
 import XCTest
 @testable import LookoutMarine
 
 #if os(macOS)
 
-final class PluginTableSpecTests: XCTestCase {
-    private func specs(_ text: String) -> [PluginTableSpec] {
-        guard let data = text.data(using: .utf8),
-              let top = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let list = top["tables"] as? [[String: Any]] else { return [] }
-        return list.compactMap { PluginTableSpec($0) }
+/// One column as the core hands it over.
+private func column(_ key: String, _ label: String, _ type: lookout_column_type) -> PluginTableColumn {
+    key.withCString { k in
+        label.withCString { l in
+            PluginTableColumn(lookout_table_column(key: k, label: l, type: type))
+        }
     }
+}
+
+/// One declaration as the core hands it over. `atLat` empty is a table whose
+/// rows have no position; the core sets both halves together.
+private func spec(plugin: String = "p",
+                  key: String = "k",
+                  title: String = "T",
+                  menu: String = "M",
+                  sortKey: String = "",
+                  sortAscending: Bool = true,
+                  atLat: String = "",
+                  atLon: String = "",
+                  columns: [PluginTableColumn] = []) -> PluginTableSpec {
+    plugin.withCString { p in
+        key.withCString { k in
+            title.withCString { ti in
+                menu.withCString { m in
+                    sortKey.withCString { s in
+                        atLat.withCString { la in
+                            atLon.withCString { lo in
+                                PluginTableSpec(
+                                    lookout_table(plugin: p, key: k, title: ti, menu: m,
+                                                  sort_key: s,
+                                                  sort_ascending: sortAscending ? 1 : 0,
+                                                  at_lat: la, at_lon: lo,
+                                                  open: 0, rows: 0, seq: 0),
+                                    columns: columns)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// What a plugin sent for one cell, in the shape a read holds.
+private enum Sent {
+    case absent
+    case number(Double)
+    case text(String)
+}
+
+private func cell(_ sent: Sent, _ type: lookout_column_type = LOOKOUT_COLUMN_TEXT) -> PluginCell {
+    switch sent {
+    case .absent:
+        return "".withCString { PluginCell(lookout_table_cell(type: type, kind: LOOKOUT_TABLE_CELL_ABSENT,
+                                                              number: 0, text: $0)) }
+    case .number(let v):
+        return "".withCString { PluginCell(lookout_table_cell(type: type, kind: LOOKOUT_TABLE_CELL_NUMBER,
+                                                              number: v, text: $0)) }
+    case .text(let s):
+        return s.withCString { PluginCell(lookout_table_cell(type: type, kind: LOOKOUT_TABLE_CELL_TEXT,
+                                                             number: 0, text: $0)) }
+    }
+}
+
+/// One row as the core hands it over. `columns` is the declaration's count,
+/// and pads a short row.
+private func row(id: String = "r",
+                 band: Int32 = 0,
+                 at: (lon: Double, lat: Double)? = nil,
+                 cells: [PluginCell] = [],
+                 columns: Int = 0) -> PluginTableRow {
+    id.withCString { i in
+        PluginTableRow(lookout_table_row(id: i,
+                                         band: band,
+                                         located: at != nil ? 1 : 0,
+                                         lon: at?.lon ?? 0,
+                                         lat: at?.lat ?? 0),
+                       cells: cells, columns: columns)
+    }
+}
+
+final class PluginTableSpecTests: XCTestCase {
 
     func testTheAisDeclarationFromTheCore() {
-        guard let s = specs(Fixture.text("tables")).first else { return XCTFail("no table") }
+        let s = spec(plugin: "org.beetlebug.ais", key: "targets", title: "AIS Targets",
+                     menu: "Vessels", sortKey: "cpa", sortAscending: true,
+                     atLat: "lat", atLon: "lon",
+                     columns: [column("name", "Vessel", LOOKOUT_COLUMN_TEXT),
+                               column("mmsi", "MMSI", LOOKOUT_COLUMN_TEXT),
+                               column("range", "Range", LOOKOUT_COLUMN_DISTANCE),
+                               column("brg", "Bearing", LOOKOUT_COLUMN_BEARING),
+                               column("sog", "SOG", LOOKOUT_COLUMN_SPEED),
+                               column("cpa", "CPA", LOOKOUT_COLUMN_DISTANCE),
+                               column("tcpa", "TCPA", LOOKOUT_COLUMN_DURATION),
+                               column("state", "", LOOKOUT_COLUMN_FLAG)])
         XCTAssertEqual(s.plugin, "org.beetlebug.ais")
         XCTAssertEqual(s.key, "targets")
         XCTAssertEqual(s.id, "org.beetlebug.ais/targets")
@@ -31,6 +119,7 @@ final class PluginTableSpecTests: XCTestCase {
                        ["name", "mmsi", "range", "brg", "sog", "cpa", "tcpa", "state"])
         XCTAssertEqual(s.columns.map(\.type),
                        [.text, .text, .distance, .bearing, .speed, .distance, .duration, .flag])
+        XCTAssertEqual(s.columns.map(\.label).last, "")
     }
 
     /// A number column is right aligned and scanned down; text and a flag are not.
@@ -44,44 +133,34 @@ final class PluginTableSpecTests: XCTestCase {
         XCTAssertFalse(PluginColumnType.flag.numeric)
     }
 
-    /// A table with no columns is not a table.
-    func testADeclarationWithNoColumnsIsDropped() {
-        XCTAssertTrue(specs(#"{"tables":[{"plugin":"p","key":"k","columns":[]}]}"#).isEmpty)
-        XCTAssertTrue(specs(#"{"tables":[{"plugin":"p","key":"k"}]}"#).isEmpty)
-    }
-
     /// A table that declared no `at` has no row to find on the chart.
     func testATableWithNoPositionIsNotLocatable() {
-        let s = specs(#"{"tables":[{"plugin":"p","key":"k","columns":[{"key":"c","type":"text"}]}]}"#)
-        XCTAssertEqual(s.count, 1)
-        XCTAssertFalse(s[0].locatable)
-        XCTAssertEqual(s[0].title, "k")
-        XCTAssertEqual(s[0].menu, "Window")
+        XCTAssertFalse(spec(columns: [column("c", "C", LOOKOUT_COLUMN_TEXT)]).locatable)
+        XCTAssertTrue(spec(atLat: "lat", atLon: "lon").locatable)
     }
 
-    /// A column of a type this build does not know is dropped, and the rest of
-    /// the table still shows.
-    func testAColumnOfAnUnknownTypeIsDropped() {
-        let s = specs("""
-            {"tables":[{"plugin":"p","key":"k","columns":[
-              {"key":"a","type":"colour"},{"key":"b","type":"text"}]}]}
-            """)
-        XCTAssertEqual(s.first?.columns.map(\.key), ["b"])
+    /// A column type this build does not know shows as text rather than not
+    /// showing. The core refuses a type it does not know itself, so this is a
+    /// shell older than the core it is talking to.
+    func testAColumnOfAnUnknownTypeReadsAsText() {
+        let t = lookout_column_type(rawValue: 99)
+        XCTAssertEqual(column("a", "A", t).type, .text)
     }
 }
 
 final class PluginTableRowTests: XCTestCase {
-    private func rows(_ text: String, columns: Int) -> (seq: Int, rows: [PluginTableRow]) {
-        guard let data = text.data(using: .utf8),
-              let top = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let list = top["rows"] as? [[String: Any]] else { return (0, []) }
-        return (top["seq"] as? Int ?? 0, list.compactMap { PluginTableRow($0, columns: columns) })
-    }
 
     func testTheWorkedExampleFromTheHeader() {
-        let got = rows(Fixture.text("table-rows"), columns: 8)
-        XCTAssertEqual(got.seq, 42)
-        guard let r = got.rows.first else { return XCTFail("no row") }
+        let r = row(id: "899000101", band: 0, at: (lon: -76.46, lat: 38.97),
+                    cells: [cell(.text("ANNE")),
+                            cell(.text("899000101")),
+                            cell(.number(1852), LOOKOUT_COLUMN_DISTANCE),
+                            cell(.number(45), LOOKOUT_COLUMN_BEARING),
+                            cell(.number(6.2), LOOKOUT_COLUMN_SPEED),
+                            cell(.number(124), LOOKOUT_COLUMN_DISTANCE),
+                            cell(.number(585), LOOKOUT_COLUMN_DURATION),
+                            cell(.text("alarm"), LOOKOUT_COLUMN_FLAG)],
+                    columns: 8)
         XCTAssertEqual(r.id, "899000101")
         XCTAssertEqual(r.band, 0)
         XCTAssertEqual(r.lon ?? 0, -76.46, accuracy: 1e-9)
@@ -93,34 +172,42 @@ final class PluginTableRowTests: XCTestCase {
     /// A row shorter than the declared column count is padded, so it still
     /// lines up under the headings.
     func testAShortRowIsPadded() {
-        let got = rows(#"{"rows":[{"id":"r","cells":["a"]}]}"#, columns: 4)
-        XCTAssertEqual(got.rows.first?.cells.count, 4)
-        if case .empty = got.rows.first!.cell(3) {} else { XCTFail("cell 3 is not empty") }
+        let r = row(cells: [cell(.text("a"))], columns: 4)
+        XCTAssertEqual(r.cells.count, 4)
+        if case .empty = r.cell(3) {} else { XCTFail("cell 3 is not empty") }
     }
 
     /// Reading past the end is empty, not a crash.
     func testReadingPastTheEndIsEmpty() {
-        let got = rows(#"{"rows":[{"id":"r","cells":["a"]}]}"#, columns: 1)
-        if case .empty = got.rows.first!.cell(9) {} else { XCTFail("cell 9 is not empty") }
+        let r = row(cells: [cell(.text("a"))], columns: 1)
+        if case .empty = r.cell(9) {} else { XCTFail("cell 9 is not empty") }
     }
 
     /// A cell the plugin did not send is not a zero.
-    func testANullCellIsEmptyRatherThanZero() {
-        let got = rows(#"{"rows":[{"id":"r","cells":[null,0]}]}"#, columns: 2)
-        if case .empty = got.rows.first!.cell(0) {} else { XCTFail("null is not empty") }
-        if case .number(let v) = got.rows.first!.cell(1) { XCTAssertEqual(v, 0) }
+    func testAnAbsentCellIsEmptyRatherThanZero() {
+        let r = row(cells: [cell(.absent), cell(.number(0))], columns: 2)
+        if case .empty = r.cell(0) {} else { XCTFail("absent is not empty") }
+        if case .number(let v) = r.cell(1) { XCTAssertEqual(v, 0) }
         else { XCTFail("0 is not a number") }
     }
 
-    func testARowWithNoIdIsDropped() {
-        XCTAssertTrue(rows(#"{"rows":[{"cells":["a"]}]}"#, columns: 1).rows.isEmpty)
+    /// A string in a numeric column stays a string: the shell shows what the
+    /// plugin sent.
+    func testAStringInANumericColumnStaysAString() {
+        let r = row(cells: [cell(.text("n/a"), LOOKOUT_COLUMN_DISTANCE)], columns: 1)
+        XCTAssertEqual(r.cell(0).string, "n/a")
     }
 
-    /// A position needs both halves.
-    func testAHalfPositionIsNoPosition() {
-        let got = rows(#"{"rows":[{"id":"r","at":[-76.46]}]}"#, columns: 0)
-        XCTAssertNil(got.rows.first?.lat)
-        XCTAssertNil(got.rows.first?.lon)
+    /// A row the table has no position for is not on the chart.
+    func testARowWithNoPositionHasNeitherHalf() {
+        let r = row()
+        XCTAssertNil(r.lat)
+        XCTAssertNil(r.lon)
+    }
+
+    /// The band is the plugin's ordering policy and crosses over as it is.
+    func testTheBandCrossesOver() {
+        XCTAssertEqual(row(band: 3).band, 3)
     }
 }
 
@@ -182,18 +269,6 @@ final class PluginTableFormatTests: XCTestCase {
     func testAFlagIsUppercased() {
         XCTAssertEqual(text(.text("alarm"), .flag), "ALARM")
         XCTAssertEqual(text(.text("alarm"), .text), "alarm")
-    }
-
-    /// JSONSerialization gives booleans as NSNumber. A cell is never a boolean,
-    /// so anything numeric reads as a number.
-    func testABooleanReadsAsANumber() {
-        if case .number(let v) = PluginCell(true) { XCTAssertEqual(v, 1) }
-        else { XCTFail("a bool is not a number") }
-    }
-
-    func testAnUnknownJsonTypeIsEmpty() {
-        if case .empty = PluginCell(["a": 1]) {} else { XCTFail("a dict is not empty") }
-        if case .empty = PluginCell(nil) {} else { XCTFail("nil is not empty") }
     }
 }
 

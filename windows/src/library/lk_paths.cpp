@@ -10,8 +10,6 @@
 #include <filesystem>
 #include <utility>
 
-#include "lk_store.h"
-
 namespace lkw
 {
     std::string ChartLibraryDir()
@@ -108,65 +106,6 @@ namespace lkw
         return out;
     }
 
-    namespace
-    {
-        bool ContainsIgnoreCase(std::string const &hay, std::string const &needle)
-        {
-            if (needle.empty() || hay.size() < needle.size())
-                return false;
-            auto it = std::search(hay.begin(), hay.end(), needle.begin(), needle.end(),
-                                  [](unsigned char a, unsigned char b) {
-                                      return std::tolower(a) == std::tolower(b);
-                                  });
-            return it != hay.end();
-        }
-
-        /* A producer this name carries, if any. Longest first, so "OpenSeaMap"
-         * is not reported as "OSM" (mirrors raster.zig providerIn). */
-        char const *ProviderIn(std::string const &name)
-        {
-            /* The match is case-insensitive, so one spelling of each. */
-            static char const *known[] = {
-                "OpenSeaMap", "Navionics", "Sentinel", "ArcGIS", "Google",
-                "C-Map",      "Yandex",    "Imagery",  "Bing",   "Esri",
-                "CMap",       "NAIP",      "SASP",     "OSM",
-            };
-            for (auto k : known)
-                if (ContainsIgnoreCase(name, k))
-                    return k;
-            return nullptr;
-        }
-    }
-
-    std::string RasterSetNameFor(std::string const &path)
-    {
-        std::filesystem::path p(path);
-        std::string base = p.filename().string();
-        if (auto k = ProviderIn(base))
-            return k;
-
-        std::string stem = p.stem().string();
-
-        /* The bake's layout — <root>/<stem>/<stem>.pmtiles: the sheet belongs
-         * to the bake, and the bake's own name names the producer when it
-         * carries one. */
-        if (LowerExtOf(p) == ".pmtiles")
-        {
-            auto dir = p.parent_path();
-            if (dir.filename().string() == stem)
-            {
-                std::string root = dir.parent_path().filename().string();
-                if (!root.empty())
-                {
-                    if (auto k = ProviderIn(root))
-                        return k;
-                    return root;
-                }
-            }
-        }
-        return stem.empty() ? base : stem;
-    }
-
     std::string AgencyForCells(std::vector<std::string> const &cells)
     {
         // The producer code every sampled cell name opens with, else nothing.
@@ -207,7 +146,7 @@ namespace lkw
         return {};
     }
 
-    std::vector<std::string> InitialPaths(std::string *source_out)
+    std::vector<std::string> InitialPaths(char const *most_recent, std::string *source_out)
     {
         if (source_out != nullptr)
             source_out->clear();
@@ -223,11 +162,8 @@ namespace lkw
                 return cells;
             }
         }
-        char **recents = lk_store_load_recents();
-        if (recents != nullptr)
         {
-            std::string first = recents[0] != nullptr ? recents[0] : "";
-            lk_store_free_recents(recents);
+            std::string first = most_recent != nullptr ? most_recent : "";
             // A recent that names raw source — the .zip an import was baked
             // FROM, noted by builds before the bake learned to note the
             // library — stands for the library the bake filled. Handing the

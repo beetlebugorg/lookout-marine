@@ -1,9 +1,8 @@
 /* lk_licenses — the licenses screen's model.
  *
- * The core bakes vendor/licenses/licenses.json into the binary and hands it
- * over whole (lookout_licenses_json), so this needs no connection and no file.
- * The entries whose `shells` array names "windows" are the ones this build
- * carries; the rest belong to other shells and are dropped.
+ * The core bakes vendor/licenses/licenses.json into the binary and hands over
+ * the entries this build carries (lookout_licenses_read, given the shell id),
+ * so this needs no connection, no file and no filter of its own.
  *
  * A license text is shown WHOLE. Nothing here truncates one, reflows one or
  * summarises one: only the width of the view breaks a line.
@@ -11,8 +10,9 @@
 #pragma once
 
 #include <string>
-#include <string_view>
 #include <vector>
+
+#include "lookout.h"
 
 namespace lkw
 {
@@ -43,6 +43,9 @@ namespace lkw
         std::string LicenseLabel() const;
         /* The short form for the list column, falling back to the full one. */
         std::string ColumnLabel() const;
+
+        LicenseComponent() = default;
+        explicit LicenseComponent(lookout_license const &c);
     };
 
     /* This app's own terms. Not a component, and never in the component count. */
@@ -54,11 +57,14 @@ namespace lkw
         std::string copyright;
         std::string url;
         std::string text;
+
+        LicenseApp() = default;
+        explicit LicenseApp(lookout_license const &a);
     };
 
     struct LicenseManifest
     {
-        bool ok{ false }; /* false when the baked list will not parse */
+        bool ok{ false }; /* false when the read came back with nothing to show */
         LicenseApp app;
         std::vector<LicenseComponent> components;
 
@@ -67,14 +73,8 @@ namespace lkw
         std::vector<std::pair<std::string, std::vector<size_t>>> Groups() const;
     };
 
-    /* Read one manifest document (lk_licenses.cpp). Separate from Licenses()
-     * so the shape of the manifest can be checked without the core: what the
-     * screens depend on is the filtering and the labels, not where the bytes
-     * came from. */
-    LicenseManifest ParseLicenses(std::string_view json);
-
     /* The BAKED manifest, the one this build actually carries
-     * (lk_licenses_baked.cpp). Parsed once, then borrowed for the life of the
+     * (lk_licenses_baked.cpp). Read once, then borrowed for the life of the
      * process. */
     LicenseManifest const &Licenses();
 

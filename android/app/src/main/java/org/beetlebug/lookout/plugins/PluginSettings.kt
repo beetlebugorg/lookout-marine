@@ -1,11 +1,13 @@
 package org.beetlebug.lookout.plugins
 
 
+import org.beetlebug.lookout.Lookout
+import org.beetlebug.lookout.store.Store
 import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * The plugin settings registry: what `lookout_plugins_json` says, as Kotlin.
+ * The plugin settings registry: what `lookout_plugins_read` states, as Kotlin.
  *
  * A shell renders a settings pane from this and knows nothing about what any
  * plugin does — the manifest declares the controls, the core hands back the
@@ -14,7 +16,7 @@ import org.json.JSONObject
  * SettingsSheet.kt.
  *
  * The Android counterpart of macOS's PluginSettings.swift, and deliberately the
- * same shape: both read one JSON contract, so a field the core adds appears in
+ * same shape: both read one typed contract, so a field the core adds appears in
  * both shells by the same route. What differs is only the rendering — Material
  * controls here, AppKit ones there.
  */
@@ -306,45 +308,142 @@ data class PluginRegistry(val plugins: List<PluginInfo> = emptyList()) {
         get() = SettingsSection.all.filter { it.core || populatedTabs.contains(it.id) }
 
     companion object {
-        fun parse(json: String?): PluginRegistry {
-            if (json.isNullOrEmpty()) return PluginRegistry()
-            return try {
-                val list = JSONObject(json).optJSONArray("plugins") ?: return PluginRegistry()
-                PluginRegistry((0 until list.length()).mapNotNull { plugin(list.optJSONObject(it)) })
-            } catch (e: Exception) {
-                PluginRegistry()
+
+        /**
+         * The registry as the core states it, read typed.
+         *
+         * A READ OF NULL IS NOT AN EMPTY REGISTRY. The core returns no snapshot
+         * with no chart open and in a build with the plugin layer compiled out;
+         * a core holding no plugins returns a snapshot with no rows. A caller
+         * that reads the two the same way empties the whole settings screen the
+         * moment one read comes back short.
+         */
+        fun read(l: Lookout): PluginRegistry? {
+            val p = l.pluginsRead()
+            if (p == 0L) return null
+            try {
+                val n = Lookout.pluginCount(p)
+                return PluginRegistry((0 until n).mapNotNull { plugin(p, it) })
+            } finally {
+                Lookout.pluginsFree(p)
             }
         }
 
-        private fun plugin(o: JSONObject?): PluginInfo? {
-            if (o == null) return null
-            val id = o.optString("id").ifEmpty { return null }
-            val lists = o.optJSONArray("lists").objects().mapNotNull { listSchema(it, id) }
-            val status = o.optString("status")
+        private fun plugin(p: Long, i: Int): PluginInfo? {
+            val id = Lookout.pluginText(p, i, TEXT_ID).ifEmpty { return null }
+            val status = Lookout.pluginText(p, i, TEXT_STATUS)
+            val settings = (0 until Lookout.settingCount(p, i))
             return PluginInfo(
                 id = id,
-                name = o.optString("name").ifEmpty { id },
-                version = o.optString("version"),
-                origin = o.optString("origin").ifEmpty { "bundled" },
+                name = Lookout.pluginText(p, i, TEXT_NAME).ifEmpty { id },
+                version = Lookout.pluginText(p, i, TEXT_VERSION),
+                origin = ORIGINS.getOrElse(Lookout.pluginInt(p, i, INT_ORIGIN)) { "bundled" },
                 status = status,
-                capabilities = o.optJSONArray("capabilities").objects().mapNotNull { capability(it) },
-                fields = o.optJSONArray("settings").objects().mapNotNull { field(it) },
-                lists = lists,
-                rows = rows(o.optJSONArray("lists")),
+                capabilities = (0 until Lookout.capCount(p, i)).map { capability(p, i, it) },
+                fields = settings.mapNotNull { field(p, i, it, -1) },
+                lists = settings.mapNotNull { listSchema(p, i, it, id) },
+                rows = settings.mapNotNull { rowsOf(p, i, it) }.toMap(),
                 statusItems = statusItems(status),
             )
         }
 
+        private fun capability(p: Long, i: Int, c: Int): PluginCapability {
+            val cap = Lookout.capText(p, i, c, TEXT_CAP_NAME)
+            return PluginCapability(
+                cap = cap,
+                sentence = Lookout.capText(p, i, c, TEXT_CAP_SENTENCE).ifEmpty { cap },
+                hosts = Lookout.capAllows(p, i, c).toList(),
+                granted = Lookout.capGranted(p, i, c),
+            )
+        }
+
+        /** One setting as a control, or null when it is a list. */
+        private fun field(p: Long, i: Int, s: Int, fi: Int): PluginField? {
+            val key = Lookout.settingText(p, i, s, fi, TEXT_KEY).ifEmpty { return null }
+            val kind = when (Lookout.settingInt(p, i, s, fi, INT_KIND)) {
+                KIND_NUMBER -> PluginField.Kind.NUMBER
+                KIND_TOGGLE -> PluginField.Kind.TOGGLE
+                KIND_TEXT -> PluginField.Kind.TEXT
+                else -> return null
+            }
+            return PluginField(
+                key = key,
+                label = Lookout.settingText(p, i, s, fi, TEXT_LABEL).ifEmpty { key },
+                desc = Lookout.settingText(p, i, s, fi, TEXT_DESC),
+                kind = kind,
+                unit = Lookout.settingText(p, i, s, fi, TEXT_UNIT),
+                group = Lookout.settingText(p, i, s, fi, TEXT_GROUP),
+                tab = tabOf(Lookout.settingInt(p, i, s, fi, INT_SECTION)),
+                min = Lookout.settingNumber(p, i, s, fi, NUM_MIN),
+                max = Lookout.settingNumber(p, i, s, fi, NUM_MAX),
+                defaultValue = Lookout.settingNumber(p, i, s, fi, NUM_DEFAULT),
+                defaultText = if (kind == PluginField.Kind.TEXT)
+                    Lookout.settingText(p, i, s, fi, TEXT_DEFAULT_TEXT) else "",
+                optional = Lookout.settingInt(p, i, s, fi, INT_OPTIONAL) != 0,
+                value = Lookout.settingNumber(p, i, s, fi, NUM_VALUE),
+            )
+        }
+
+        /** One setting as a repeating group, or null when it is a control. */
+        private fun listSchema(p: Long, i: Int, s: Int, pluginId: String): PluginListSchema? {
+            if (Lookout.settingInt(p, i, s, -1, INT_KIND) != KIND_LIST) return null
+            val key = Lookout.settingText(p, i, s, -1, TEXT_KEY).ifEmpty { return null }
+            return PluginListSchema(
+                pluginId = pluginId,
+                key = key,
+                group = Lookout.settingText(p, i, s, -1, TEXT_GROUP),
+                tab = tabOf(Lookout.settingInt(p, i, s, -1, INT_SECTION)),
+                itemFields = itemFields(p, i, s),
+                footer = Lookout.settingText(p, i, s, -1, TEXT_FOOTER),
+                empty = Lookout.settingText(p, i, s, -1, TEXT_EMPTY),
+                addLabel = Lookout.settingText(p, i, s, -1, TEXT_ADD_LABEL),
+                switchKey = Lookout.settingText(p, i, s, -1, TEXT_SWITCH_KEY),
+                discover = discover(p, i, s),
+                maxRows = Lookout.settingInt(p, i, s, -1, INT_MAX_ITEMS),
+            )
+        }
+
+        private fun itemFields(p: Long, i: Int, s: Int): List<PluginField> =
+            (0 until Lookout.settingFieldCount(p, i, s)).mapNotNull { field(p, i, s, it) }
+
+        private fun discover(p: Long, i: Int, s: Int): List<PluginDiscover> =
+            Lookout.services(p, i, s).mapIndexed { sv, service ->
+                PluginDiscover(service, pairs(Lookout.serviceSet(p, i, s, sv)))
+            }
+
+        /** The rows in force for one list setting, keyed by its key. */
+        private fun rowsOf(p: Long, i: Int, s: Int): Pair<String, List<PluginRow>>? {
+            if (Lookout.settingInt(p, i, s, -1, INT_KIND) != KIND_LIST) return null
+            val key = Lookout.settingText(p, i, s, -1, TEXT_KEY).ifEmpty { return null }
+            val rows = (0 until Lookout.itemCount(p, i, s)).mapNotNull { it ->
+                val id = Lookout.itemId(p, i, s, it).ifEmpty { return@mapNotNull null }
+                PluginRow(id, pairs(Lookout.itemValues(p, i, s, it)))
+            }
+            return key to rows
+        }
+
+        /** A {key, text, key, text, ...} run as a map. */
+        private fun pairs(flat: Array<String>): Map<String, String> {
+            val out = LinkedHashMap<String, String>(flat.size / 2)
+            var k = 0
+            while (k + 1 < flat.size) {
+                out[flat[k]] = flat[k + 1]
+                k += 2
+            }
+            return out
+        }
+
         /**
-         * The per-row lines out of one plugin's status. A plugin that writes a
-         * plain sentence rather than the JSON line simply has none — the status
-         * is TEXT the plugin chose, and the shell must not fall over on it.
+         * The per-row lines out of one plugin's status. The core hands the
+         * status over as the TEXT the plugin wrote, so a plugin that writes a
+         * plain sentence rather than the JSON line simply has none.
          */
         private fun statusItems(status: String): Map<String, PluginStatusItem> {
             if (status.isEmpty() || !status.startsWith("{")) return emptyMap()
             return try {
                 val items = JSONObject(status).optJSONArray("items") ?: return emptyMap()
-                items.objects().mapNotNull { it ->
+                (0 until items.length()).mapNotNull { k ->
+                    val it = items.optJSONObject(k) ?: return@mapNotNull null
                     val id = it.optString("id").ifEmpty { return@mapNotNull null }
                     id to PluginStatusItem(id, it.optString("state"), it.optString("detail"))
                 }.toMap()
@@ -353,105 +452,50 @@ data class PluginRegistry(val plugins: List<PluginInfo> = emptyList()) {
             }
         }
 
-        private fun capability(o: JSONObject): PluginCapability? {
-            val cap = o.optString("cap").ifEmpty { return null }
-            return PluginCapability(
-                cap = cap,
-                sentence = o.optString("sentence").ifEmpty { cap },
-                hosts = o.optJSONArray("hosts").strings(),
-                // Absent means granted: a manifest's capability is in force
-                // until the mariner switches it off.
-                granted = o.optBoolean("granted", true),
-            )
-        }
+        /** lookout_section as one of [SettingsSection]'s ids. */
+        private fun tabOf(section: Int): String = TABS.getOrElse(section) { "advanced" }
 
-        private fun listSchema(o: JSONObject, pluginId: String): PluginListSchema? {
-            val key = o.optString("key").ifEmpty { return null }
-            return PluginListSchema(
-                pluginId = pluginId,
-                key = key,
-                group = o.optString("group"),
-                tab = o.optString("tab").ifEmpty { "advanced" },
-                itemFields = o.optJSONArray("item_fields").objects().mapNotNull { field(it) },
-                footer = o.optString("footer"),
-                empty = o.optString("empty"),
-                addLabel = o.optString("add_label"),
-                switchKey = o.optString("switch_key"),
-                discover = o.optJSONArray("discover").objects().mapNotNull { discover(it) },
-                maxRows = o.optInt("max_rows", 8),
-            )
-        }
+        private val ORIGINS = listOf("bundled", "installed", "developer")
+        private val TABS = listOf(
+            "display", "depths", "text", "charts",
+            "vessels", "alarms", "connections", "advanced",
+        )
 
-        private fun discover(o: JSONObject): PluginDiscover? {
-            val service = o.optString("service").ifEmpty { return null }
-            val set = o.optJSONObject("set")
-            return PluginDiscover(
-                service = service,
-                set = set?.keys()?.asSequence()?.associateWith { set.optString(it) }.orEmpty(),
-            )
-        }
+        // The ordinals the natives take. They mirror Lookout.java.
+        private const val TEXT_ID = 0
+        private const val TEXT_NAME = 1
+        private const val TEXT_VERSION = 2
+        private const val TEXT_STATUS = 3
+        private const val INT_ORIGIN = 0
 
-        /** The rows in force for every list of one plugin, keyed by list key. */
-        private fun rows(lists: JSONArray?): Map<String, List<PluginRow>> {
-            val out = mutableMapOf<String, List<PluginRow>>()
-            for (l in lists.objects()) {
-                val key = l.optString("key")
-                if (key.isEmpty()) continue
-                val fields = l.optJSONArray("item_fields").objects().mapNotNull { field(it) }
-                out[key] = l.optJSONArray("rows").objects().mapNotNull { r ->
-                    val id = r.optString("id").ifEmpty { return@mapNotNull null }
-                    // Cells are kept as text whatever the field's kind: a row
-                    // editor binds them to text controls, and the core clamps
-                    // and coerces on the way back in.
-                    PluginRow(id, fields.associate { f -> f.key to r.optString(f.key) })
-                }
-            }
-            return out
-        }
+        private const val TEXT_CAP_NAME = 0
+        private const val TEXT_CAP_SENTENCE = 1
 
-        private fun field(o: JSONObject): PluginField? {
-            val key = o.optString("key").ifEmpty { return null }
-            val kind = PluginField.Kind.parse(o.optString("kind")) ?: return null
-            // A toggle's value and default are booleans, a number's are
-            // numbers, and a text field carries neither — its value lives in
-            // the row that holds it.
-            val value: Double
-            val fallback: Double
-            when (kind) {
-                PluginField.Kind.TOGGLE -> {
-                    value = if (o.optBoolean("value", false)) 1.0 else 0.0
-                    fallback = if (o.optBoolean("default", false)) 1.0 else 0.0
-                }
-                PluginField.Kind.NUMBER -> {
-                    value = o.optDouble("value", 0.0).let { if (it.isNaN()) 0.0 else it }
-                    fallback = o.optDouble("default", value).let { if (it.isNaN()) value else it }
-                }
-                PluginField.Kind.TEXT -> { value = 0.0; fallback = 0.0 }
-            }
-            // A schema that declares no label, description, group or section
-            // still renders: the key names the control and Advanced takes it.
-            return PluginField(
-                key = key,
-                label = o.optString("label").ifEmpty { key },
-                desc = o.optString("desc"),
-                kind = kind,
-                unit = o.optString("unit"),
-                group = o.optString("group"),
-                tab = o.optString("tab").ifEmpty { "advanced" },
-                min = o.optDouble("min", 0.0).let { if (it.isNaN()) 0.0 else it },
-                max = o.optDouble("max", 1.0).let { if (it.isNaN()) 1.0 else it },
-                defaultValue = fallback,
-                defaultText = if (kind == PluginField.Kind.TEXT) o.optString("default") else "",
-                optional = o.optBoolean("optional", false),
-                value = value,
-            )
-        }
+        private const val TEXT_KEY = 0
+        private const val TEXT_LABEL = 1
+        private const val TEXT_DESC = 2
+        private const val TEXT_GROUP = 3
+        private const val TEXT_UNIT = 4
+        private const val TEXT_DEFAULT_TEXT = 5
+        private const val TEXT_FOOTER = 7
+        private const val TEXT_EMPTY = 8
+        private const val TEXT_ADD_LABEL = 9
+        private const val TEXT_SWITCH_KEY = 10
 
-        private fun JSONArray?.objects(): List<JSONObject> =
-            if (this == null) emptyList() else (0 until length()).mapNotNull { optJSONObject(it) }
+        private const val NUM_MIN = 0
+        private const val NUM_MAX = 1
+        private const val NUM_DEFAULT = 2
+        private const val NUM_VALUE = 3
 
-        private fun JSONArray?.strings(): List<String> =
-            if (this == null) emptyList() else (0 until length()).map { optString(it) }
+        private const val INT_KIND = 0
+        private const val INT_SECTION = 1
+        private const val INT_OPTIONAL = 2
+        private const val INT_MAX_ITEMS = 4
+
+        private const val KIND_NUMBER = 0
+        private const val KIND_TOGGLE = 1
+        private const val KIND_TEXT = 2
+        private const val KIND_LIST = 3
     }
 }
 
@@ -547,35 +591,29 @@ internal fun trimmed(v: Double): String =
  * which is the whole reason the launch intent existed.
  */
 object PluginPrefs {
-    private const val PREFS = "plugins.lists.v1"
-    private const val SCALARS = "plugins.v1"
 
     private fun key(pluginId: String, listKey: String) = "$pluginId/$listKey"
 
     fun saveRows(ctx: android.content.Context, list: PluginListSchema, json: String) {
-        ctx.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
-            .edit().putString(key(list.pluginId, list.key), json).apply()
+        Store.setText(Store.Group.PLUGINS, key(list.pluginId, list.key) + ".rows", json)
     }
 
     /** The saved array, or null when the mariner has never edited this list. */
     fun savedRows(ctx: android.content.Context, list: PluginListSchema): String? =
-        ctx.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
-            .getString(key(list.pluginId, list.key), null)
+        Store.text(Store.Group.PLUGINS, key(list.pluginId, list.key) + ".rows")
 
     /**
-     * One scalar field — the Android twin of macOS's `plugins.v1`. Toggles
-     * ride as 1.0/0.0; the field's kind, read from the live schema at restore,
-     * decides the JSON shape the core is given back. Stored as raw double bits
-     * because SharedPreferences has no double.
+     * One scalar field. Toggles ride as 1 and 0; the live schema decides the
+     * JSON shape at restore.
      */
     fun saveScalar(ctx: android.content.Context, pluginId: String, fieldKey: String, value: Double) {
-        ctx.getSharedPreferences(SCALARS, android.content.Context.MODE_PRIVATE)
-            .edit().putLong(key(pluginId, fieldKey), java.lang.Double.doubleToRawLongBits(value)).apply()
+        Store.setNumber(Store.Group.PLUGINS, key(pluginId, fieldKey), value)
     }
 
-    /** Every saved scalar, keyed `pluginId/fieldKey`. */
+    /** Every saved scalar, keyed `pluginId/fieldKey`. A row list lives under
+     *  the same group and is not one. */
     fun savedScalars(ctx: android.content.Context): Map<String, Double> =
-        ctx.getSharedPreferences(SCALARS, android.content.Context.MODE_PRIVATE)
-            .all.mapNotNull { (k, v) -> (v as? Long)?.let { k to java.lang.Double.longBitsToDouble(it) } }
-            .toMap()
+        Store.keys(Store.Group.PLUGINS)
+            .filterNot { it.endsWith(".rows") }
+            .associateWith { Store.number(Store.Group.PLUGINS, it, 0.0) }
 }

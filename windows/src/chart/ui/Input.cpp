@@ -6,9 +6,7 @@
 
 #include <cmath>
 
-#include "lk_coord.h"
 #include "lk_format.h"
-#include "lk_text.h"
 #include "lk_store.h"
 
 using namespace winrt;
@@ -179,7 +177,7 @@ namespace winrt::LookoutMarine::implementation
     {
         double lat, lon;
         std::string text = winrt::to_string(SearchBox().Text());
-        if (lk_coord_parse(text.c_str(), &lat, &lon))
+        if (lookout_parse_position(text.c_str(), &lat, &lon))
         {
             lk_controller_set_center(controller, lon, lat);
             SearchBox().Text(L"");
@@ -202,7 +200,7 @@ namespace winrt::LookoutMarine::implementation
 
         SearchResultRows().Children().Clear();
         double lat = 0, lon = 0;
-        if (lk_coord_parse(text.c_str(), &lat, &lon))
+        if (lookout_parse_position(text.c_str(), &lat, &lon))
         {
             Controls::Button go;
             go.HorizontalAlignment(HorizontalAlignment::Stretch);
@@ -218,7 +216,9 @@ namespace winrt::LookoutMarine::implementation
             pin.FontSize(14);
             row.Children().Append(pin);
             Controls::TextBlock label;
-            label.Text(hstring{ L"Go to " } + to_hstring(lkw::FormatCoord(lat, lon)));
+            char pos[LOOKOUT_POSITION_MAX];
+            lookout_fmt_position(lat, lon, pos, sizeof pos);
+            label.Text(hstring{ L"Go to " } + to_hstring(pos));
             label.FontSize(13);
             row.Children().Append(label);
             go.Content(row);

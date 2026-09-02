@@ -102,33 +102,31 @@ class PluginSettingsController(
      * RENDER THREAD.
      */
     fun forgetLastRegistry() {
-        lastPluginsJson = null
+        lastRegistry = null
     }
 
-    private var lastPluginsJson: String? = null
-    private var pluginsJsonWasNull = false
+    private var lastRegistry: PluginRegistry? = null
+    private var registryUnread = false
 
     fun republish(l: Lookout) {
-        val json = l.pluginsJson()
-        if (json == null) {
-            // A null read is the plugin layer mid-restart, not an empty
-            // registry. Publishing it would empty Vessels, Alarms and
-            // Connections until the next good read; keep the last one and
-            // say so once each way.
-            if (!pluginsJsonWasNull) Log.w(TAG, "plugins registry unreadable; keeping the last one")
-            pluginsJsonWasNull = true
+        val reg = PluginRegistry.read(l)
+        if (reg == null) {
+            // No snapshot is the plugin layer mid-restart. An empty registry
+            // here empties Vessels, Alarms and Connections until the next good
+            // read, so keep the last one and log it once each way.
+            if (!registryUnread) Log.w(TAG, "plugins registry unreadable; keeping the last one")
+            registryUnread = true
             return
         }
-        if (pluginsJsonWasNull) {
+        if (registryUnread) {
             Log.w(TAG, "plugins registry is back")
-            pluginsJsonWasNull = false
+            registryUnread = false
         }
-        if (json == lastPluginsJson) return
-        lastPluginsJson = json
-        val reg = PluginRegistry.parse(json)
+        if (reg == lastRegistry) return
+        lastRegistry = reg
         // The declared tables ride the same refresh: they follow the loaded
         // set, so a plugin that unloads takes its table with it.
-        val specs = parseTableSpecs(l.pluginTables())
+        val specs = readTableSpecs(l)
         access.onMain {
             pluginRegistry = reg
             onTables(specs)
@@ -187,9 +185,8 @@ class PluginSettingsController(
         l.pluginsLoadInstalled()
         // What actually came up, by id — the answer to "did the module load"
         // that a screenshot cannot give.
-        val json = l.pluginsJson()
-        Log.i(TAG, "plugins: active=${l.pluginsActive()} ${summarize(json)}")
-        val loadedReg = PluginRegistry.parse(json)
+        val loadedReg = PluginRegistry.read(l) ?: PluginRegistry()
+        Log.i(TAG, "plugins: active=${l.pluginsActive()} ${summarize(loadedReg)}")
         val restored = restoreLists(l, loadedReg)
         restoreScalars(l, loadedReg)
         // The developer override, and only where the mariner has said nothing:
@@ -203,13 +200,13 @@ class PluginSettingsController(
         }
         // After the restore, so the registry the settings screen first sees
         // already holds the mariner's own connections.
-        val reg = PluginRegistry.parse(l.pluginsJson())
+        val reg = PluginRegistry.read(l) ?: PluginRegistry()
         Log.i(
             TAG,
             "plugins: sections ${reg.sections.joinToString(", ") { it.id }}" +
                 " | managed ${reg.managed.size} of ${reg.plugins.size}",
         )
-        lastPluginsJson = l.pluginsJson()
+        lastRegistry = reg
         access.onMain { pluginRegistry = reg }
     }
 
@@ -290,16 +287,9 @@ class PluginSettingsController(
      * scanning the text for one reported a gateway row ("lookout-nmea") as
      * though it were a sixth plugin.
      */
-    private fun summarize(json: String?): String {
-        if (json.isNullOrEmpty()) return "(no plugin json)"
-        val ids = try {
-            val arr = org.json.JSONObject(json).getJSONArray("plugins")
-            (0 until arr.length()).mapNotNull { arr.getJSONObject(it).optString("id").ifEmpty { null } }
-        } catch (e: Exception) {
-            return "(unreadable plugin json: $e)"
-        }
-        return if (ids.isEmpty()) "(none loaded)" else "loaded: ${ids.joinToString(", ")}"
-    }
+    private fun summarize(reg: PluginRegistry): String =
+        if (reg.plugins.isEmpty()) "(none loaded)"
+        else "loaded: ${reg.plugins.joinToString(", ") { it.id }}"
 
     /** What the source plugins' connection rows say between them. */
     data class Connections(val live: Boolean, val trying: Boolean)

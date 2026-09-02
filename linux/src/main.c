@@ -8,6 +8,7 @@
 
 #include "model/app-model.h"
 #include "library/bake.h"
+#include "model/store.h"
 #include "ui/window.h"
 
 #include "lk-resources.h"
@@ -415,5 +416,10 @@ main (int argc, char *argv[])
   g_signal_connect (app, "startup", G_CALLBACK (lk_app_startup), model);
   g_signal_connect (app, "activate", G_CALLBACK (lk_app_activate), model);
 
-  return g_application_run (G_APPLICATION (app), argc, argv);
+  int status = g_application_run (G_APPLICATION (app), argc, argv);
+
+  /* The store coalesces its writes, so the last of them reaches the disk
+   * here. */
+  lk_store_shutdown ();
+  return status;
 }

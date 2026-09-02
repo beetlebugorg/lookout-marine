@@ -9,7 +9,7 @@
 #include "lk-test.h"
 
 #include "model/app-model.h"
-#include "ui/chart/pick-report.h"
+#include "pick-fixture.h"
 #include "ui/window.h"
 
 static LkAppModel *model;
@@ -87,26 +87,17 @@ test_empty_state_visible (void)
   g_assert_false (lk_test_shown (capsule, window));
 }
 
-static LkPickFeature
-feature (const char *cls, const char *chart, const char *s57)
-{
-  return (LkPickFeature) { .cls = (char *) cls, .chart = (char *) chart,
-                           .s57 = (char *) s57 };
-}
-
 /* A pick raises the report into the overlay; close-pick clears the set, and the
  * report leaves with it. */
 static void
 test_close_pick_clears_report (void)
 {
-  LkPickFeature f = feature ("LIGHTS", "US5MD1MC",
-      "{\"report\":{\"title\":\"Fl(2) 10s 5m\",\"subtitle\":\"Light\","
-      "\"chip\":\"Light\",\"footnote\":\"US5MD1MC ed 27\","
-      "\"rows\":[{\"label\":\"Colour\",\"value\":\"red\"}]},"
-      "\"s57\":{\"OBJL\":\"LIGHTS\"}}");
+  LkPickDecoded *f = lk_fixture_feature ("LIGHTS", "US5MD1MC", "Fl(2) 10s 5m",
+                                         "Light", "Light", "US5MD1MC ed 27");
   GPtrArray *results = g_ptr_array_new_with_free_func ((GDestroyNotify) lk_pick_decoded_free);
 
-  g_ptr_array_add (results, lk_pick_decoded_new (&f));
+  g_ptr_array_add (f->rows, lk_fixture_row ("Colour", "red", 0));
+  g_ptr_array_add (results, f);
   lk_app_model_set_pick (model, results, 640, 400, -76.48, 38.98);
   lk_test_drain ();
 

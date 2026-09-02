@@ -1,8 +1,8 @@
 //  PluginAlerts.swift: the alerts the plugins raise, on screen and out loud.
 //
 //  A plugin raises an alert with a severity, a title and a body. The core holds
-//  it and hands it over through lookout_plugin_alerts_json, already ordered:
-//  what nobody has answered first, then the loudest, then the oldest. This file
+//  it and hands it over through lookout_alerts_read, already ordered: what
+//  nobody has answered first, then the loudest, then the oldest. This file
 //  shows it, sounds the alarms, and calls lookout_plugin_alert_ack when the
 //  mariner silences one.
 //
@@ -25,6 +25,16 @@ enum PluginAlertSeverity: String {
 
     /// True when this severity is sounded rather than only shown.
     var audible: Bool { self == .alarm }
+
+    /// A severity this build does not know is treated as an alarm, the same
+    /// way the core treats one it cannot read. Silence is never the fallback.
+    init(_ s: lookout_alert_severity) {
+        switch s {
+        case LOOKOUT_ALERT_WARNING: self = .warning
+        case LOOKOUT_ALERT_NOTICE:  self = .notice
+        default:                    self = .alarm
+        }
+    }
 }
 
 struct PluginAlert: Identifiable, Equatable {
@@ -37,19 +47,32 @@ struct PluginAlert: Identifiable, Equatable {
     let raised: Date
     let acknowledged: Bool
 
-    init?(_ o: [String: Any]) {
-        guard let id = (o["id"] as? NSNumber)?.uint64Value,
-              let title = o["title"] as? String else { return nil }
+    init(id: UInt64,
+         plugin: String = "",
+         severity: PluginAlertSeverity = .alarm,
+         title: String,
+         body: String = "",
+         raised: Date = Date(timeIntervalSince1970: 0),
+         acknowledged: Bool = false) {
         self.id = id
-        self.plugin = o["plugin"] as? String ?? ""
-        // A severity this build does not know is treated as an alarm, the same
-        // way the core treats one it cannot read. Silence is never the fallback.
-        self.severity = PluginAlertSeverity(rawValue: o["severity"] as? String ?? "") ?? .alarm
+        self.plugin = plugin
+        self.severity = severity
         self.title = title
-        self.body = o["body"] as? String ?? ""
-        let ms = (o["raised"] as? NSNumber)?.doubleValue ?? 0
-        self.raised = Date(timeIntervalSince1970: ms / 1000)
-        self.acknowledged = o["acknowledged"] as? Bool ?? false
+        self.body = body
+        self.raised = raised
+        self.acknowledged = acknowledged
+    }
+
+    /// One alert of a read. Every string is copied, so the alert outlives the
+    /// read it came from.
+    init(_ a: lookout_alert) {
+        self.init(id: a.id,
+                  plugin: String(cString: a.plugin),
+                  severity: PluginAlertSeverity(a.severity),
+                  title: String(cString: a.title),
+                  body: String(cString: a.body),
+                  raised: Date(timeIntervalSince1970: Double(a.raised) / 1000),
+                  acknowledged: a.acknowledged != 0)
     }
 }
 

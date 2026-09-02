@@ -39,7 +39,7 @@ private struct EmptyStateNote<Content: View>: View {
 
 
 
-/// The first thing a mariner sees, before any chart is aboard.
+/// The first thing a mariner sees, before any chart is installed.
 ///
 /// It answers three questions in the order they are asked. What is this
 /// program for. Why is it empty. What do I do now. The old panel answered only
