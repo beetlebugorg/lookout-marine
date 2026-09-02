@@ -178,6 +178,13 @@ pub fn outputPath(
     return std.fs.path.join(a, &.{ dir, file });
 }
 
+/// What one chart is called, out of a path or an entry name: the file name
+/// with its extension off. This is the name an import panel says it is working
+/// on, so every shell says the same one.
+pub fn chartName(path: []const u8) []const u8 {
+    return stemOf(path);
+}
+
 fn stemOf(name: []const u8) []const u8 {
     const base = std.fs.path.basename(name);
     const dot = std.mem.lastIndexOfScalar(u8, base, '.') orelse return base;

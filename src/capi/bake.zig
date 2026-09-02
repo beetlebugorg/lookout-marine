@@ -67,7 +67,7 @@ export fn lookout_bake_cancel(b: ?*lookout_bake) void {
 export fn lookout_bake_poll(b: ?*const lookout_bake, out: ?*lookout_bake_progress) void {
     const dst = out orelse return;
     const x = b orelse {
-        dst.* = .{ .done = 0, .total = 0, .baked = 0, .ok = 0, .running = 0 };
+        dst.* = .{ .done = 0, .total = 0, .baked = 0, .ok = 0, .running = 0, .chart = @splat(0) };
         return;
     };
     dst.* = x.poll();

@@ -125,6 +125,11 @@ typedef struct {
     int ok;
     /* 1 while the worker is still going. */
     int running;
+    /* The chart written most recently, with no extension, NUL-terminated.
+     * Empty until the first one lands, and through the lift, which reports no
+     * name. A bake runs several charts at once, so this is one of the few in
+     * flight rather than the one `done` counts to. */
+    char chart[64];
 } lookout_bake_progress;
 
 /* Start a bake on a thread of its own. NULL when it does not start. The

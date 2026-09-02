@@ -27,6 +27,11 @@ pub const Job = struct {
     ok: std.atomic.Value(bool) = .init(false),
     done: std.atomic.Value(u32) = .init(0),
     baked: std.atomic.Value(u32) = .init(0),
+    /// The chart written most recently, as 1 + its index in `outs`. Zero until
+    /// the first one lands. tile57 names it on the worker that wrote it, and
+    /// `outs` never moves after the job starts, so the index is all that
+    /// crosses between the threads.
+    last_out: std.atomic.Value(u32) = .init(0),
 
     /// Where the phase now running starts in the job. tile57 counts from zero
     /// each phase; the mariner is watching one job.
@@ -89,13 +94,21 @@ pub const Job = struct {
 
     /// How far along, for a progress bar. Read from any thread.
     pub fn poll(self: *const Job) Progress {
-        return .{
+        var p = Progress{
             .done = self.done.load(.acquire),
             .total = self.total,
             .baked = self.baked.load(.acquire),
             .ok = @intFromBool(self.ok.load(.acquire)),
             .running = @intFromBool(self.running.load(.acquire)),
+            .chart = @splat(0),
         };
+        const last = self.last_out.load(.acquire);
+        if (last > 0 and last <= self.outs.len) {
+            const name = rules.chartName(self.outs[last - 1]);
+            const n = @min(name.len, p.chart.len - 1);
+            @memcpy(p.chart[0..n], name[0..n]);
+        }
+        return p;
     }
 
     /// Join the worker and free the job. Cancel first, or this blocks for about
@@ -143,9 +156,9 @@ pub const Job = struct {
             self.phase_offset = 0;
             var n: u32 = 0;
             st = if (self.archive)
-                cc.tile57_bake_zip_charts(self.source.ptr, ins_c.ptr, outs_c.ptr, self.cells, workers, progress, null, self, &n, &err)
+                cc.tile57_bake_zip_charts(self.source.ptr, ins_c.ptr, outs_c.ptr, self.cells, workers, progress, label, self, &n, &err)
             else
-                cc.tile57_bake_files(ins_c.ptr, outs_c.ptr, self.cells, workers, progress, null, self, &n, &err);
+                cc.tile57_bake_files(ins_c.ptr, outs_c.ptr, self.cells, workers, progress, label, self, &n, &err);
             total += n;
         }
         if (st == cc.TILE57_OK and self.sheets > 0 and !self.cancelled.load(.acquire)) {
@@ -153,9 +166,9 @@ pub const Job = struct {
             const off = self.cells;
             var n: u32 = 0;
             st = if (self.archive)
-                cc.tile57_bake_zip_rasters(self.source.ptr, ins_c.ptr + off, outs_c.ptr + off, self.sheets, workers, progress, null, self, &n, &err)
+                cc.tile57_bake_zip_rasters(self.source.ptr, ins_c.ptr + off, outs_c.ptr + off, self.sheets, workers, progress, label, self, &n, &err)
             else
-                cc.tile57_bake_rasters(ins_c.ptr + off, outs_c.ptr + off, self.sheets, workers, progress, null, self, &n, &err);
+                cc.tile57_bake_rasters(ins_c.ptr + off, outs_c.ptr + off, self.sheets, workers, progress, label, self, &n, &err);
             total += n;
         }
         // A lift only comes out of an archive. Loose files are already where
@@ -182,6 +195,13 @@ pub const Job = struct {
         self.done.store(self.phase_offset + done, .release);
         return !self.cancelled.load(.acquire);
     }
+
+    /// tile57's per-chart LABEL callback: which chart of the phase was just
+    /// written. Also on a worker thread.
+    fn label(ctx: ?*anyopaque, index: u32) callconv(.c) void {
+        const self: *Job = @ptrCast(@alignCast(ctx orelse return));
+        self.last_out.store(self.phase_offset + index + 1, .release);
+    }
 };
 
 /// How far a bake has got. A snapshot: every field is read in one call.
@@ -194,6 +214,11 @@ pub const Progress = extern struct {
     ok: c_int,
     /// 1 while the worker is still going.
     running: c_int,
+    /// The chart written most recently, with no extension. Empty until the
+    /// first one lands, and through the lift, which reports no name. A bake
+    /// runs several charts at once, so this is one of the few in flight rather
+    /// than the one `done` counts to.
+    chart: [64]u8,
 };
 
 // ---- tests ---------------------------------------------------------------------
@@ -233,6 +258,52 @@ test "a job runs on its own thread and reports when it is done" {
     // No phase to run, so nothing was baked and nothing failed.
     try t.expectEqual(@as(u32, 0), p.baked);
     try t.expectEqual(@as(c_int, 1), p.ok);
+}
+
+// The name a shell puts in its import panel.
+test "the chart a poll names is the one written last" {
+    const job = try namedJob();
+    defer job.free();
+    settle(job);
+
+    // Nothing has been written, so there is no name to say.
+    try t.expectEqualStrings("", std.mem.sliceTo(&job.poll().chart, 0));
+
+    // tile57 counts from zero in each phase; the offset is the job's, so the
+    // second chart of the second phase is the third of the run.
+    job.phase_offset = 1;
+    Job.label(job, 1);
+    try t.expectEqualStrings("US5MD1MC", std.mem.sliceTo(&job.poll().chart, 0));
+
+    Job.label(job, 0);
+    try t.expectEqualStrings("US4MD11M", std.mem.sliceTo(&job.poll().chart, 0));
+}
+
+test "a chart name past the buffer is cut rather than lost" {
+    const job = try namedJob();
+    defer job.free();
+    settle(job);
+
+    job.phase_offset = 0;
+    Job.label(job, 0);
+    const name = std.mem.sliceTo(&job.poll().chart, 0);
+    try t.expectEqual(@as(usize, 63), name.len);
+    try t.expect(std.mem.startsWith(u8, name, "aaaa"));
+}
+
+/// Three outputs with names to read back: one long enough to be cut, then the
+/// two an exchange set writes.
+fn namedJob() !*Job {
+    const gpa = t.allocator;
+    const ins = try gpa.alloc([:0]u8, 3);
+    const outs = try gpa.alloc([:0]u8, 3);
+    const names = [_][]const u8{ "a" ** 80, "US4MD11M", "US5MD1MC" };
+    for (ins, outs, names) |*i, *o, name| {
+        i.* = try std.fmt.allocPrintSentinel(gpa, "/in/{s}.000", .{name}, 0);
+        o.* = try std.fmt.allocPrintSentinel(gpa, "/out/{s}/{s}.pmtiles", .{ name, name }, 0);
+    }
+    const src = try gpa.dupeZ(u8, "/source");
+    return Job.start(gpa, src, ins, outs, 0, 0, 0, false).?;
 }
 
 test "a cancel is seen, and a cancelled bake is not a failure" {
