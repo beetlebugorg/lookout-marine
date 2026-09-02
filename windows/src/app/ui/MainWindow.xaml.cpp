@@ -164,6 +164,9 @@ namespace winrt::LookoutMarine::implementation
             StopRenderThread();
             lk_controller_free(controller);
             controller = nullptr;
+            // The set model holds a scan thread and the store, so it goes
+            // before the store does.
+            CloseChartSets();
             // The store coalesces its writes, so the last of them reaches the
             // disk here rather than at whatever the window was doing.
             lk_store_shutdown();
@@ -353,12 +356,18 @@ namespace winrt::LookoutMarine::implementation
         {
             if (controller == nullptr)
                 return;
+            // A set's metadata scan lands with no gesture behind it, and the
+            // page it refreshes is drawn whether or not a chart is open, so
+            // this is asked before the stand-down below.
+            PollChartSets();
             if (!lk_controller_is_open(controller))
             {
                 // Between a close and the open that follows it there is
                 // nothing to read out. The open itself is driven by layout,
-                // not by this clock, so the poll stands down until one lands.
-                readout_timer.Stop();
+                // not by this clock, so the poll stands down until one lands,
+                // unless a settings page is up with a scan still to land.
+                if (!SettingsOpen() || !ChartSetsScanning())
+                    readout_timer.Stop();
                 return;
             }
             UpdateReadouts();

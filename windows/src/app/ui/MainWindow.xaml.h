@@ -265,16 +265,25 @@ namespace winrt::LookoutMarine::implementation
         {
             std::string path;
             bool on{ true };
-            std::vector<std::string> cells;
-            std::vector<std::string> rasters;
+            // 0 until the background scan has read the folder, and every
+            // count below is 0 until then.
+            bool scanned{ false };
+            size_t charts{ 0 };
+            size_t pictures{ 0 };
             std::string title; // the agency whose charts these are, else the folder
         };
+        lookout_chart_sets *ChartSetsModel();
         void LoadChartSets(std::function<void()> then);
-        std::vector<std::string> ChartSetOpenPaths() const;
+        void PollChartSets();
+        /* True while any installed set is still waiting for its scan. */
+        bool ChartSetsScanning() const;
+        void CloseChartSets();
+        std::vector<std::string> ChartSetOpenPaths();
         void AdoptChartSet(std::string const &path);
         void SetChartSetOn(std::string const &path, bool on);
         void RemoveChartSet(std::string const &path);
         std::vector<ChartSetRow> chart_sets;
+        lookout_chart_sets *chart_sets_model{ nullptr };
 
         // ---- charts by link (an online map AS the chart) --------------------
         // One chart added by link: a MapLibre style url. Picking it renders

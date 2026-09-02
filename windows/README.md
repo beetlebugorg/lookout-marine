@@ -134,7 +134,7 @@ quietly lost test suite.
 | `src/chart/` | `lk_pick` — the pick report as the card holds it, and the clipboard form |
 | `src/chart/ui/` | The open flow and the chart panel, gestures and commands, the mariner's markers, the pick report card and the files a pick points at |
 | `src/hud/ui/` | The readout capsule and the scale bar, the startup loader phases, the overlay bubbles and the GPS and follow pills, the zoom-to-scale panel, and `lk_format` (the brushes) |
-| `src/library/` | `lk_paths` (chart and raster discovery, the agency name, the set names) and `lk_bake` (the import's order and progress) |
+| `src/library/` | `lk_paths` (chart and raster discovery, and the agency name) and `lk_bake` (what the import panel shows, over the engine's own bake) |
 | `src/library/ui/` | The installed sets and their switches, charts by link, the raster underlay and its pill, the import panel |
 | `src/plugins/` | `lk_plugin_registry` (the config object that goes back and the status line), `lk_table` (the declarations, the rows and the mariner's units), `lk_alerts` (the audibility rule), `lk_discovery` (DNS-SD) |
 | `src/plugins/ui/` | The plugin settings sections and connection lists, the `.lkplug` consent sheet and install, the table windows, the alert strip and its siren |
@@ -147,10 +147,9 @@ quietly lost test suite.
 
 Three model files are not in the test build because they call the core rather
 than only reasoning about its answers: `lk_licenses_baked.cpp` (which fetches
-the baked manifest), `lk_bake.cpp` (which drives tile57), and `lk_store.c`
-(which is the core settings store). Each is split so that the part worth
-testing — the labels on a licence row, the bake's order, what a scan found —
-is not in it.
+the baked manifest), `lk_bake.cpp` (which drives the engine's bake), and
+`lk_store.c` (which is the core settings store). Each is split so that the
+part still worth testing here is not in it.
 
 At the root: `build-core.ps1` builds the Zig core where the vcxproj expects its
 outputs, `build-tests.ps1` builds and runs the tests, `pch.h` is the WinRT

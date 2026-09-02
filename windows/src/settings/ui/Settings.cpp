@@ -746,12 +746,14 @@ namespace winrt::LookoutMarine::implementation
                     stext.Children().Append(sname);
                     Controls::TextBlock ssum;
                     std::string sum;
-                    if (!set.cells.empty())
-                        sum = std::to_string(set.cells.size()) + (set.cells.size() == 1 ? " chart" : " charts");
-                    if (!set.rasters.empty())
-                        sum += (sum.empty() ? "" : ", ") + std::to_string(set.rasters.size()) +
-                               (set.rasters.size() == 1 ? " picture" : " pictures");
-                    if (sum.empty())
+                    if (set.charts != 0)
+                        sum = std::to_string(set.charts) + (set.charts == 1 ? " chart" : " charts");
+                    if (set.pictures != 0)
+                        sum += (sum.empty() ? "" : ", ") + std::to_string(set.pictures) +
+                               (set.pictures == 1 ? " picture" : " pictures");
+                    // A row is listed before the scan has read its folder, and
+                    // a folder still being read has not failed to answer.
+                    if (sum.empty() && set.scanned)
                         sum = "not answering (drive unplugged?)";
                     ssum.Text(winrt::to_hstring(sum));
                     ssum.FontSize(11);
@@ -843,7 +845,7 @@ namespace winrt::LookoutMarine::implementation
                 std::vector<std::pair<std::string, std::vector<std::string>>> groups;
                 for (auto const &p : raster_paths)
                 {
-                    std::string g = lkw::RasterSetNameFor(p);
+                    std::string g = lookout_raster_set_name_for(p.c_str(), nullptr);
                     auto it = std::find_if(groups.begin(), groups.end(),
                                            [&](auto const &e) { return e.first == g; });
                     if (it == groups.end())

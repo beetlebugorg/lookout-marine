@@ -48,8 +48,4 @@ namespace lkw
      * flow bakes on the way in. The extension is a hint; the engine decides
      * per file. */
     std::vector<std::string> CollectRasterCharts(std::string const &dir);
-    /* The engine's set name for a raster chart (raster.zig setNameFor),
-     * replicated so Settings' groups and the post-add auto-select agree with
-     * the sets the pill offers. */
-    std::string RasterSetNameFor(std::string const &path);
 }

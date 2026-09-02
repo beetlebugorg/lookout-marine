@@ -211,7 +211,7 @@ namespace winrt::LookoutMarine::implementation
         // picked those files while looking at this water.
         if (!last_added.empty())
         {
-            std::string want = lkw::RasterSetNameFor(last_added);
+            std::string want = lookout_raster_set_name_for(last_added.c_str(), nullptr);
             int count = lk_controller_raster_set_count(controller);
             for (int i = 0; i < count; ++i)
             {

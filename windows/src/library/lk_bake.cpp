@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
+#include <map>
 
 extern "C"
 {
@@ -29,26 +30,22 @@ namespace lkw
             return ext;
         }
 
-        /* The engine bakes a cell before a sheet before a lift, and each engine
-         * call takes one contiguous run, so this is both the mariner's order and
-         * the call boundary. */
-        int Rank(ScannedCell const &c)
+        /* What has to happen to one file before it can be drawn. A file that
+         * is a chart already only has to come out of the archive. */
+        lookout_prepare PrepareOf(ScannedCell const &c)
         {
             if (c.kind == LOOKOUT_FILE_SOURCE)
-                return 0;
+                return LOOKOUT_PREPARE_CELL;
             if (c.kind == LOOKOUT_FILE_RASTER_SOURCE)
-                return 1;
-            return 2;
+                return LOOKOUT_PREPARE_SHEET;
+            return LOOKOUT_PREPARE_LIFT;
         }
 
-        /* tile57's callbacks take a void* context; both forward to the job. */
-        bool ProgressThunk(void *ctx, uint32_t done, uint32_t total)
+        /* A picture belongs to the raster underlay rather than the vector
+         * open, whichever way it got there. */
+        bool IsPicture(lookout_file_kind kind)
         {
-            return ((BakeJob *)ctx)->OnProgress(done, total);
-        }
-        void LabelThunk(void *ctx, uint32_t index)
-        {
-            ((BakeJob *)ctx)->OnLabel(index);
+            return kind == LOOKOUT_FILE_RASTER || kind == LOOKOUT_FILE_RASTER_SOURCE;
         }
     }
 
@@ -121,242 +118,157 @@ namespace lkw
 
     BakeJob::~BakeJob()
     {
+        /* Cancel first, or the free blocks for about one chart's bake time. */
         Cancel();
-        if (thread_.joinable())
-            thread_.join();
+        if (job_ != nullptr)
+            lookout_bake_free(job_);
     }
 
     void BakeJob::Cancel()
     {
-        cancel_.store(true);
-        std::lock_guard<std::mutex> g(mu_);
-        p_.cancelled = true;
+        cancelled_ = true;
+        if (job_ != nullptr)
+            lookout_bake_cancel(job_);
+    }
+
+    bool BakeJob::Running() const
+    {
+        if (job_ == nullptr)
+            return false;
+        lookout_bake_progress p{};
+        lookout_bake_poll(job_, &p);
+        return p.running != 0;
     }
 
     BakeProgress BakeJob::Snapshot() const
     {
-        std::lock_guard<std::mutex> g(mu_);
-        BakeProgress p = p_;
-        p.running = running_.load();
-        if (started_ms_ != 0)
-            p.elapsed = (double)(NowMs() - started_ms_) / 1000.0;
-        return p;
+        BakeProgress out;
+        out.kind = WorkKind::Importing;
+        out.name = source_name_;
+        out.cancelled = cancelled_;
+        if (job_ == nullptr)
+            return out;
+
+        lookout_bake_progress p{};
+        lookout_bake_poll(job_, &p);
+        out.done = p.done;
+        out.total = p.total;
+        out.cell = p.chart;
+        out.running = p.running != 0;
+        out.elapsed = (double)(NowMs() - started_ms_) / 1000.0;
+        return out;
     }
 
+    /* An import that produced NOTHING must say why, not just take the panel
+     * down: a folder of malformed cells otherwise looks like an app that did
+     * nothing. A partial bake is not an error — what landed is a library — so
+     * only the all-failed case keeps the message. */
     std::string BakeJob::Error() const
     {
-        std::lock_guard<std::mutex> g(mu_);
-        return error_;
+        if (job_ == nullptr || cancelled_)
+            return {};
+        lookout_bake_progress p{};
+        lookout_bake_poll(job_, &p);
+        if (p.running != 0 || p.baked != 0 || p.total == 0)
+            return {};
+        return p.why[0] != '\0' ? std::string(p.why) : "None of the charts could be prepared.";
     }
 
+    /* What landed, read off the disk. The engine counts charts; which of them
+     * belongs to the raster underlay rather than the vector open is the
+     * shell's question, and an entry an archive did not hold wrote nothing. */
     std::vector<std::string> BakeJob::Finished() const
     {
-        std::lock_guard<std::mutex> g(mu_);
-        return finished_;
+        return Landed(false);
     }
 
     std::vector<std::string> BakeJob::FinishedRasters() const
     {
-        std::lock_guard<std::mutex> g(mu_);
-        return finished_rasters_;
+        return Landed(true);
     }
 
-    bool BakeJob::OnProgress(unsigned done, unsigned total)
+    std::vector<std::string> BakeJob::Landed(bool raster) const
     {
+        std::vector<std::string> out;
+        for (size_t i = 0; i < out_paths_.size(); ++i)
         {
-            std::lock_guard<std::mutex> g(mu_);
-            p_.kind = WorkKind::Importing;
-            p_.done = done + offset_;
-            p_.total = job_total_ > 0 ? job_total_ : total;
+            if ((is_raster_[i] != 0) != raster)
+                continue;
+            std::error_code ec;
+            if (std::filesystem::exists(out_paths_[i], ec))
+                out.push_back(out_paths_[i]);
         }
-        return !cancel_.load();
-    }
-
-    void BakeJob::OnLabel(unsigned index)
-    {
-        std::lock_guard<std::mutex> g(mu_);
-        size_t i = (size_t)index + offset_;
-        if (i >= out_paths_.size())
-            return;
-        /* ordered_ and out_paths_ run in step, so the kind rides on the index:
-         * a baked sheet is a picture for the raster underlay, never a chart
-         * for the vector open. */
-        if (ordered_[i].kind == LOOKOUT_FILE_RASTER_SOURCE)
-            finished_rasters_.push_back(out_paths_[i]);
-        else
-            finished_.push_back(out_paths_[i]);
-        p_.cell = std::filesystem::path(out_paths_[i]).stem().string();
+        return out;
     }
 
     bool BakeJob::Start(ScanResult const &scan, std::string const &source, std::string const &out_dir,
                         std::string const &raster_out_dir)
     {
-        ordered_.clear();
+        std::vector<ScannedCell> work;
         for (auto const &c : scan.cells)
             if (c.NeedsPrepare())
-                ordered_.push_back(c);
-        if (ordered_.empty())
+                work.push_back(c);
+        if (work.empty())
             return false;
 
         /* Coarse band first, so a cancel leaves usable coverage of the whole
-         * passage rather than every berth in one river. */
-        std::sort(ordered_.begin(), ordered_.end(), [](ScannedCell const &a, ScannedCell const &b) {
-            if (Rank(a) != Rank(b))
-                return Rank(a) < Rank(b);
-            if (a.band != b.band)
-                return a.band < b.band;
-            return a.name < b.name;
-        });
+         * passage rather than every berth in one river. The order is also what
+         * makes the phases contiguous for lookout_bake_start. */
+        std::vector<lookout_bake_item> items;
+        std::map<std::string, lookout_file_kind> kinds;
+        items.reserve(work.size());
+        for (auto const &c : work)
+        {
+            items.push_back({ c.path.c_str(), c.name.c_str(), c.band, PrepareOf(c) });
+            kinds[c.path] = c.kind;
+        }
+        lookout_bake_order(items.data(), items.size());
 
-        /* Every prepared chart goes in a directory of its own name, which is the
-         * layout tile57's own bake writes and the layout an exchange set uses. A
-         * cell carries the text and pictures it references beside it, and the
-         * engine only writes those when the chart has a directory to hold them;
-         * written flat they would share one manifest and overwrite each other.
-         *
-         * From an archive the output MIRRORS the entry's own path, so what comes
-         * out is laid out like what went in. An exchange set already puts each
-         * cell in a directory of its name, so appending the stem again would give
-         * US1EEZ3M/US1EEZ3M/US1EEZ3M.pmtiles. */
-        const bool zip = IsArchive(source);
+        /* A cell bakes into the chart library and a sheet into the raster one:
+         * separate roots, because the vector open globs the chart library for
+         * .pmtiles and a picture archive it swallowed would join the composed
+         * chart library. */
         out_paths_.clear();
-        out_paths_.reserve(ordered_.size());
-        for (auto const &c : ordered_)
+        is_raster_.clear();
+        std::vector<std::string> ins;
+        for (auto const &item : items)
         {
-            std::filesystem::path stem = std::filesystem::path(c.name).stem();
-            const bool raster = (c.kind == LOOKOUT_FILE_RASTER_SOURCE || c.kind == LOOKOUT_FILE_RASTER);
-            std::filesystem::path base = raster ? raster_out_dir : out_dir;
-            if (zip)
-            {
-                std::filesystem::path rel = std::filesystem::path(c.path).parent_path();
-                if (!rel.empty())
-                    base /= rel;
-            }
-            /* A lift keeps the entry's own name in the mirrored directory: it
-             * is a chart already, and the stem directory is for what a bake
-             * writes beside a cell. */
-            const bool lift = Rank(c) == 2;
-            std::filesystem::path dir = (lift || base.filename() == stem) ? base : base / stem;
+            const bool raster = IsPicture(kinds[item.path]);
+            char buf[1024];
+            size_t n = lookout_bake_output_path(raster ? raster_out_dir.c_str() : out_dir.c_str(),
+                                                source.c_str(), &item, buf, sizeof buf);
+            if (n == 0)
+                return false;
             std::error_code ec;
-            std::filesystem::create_directories(dir, ec);
-            std::string fname = lift ? std::filesystem::path(c.path).filename().string()
-                                     : stem.string() + ".pmtiles";
-            out_paths_.push_back((dir / fname).string());
+            std::filesystem::create_directories(std::filesystem::path(buf).parent_path(), ec);
+            out_paths_.push_back(buf);
+            is_raster_.push_back(raster ? 1 : 0);
+            ins.push_back(item.path);
         }
 
+        /* Kind-contiguous after the order, and each engine phase takes its own
+         * run: the cells, then the sheets, then the lift. */
+        size_t cells = 0, sheets = 0;
+        for (auto const &item : items)
         {
-            std::lock_guard<std::mutex> g(mu_);
-            p_ = BakeProgress{};
-            p_.kind = WorkKind::Importing;
-            p_.name = std::filesystem::path(source).filename().string();
-            p_.total = (unsigned)ordered_.size();
-            finished_.clear();
-            finished_rasters_.clear();
+            if (item.work == LOOKOUT_PREPARE_CELL)
+                ++cells;
+            else if (item.work == LOOKOUT_PREPARE_SHEET)
+                ++sheets;
         }
-        job_total_ = (unsigned)ordered_.size();
-        offset_ = 0;
+
+        std::vector<char const *> in_c, out_c;
+        for (size_t i = 0; i < ins.size(); ++i)
+        {
+            in_c.push_back(ins[i].c_str());
+            out_c.push_back(out_paths_[i].c_str());
+        }
+
+        source_name_ = std::filesystem::path(source).filename().string();
         started_ms_ = NowMs();
-        cancel_.store(false);
-        running_.store(true);
-        thread_ = std::thread(&BakeJob::Run, this, source, out_dir);
-        return true;
-    }
-
-    void BakeJob::Run(std::string source, std::string out_dir)
-    {
-        (void)out_dir;
-        const bool zip = IsArchive(source);
-        /* A MEMORY bound, not a speed dial: each worker holds a whole cell's
-         * working set. */
-        unsigned hw = std::thread::hardware_concurrency();
-        uint32_t workers = (uint32_t)std::max(1u, std::min(8u, hw ? hw : 4u));
-
-        std::vector<char const *> ins, outs;
-        ins.reserve(ordered_.size());
-        outs.reserve(ordered_.size());
-        for (size_t i = 0; i < ordered_.size(); ++i)
-        {
-            ins.push_back(ordered_[i].path.c_str());
-            outs.push_back(out_paths_[i].c_str());
-        }
-
-        /* Sorted by kind, so each is one contiguous run and each engine call
-         * takes exactly its own. */
-        size_t cells = 0;
-        while (cells < ordered_.size() && Rank(ordered_[cells]) == 0)
-            ++cells;
-        size_t sheets = 0;
-        while (cells + sheets < ordered_.size() && Rank(ordered_[cells + sheets]) == 1)
-            ++sheets;
-
-        tile57_error err{};
-        uint32_t baked_total = 0;
-        auto run = [&](size_t off, size_t n, bool raster) {
-            if (n == 0 || cancel_.load())
-                return;
-            offset_ = (unsigned)off;
-            uint32_t baked = 0;
-            if (zip)
-            {
-                if (raster)
-                    tile57_bake_zip_rasters(source.c_str(), ins.data() + off, outs.data() + off, n,
-                                            workers, ProgressThunk, LabelThunk, this, &baked, &err);
-                else
-                    tile57_bake_zip_charts(source.c_str(), ins.data() + off, outs.data() + off, n,
-                                           workers, ProgressThunk, LabelThunk, this, &baked, &err);
-            }
-            else
-            {
-                if (raster)
-                    tile57_bake_rasters(ins.data() + off, outs.data() + off, n, workers,
-                                        ProgressThunk, LabelThunk, this, &baked, &err);
-                else
-                    tile57_bake_files(ins.data() + off, outs.data() + off, n, workers,
-                                      ProgressThunk, LabelThunk, this, &baked, &err);
-            }
-            baked_total += baked;
-        };
-
-        run(0, cells, false);
-        run(cells, sheets, true);
-
-        /* The lift: entries that are charts already and only have to come out
-         * of the archive. Serial in the engine; no label callback, so the
-         * finished lists are settled from what actually landed — an entry the
-         * archive does not hold is skipped and writes nothing. */
-        const size_t lifts = ordered_.size() - cells - sheets;
-        if (zip && lifts != 0 && !cancel_.load())
-        {
-            const size_t off = cells + sheets;
-            offset_ = (unsigned)off;
-            uint32_t done = 0;
-            tile57_zip_extract(source.c_str(), ins.data() + off, outs.data() + off, lifts,
-                               ProgressThunk, this, &done, &err);
-            std::lock_guard<std::mutex> g(mu_);
-            for (size_t i = off; i < ordered_.size(); ++i)
-            {
-                std::error_code ec;
-                if (!std::filesystem::exists(out_paths_[i], ec))
-                    continue;
-                if (ordered_[i].kind == LOOKOUT_FILE_RASTER)
-                    finished_rasters_.push_back(out_paths_[i]);
-                else
-                    finished_.push_back(out_paths_[i]);
-            }
-        }
-
-        /* An import that produced NOTHING must say why, not just take the
-         * panel down: a folder of malformed cells otherwise looks like an app
-         * that did nothing. A partial bake is not an error — what landed is a
-         * library — so only the all-failed case keeps the message. */
-        if (!cancel_.load() && baked_total == 0 && (cells + sheets) != 0)
-        {
-            std::lock_guard<std::mutex> g(mu_);
-            error_ = err.message[0] != '\0'
-                         ? err.message
-                         : "None of the charts could be prepared.";
-        }
-
-        running_.store(false);
+        cancelled_ = false;
+        job_ = lookout_bake_start(source.c_str(), in_c.data(), out_c.data(), cells, sheets,
+                                  items.size() - cells - sheets, IsArchive(source) ? 1 : 0);
+        return job_ != nullptr;
     }
 }
