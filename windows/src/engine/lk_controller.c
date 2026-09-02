@@ -969,20 +969,14 @@ lk_controller_chart_links_import(lk_controller *self, const char *json)
     lookout_chart_links_import(self->handle, json);
 }
 
-char *
-lk_controller_chart_links_changed_json(lk_controller *self)
+lookout_links *
+lk_controller_chart_links_changed_read(lk_controller *self)
 {
     if (!lk_controller_is_open(self))
         return NULL;
     if (!lookout_chart_links_changed(self->handle))
         return NULL;
-    return lookout_chart_links_json(self->handle);
-}
-
-void
-lk_controller_string_free(char *s)
-{
-    lookout_string_free(s);
+    return lookout_links_read(self->handle);
 }
 
 /* ---- markers ------------------------------------------------------------- */

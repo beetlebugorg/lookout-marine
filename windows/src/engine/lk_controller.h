@@ -115,10 +115,9 @@ void lk_controller_chart_link_remove(lk_controller *self, const char *url);
 void lk_controller_chart_link_refresh(lk_controller *self, const char *url);
 void lk_controller_chart_links_import(lk_controller *self, const char *json);
 /* Everything the chart list shows, or NULL when nothing changed since the last
- * poll. Free with lk_controller_string_free. ONE consumer: whoever polls it
- * clears the flag. */
-char *lk_controller_chart_links_changed_json(lk_controller *self);
-void  lk_controller_string_free(char *s);
+ * poll. Free with lookout_links_free. ONE consumer: whoever polls it clears
+ * the flag. */
+lookout_links *lk_controller_chart_links_changed_read(lk_controller *self);
 
 /* ---- markers (the mariner's own marks; the core owns and draws them) ----- */
 
