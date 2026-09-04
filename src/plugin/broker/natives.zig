@@ -80,6 +80,17 @@ fn hostNowMs(env: wasm.c.wasm_exec_env_t) callconv(.c) i64 {
     return wallMs();
 }
 
+/// Fill the caller's buffer with cryptographically secure random bytes.
+/// Capability-free like the clocks: the sandbox has no entropy of its own,
+/// and a plugin minting an identity key needs some.
+fn hostRandBytes(env: wasm.c.wasm_exec_env_t, ptr: [*c]u8, cap: u32) callconv(.c) i32 {
+    _ = caller(env) orelse return -1;
+    if (ptr == null or cap == 0) return 0;
+    // The same CSPRNG the TLS layer draws from (webio.zig).
+    std.Io.Threaded.global_single_threaded.io().random(ptr[0..cap]);
+    return @intCast(cap);
+}
+
 fn hostMonoMs(env: wasm.c.wasm_exec_env_t) callconv(.c) i64 {
     _ = env;
     return monoMs();
@@ -164,11 +175,14 @@ fn applyAisUpsert(p: *Plugin, json: []const u8) i32 {
     const targets = parsed.value.object.get("targets") orelse return -1;
     if (targets != .array) return -1;
     const source = batchSource(p, parsed.value.object, "ais_upsert");
+    // Display provenance only; the store arbitrates by ts.
+    const net = jsonBool(parsed.value.object.get("net")) orelse false;
 
-    // Eviction measures `now - ts`, so a plugin-stamped future `ts` would
-    // make its target immortal. Clamped here because the store itself reads
-    // no wall clock.
+    // Clamped because the store reads no wall clock: a future `ts` would
+    // outrank every live report and never evict; an ancient one would evict
+    // on the next tick while churning the change counter.
     const now = wallMs();
+    const ts_floor = now - ais_store.default_evict_ms;
     var applied: i32 = 0;
     for (targets.array.items) |tv| {
         if (tv != .object) continue;
@@ -194,13 +208,18 @@ fn applyAisUpsert(p: *Plugin, json: []const u8) i32 {
             .aton_type = atonType(o.get("aton_type")),
             .virtual_aton = jsonBool(o.get("virtual")),
             .off_position = jsonBool(o.get("off_position")),
-            .ts_ms = @min(jsonInt(o.get("ts")) orelse now, now),
+            // A target's own key overrides the batch, so a bridge re-publishing
+            // a mixed set keeps each target's provenance.
+            .net = jsonBool(o.get("net")) orelse net,
+            .ts_ms = std.math.clamp(jsonInt(o.get("ts")) orelse now, ts_floor, now),
         };
-        p.broker.ais.upsert(upd, source) catch |e| {
+        const landed = p.broker.ais.upsert(upd, source) catch |e| {
             p.broker.say(level_warn, p.id, "ais_upsert {d}: {s}", .{ mmsi, @errorName(e) });
             continue;
         };
-        applied += 1;
+        // An outranked update is not an error, but it did not land, and the
+        // return is the number applied.
+        if (landed) applied += 1;
     }
     return applied;
 }
@@ -770,6 +789,7 @@ fn hostFileClose(env: wasm.c.wasm_exec_env_t, handle: i64) callconv(.c) void {
 var natives = wasm.nativeSymbols(&.{
     .{ .name = "log", .func = @ptrCast(&hostLog), .signature = "(i*~)" },
     .{ .name = "now_ms", .func = @ptrCast(&hostNowMs), .signature = "()I" },
+    .{ .name = "rand_bytes", .func = @ptrCast(&hostRandBytes), .signature = "(*~)i" },
     .{ .name = "mono_ms", .func = @ptrCast(&hostMonoMs), .signature = "()I" },
     .{ .name = "publish", .func = @ptrCast(&hostPublish), .signature = "(*~)i" },
     .{ .name = "ais_upsert", .func = @ptrCast(&hostAisUpsert), .signature = "(*~)i" },

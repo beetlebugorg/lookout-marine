@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Compile the five core plugins ahead of time, one .aot per architecture.
+# Compile the shipped core plugins ahead of time, one .aot per architecture.
 #
 #     scripts/build-plugin-aot.sh [target]     (default: the host's)
 #
@@ -14,10 +14,10 @@
 #
 #   all            every target above
 #
-# Each holds <id>.aot for the five org.beetlebug plugins and an AOT_VERSION
+# Each holds <id>.aot for the shipped org.beetlebug plugins and an AOT_VERSION
 # stamp. All are gitignored (vendor/wamr-dist-aot/).
 #
-# WHY ONLY THESE FIVE. A .aot is native code. We ship it because we compiled it
+# WHY ONLY THE SHIPPED SET. A .aot is native code. We ship it because we compiled it
 # from a module we built, with flags we chose, on a machine we control. A
 # third-party plugin package carries wasm and only wasm — an .aot inside a
 # .lkplug would be native code nobody here compiled, running with no sandbox
@@ -37,7 +37,7 @@
 #
 # Idempotent per target: returns at once when the directory's AOT_VERSION
 # matches what this script would write now — which covers the WAMR pin, the
-# wamrc flags AND a digest of the five .wasm inputs, so rebuilding a plugin
+# wamrc flags AND a digest of the shipped .wasm inputs, so rebuilding a plugin
 # invalidates its .aot. Force a rebuild with `rm -rf vendor/wamr-dist-aot/<target>`.
 set -euo pipefail
 
@@ -48,6 +48,7 @@ wamrc="$root/vendor/wamr-dist-wamrc/bin/wamrc"
 # zig-out/plugins-bundled, which is the set the app carries inside itself.
 PLUGINS=(
     org.beetlebug.ais
+    org.beetlebug.aiscast
     org.beetlebug.laylines
     org.beetlebug.nmea0183
     org.beetlebug.ownship

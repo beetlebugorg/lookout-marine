@@ -402,6 +402,7 @@ null: never heard and heard as zero are different values.
 | `aton`, `virtual_aton` | `bool` | an aid to navigation, and one that exists only as a broadcast |
 | `aton_type` | `?u8` | |
 | `off_position` | `?bool` | |
+| `net` | `bool` | the last report came over the internet, not from a receiver on the boat |
 | `age_ms` | `i64` | |
 | `name()` | `[]const u8` | cut at 32 bytes |
 
