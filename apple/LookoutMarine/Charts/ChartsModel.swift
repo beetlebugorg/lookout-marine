@@ -39,20 +39,20 @@ final class ChartsModel {
 
     var showStartupLoader: Bool {
         if isOpening || (hasChart && !firstBuildDone) { return true }
-        // Charts are installed and none is drawing yet: the scan is still
-        // reading them, or an open is on its way. Something has to stand in
-        // that gap, and it must not be the page that says there are none.
-        // The import panel takes precedence when there is one, so the mariner
-        // watches the work they started rather than a bar about it.
+        // Charts are installed and none is drawing yet, because the scan is
+        // still reading them or an open is on its way. The loader fills that
+        // gap. An import has a panel of its own with the more specific report
+        // of the same wait, so this defers to it.
         return !hasChart && !libraryIsEmpty && chartWork == nil
     }
 
-    /// True only when the app KNOWS there is nothing to draw: no set installed,
-    /// nothing being looked through or prepared, and no open on its way.
+    /// True once the app has established that there is nothing to draw: no set
+    /// installed, nothing being looked through or prepared, and no open on its
+    /// way.
     ///
-    /// The first-run page reads THIS, never `hasChart`. A mariner with charts
-    /// installed must never be told they have none, not even for the second
-    /// between launch and the scan landing.
+    /// The first-run page reads this rather than `hasChart`. `hasChart` is
+    /// also false for the second between launch and the scan result, while a
+    /// set is being read, and while an import runs.
     var libraryIsEmpty: Bool {
         !hasChart && !isOpening && openRequest == nil && !scanning
             && bake == nil && sets.isEmpty && raster.paths.isEmpty
@@ -91,8 +91,8 @@ final class ChartsModel {
     var loadingPhase: LoadPhase {
         if preparingSymbols { return .bakingAtlas }
         if isOpening { return .mapping(cells: openingCells) }
-        // Nothing open and nothing opening: this is the wait for the scan to
-        // say what the installed sets hold.
+        // No chart is open and none is opening, so this is the wait for the
+        // scan result.
         if !hasChart { return .finding }
         return .tessellating
     }
@@ -294,17 +294,16 @@ final class ChartsModel {
 
     /// Watch for the launch scan landing, while no chart is open.
     ///
-    /// A scan landing is the core's only unprompted change, and the frame loop
-    /// is what polls for it, and the frame loop starts with the first chart.
-    /// With none open there was no poll at all, so a set that became openable
-    /// (the launch walk cannot see into an archive, and a bake had not been
-    /// read back yet) was never noticed: the app sat on the first-run page
-    /// with a full library installed until the mariner picked the folder
-    /// again.
+    /// A scan result is the core's only unprompted change, and `pushReadouts`
+    /// polls for it off the frame loop, which starts with the first chart.
+    /// With no chart open there was no poll, so a set that became openable
+    /// after launch went unnoticed. The launch walk does not look inside an
+    /// archive, and the output of an import has not been read back yet, so
+    /// both of those cases left the first-run page up over an installed
+    /// library until the mariner picked the folder again.
     ///
-    /// It stops the moment a chart opens, and it stops when every folder has
-    /// been read and none of it opened. A poll with nothing left to find is
-    /// exactly the clock a boat's battery should not be running.
+    /// This stops on the first chart, and stops when every folder has been
+    /// read, so it holds no clock open on a battery.
     private func watchLibraryUntilOpen() {
         guard !watchingLibrary, !hasChart, scanning else { return }
         watchingLibrary = true
@@ -314,6 +313,8 @@ final class ChartsModel {
     private func tickLibraryWatch() {
         guard watchingLibrary else { return }
         if ChartSetStore.changed() { pullChartSets() }
+        // A chart is up, or every folder has been read. Either way there is
+        // nothing further to poll for.
         guard !hasChart, scanning else {
             watchingLibrary = false
             return

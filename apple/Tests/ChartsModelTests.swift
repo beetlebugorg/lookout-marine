@@ -1,10 +1,10 @@
-//  ChartsModelTests.swift — what the app believes about the charts it holds.
+//  ChartsModelTests.swift — the state the first-run page is drawn from.
 //
-//  The first-run page is drawn from one answer: does this app know there is
-//  nothing to draw. Getting that answer from `hasChart` alone told a mariner
-//  with a full library that they had no charts, for as long as it took to read
-//  the folders, and for good when the open that followed a scan or an import
-//  was never serviced.
+//  The first-run page is drawn from one test: has the app established that
+//  there is nothing to draw. Reading `hasChart` alone told a mariner with a
+//  full library that they had no charts, for as long as it took to read the
+//  folders, and until they picked the folder again when the open that followed
+//  a scan or an import went unserviced.
 
 import XCTest
 @testable import LookoutMarine
@@ -28,36 +28,49 @@ final class ChartsModelTests: ShellTestCase {
         XCTAssertFalse(m.showStartupLoader)
     }
 
-    /// A set installed, the scan still reading it: the mariner HAS charts, and
-    /// must not be told otherwise for the second that takes.
-    func testASetInstalledIsNeverAnEmptyLibrary() {
-        ChartSetStore.add("/charts/a")
+    /// A scan is running, so what the installed sets hold is not established
+    /// yet. The loader is drawn for that second, in place of the first-run
+    /// page.
+    ///
+    /// The state is set here rather than driven through `loadChartSets`, which
+    /// starts a scan on a worker. `pullChartSets` reads `scanning` back off the
+    /// rows, so a scan that finishes first clears the flag before the assertion
+    /// runs.
+    func testAScanRunningIsNeverAnEmptyLibrary() {
         let m = model()
-        m.loadChartSets()
-        XCTAssertTrue(m.scanning, "the launch scan should be running")
+        m.scanning = true
         XCTAssertFalse(m.libraryIsEmpty)
-        XCTAssertTrue(m.showStartupLoader, "something has to stand in the gap")
+        XCTAssertTrue(m.showStartupLoader)
     }
 
-    /// The import runs for minutes over a big folder. The page that says there
-    /// are no charts is not what stands over it.
+    /// A set on the list is not an empty library either.
+    func testAListedSetIsNeverAnEmptyLibrary() {
+        let m = model()
+        m.sets = [ChartSet(path: "/charts/a", producer: nil, preparedPath: nil,
+                           cells: [], rasters: [], on: true)]
+        XCTAssertFalse(m.libraryIsEmpty)
+    }
+
+    /// An import runs for minutes over a big folder, and the first-run page is
+    /// not drawn over it.
     func testABakeIsNeverAnEmptyLibrary() {
         let m = model()
         m.bake = BakeProgress(done: 3, total: 60, name: "All_ENCs.zip")
         XCTAssertFalse(m.libraryIsEmpty)
     }
 
-    /// An open on its way is not an empty library either, and it is the state
-    /// a request raised before the chart view had a size sits in.
+    /// An open on its way is not an empty library either. A request raised
+    /// before the chart view had a size stays in that state until the view
+    /// services it.
     func testAPendingOpenIsNeverAnEmptyLibrary() {
         let m = model()
         m.openRequest = OpenRequest(id: 1, paths: ["/charts/a/US5MD1MC.pmtiles"])
         XCTAssertFalse(m.libraryIsEmpty)
     }
 
-    /// And the loader comes down when the chart is up. The gap it fills is
-    /// before the first chart, not after it.
-    func testADrawingChartKeepsNoLoaderUp() {
+    /// The loader fills the gap before the first chart, and a drawing chart
+    /// ends it.
+    func testADrawingChartHasNoLoader() {
         let m = model()
         m.hasChart = true
         m.firstBuildDone = true
