@@ -404,21 +404,14 @@ test "a package that is not exactly manifest.json and <id>.wasm is refused by na
             .{ .name = downwind_id ++ ".wasm", .data = "fake" },
             .{ .name = "sub/", .data = "" },
         } },
-        // A PACKAGE MAY NOT BRING NATIVE CODE. An .aot is compiled machine
-        // code, and the five plugins the app ships have one because THIS
-        // project compiled them: from modules built here, on a build machine,
-        // with wamrc flags chosen to match the runtime — software bounds
-        // checks on, because the runtime installs no signal handler to catch
-        // an out-of-range access (scripts/build-plugin-aot.sh).
-        //
-        // A third-party .aot is none of that. It is native code nobody here
-        // compiled, and nothing in the AOT format records whether its bounds
-        // checks were switched on, so there is no inspection that would make
-        // it safe to run — it would simply be a plugin outside the sandbox.
-        // We compile it, or we interpret it. There is no third option, and
-        // this is where that is enforced: an .aot is not manifest.json and
-        // does not end in .wasm, so the member is refused BY NAME, whether it
-        // arrives beside a module or instead of one.
+        // A PACKAGE MAY NOT CONTAIN NATIVE CODE. An .aot is compiled machine
+        // code. The AOT format has no field recording whether its bounds
+        // checks were compiled in, so no inspection of the file establishes
+        // that it is safe to run: running it puts a plugin outside the
+        // sandbox. The runtime is built with WAMR_BUILD_AOT=0 and cannot load
+        // one. This gate runs earlier and matches on the member name. An .aot
+        // is not manifest.json and does not end in .wasm, so the member is
+        // refused whether it arrives beside a module or instead of one.
         .{ .name = "aot-beside.lkplug", .says = downwind_id ++ ".aot", .members = &.{
             .{ .name = "manifest.json", .data = manifest_v1 },
             .{ .name = downwind_id ++ ".wasm", .data = "fake" },

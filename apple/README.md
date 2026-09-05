@@ -43,9 +43,8 @@ are idempotent and cost a fraction of a second once built; the first run clones
 and builds the pinned WAMR and takes a few minutes. `-Dplugins=true` is
 explicit because its default is off when the archive is absent, which builds a
 working app with no plugin host inside it, so no own ship, no AIS and no
-laylines. Ahead-of-time plugin compilation is not part of this build:
-`scripts/build-plugin-aot.sh` needs LLVM, and `load_aot_modules` in
-`src/plugin/host.zig` is false, so nothing reads its output yet.
+laylines. Every plugin runs interpreted. See `scripts/build-wamr.sh` for why
+ahead-of-time compilation is not viable on these targets.
 
 **No Xcode?** `apple/build-dev.sh [--zig]` builds the same app with just the
 Command Line Tools (swiftc + a hand-rolled bundle). It fills the slot the Xcode
