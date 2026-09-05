@@ -37,12 +37,33 @@ final class ChartsModel {
     /// The number of cells the open is mapping. The loader states it.
     var openingCells = 0
 
-    var showStartupLoader: Bool { isOpening || (hasChart && !firstBuildDone) }
+    var showStartupLoader: Bool {
+        if isOpening || (hasChart && !firstBuildDone) { return true }
+        // Charts are installed and none is drawing yet: the scan is still
+        // reading them, or an open is on its way. Something has to stand in
+        // that gap, and it must not be the page that says there are none.
+        // The import panel takes precedence when there is one, so the mariner
+        // watches the work they started rather than a bar about it.
+        return !hasChart && !libraryIsEmpty && chartWork == nil
+    }
+
+    /// True only when the app KNOWS there is nothing to draw: no set installed,
+    /// nothing being looked through or prepared, and no open on its way.
+    ///
+    /// The first-run page reads THIS, never `hasChart`. A mariner with charts
+    /// installed must never be told they have none, not even for the second
+    /// between launch and the scan landing.
+    var libraryIsEmpty: Bool {
+        !hasChart && !isOpening && openRequest == nil && !scanning
+            && bake == nil && sets.isEmpty && raster.paths.isEmpty
+    }
 
     /// The phase the startup loader shows. Each phase is a different wait: the
-    /// first-run atlas bake, the library open, and the first tessellation.
+    /// first-run atlas bake, the scan, the library open, and the first
+    /// tessellation.
     enum LoadPhase: Equatable {
         case bakingAtlas
+        case finding
         case mapping(cells: Int)
         case tessellating
 
@@ -50,6 +71,8 @@ final class ChartsModel {
             switch self {
             case .bakingAtlas:
                 return "Baking the symbol atlas"
+            case .finding:
+                return "Finding your charts"
             case .mapping(let cells):
                 return cells > 1 ? "Mapping \(cells.formatted(.number)) cells" : "Mapping the chart"
             case .tessellating:
@@ -67,7 +90,11 @@ final class ChartsModel {
 
     var loadingPhase: LoadPhase {
         if preparingSymbols { return .bakingAtlas }
-        return isOpening ? .mapping(cells: openingCells) : .tessellating
+        if isOpening { return .mapping(cells: openingCells) }
+        // Nothing open and nothing opening: this is the wait for the scan to
+        // say what the installed sets hold.
+        if !hasChart { return .finding }
+        return .tessellating
     }
 
     // MARK: The installed sets
@@ -84,6 +111,9 @@ final class ChartsModel {
     var scanningName = ""
     /// The last folder that held no charts, for the panel to say so.
     var emptyPick: String?
+    /// True while the launch scan is being watched for. See
+    /// `watchLibraryUntilOpen`.
+    private var watchingLibrary = false
 
     /// The bake running now, if any. The HUD pill watches this.
     var bake: BakeProgress?
@@ -258,7 +288,39 @@ final class ChartsModel {
         }
         scanning = true
         pullChartSets()
+        watchLibraryUntilOpen()
         completion?()
+    }
+
+    /// Watch for the launch scan landing, while no chart is open.
+    ///
+    /// A scan landing is the core's only unprompted change, and the frame loop
+    /// is what polls for it, and the frame loop starts with the first chart.
+    /// With none open there was no poll at all, so a set that became openable
+    /// (the launch walk cannot see into an archive, and a bake had not been
+    /// read back yet) was never noticed: the app sat on the first-run page
+    /// with a full library installed until the mariner picked the folder
+    /// again.
+    ///
+    /// It stops the moment a chart opens, and it stops when every folder has
+    /// been read and none of it opened. A poll with nothing left to find is
+    /// exactly the clock a boat's battery should not be running.
+    private func watchLibraryUntilOpen() {
+        guard !watchingLibrary, !hasChart, scanning else { return }
+        watchingLibrary = true
+        tickLibraryWatch()
+    }
+
+    private func tickLibraryWatch() {
+        guard watchingLibrary else { return }
+        if ChartSetStore.changed() { pullChartSets() }
+        guard !hasChart, scanning else {
+            watchingLibrary = false
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            self?.tickLibraryWatch()
+        }
     }
 
     /// The core's list, as the settings page draws it. Called at launch and

@@ -28,6 +28,7 @@ struct StartupLoader: View {
 
     private var step: Int {
         switch phase {
+        case .finding: return -1
         case .bakingAtlas: return 0
         case .mapping: return 1
         case .tessellating: return 2
@@ -37,36 +38,63 @@ struct StartupLoader: View {
     var body: some View {
         ZStack {
             Chrome.panel.ignoresSafeArea()
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(spacing: 10) {
-                    CompassMark().frame(width: 24, height: 24)
-                    Text(cells > 1 ? "Opening \(cells.formatted(.number)) charts" : "Opening the chart")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(Chrome.ink)
-                }
-
-                ProgressView()
-                    .progressViewStyle(.linear)
-                    .tint(Chrome.accent)
-                    .frame(width: BakeDetail.width)
-
-                VStack(alignment: .leading, spacing: 7) {
-                    // The atlas bake happens on the first run only, so on every
-                    // other run it is already true rather than skipped.
-                    BakeStep(state: step > 0 ? .done : .running,
-                             label: "Preparing chart symbols",
-                             detail: step > 0 ? "" : "first run only")
-                    BakeStep(state: step > 1 ? .done : (step == 1 ? .running : .waiting),
-                             label: cells > 1 ? "Mapping \(cells.formatted(.number)) cells" : "Mapping the chart",
-                             detail: step == 1 ? "not loading them, so this is quick" : "")
-                    BakeStep(state: step == 2 ? .running : .waiting,
-                             label: "Drawing the first scene")
-                }
-                .frame(width: BakeDetail.width, alignment: .leading)
-            }
+            if case .finding = phase { finding } else { opening }
         }
         .accessibilityIdentifier("startup-loader")
     }
+
+    /// Before there is anything to open: the installed sets are still being
+    /// read. None of the three steps below has started, so none of them is
+    /// drawn. A list of waiting work says less than one line of what is
+    /// happening.
+    private var finding: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 10) {
+                CompassMark().frame(width: 24, height: 24)
+                Text("Finding your charts")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Chrome.ink)
+            }
+            ProgressView()
+                .progressViewStyle(.linear)
+                .tint(Chrome.accent)
+                .frame(width: BakeDetail.width)
+            Text("Reading the folders you installed.")
+                .font(.system(size: 11.5))
+                .foregroundStyle(Chrome.muted)
+                .frame(width: BakeDetail.width, alignment: .leading)
+        }
+    }
+
+    private var opening: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 10) {
+                CompassMark().frame(width: 24, height: 24)
+                Text(cells > 1 ? "Opening \(cells.formatted(.number)) charts" : "Opening the chart")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Chrome.ink)
+            }
+
+            ProgressView()
+                .progressViewStyle(.linear)
+                .tint(Chrome.accent)
+                .frame(width: BakeDetail.width)
+
+            VStack(alignment: .leading, spacing: 7) {
+                // The atlas bake happens on the first run only, so on every
+                // other run it is already true rather than skipped.
+                BakeStep(state: step > 0 ? .done : .running,
+                         label: "Preparing chart symbols",
+                         detail: step > 0 ? "" : "first run only")
+                BakeStep(state: step > 1 ? .done : (step == 1 ? .running : .waiting),
+                         label: cells > 1 ? "Mapping \(cells.formatted(.number)) cells" : "Mapping the chart",
+                         detail: step == 1 ? "not loading them, so this is quick" : "")
+                BakeStep(state: step == 2 ? .running : .waiting,
+                         label: "Drawing the first scene")
+            }
+            .frame(width: BakeDetail.width, alignment: .leading)
+        }
+}
 }
 
 
