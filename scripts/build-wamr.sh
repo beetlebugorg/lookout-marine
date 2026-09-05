@@ -19,19 +19,9 @@
 #                  on an ARM64 Windows machine (it needs the installed MSVC
 #                  headers and Windows SDK)
 #
-# And one target that is not a runtime archive at all:
-#
-#   wamrc          vendor/wamr-dist-wamrc/bin/wamrc  the AOT compiler
-#
 # Each runtime dist holds lib/libvmlib.a + include/*.h and is consumed by
 # build.zig behind -Dplugins, which picks the directory from the target. All
 # are gitignored (vendor/wamr-dist*/).
-#
-# WAMRC is the ahead-of-time compiler, and it is a BUILD-MACHINE TOOL: it is
-# never shipped in any app, and `all` does not build it. It turns the five core
-# plugins into .aot, one file per architecture, and scripts/build-plugin-aot.sh
-# drives it. It is separate because it is the only thing here that needs LLVM
-# (18.x, the release WAMR pins); see build_wamrc for how that is found.
 #
 # The Apple targets need Xcode and run on macOS only. The four cross targets
 # need zig and cmake and nothing else: WAMR is plain C, so `zig cc -target ...`
@@ -70,7 +60,7 @@ WAMR_URL="https://github.com/bytecodealliance/wasm-micro-runtime"
 # runtime that cannot instantiate a Go or Rust plugin, and it is otherwise
 # indistinguishable from a current one. Bump this string whenever wamr_flags
 # changes in a way a built archive cannot show.
-WAMR_FEATURES="interp+aot+wasi"
+WAMR_FEATURES="interp+wasi"
 
 # Deployment minimums. 13.0 matches Zig's default macOS minimum, so ld64 raises
 # no version warning. 15.0 is the app's stated iOS floor (apple/README.md); the
@@ -84,35 +74,47 @@ ANDROID_API="24"
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 src="$root/vendor/wamr"
 
-usage="usage: ${BASH_SOURCE[0]##*/} [macos|ios|iossim|linux-x64|linux-arm64|windows-x64|windows-arm64|android-arm64|apple|all|wamrc] [--print-msvc]"
+usage="usage: ${BASH_SOURCE[0]##*/} [macos|ios|iossim|linux-x64|linux-arm64|windows-x64|windows-arm64|android-arm64|apple|all] [--print-msvc]"
 target="${1:-macos}"
 case "$target" in
     macos|ios|iossim|linux-x64|linux-arm64|windows-x64|windows-arm64|android-arm64) targets=("$target") ;;
     apple) targets=(macos ios iossim) ;;
-    # wamrc is NOT in `all`: it is a build-machine tool, it needs LLVM, and
-    # nothing that ships contains it. windows-arm64 is not in `all` either:
-    # it builds only on the ARM64 Windows machine (see WINDOWS above).
+    # windows-arm64 is not in `all`: it builds only on the ARM64 Windows
+    # machine (see WINDOWS above).
     all)   targets=(macos ios iossim linux-x64 linux-arm64 windows-x64 android-arm64) ;;
-    wamrc) targets=(wamrc) ;;
     *) echo "$usage" >&2; exit 2 ;;
 esac
 
 # Feature set for the prototype host. Identical on every target — the fast
 # interpreter runs everywhere and is what makes iOS work at all.
-#   * fast interpreter, plus the AOT LOADER, and no JIT of either flavour.
-#     The interpreter is what runs every module by default and the only thing
-#     that runs a third-party one; the AOT loader is here so the five core
-#     plugins can be shipped as native code we compiled ourselves at build
-#     time (scripts/build-plugin-aot.sh). Turning it on costs the aot/ loader
-#     and relocation sources in the archive — about 200 KiB — and buys nothing
-#     unless an .aot is actually present, because a plugin without one is
-#     interpreted exactly as before.
+#   * fast interpreter, no AOT and no JIT. Every module is bytecode and runs
+#     interpreted, third-party and core alike. Omitting the AOT loader drops
+#     the aot/ loader and relocation sources from the archive, 692K to 564K on
+#     macOS arm64.
 #     NO JIT: Fast JIT is x86-64 only in this release and LLVM JIT would mean
-#     bundling LLVM in the app. The AOT compiler runs on the BUILD machine.
-#     ON iOS the loader is compiled in for one reason only — to keep the flag
-#     matrix identical on every target — and shipping an iOS .aot is NOT
-#     proven: the AOT text section is mapped MAP_JIT/PROT_EXEC, which an App
-#     Store app cannot do. iOS runs the interpreter.
+#     bundling LLVM in the app.
+#     NO AOT. Three conditions block it:
+#       - wamrc picks the registers its output may use from the target triple,
+#         and it reserves x18 only when given `--cpu` and
+#         `--cpu-features=+reserve-x18` together. Darwin, iOS, Android and
+#         Windows on arm64 reserve x18 for the platform and overwrite it at
+#         any instruction boundary, so a pointer held there reads back as null
+#         and the next load through it faults.
+#         `--target=aarch64-apple-darwin` alone leaves x18 in use.
+#       - the AOT format records the architecture, and omits the ABI, the
+#         platform, and whether the code was compiled with bounds checks. A
+#         file compiled with wamrc's default --bounds-checks=0 relies on the
+#         runtime trapping out-of-range accesses in a signal handler, and this
+#         runtime installs none (see hardware bound check below). The format
+#         has no field that separates a file with a memory sandbox from one
+#         without.
+#       - on iOS the AOT text section is mapped MAP_JIT/PROT_EXEC, which an
+#         App Store app cannot do.
+#     Enabling AOT means reserving the platform's registers in the compile
+#     script for every target it emits, writing a stamp file beside the output
+#     to record what the format omits, and showing the watchdog terminating a
+#     spinning plugin whose code is native. An earlier implementation of all
+#     three is in git history under scripts/build-plugin-aot.sh.
 #   * libc-wasi ON, and it is a LANGUAGE FLOOR, not a capability surface. The
 #     Go and Rust standard libraries do not boot without wasi_snapshot_preview1
 #     resolving, so the runtime has to answer it. What a plugin can reach
@@ -139,12 +141,7 @@ esac
 #     LIB_PTHREAD stays off; plugins still cannot spawn threads.
 #   * PIC: the archive is linked into liblookout_marine.a and from there into
 #     app binaries.
-#   * hardware bound check OFF: this one now binds the AOT compiler too. See
-#     AOT_FLAGS in scripts/build-plugin-aot.sh — an .aot compiled with wamrc's
-#     default --bounds-checks=0 assumes the runtime traps out-of-range
-#     accesses in a signal handler, and this runtime installs none, so every
-#     core .aot is compiled with --bounds-checks=1. The reason the flag is off:
-#     the alternative is WAMR installing
+#   * hardware bound check OFF. The alternative is WAMR installing
 #     process-wide SIGSEGV/SIGBUS handlers beside Metal's and tile57's, and
 #     mprotecting a guard page on every thread that calls into wasm — which
 #     fails on macOS for stacks >= 8 MiB, Zig's thread default being 16 MiB.
@@ -159,7 +156,7 @@ wamr_flags=(
     -DWAMR_BUILD_PLATFORM=darwin
     -DWAMR_BUILD_INTERP=1
     -DWAMR_BUILD_FAST_INTERP=1
-    -DWAMR_BUILD_AOT=1
+    -DWAMR_BUILD_AOT=0
     -DWAMR_BUILD_JIT=0
     -DWAMR_BUILD_FAST_JIT=0
     -DWAMR_BUILD_LIBC_BUILTIN=1
@@ -244,8 +241,6 @@ for t in "${targets[@]}"; do
             [ "$(uname -s)" = "Darwin" ] ||
                 { echo "build-wamr.sh: target $t needs the Apple SDKs; this host is $(uname -s)" >&2; exit 1; }
             ;;
-        # wamrc is a native host tool. It needs a C++ compiler and LLVM, not zig.
-        wamrc) ;;
         *)
             command -v zig >/dev/null 2>&1 ||
                 { echo "build-wamr.sh: zig not found in PATH, and it is the cross compiler for $t" >&2; exit 1; }
@@ -814,111 +809,6 @@ build_one() {
     echo "wamr: ${dist#$root/}/lib/libvmlib.a ($(du -h "$dist/lib/libvmlib.a" | cut -f1)) from $WAMR_TAG"
 }
 
-# ---- wamrc, the AOT compiler ----
-#
-# LLVM. wamr-compiler/CMakeLists.txt takes one of two paths. Left alone it
-# insists on core/deps/llvm/build — WAMR's own from-source LLVM, which
-# build-scripts/build_llvm.py clones (release/18.x) and configures with five
-# backends. That build is tens of GB of objects and the better part of an hour
-# even on an idle machine, and it produces nothing a release LLVM does not
-# already have. With WAMR_BUILD_WITH_CUSTOM_LLVM=1 the file drops straight to
-# `find_package(LLVM CONFIG)`, so ANY LLVM install with its cmake package is
-# enough — a Homebrew keg, a distribution's llvm-18-dev, an SDK's.
-#
-# THE VERSION IS NOT FREE. WAMR 2.4.5 pins release/18.x and means it: on
-# LLVM 21 this tree fails to compile, because aot_llvm.c calls
-# LLVMOrcThreadSafeContextGetContext, which that release removed from the C
-# API. 18 builds clean. find_llvm therefore looks for 18 by name and says so
-# when it cannot find one, rather than picking up whatever llvm-config is
-# first in PATH and failing 90 seconds later inside a compile.
-find_llvm() {
-    local d
-    # An explicit LLVM_DIR wins, whatever version it is: someone who sets it
-    # has a reason, and cmake will report the version it found.
-    if [ -n "${LLVM_DIR:-}" ] && [ -f "$LLVM_DIR/LLVMConfig.cmake" ]; then
-        echo "$LLVM_DIR"; return 0
-    fi
-    for d in /opt/homebrew/opt/llvm@18 /usr/local/opt/llvm@18 /usr/lib/llvm-18 \
-             /opt/homebrew/opt/llvm /usr/local/opt/llvm; do
-        [ -f "$d/lib/cmake/llvm/LLVMConfig.cmake" ] || continue
-        # Only take an unversioned prefix if it happens to BE 18.
-        case "$d" in
-            *@18|*llvm-18) echo "$d/lib/cmake/llvm"; return 0 ;;
-            *) [ -x "$d/bin/llvm-config" ] &&
-               case "$("$d/bin/llvm-config" --version 2>/dev/null)" in
-                   18.*) echo "$d/lib/cmake/llvm"; return 0 ;;
-               esac ;;
-        esac
-    done
-    return 1
-}
-
-build_wamrc() {
-    local dist="$root/vendor/wamr-dist-wamrc"
-    local build="$src/build-lookout-wamrc"
-    local stamp="$WAMR_TAG $WAMR_COMMIT wamrc"
-    local llvm_dir
-
-    if [ -x "$dist/bin/wamrc" ]; then
-        local have
-        have=$(cat "$dist/WAMR_VERSION" 2>/dev/null || echo unknown)
-        if [ "$have" = "$stamp" ]; then
-            echo "wamr: ${dist#$root/} already built ($have)"
-            return 0
-        fi
-        echo "wamr: ${dist#$root/} is '$have', this script builds '$stamp' — rebuilding"
-        rm -rf "$dist" "$build"
-    fi
-
-    llvm_dir="$(find_llvm)" || {
-        echo "build-wamr.sh: no LLVM 18 with a cmake package found, and wamrc needs one." >&2
-        echo "               WAMR $WAMR_TAG pins LLVM release/18.x; 21 does not compile" >&2
-        echo "               (LLVMOrcThreadSafeContextGetContext is gone from its C API)." >&2
-        echo >&2
-        echo "               macOS:  brew install llvm@18            (~1.8 GB installed)" >&2
-        echo "               Debian: apt install llvm-18-dev" >&2
-        echo "               Or point at one you have: LLVM_DIR=/path/to/lib/cmake/llvm" >&2
-        echo >&2
-        echo "               The from-source route WAMR ships —" >&2
-        echo "               vendor/wamr/wamr-compiler/build_llvm.sh — is the same release" >&2
-        echo "               built with five backends, and wants tens of GB and the better" >&2
-        echo "               part of an hour. A release LLVM is the same compiler." >&2
-        exit 1
-    }
-
-    ensure_src
-    echo "wamr: configuring wamrc ($WAMR_TAG, LLVM at ${llvm_dir})"
-    if ! cmake -S "$src/wamr-compiler" -B "$build" \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DWAMR_BUILD_WITH_CUSTOM_LLVM=1 \
-        -DLLVM_DIR="$llvm_dir" \
-        -DWAMR_BUILD_PLATFORM="$(uname -s | tr '[:upper:]' '[:lower:]')" \
-        >"$build.log" 2>&1
-    then
-        cat "$build.log" >&2
-        exit 1
-    fi
-    grep -E "^-- Found LLVM " "$build.log" || true
-
-    echo "wamr: building wamrc"
-    if ! cmake --build "$build" --parallel "$(ncpu)" >>"$build.log" 2>&1; then
-        tail -40 "$build.log" >&2
-        exit 1
-    fi
-
-    rm -rf "$dist"
-    mkdir -p "$dist/bin"
-    # cmake writes wamrc-<version> and a `wamrc` symlink beside it. Copy the
-    # real file under the plain name, so the dist holds no dangling link.
-    local bin="$build/wamrc"
-    [ -L "$bin" ] && bin="$build/$(readlink "$bin")"
-    cp "$bin" "$dist/bin/wamrc"
-    chmod +x "$dist/bin/wamrc"
-    echo "$stamp" >"$dist/WAMR_VERSION"
-
-    echo "wamr: ${dist#$root/}/bin/wamrc ($("$dist/bin/wamrc" --version), $(du -h "$dist/bin/wamrc" | cut -f1))"
-}
-
 for t in "${targets[@]}"; do
-    if [ "$t" = wamrc ]; then build_wamrc; else build_one "$t"; fi
+    build_one "$t"
 done

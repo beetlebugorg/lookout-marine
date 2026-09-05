@@ -652,88 +652,6 @@ pub const Host = struct {
         try self.loadOne(sub, "", "manifest.json", .installed, dir_path);
     }
 
-    /// The stamp file scripts/build-plugin-aot.sh writes beside the .aot
-    /// files it produced, naming the WAMR build and the wamrc flags they were
-    /// compiled under. See `readAot`.
-    const aot_stamp_file = "AOT_VERSION";
-
-    /// Whether `<stem>.aot` is loaded in preference to `<stem>.wasm`.
-    ///
-    /// An AOT module is native code, and wamrc decides which registers that
-    /// code may use from the target triple it is handed.
-    /// scripts/build-plugin-aot.sh names an architecture and an ABI with no
-    /// platform in them, so the code it emits treats x18 as an ordinary
-    /// register. Darwin, iOS, Android and Windows on arm64 all reserve x18 for
-    /// the platform and overwrite it at any instruction boundary, so a pointer
-    /// held there reads back as null and the next load through it faults.
-    ///
-    /// Naming a full triple does not settle it: wamrc reserves x18 only when
-    /// it is given `--cpu` and `--cpu-features=+reserve-x18` together, and a
-    /// file built with `--target=aarch64-apple-darwin` alone still uses the
-    /// register.
-    ///
-    /// The AOT format records the architecture but not the ABI or the
-    /// platform, so `wasm.aotRefusal` cannot separate a file that is safe here
-    /// from one that is not, and this constant is the only gate. Turning it on
-    /// requires the build script to reserve the platform's registers on every
-    /// target it emits, and the watchdog to be shown terminating a spinning
-    /// plugin whose code is native.
-    const load_aot_modules = false;
-
-    comptime {
-        // The loader stays analyzed while `load_aot_modules` is false.
-        _ = &readAot;
-    }
-
-    /// `<stem>.aot` for this plugin, when there is one that belongs to this
-    /// binary; null to interpret the .wasm instead.
-    ///
-    /// WHO GETS ONE. The five core plugins, on the platforms the build machine
-    /// compiled them for. Nobody else, ever: a .lkplug holds manifest.json and
-    /// one .wasm and `unpackToTemp` refuses anything else, so no installed
-    /// plugin can bring native code with it. We compile it, or we interpret
-    /// it — a third-party .aot would be native code with no sandbox we could
-    /// vouch for and no way to tell from the file whether its bounds checks
-    /// were even switched on.
-    ///
-    /// WHY A STALE OR FOREIGN FILE IS REFUSED BY NAME rather than tried. An
-    /// .aot is tied to two things at once — the architecture and the exact
-    /// WAMR build — and when either has moved the failure the mariner would
-    /// otherwise see is "plugin stopped", days after an upgrade, with no way
-    /// to connect it to the file left in the plugins directory. So both are
-    /// checked here and both are logged with the reason in them, and the
-    /// plugin runs interpreted rather than not at all.
-    ///
-    ///   * the file itself — format version, endianness, word size,
-    ///     architecture — in `wasm.aotRefusal`, which reads the header WAMR's
-    ///     loader would read.
-    ///   * the WAMR build and the wamrc flags — in `wasm.aotStampRefusal`,
-    ///     against the AOT_VERSION file the build script wrote beside it.
-    ///     This is the half the runtime cannot do: nothing in the AOT format
-    ///     records whether the code has bounds checks in it, so a file with no
-    ///     stamp is a file we cannot vouch for and is not run.
-    fn readAot(self: *Host, dir: std.Io.Dir, stem: []const u8, id: []const u8) !?[]u8 {
-        if (!load_aot_modules) return null;
-        var name_buf: [160]u8 = undefined;
-        const aot_name = std.fmt.bufPrint(&name_buf, "{s}.aot", .{stem}) catch return null;
-        const bytes = dir.readFileAlloc(io, aot_name, self.alloc, .limited(max_module_bytes)) catch return null;
-        errdefer self.alloc.free(bytes);
-
-        var why_buf: [192]u8 = undefined;
-        const stamp = dir.readFileAlloc(io, aot_stamp_file, self.alloc, .limited(1024)) catch "";
-        defer if (stamp.len > 0) self.alloc.free(stamp);
-
-        const refusal = wasm.aotStampRefusal(std.mem.trim(u8, stamp, " \t\r\n"), &why_buf) orelse
-            wasm.aotRefusal(bytes, &why_buf);
-        if (refusal) |why| {
-            self.br.say(broker.level_warn, id, "{s} ignored: {s}; running the module interpreted", .{ aot_name, why });
-            self.alloc.free(bytes);
-            return null;
-        }
-        self.br.say(broker.level_info, id, "loading the ahead-of-time build ({s})", .{aot_name});
-        return bytes;
-    }
-
     /// Read, validate, instantiate and start one plugin. `stem` names the
     /// module file (`<stem>.wasm`); empty means the manifest's id names it,
     /// which is the installed layout. `plugin_dir` is copied into the entry;
@@ -805,12 +723,7 @@ pub const Host = struct {
         const module_stem = if (stem.len > 0) stem else manifest.id;
         const wasm_name = try std.fmt.allocPrint(self.alloc, "{s}.wasm", .{module_stem});
         defer self.alloc.free(wasm_name);
-        // The ahead-of-time build of this plugin, if this platform has one and
-        // it belongs to this binary. Absent, stale or foreign, the .wasm below
-        // is read instead and the plugin is interpreted, which is what every
-        // third-party plugin does always.
-        const raw = (try self.readAot(dir, module_stem, manifest.id)) orelse
-            try dir.readFileAlloc(io, wasm_name, self.alloc, .limited(max_module_bytes));
+        const raw = try dir.readFileAlloc(io, wasm_name, self.alloc, .limited(max_module_bytes));
         defer self.alloc.free(raw);
 
         // The grants in force: what the manifest asked for, minus whatever the
