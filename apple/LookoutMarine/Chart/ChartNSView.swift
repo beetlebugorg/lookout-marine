@@ -225,8 +225,18 @@ final class ChartNSView: NSView {
     /// +[NSOpenGLContext currentContext] → 0xbad4007).
     func maybeAutoOpen() {
         guard !didAutoOpen, window != nil, controller?.handle == nil,
-              bounds.width > 1, bounds.height > 1,
-              let paths = model?.charts.initialChartPaths(), !paths.isEmpty else { return }
+              bounds.width > 1, bounds.height > 1 else { return }
+        // The controller gets the view before the first chart. reopen() needs
+        // one, and only open() and attachView set it, so in an app that
+        // launched with no chart the open request an import raises went
+        // unserviced and the first-run page stayed up over a full library.
+        // ChartUIView attaches in the same place. The window and a real size
+        // are checked above, so this is the view open() uses below.
+        controller?.attachView(self)
+        // A request raised before this view had a size is the newer list: the
+        // scan or the import worked it out after the walk ran.
+        let paths = model?.charts.openRequest?.paths ?? model?.charts.initialChartPaths() ?? []
+        guard !paths.isEmpty else { return }
         didAutoOpen = true
         // No frame restoration for this window: the chart reopens from our own
         // recents, and the fromServer frame restore is exactly the mid-load
