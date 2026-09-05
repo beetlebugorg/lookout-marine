@@ -43,10 +43,9 @@ struct StartupLoader: View {
         .accessibilityIdentifier("startup-loader")
     }
 
-    /// Before there is anything to open: the installed sets are still being
-    /// read. None of the three steps below has started, so none of them is
-    /// drawn. A list of waiting work says less than one line of what is
-    /// happening.
+    /// The wait before there is anything to open, while the installed sets are
+    /// being read. None of the three steps in `opening` has started, so this
+    /// draws one line of what is happening instead of a list of waiting work.
     private var finding: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 10) {
@@ -87,8 +86,7 @@ struct StartupLoader: View {
                          label: "Preparing chart symbols",
                          detail: step > 0 ? "" : "first run only")
                 BakeStep(state: step > 1 ? .done : (step == 1 ? .running : .waiting),
-                         label: cells > 1 ? "Mapping \(cells.formatted(.number)) cells" : "Mapping the chart",
-                         detail: step == 1 ? "not loading them, so this is quick" : "")
+                         label: cells > 1 ? "Mapping \(cells.formatted(.number)) cells" : "Mapping the chart")
                 BakeStep(state: step == 2 ? .running : .waiting,
                          label: "Drawing the first scene")
             }
