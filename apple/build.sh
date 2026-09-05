@@ -19,7 +19,7 @@ set -e
 # DEVELOPER_DIR wins.
 if [[ -z "$DEVELOPER_DIR" ]] && ! xcode-select -p 2>/dev/null | grep -q '\.app/Contents/Developer'; then
   for app in /Applications/Xcode.app /Applications/Xcode-beta.app \
-             $HOME/Applications/Xcode*.app $HOME/Downloads/Xcode*.app; do
+             $HOME/Applications/Xcode*.app(N) $HOME/Downloads/Xcode*.app(N); do
     if [[ -x "$app/Contents/Developer/usr/bin/xcodebuild" ]]; then
       export DEVELOPER_DIR="$app/Contents/Developer"
       echo "==> DEVELOPER_DIR=$DEVELOPER_DIR"
