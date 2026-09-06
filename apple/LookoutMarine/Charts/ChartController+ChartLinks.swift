@@ -13,33 +13,41 @@ extension ChartController {
     /// Add a chart by link. The core resolves it through this shell's fetcher
     /// and, on success, keeps it and selects it. Non-blocking: what happened
     /// arrives in the snapshot below.
-    func addChartLink(_ link: String) {
-        guard let h = handle else { return }
+    @discardableResult
+    func addChartLink(_ link: String) -> Bool {
+        guard let h = handle else { return false }
         link.withCString { lookout_chart_link_add(h, $0) }
         kick()
+        return true
     }
 
     /// Draw one of the carried charts, or nil for Lookout's own.
-    func selectChartLink(_ url: String?) {
-        guard let h = handle else { return }
+    @discardableResult
+    func selectChartLink(_ url: String?) -> Bool {
+        guard let h = handle else { return false }
         if let url {
             url.withCString { lookout_chart_link_select(h, $0) }
         } else {
             lookout_chart_link_select(h, nil)
         }
         kick()
+        return true
     }
 
-    func removeChartLink(_ url: String) {
-        guard let h = handle else { return }
+    @discardableResult
+    func removeChartLink(_ url: String) -> Bool {
+        guard let h = handle else { return false }
         url.withCString { lookout_chart_link_remove(h, $0) }
         kick()
+        return true
     }
 
-    func refreshChartLink(_ url: String) {
-        guard let h = handle else { return }
+    @discardableResult
+    func refreshChartLink(_ url: String) -> Bool {
+        guard let h = handle else { return false }
         url.withCString { lookout_chart_link_refresh(h, $0) }
         kick()
+        return true
     }
 
     /// Hand the mariner's old UserDefaults list to the core, once. See

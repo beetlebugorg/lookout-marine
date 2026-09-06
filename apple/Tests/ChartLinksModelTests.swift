@@ -138,4 +138,89 @@ final class ChartLinksModelTests: ShellTestCase {
         m.migrate()
         XCTAssertTrue(engine.calls.isEmpty)
     }
+
+    // MARK: With no chart open
+    //
+    // Every call here goes through a lookout handle, which exists only while a
+    // chart is open. Without one the call was discarded, and add() left `busy`
+    // set forever.
+
+    /// A pick with no chart open asks for one and runs when it opens.
+    func testAPickWithNoChartAsksForOneAndRunsWhenItOpens() {
+        let m = model()
+        engine.hasChartHandle = false
+        var asked = 0
+        m.openChartForLink = { asked += 1 }
+        m.select("https://a/style.json")
+        XCTAssertEqual(asked, 1)
+
+        engine.hasChartHandle = true
+        m.chartDidOpen()
+        XCTAssertEqual(engine.calls.filter { $0 == "selectChartLink(https://a/style.json)" }.count, 2,
+                       "asked once with no chart, and again once there was one")
+    }
+
+    /// Adding one with no chart open holds the request the same way.
+    func testAddingWithNoChartWaitsForOne() {
+        let m = model()
+        engine.hasChartHandle = false
+        var asked = 0
+        m.openChartForLink = { asked += 1 }
+        m.add(" https://a/style.json ")
+        XCTAssertEqual(asked, 1)
+        XCTAssertTrue(m.busy)
+
+        engine.hasChartHandle = true
+        m.chartDidOpen()
+        XCTAssertEqual(engine.calls.filter { $0 == "addChartLink(https://a/style.json)" }.count, 2)
+    }
+
+    /// The requests are replayed in the order they were made.
+    func testHeldRequestsRunInOrder() {
+        let m = model()
+        engine.hasChartHandle = false
+        m.openChartForLink = {}
+        m.add("https://a/style.json")
+        m.select("https://b/style.json")
+        engine.hasChartHandle = true
+        engine.calls = []
+        m.chartDidOpen()
+        XCTAssertEqual(engine.calls,
+                       ["addChartLink(https://a/style.json)",
+                        "selectChartLink(https://b/style.json)"])
+    }
+
+    /// A second open has no held request left to run.
+    func testTheHeldRequestsRunOnce() {
+        let m = model()
+        engine.hasChartHandle = false
+        m.openChartForLink = {}
+        m.select("https://a/style.json")
+        engine.hasChartHandle = true
+        m.chartDidOpen()
+        engine.calls = []
+        m.chartDidOpen()
+        XCTAssertTrue(engine.calls.isEmpty)
+    }
+
+    /// A call that goes through does not ask for a chart.
+    func testAPickThatGoesThroughAsksForNothing() {
+        let m = model()
+        var asked = 0
+        m.openChartForLink = { asked += 1 }
+        m.select("https://a/style.json")
+        XCTAssertEqual(asked, 0)
+    }
+
+    /// Picking Lookout's own chart calls the seam that closes a chart opened
+    /// only for a link.
+    func testPickingLookoutsOwnChartSaysSo() {
+        let m = model()
+        var told = 0
+        m.lookoutChartPicked = { told += 1 }
+        m.select(nil)
+        XCTAssertEqual(told, 1)
+        m.select("https://a/style.json")
+        XCTAssertEqual(told, 1)
+    }
 }

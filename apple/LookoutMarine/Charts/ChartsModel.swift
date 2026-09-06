@@ -242,14 +242,35 @@ final class ChartsModel {
         addChartSet(dir)
     }
 
-    private func requestOpen(_ paths: [String]) {
+    /// Open with no cells. A library of pictures alone opens this way too.
+    ///
+    /// The core draws a chart link, and the core exists only while something
+    /// is open, so picking a link with no charts installed needs a chart of no
+    /// cells under it.
+    func openEmpty() {
+        guard !hasChart, !isOpening else { return }
+        requestOpen([], evenWithNothingToDraw: true)
+    }
+
+    /// Close a chart that is open only for a link, once the mariner picks
+    /// Lookout's own chart with no set installed to build it from. The
+    /// first-run page then returns.
+    func closeIfNothingInstalled() {
+        guard hasChart, openPaths.isEmpty, raster.paths.isEmpty else { return }
+        closeChart()
+    }
+
+    private func requestOpen(_ paths: [String], evenWithNothingToDraw: Bool = false) {
         // Nothing left to draw at all. Switching off the last set, or removing
         // it, has to take the chart off the display: leaving the old one up
         // says the charts are still installed when they are not.
         //
         // A set of pictures with no survey in it still draws, so the test is
         // whether anything is installed, rather than whether any CELL is.
-        guard !paths.isEmpty || !raster.paths.isEmpty else { closeChart(); return }
+        guard evenWithNothingToDraw || !paths.isEmpty || !raster.paths.isEmpty else {
+            closeChart()
+            return
+        }
         openSeq += 1
         openRequest = OpenRequest(id: openSeq, paths: paths)
         // Show the loader BEFORE the (synchronous, possibly seconds-long) open
