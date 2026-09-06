@@ -51,12 +51,17 @@ fn split(basename: []const u8) struct { stem: []const u8, ext: []const u8 } {
     return .{ .stem = basename[0..i], .ext = basename[i + 1 ..] };
 }
 
-/// True when `stem` is an S-57 dataset name: 2 letters for the producer, a
-/// usage band digit of 1 to 6, then 5 characters the producer assigns.
+/// True when `stem` is a chart dataset name, of either standard.
 ///
 /// CATALOG.031 passes an extension test for an update file, so the name test
 /// is what rejects it. Its third character is a letter.
 pub fn isDatasetName(stem: []const u8) bool {
+    return isS57Name(stem) or isS101Name(stem);
+}
+
+/// An S-57 dataset name: two characters for the producing agency, one for the
+/// usage band, five the agency chooses. US5MD1MC.
+fn isS57Name(stem: []const u8) bool {
     if (stem.len != 8) return false;
     if (!std.ascii.isAlphabetic(stem[0]) or !std.ascii.isAlphabetic(stem[1])) return false;
     if (stem[2] < '1' or stem[2] > '6') return false;
@@ -64,22 +69,39 @@ pub fn isDatasetName(stem: []const u8) bool {
     return true;
 }
 
-/// The producing agency's code: the first two characters of an S-57 dataset
-/// name, which the standard reserves for it (US5MD12M -> US). Null when the
-/// name is not a dataset name.
+/// An S-101 dataset name: 101 for the product, two characters for the agency,
+/// and up to eight the agency chooses. 101AA00DS0001.
+///
+/// S-100 numbers the product where S-57 put the agency, so the name is longer
+/// and the agency has moved along it. An S-101 name states no usage band. The
+/// scale is in the dataset.
+fn isS101Name(stem: []const u8) bool {
+    if (stem.len < 5 or stem.len > 13) return false;
+    if (!std.mem.eql(u8, stem[0..3], "101")) return false;
+    if (!std.ascii.isAlphabetic(stem[3]) or !std.ascii.isAlphabetic(stem[4])) return false;
+    for (stem[5..]) |c| if (!std.ascii.isAlphanumeric(c)) return false;
+    return true;
+}
+
+/// The producing agency's code, which each standard reserves two characters
+/// for: the first two of an S-57 name (US5MD12M -> US), and the two after the
+/// product number in an S-101 name (101AA00DS0001 -> AA). Null when the name
+/// is not a dataset name.
 ///
 /// This is what lets a library be named by WHO MADE IT rather than by the
 /// folder it arrived in — "All_ENCs.zip" and "ENC_ROOT" say nothing, and the
 /// charts themselves know.
 pub fn producerCode(stem: []const u8) ?[]const u8 {
-    if (!isDatasetName(stem)) return null;
-    return stem[0..2];
+    if (isS57Name(stem)) return stem[0..2];
+    if (isS101Name(stem)) return stem[3..5];
+    return null;
 }
 
-/// The usage band an S-57 dataset name carries, or null when the name is not
-/// a dataset name.
+/// The usage band an S-57 dataset name states, or null when the name states
+/// none. An S-101 name states no band, and neither does a name that is not a
+/// dataset name.
 pub fn usageBand(stem: []const u8) ?u8 {
-    if (!isDatasetName(stem)) return null;
+    if (!isS57Name(stem)) return null;
     return stem[2] - '0';
 }
 
@@ -666,6 +688,30 @@ test "a dataset name carries the producer and the usage band" {
     try std.testing.expectEqual(@as(?u8, null), usageBand("partition"));
 }
 
+test "an S-101 cell is a chart" {
+    // S-100 names a dataset by product, producer and a free-text part:
+    // 101 for S-101, AA for the agency, DS0001 for the dataset. The name is
+    // longer than an S-57 one and states no usage band.
+    try std.testing.expectEqual(Kind.source, classify("101AA00DS0001.000"));
+    try std.testing.expectEqual(Kind.update, classify("101AA00DS0001.001"));
+    try std.testing.expectEqual(Kind.baked, classify("101AA00DS0001.pmtiles"));
+    try std.testing.expectEqual(Kind.other, classify("101AA00DS0001.yaml"));
+
+    try std.testing.expect(isDatasetName("101AA00DS0001"));
+    try std.testing.expect(isDatasetName("101GB")); // the free part may be empty
+    try std.testing.expect(!isDatasetName("101AA00DS00012")); // 14 characters
+    try std.testing.expect(!isDatasetName("1010000DS0001")); // the agency is 2 letters
+    try std.testing.expect(!isDatasetName("102AA00DS0001")); // another S-100 product
+    try std.testing.expect(!isDatasetName("101AA00DS-001")); // the free part is alphanumeric
+
+    // The agency moved along the name when S-100 numbered the product first.
+    try std.testing.expectEqualStrings("AA", producerCode("101AA00DS0001").?);
+    try std.testing.expectEqualStrings("US", producerCode("US5MD1MC").?);
+    // An S-101 name states no band. The scale is in the dataset.
+    try std.testing.expectEqual(@as(?u8, null), usageBand("101AA00DS0001"));
+    try std.testing.expectEqualStrings("101AA00DS0001", cellName("101AA00DS0001.000").?);
+}
+
 test "a cell name comes off either kind of chart file" {
     try std.testing.expectEqualStrings("US5MD1MC", cellName("US5MD1MC.000").?);
     try std.testing.expectEqualStrings("US5MD1MC", cellName("US5MD1MC.pmtiles").?);
@@ -943,6 +989,33 @@ test "charts from two offices have no one name" {
     const json = try toJson(a, &s);
     defer a.free(json);
     try t.expect(std.mem.indexOf(u8, json, "producer") == null);
+}
+
+test "a scan reaches S-101 cells in a subfolder" {
+    // An S-101 exchange set puts its datasets under a directory of their own,
+    // and the mariner picks the folder above it.
+    var tmp = t.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    const io = std.Io.Threaded.global_single_threaded.io();
+    try tmp.dir.createDirPath(io, "S-101_1.2/000");
+    try tmp.dir.createDirPath(io, "S-101_1.2/yaml");
+    try tmp.dir.writeFile(io, .{ .sub_path = "S-101_1.2/000/101AA00DS0001.000", .data = "cell" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "S-101_1.2/000/101AA00DS0002.000", .data = "cell" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "S-101_1.2/yaml/101AA00DS0001.yaml", .data = "meta" });
+    const root = try tmpRoot(&tmp);
+    defer t.allocator.free(root);
+
+    var s = try scan(t.allocator, io, root, null, null);
+    defer s.deinit();
+    try t.expectEqual(@as(usize, 2), s.cells.len);
+    try t.expectEqual(Kind.source, s.cells[0].kind);
+    try t.expectEqualStrings("101AA00DS0001", s.cells[0].name);
+    // The yaml beside them is not a chart.
+    try t.expectEqual(@as(usize, 1), s.other);
+    // The agency the charts agree on, which titles the set.
+    try t.expectEqualStrings("AA", &s.producer.?);
+    // An S-101 name states no usage band.
+    try t.expectEqual(@as(u8, 0), s.cells[0].band);
 }
 
 test "a folder of pictures has no producer to report" {

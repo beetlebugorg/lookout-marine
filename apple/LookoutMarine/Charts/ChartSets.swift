@@ -39,7 +39,8 @@ struct ScannedCell: Identifiable, Hashable {
     }
 
     let path: String
-    /// The 8 character dataset name, such as US5MD1MC.
+    /// The dataset name: 8 characters under S-57 (US5MD1MC), up to 13 under
+    /// S-101 (101AA00DS0001).
     let name: String
     let kind: Kind
     /// 1 to 6, or 0 when the name carries no usage band. The name of the band

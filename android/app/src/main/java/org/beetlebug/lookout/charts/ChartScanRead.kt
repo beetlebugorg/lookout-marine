@@ -30,7 +30,8 @@ data class ChartScanRead(
     data class ChartFile(
         /** The absolute path, or the entry name inside an archive. */
         val path: String,
-        /** The eight character dataset name, such as US5MD1MC. */
+        /** The dataset name: eight characters under S-57 (US5MD1MC), up to
+         * thirteen under S-101 (101AA00DS0001). */
         val name: String,
         val kind: Int,
         /** 1 to 6, or 0 when the name has no usage band. */
