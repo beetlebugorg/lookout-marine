@@ -36,23 +36,12 @@ final class ChartArchiveSetTests: ShellTestCase {
         return dir.path
     }
 
-    /// An exchange set as an agency publishes it: cells under ENC_ROOT, zipped.
-    /// The name is unique so two runs use different prepared directories, which
-    /// are under this machine's application support.
+    /// An exchange set as an agency publishes it: one cell under ENC_ROOT. The
+    /// name is unique so two runs use different prepared directories, which are
+    /// under this machine's application support.
     private func archive(in dir: String) throws -> String {
-        let root = URL(fileURLWithPath: dir).appendingPathComponent("ENC_ROOT/US5MD1MC")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        try Data("x".utf8).write(to: root.appendingPathComponent("US5MD1MC.000"))
         let zip = (dir as NSString).appendingPathComponent("ENCs-\(UUID().uuidString).zip")
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/zip")
-        p.arguments = ["-q", "-r", zip, "ENC_ROOT"]
-        p.currentDirectoryURL = URL(fileURLWithPath: dir)
-        try p.run()
-        p.waitUntilExit()
-        try XCTSkipUnless(p.terminationStatus == 0, "could not write the test archive")
-        try FileManager.default.removeItem(at: URL(fileURLWithPath: dir)
-            .appendingPathComponent("ENC_ROOT"))
+        try MiniZip.write([("ENC_ROOT/US5MD1MC/US5MD1MC.000", Data("x".utf8))], to: zip)
         return zip
     }
 
@@ -156,15 +145,8 @@ final class ChartArchiveSetTests: ShellTestCase {
     /// An archive holding no charts is not offered.
     func testAnArchiveWithNoChartsIsNotOffered() throws {
         let dir = try temporaryDirectory()
-        let junk = (dir as NSString).appendingPathComponent("notes.zip")
-        FileManager.default.createFile(atPath: (dir as NSString).appendingPathComponent("notes.txt"),
-                                       contents: Data("hi".utf8))
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/zip")
-        p.arguments = ["-q", junk, "notes.txt"]
-        p.currentDirectoryURL = URL(fileURLWithPath: dir)
-        try p.run()
-        p.waitUntilExit()
+        try MiniZip.write([("notes.txt", Data("hi".utf8))],
+                          to: (dir as NSString).appendingPathComponent("notes.zip"))
         XCTAssertTrue(ChartScan.archivesHoldingCharts(in: dir).isEmpty)
     }
 
@@ -173,5 +155,66 @@ final class ChartArchiveSetTests: ShellTestCase {
         let zip = try archive(in: dir)
         XCTAssertTrue(ChartScan.archivesHoldingCharts(in: zip).isEmpty)
         XCTAssertTrue(ChartScan.archivesHoldingCharts(in: "/no/such/folder").isEmpty)
+    }
+}
+
+
+/// A .zip written here, with every entry stored rather than deflated.
+///
+/// The fixture is a listing: the core reads an archive's central directory and
+/// names each entry, and it inflates nothing. Writing the file in Swift keeps
+/// the test off /usr/bin/zip, which the iOS target has no Process to run.
+enum MiniZip {
+    static func write(_ entries: [(name: String, data: Data)], to path: String) throws {
+        try archive(entries).write(to: URL(fileURLWithPath: path))
+    }
+
+    static func archive(_ entries: [(name: String, data: Data)]) -> Data {
+        var out = Data()
+        var central = Data()
+        for e in entries {
+            let name = Data(e.name.utf8)
+            let crc = crc32(e.data)
+            let size = UInt32(e.data.count)
+            let offset = UInt32(out.count)
+            // Local header: version 2.0, no flags, stored, no timestamp.
+            out += le32(0x0403_4b50) + le16(20) + le16(0) + le16(0) + le16(0) + le16(0)
+            out += le32(crc) + le32(size) + le32(size)
+            out += le16(UInt16(name.count)) + le16(0)
+            out += name + e.data
+            central += le32(0x0201_4b50) + le16(20) + le16(20)
+            central += le16(0) + le16(0) + le16(0) + le16(0)
+            central += le32(crc) + le32(size) + le32(size)
+            // Name, extra, comment, disk, internal attributes.
+            central += le16(UInt16(name.count)) + le16(0) + le16(0) + le16(0) + le16(0)
+            central += le32(0) + le32(offset) + name
+        }
+        let directory = UInt32(central.count)
+        let start = UInt32(out.count)
+        out += central
+        out += le32(0x0605_4b50) + le16(0) + le16(0)
+        out += le16(UInt16(entries.count)) + le16(UInt16(entries.count))
+        out += le32(directory) + le32(start) + le16(0)
+        return out
+    }
+
+    private static func le16(_ v: UInt16) -> Data {
+        Data([UInt8(v & 0xFF), UInt8(v >> 8)])
+    }
+
+    private static func le32(_ v: UInt32) -> Data {
+        Data([UInt8(v & 0xFF), UInt8((v >> 8) & 0xFF),
+              UInt8((v >> 16) & 0xFF), UInt8(v >> 24)])
+    }
+
+    private static func crc32(_ data: Data) -> UInt32 {
+        var c: UInt32 = 0xFFFF_FFFF
+        for byte in data {
+            c ^= UInt32(byte)
+            for _ in 0..<8 {
+                c = (c & 1) != 0 ? (c >> 1) ^ 0xEDB8_8320 : c >> 1
+            }
+        }
+        return c ^ 0xFFFF_FFFF
     }
 }
