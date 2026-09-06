@@ -339,13 +339,22 @@ enum ChartSetStore {
     /// rather than walking the folder again.
     static func files(of path: String) -> [ScannedCell] {
         guard let h = handle else { return [] }
+        // An entry path is a name inside the archive with no file at it. The
+        // core also lists the charts a bake wrote into the prepared directory,
+        // and those are files on disk. Test the path prefix rather than the
+        // kind of the set. Marking every file in a .zip set as an entry
+        // reported an imported library's own charts as unreadable and left the
+        // set with no openable path.
+        let archive = ChartScan.isArchive(path)
+        // With no prepared directory, every path in an archive set is an entry.
+        let prepared = archive ? ChartBake.preparedDirectory(for: path).map { $0 + "/" } : nil
         return path.withCString { p in
             var n = 0
             guard let rows = lookout_chart_set_files(h, p, &n) else { return [] }
-            // A .zip's entries cannot be handed to the engine as they lie.
-            let archive = ChartScan.isArchive(path)
-            return (0..<n).compactMap { i in
-                rows[i].map { ScannedCell($0.pointee, archived: archive) }
+            return (0..<n).compactMap { i -> ScannedCell? in
+                guard let row = rows[i] else { return nil }
+                let onDisk = prepared.map { String(cString: row.pointee.path).hasPrefix($0) } ?? false
+                return ScannedCell(row.pointee, archived: archive && !onDisk)
             }
         }
     }
