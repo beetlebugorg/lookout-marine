@@ -31,8 +31,9 @@ pub const Set = extern struct {
     producer: [*:0]const u8,
     /// 0 when the mariner switched this set off. It stays installed.
     on: c_int,
-    /// 1 once the background scan has read this folder. Every count below is
-    /// 0 until then.
+    /// 1 once the background scan has read this folder. 0 while it is being
+    /// read: on the first pass with every count below 0, and after a rescan
+    /// with what the last pass found.
     scanned: c_int,
     /// The vector charts ready to draw, and the pictures.
     charts: usize,
@@ -221,6 +222,36 @@ pub const Sets = struct {
         self.save();
         self.startScans();
         return true;
+    }
+
+    /// Read a folder again. False when it is not on the list.
+    ///
+    /// A shell calls this after preparing charts. The bake writes into
+    /// `prepared_root`, which is scanned beside each set, so a set keeps its
+    /// pre-bake counts until the folder is read again: every chart unprepared,
+    /// and no openable path to compose.
+    ///
+    /// The row returns to unscanned while the worker reads it and keeps the
+    /// counts from the last scan, so a page drawn in that second shows the
+    /// same set.
+    pub fn rescan(self: *Sets, path: []const u8) bool {
+        self.mu.lock();
+        var found = false;
+        for (self.rows.items) |*r| {
+            if (!std.mem.eql(u8, r.path, path)) continue;
+            r.scanned = false;
+            found = true;
+            break;
+        }
+        if (found) {
+            if (self.gpa.dupeZ(u8, path)) |owned| {
+                self.queue.append(self.gpa, owned) catch self.gpa.free(owned);
+            } else |_| {}
+            _ = self.reads.reset(.retain_capacity);
+        }
+        self.mu.unlock();
+        if (found) self.startScans();
+        return found;
     }
 
     /// Take a folder off the list. False when it was not on it.
@@ -795,4 +826,73 @@ test "a set with nothing prepared still reports what it holds" {
     const files = s.files(src);
     try t.expectEqual(@as(usize, 1), files.len);
     try t.expectEqual(library.FileKind.source, files[0].kind);
+}
+
+test "a set is read again after a bake, and its prepared charts open" {
+    var f = try Fixture.init();
+    defer f.deinit();
+
+    const src = try f.folderNamed("Set C", &.{"US5MD1MC.000"});
+    defer t.allocator.free(src);
+    const root = try f.folderNamed("Prepared", &.{});
+    defer t.allocator.free(root);
+
+    const s = try Sets.open(t.allocator, f.io, f.store, root);
+    defer s.close();
+    try t.expect(s.add(src));
+    settle(s);
+    // A raw cell. It opens after a bake prepares it.
+    try t.expectEqual(@as(usize, 1), s.all()[0].unprepared);
+    try t.expectEqual(@as(usize, 0), s.compose().len);
+
+    // The bake writes into the prepared root, under the folder the mariner
+    // picked.
+    try f.tmp.dir.createDirPath(f.io, "Prepared/Set C/US5MD1MC");
+    try f.tmp.dir.writeFile(f.io, .{
+        .sub_path = "Prepared/Set C/US5MD1MC/US5MD1MC.pmtiles",
+        .data = "x",
+    });
+    // The path is already on the list, so add queues no scan.
+    try t.expect(!s.add(src));
+    settle(s);
+    try t.expectEqual(@as(usize, 0), s.compose().len);
+
+    try t.expect(s.rescan(src));
+    settle(s);
+    try t.expectEqual(@as(usize, 1), s.all()[0].charts);
+    try t.expectEqual(@as(usize, 0), s.all()[0].unprepared);
+    const paths = s.compose();
+    try t.expectEqual(@as(usize, 1), paths.len);
+    try t.expect(std.mem.endsWith(u8, std.mem.span(paths[0]), ".pmtiles"));
+}
+
+test "a folder that is not on the list is not read again" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const s = try f.open();
+    defer s.close();
+    try t.expect(!s.rescan("/no/such/folder"));
+}
+
+test "a set being read again keeps what the last scan found" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const dir = try f.folder("Set D");
+    defer t.allocator.free(dir);
+
+    const s = try f.open();
+    defer s.close();
+    try t.expect(s.add(dir));
+    settle(s);
+    try t.expectEqual(@as(usize, 1), s.all()[0].charts);
+
+    // The row is unscanned while the worker reads it and keeps the counts
+    // from the last scan.
+    s.mu.lock();
+    s.stopping = true;
+    s.mu.unlock();
+    try t.expect(s.rescan(dir));
+    const rows = s.all();
+    try t.expectEqual(@as(c_int, 0), rows[0].scanned);
+    try t.expectEqual(@as(usize, 1), rows[0].charts);
 }
