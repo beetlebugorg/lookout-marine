@@ -386,7 +386,18 @@ final class ChartsModel {
         scanningName = (path as NSString).lastPathComponent
         emptyPick = nil
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let found = ChartScan.scan(path)
+            var found = ChartScan.scan(path)
+            var spare: [String] = []
+            // A folder whose charts are inside an archive holds charts. An
+            // agency publishes one .zip and it goes in a folder with other
+            // files. A double click on the archive in the open panel also
+            // arrives here as the folder, because the panel returns the
+            // enclosing directory for a double-clicked item. Both cases used
+            // to report that the folder holds no charts.
+            if found?.cells.isEmpty ?? true, found?.rasters.isEmpty ?? true {
+                spare = ChartScan.archivesHoldingCharts(in: path)
+                if spare.count == 1 { found = ChartScan.scan(spare[0]) }
+            }
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.scanning = false
@@ -395,9 +406,14 @@ final class ChartsModel {
                 // anything Lookout can draw, of either kind.
                 guard let set = found, !set.cells.isEmpty || !set.rasters.isEmpty else {
                     let name = (path as NSString).lastPathComponent
-                    self.emptyPick = "\(name) holds no charts Lookout can read."
+                    // Each archive is a chart set of its own, so with several
+                    // in the folder the mariner picks.
+                    self.emptyPick = spare.count > 1
+                        ? "\(name) holds \(spare.count) chart archives. Open the one you want."
+                        : "\(name) holds no charts Lookout can read."
                     return
                 }
+                self.scanningName = (set.path as NSString).lastPathComponent
                 // Raw cells cannot be drawn. Bake them first, then take the
                 // baked folder as the set.
                 // S-57 and S-101 cells, and BSB/KAP sheets, are all prepared

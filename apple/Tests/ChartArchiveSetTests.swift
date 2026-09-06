@@ -139,4 +139,39 @@ final class ChartArchiveSetTests: ShellTestCase {
     func testAFolderThatIsNotOnTheListIsNotReadAgain() {
         XCTAssertFalse(ChartSetStore.rescan("/no/such/folder"))
     }
+
+    /// A folder holding one chart archive holds charts. A double click on the
+    /// archive in the open panel also arrives as the folder.
+    func testAFolderOfArchivesOffersTheArchive() throws {
+        let dir = try temporaryDirectory()
+        let zip = try archive(in: dir)
+        FileManager.default.createFile(atPath: (dir as NSString).appendingPathComponent("readme.txt"),
+                                       contents: Data("hi".utf8))
+        // The folder itself holds no chart file.
+        let asFolder = ChartScan.scan(dir)
+        XCTAssertTrue(asFolder?.cells.isEmpty ?? true)
+        XCTAssertEqual(ChartScan.archivesHoldingCharts(in: dir), [zip])
+    }
+
+    /// An archive holding no charts is not offered.
+    func testAnArchiveWithNoChartsIsNotOffered() throws {
+        let dir = try temporaryDirectory()
+        let junk = (dir as NSString).appendingPathComponent("notes.zip")
+        FileManager.default.createFile(atPath: (dir as NSString).appendingPathComponent("notes.txt"),
+                                       contents: Data("hi".utf8))
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/zip")
+        p.arguments = ["-q", junk, "notes.txt"]
+        p.currentDirectoryURL = URL(fileURLWithPath: dir)
+        try p.run()
+        p.waitUntilExit()
+        XCTAssertTrue(ChartScan.archivesHoldingCharts(in: dir).isEmpty)
+    }
+
+    func testAFileIsNotAFolderOfArchives() throws {
+        let dir = try temporaryDirectory()
+        let zip = try archive(in: dir)
+        XCTAssertTrue(ChartScan.archivesHoldingCharts(in: zip).isEmpty)
+        XCTAssertTrue(ChartScan.archivesHoldingCharts(in: "/no/such/folder").isEmpty)
+    }
 }

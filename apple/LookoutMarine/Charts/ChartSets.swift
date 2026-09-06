@@ -272,6 +272,26 @@ enum ChartScan {
         (path as NSString).pathExtension.lowercased() == "zip"
     }
 
+    /// The chart archives directly in a folder, in name order: each .zip whose
+    /// listing holds charts.
+    ///
+    /// Only the top level of the folder. A zip scan reads the listing and
+    /// unpacks no file, so a folder of a few archives is cheap to scan.
+    static func archivesHoldingCharts(in dir: String) -> [String] {
+        let fm = FileManager.default
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: dir, isDirectory: &isDir), isDir.boolValue,
+              let names = try? fm.contentsOfDirectory(atPath: dir)
+        else { return [] }
+        return names.sorted()
+            .map { (dir as NSString).appendingPathComponent($0) }
+            .filter(isArchive)
+            .filter { path in
+                guard let set = scan(path) else { return false }
+                return !set.cells.isEmpty || !set.rasters.isEmpty
+            }
+    }
+
     private static func scanLocked(_ path: String) -> ChartSet? {
         let archive = isArchive(path)
         guard let read = archive ? lookout_scan_zip_read(path) : lookout_scan_read(path),
