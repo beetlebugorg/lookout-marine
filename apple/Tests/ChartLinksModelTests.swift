@@ -212,15 +212,17 @@ final class ChartLinksModelTests: ShellTestCase {
         XCTAssertEqual(asked, 0)
     }
 
-    /// Picking Lookout's own chart calls the seam that closes a chart opened
-    /// only for a link.
-    func testPickingLookoutsOwnChartSaysSo() {
+    /// Lookout's own chart goes through in one call, with no held request.
+    ///
+    /// Closing the chart here left the pick unread. The list is polled off the
+    /// frame loop, so with the chart gone the row stayed on the link until a
+    /// second click reopened a chart and replayed the pick.
+    func testPickingLookoutsOwnChartGoesThroughOnce() {
         let m = model()
-        var told = 0
-        m.lookoutChartPicked = { told += 1 }
         m.select(nil)
-        XCTAssertEqual(told, 1)
-        m.select("https://a/style.json")
-        XCTAssertEqual(told, 1)
+        XCTAssertEqual(engine.calls, ["selectChartLink(nil)"])
+        engine.calls = []
+        m.chartDidOpen()
+        XCTAssertTrue(engine.calls.isEmpty)
     }
 }

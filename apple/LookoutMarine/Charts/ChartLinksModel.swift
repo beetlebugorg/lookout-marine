@@ -64,10 +64,6 @@ final class ChartLinksModel {
     /// of no cells.
     var openChartForLink: (() -> Void)?
 
-    /// Called when the mariner picks Lookout's own chart. AppModel closes a
-    /// chart that was open only for a link, so the first-run page returns.
-    var lookoutChartPicked: (() -> Void)?
-
     private static let listKey = "lookout.chartlinks"
     private static let activeKey = "lookout.chartlinks.active"
 
@@ -161,6 +157,5 @@ final class ChartLinksModel {
         error = nil
         if url != nil { busy = true }
         through { $0.selectChartLink(url) }
-        if url == nil { lookoutChartPicked?() }
     }
 }

@@ -77,10 +77,8 @@ final class AppModel {
         //
         // Every chart-link call goes through a lookout handle, which exists
         // only while a chart is open. Open a chart of no cells so a link
-        // picked with no charts installed has a core to run through. Picking
-        // Lookout's own chart again closes it.
+        // picked with no charts installed has a core to run through.
         chartLinks.openChartForLink = { [weak self] in self?.charts.openEmpty() }
-        chartLinks.lookoutChartPicked = { [weak self] in self?.charts.closeIfNothingInstalled() }
     }
 
     /// A chart handle has just been created. The core reads its chart-link

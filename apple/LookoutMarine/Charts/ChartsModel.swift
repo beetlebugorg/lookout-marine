@@ -252,14 +252,6 @@ final class ChartsModel {
         requestOpen([], evenWithNothingToDraw: true)
     }
 
-    /// Close a chart that is open only for a link, once the mariner picks
-    /// Lookout's own chart with no set installed to build it from. The
-    /// first-run page then returns.
-    func closeIfNothingInstalled() {
-        guard hasChart, openPaths.isEmpty, raster.paths.isEmpty else { return }
-        closeChart()
-    }
-
     private func requestOpen(_ paths: [String], evenWithNothingToDraw: Bool = false) {
         // Nothing left to draw at all. Switching off the last set, or removing
         // it, has to take the chart off the display: leaving the old one up
