@@ -249,7 +249,8 @@ typedef struct {
      * archive, which is what the engine's zip bake takes back: there is no
      * file at it until it is taken out. */
     const char *path;
-    /* The 8 character dataset name, such as US5MD1MC. */
+    /* The dataset name: 8 characters under S-57 (US5MD1MC), up to 13 under
+     * S-101 (101AA00DS0001). */
     const char *name;
     lookout_file_kind kind;
     /* 1 to 6, or 0 when the name has no usage band. */
