@@ -42,6 +42,7 @@
 		29D69EB0C3BEBC71F0CCBF36 /* Store.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B35807C0ABB9C564DABEC58 /* Store.swift */; };
 		2CAAB96A58BB675F015568F5 /* ChartController+Markers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3679C3C6EF257BD3E89496F0 /* ChartController+Markers.swift */; };
 		2D18C3C1548A171547BCD515 /* ChartEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25170EA011726656A1803B82 /* ChartEngine.swift */; };
+		2DC7389F6E864FFE3AC46042 /* ChartsModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C73EED5D81CE4D0D4A578E1A /* ChartsModelTests.swift */; };
 		2F80D13D42F2990D89CB26E5 /* ChartSetStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52541E0740AE0F9E3BBC236D /* ChartSetStoreTests.swift */; };
 		2FE63BAE429B166A470E7312 /* ChartBakeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B2641D4DD30D574228F9033 /* ChartBakeTests.swift */; };
 		304A739310B89E36ADDF3A21 /* ChartScanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A443DE42C30306D7110F731 /* ChartScanTests.swift */; };
@@ -72,6 +73,7 @@
 		50C214AAD062B26FCB84D7BE /* RasterChartTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3F841BB92E185C6D2C47A7A /* RasterChartTests.swift */; };
 		52AFAE4BCB8FA4AFBD4C103D /* PlacementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1C44341E0A9C0B713D97E32 /* PlacementTests.swift */; };
 		52E4163448CFFE05D94E59F4 /* PluginTableTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2FC4787E7CFF2D99B0290ED1 /* PluginTableTests.swift */; };
+		5324562FED0A44AAAFB56AC8 /* ChartsModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C73EED5D81CE4D0D4A578E1A /* ChartsModelTests.swift */; };
 		5396D82AF2680CB6CA36DC9F /* RasterPillTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9CB7F2EE01F7A2521E623AD /* RasterPillTests.swift */; };
 		56953BE7D9D4CF249C438ABE /* ViewStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A1AE666034E0F470280B7AD /* ViewStateTests.swift */; };
 		58AC131857390A27742AD81A /* TextSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2BA1B3F8DF89EE3D756BCD9A /* TextSection.swift */; };
@@ -373,6 +375,7 @@
 		C315E2FD12D936B349662AB2 /* ChartController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartController.swift; sourceTree = "<group>"; };
 		C440A0CF1A4AE2740ACEFF2F /* ChartBake.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartBake.swift; sourceTree = "<group>"; };
 		C662FFE95992970B22324BF0 /* OverlayModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverlayModelTests.swift; sourceTree = "<group>"; };
+		C73EED5D81CE4D0D4A578E1A /* ChartsModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartsModelTests.swift; sourceTree = "<group>"; };
 		C92108B96F87BAE129BE6656 /* FakeEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FakeEngine.swift; sourceTree = "<group>"; };
 		CB8AD6DFED21DF30B2636C6C /* ChartMenuPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartMenuPanel.swift; sourceTree = "<group>"; };
 		CDC82FE85405E2169A271617 /* EmptyChartState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmptyChartState.swift; sourceTree = "<group>"; };
@@ -516,6 +519,7 @@
 				7A6C878008109734E6888D48 /* ChartLinksModelTests.swift */,
 				1A443DE42C30306D7110F731 /* ChartScanTests.swift */,
 				52541E0740AE0F9E3BBC236D /* ChartSetStoreTests.swift */,
+				C73EED5D81CE4D0D4A578E1A /* ChartsModelTests.swift */,
 				80A6678722FC01CA46E10CE0 /* CoordFormatTests.swift */,
 				BB4DB25833426EC809E14055 /* CoordinateParserTests.swift */,
 				C92108B96F87BAE129BE6656 /* FakeEngine.swift */,
@@ -1032,6 +1036,7 @@
 				44106C96DB481F899311829B /* ChartLinksModelTests.swift in Sources */,
 				304A739310B89E36ADDF3A21 /* ChartScanTests.swift in Sources */,
 				975D7A97AEDE359E19292148 /* ChartSetStoreTests.swift in Sources */,
+				5324562FED0A44AAAFB56AC8 /* ChartsModelTests.swift in Sources */,
 				315E261DE0454FB6293200D0 /* CoordFormatTests.swift in Sources */,
 				99E0F6FB645D764E1D573BF8 /* CoordinateParserTests.swift in Sources */,
 				A2B1831C4109BB26076FE692 /* FakeEngine.swift in Sources */,
@@ -1168,6 +1173,7 @@
 				138A4F680ACD73391F8D9340 /* ChartLinksModelTests.swift in Sources */,
 				7E88421B782228FB3E978EC7 /* ChartScanTests.swift in Sources */,
 				2F80D13D42F2990D89CB26E5 /* ChartSetStoreTests.swift in Sources */,
+				2DC7389F6E864FFE3AC46042 /* ChartsModelTests.swift in Sources */,
 				D4053EFD7BBC6FD277438F1D /* CoordFormatTests.swift in Sources */,
 				B90762606839663FBE4F1600 /* CoordinateParserTests.swift in Sources */,
 				AAEAA11652744E72897F0250 /* FakeEngine.swift in Sources */,

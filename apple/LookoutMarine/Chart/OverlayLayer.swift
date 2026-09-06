@@ -246,7 +246,7 @@ struct OverlayLayer: View {
                     // The picker asked a question the mariner has answered.
                     // While the answer is being acted on, the work stands in
                     // its place.
-                    if !model.charts.showStartupLoader, !model.charts.hasChart, model.charts.chartWork == nil {
+                    if model.charts.libraryIsEmpty, model.charts.chartWork == nil {
                         EmptyChartState(model: model).chromeHitRegion("empty-state")
                             .transition(.opacity)
                     }
