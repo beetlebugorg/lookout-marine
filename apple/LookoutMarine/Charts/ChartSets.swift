@@ -162,6 +162,12 @@ struct ChartSet: Identifiable, Hashable {
     var refusedCount: Int { preparedPath == nil ? 0 : toPrepare.count }
     /// The pictures that are ready to draw now.
     var rasterPaths: [String] { rasters.filter { !$0.needsPrepare }.map(\.path) }
+    /// True when this set holds anything that draws now. `openablePaths` and
+    /// `rasterPaths` build a list of every path in the set; a view body reads
+    /// this on each evaluation, so it stops at the first match.
+    var hasSomethingToDraw: Bool {
+        cells.contains { !$0.needsPrepare } || rasters.contains { !$0.needsPrepare }
+    }
 
     /// The pictures, grouped the way the chart draws them: by whoever made
     /// them. A folder can hold hundreds of tiles from one survey, and a
@@ -357,6 +363,15 @@ enum ChartSetStore {
                 return ScannedCell(row.pointee, archived: archive && !onDisk)
             }
         }
+    }
+
+    /// Read a folder again after a bake wrote charts into its prepared
+    /// directory. Until then the row counts every chart as unprepared and
+    /// holds no openable path.
+    @discardableResult
+    static func rescan(_ path: String) -> Bool {
+        guard let h = handle else { return false }
+        return path.withCString { lookout_chart_sets_rescan(h, $0) != 0 }
     }
 
     static func savedPaths() -> [String] { all().map(\.path) }

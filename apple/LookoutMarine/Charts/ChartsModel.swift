@@ -43,19 +43,29 @@ final class ChartsModel {
         // still reading them or an open is on its way. The loader fills that
         // gap. An import has a panel of its own with the more specific report
         // of the same wait, so this defers to it.
-        return !hasChart && !libraryIsEmpty && chartWork == nil
+        //
+        // A library that has been read and holds no drawable chart is a
+        // finished wait. The loader used to stay up over one, and the
+        // first-run page never appeared.
+        return !hasChart && !nothingToDraw && chartWork == nil
     }
 
-    /// True once the app has established that there is nothing to draw: no set
-    /// installed, nothing being looked through or prepared, and no open on its
-    /// way.
+    /// True once the app has established that it has no chart to draw and no
+    /// work running that will produce one: no scan, no bake, no open under
+    /// way, and no switched-on set holding a drawable chart.
     ///
     /// The first-run page reads this rather than `hasChart`. `hasChart` is
     /// also false for the second between launch and the scan result, while a
     /// set is being read, and while an import runs.
-    var libraryIsEmpty: Bool {
-        !hasChart && !isOpening && openRequest == nil && !scanning
-            && bake == nil && sets.isEmpty && raster.paths.isEmpty
+    ///
+    /// A set can be installed, read and switched on and still hold no chart
+    /// this app opens, such as a folder whose import failed. The earlier test
+    /// asked only whether a set was installed, so the loader stayed up over
+    /// such a library and the first-run page never appeared.
+    var nothingToDraw: Bool {
+        !hasChart && !isOpening && openRequest == nil && !scanning && bake == nil
+            && raster.paths.isEmpty
+            && !sets.contains { $0.on && $0.hasSomethingToDraw }
     }
 
     /// The phase the startup loader shows. Each phase is a different wait: the
@@ -413,9 +423,27 @@ final class ChartsModel {
     private func adopt(_ set: ChartSet, reopen: Bool = true) {
         sets.removeAll { $0.path == set.path }
         sets.append(set)
-        ChartSetStore.add(set.path)
+        // add queues a scan for a new path. A set already on the list needs a
+        // rescan instead: the bake has written charts into its prepared
+        // directory, and the core composes no openable path until it reads
+        // them.
+        let rereading = !ChartSetStore.add(set.path) && ChartSetStore.rescan(set.path)
         syncRasterFromSets()
-        if reopen { requestOpen(openPaths) }
+        if reopen {
+            // Both what the core composed and what this scan found. The core
+            // has not read the prepared charts yet, and a rescan of a large
+            // library holds the loader on screen for seconds.
+            var paths = openPaths
+            var seen = Set(paths)
+            for p in set.openablePaths where seen.insert(p).inserted { paths.append(p) }
+            requestOpen(paths.sorted())
+        }
+        // The rescan runs on a worker. With no chart open there is no frame
+        // loop polling for the result.
+        if rereading {
+            scanning = true
+            watchLibraryUntilOpen()
+        }
     }
 
     /// The pictures the switched-on sets carry, installed as the raster charts.

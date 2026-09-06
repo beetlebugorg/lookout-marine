@@ -24,7 +24,7 @@ final class ChartsModelTests: ShellTestCase {
     /// Nothing installed and nothing running is the only empty library.
     func testNothingInstalledIsAnEmptyLibrary() {
         let m = model()
-        XCTAssertTrue(m.libraryIsEmpty)
+        XCTAssertTrue(m.nothingToDraw)
         XCTAssertFalse(m.showStartupLoader)
     }
 
@@ -39,16 +39,18 @@ final class ChartsModelTests: ShellTestCase {
     func testAScanRunningIsNeverAnEmptyLibrary() {
         let m = model()
         m.scanning = true
-        XCTAssertFalse(m.libraryIsEmpty)
+        XCTAssertFalse(m.nothingToDraw)
         XCTAssertTrue(m.showStartupLoader)
     }
 
-    /// A set on the list is not an empty library either.
-    func testAListedSetIsNeverAnEmptyLibrary() {
+    /// A set holding a chart is not an empty library.
+    func testASetHoldingAChartIsNeverAnEmptyLibrary() {
+        let cell = ScannedCell(path: "/charts/a/US5MD1MC.pmtiles", name: "US5MD1MC",
+                               kind: .baked, band: 5, bytes: 1)
         let m = model()
         m.sets = [ChartSet(path: "/charts/a", producer: nil, preparedPath: nil,
-                           cells: [], rasters: [], on: true)]
-        XCTAssertFalse(m.libraryIsEmpty)
+                           cells: [cell], rasters: [], on: true)]
+        XCTAssertFalse(m.nothingToDraw)
     }
 
     /// An import runs for minutes over a big folder, and the first-run page is
@@ -56,7 +58,7 @@ final class ChartsModelTests: ShellTestCase {
     func testABakeIsNeverAnEmptyLibrary() {
         let m = model()
         m.bake = BakeProgress(done: 3, total: 60, name: "All_ENCs.zip")
-        XCTAssertFalse(m.libraryIsEmpty)
+        XCTAssertFalse(m.nothingToDraw)
     }
 
     /// An open on its way is not an empty library either. A request raised
@@ -65,7 +67,46 @@ final class ChartsModelTests: ShellTestCase {
     func testAPendingOpenIsNeverAnEmptyLibrary() {
         let m = model()
         m.openRequest = OpenRequest(id: 1, paths: ["/charts/a/US5MD1MC.pmtiles"])
-        XCTAssertFalse(m.libraryIsEmpty)
+        XCTAssertFalse(m.nothingToDraw)
+    }
+
+    /// A set that has been read and holds no drawable chart ends the loader.
+    /// The first-run page appears instead.
+    func testASetHoldingNothingToDrawEndsTheLoader() {
+        let m = model()
+        m.sets = [ChartSet(path: "/charts/a", producer: nil, preparedPath: nil,
+                           cells: [], rasters: [], on: true)]
+        XCTAssertTrue(m.nothingToDraw)
+        XCTAssertFalse(m.showStartupLoader)
+    }
+
+    /// A set that holds a chart keeps the loader up while the open runs.
+    func testASetHoldingAChartKeepsTheLoader() {
+        let m = model()
+        let cell = ScannedCell(path: "/charts/a/US5MD1MC.pmtiles", name: "US5MD1MC",
+                               kind: .baked, band: 5, bytes: 1)
+        m.sets = [ChartSet(path: "/charts/a", producer: nil, preparedPath: nil,
+                           cells: [cell], rasters: [], on: true)]
+        XCTAssertFalse(m.nothingToDraw)
+        XCTAssertTrue(m.showStartupLoader)
+    }
+
+    /// A set switched off leaves the app with no chart to draw.
+    func testASetSwitchedOffIsNothingToDraw() {
+        let m = model()
+        let cell = ScannedCell(path: "/charts/a/US5MD1MC.pmtiles", name: "US5MD1MC",
+                               kind: .baked, band: 5, bytes: 1)
+        m.sets = [ChartSet(path: "/charts/a", producer: nil, preparedPath: nil,
+                           cells: [cell], rasters: [], on: false)]
+        XCTAssertTrue(m.nothingToDraw)
+        XCTAssertFalse(m.showStartupLoader)
+    }
+
+    /// A scan running means the folder's contents are not established yet.
+    func testAScanRunningIsNeverNothingToDraw() {
+        let m = model()
+        m.scanning = true
+        XCTAssertFalse(m.nothingToDraw)
     }
 
     /// The loader fills the gap before the first chart, and a drawing chart
@@ -75,6 +116,6 @@ final class ChartsModelTests: ShellTestCase {
         m.hasChart = true
         m.firstBuildDone = true
         XCTAssertFalse(m.showStartupLoader)
-        XCTAssertFalse(m.libraryIsEmpty)
+        XCTAssertFalse(m.nothingToDraw)
     }
 }

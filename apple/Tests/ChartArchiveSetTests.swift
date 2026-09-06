@@ -115,4 +115,28 @@ final class ChartArchiveSetTests: ShellTestCase {
         XCTAssertEqual(set.needsBake, 0)
         XCTAssertEqual(set.openablePaths.count, 1)
     }
+
+    /// The core holds the list. Until it reads the folder again after a bake,
+    /// the set composes no openable path and the chart never opens.
+    func testASetIsReadAgainAfterABake() throws {
+        let dir = try temporaryDirectory()
+        let zip = try archive(in: dir)
+        ChartSetStore.add(zip)
+        waitForScan(zip)
+        XCTAssertTrue(ChartSetStore.compose().isEmpty, "no entry inside an archive is openable")
+
+        try prepare(zip)
+        // The path is already on the list, so add queues no scan.
+        XCTAssertFalse(ChartSetStore.add(zip))
+        XCTAssertTrue(ChartSetStore.compose().isEmpty)
+
+        XCTAssertTrue(ChartSetStore.rescan(zip))
+        waitForScan(zip)
+        XCTAssertEqual(ChartSetStore.compose().count, 1)
+        XCTAssertTrue(ChartSetStore.compose()[0].hasSuffix("US5MD1MC.pmtiles"))
+    }
+
+    func testAFolderThatIsNotOnTheListIsNotReadAgain() {
+        XCTAssertFalse(ChartSetStore.rescan("/no/such/folder"))
+    }
 }
