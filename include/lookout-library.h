@@ -332,8 +332,9 @@ typedef struct {
     const char *producer;
     /* 0 when the mariner switched this set off. It stays installed. */
     int on;
-    /* 1 once the background scan has read this folder. Every count below is 0
-     * until then. */
+    /* 1 once the background scan has read this folder. 0 while it is being
+     * read: on the first pass with every count below 0, and after
+     * lookout_chart_sets_rescan with what the last pass found. */
     int scanned;
     /* The vector charts ready to draw, and the pictures. */
     size_t charts;
@@ -382,6 +383,15 @@ const lookout_chart_file *const *lookout_chart_set_files(lookout_chart_sets *s,
  * because a folder changes underneath the app and a stored cell list would
  * offer charts that are no longer there. */
 int lookout_chart_sets_add(lookout_chart_sets *s, const char *path);
+/* Read a folder again. 1 when it is on the list.
+ *
+ * A shell calls this after preparing charts. The bake writes into
+ * `prepared_root`, which is scanned beside each set, so a set keeps its
+ * pre-bake counts until the folder is read again: every chart unprepared, and
+ * no openable path to compose. The row returns to unscanned while the worker
+ * reads it, and the result raises lookout_chart_sets_changed the same as any
+ * other scan. */
+int lookout_chart_sets_rescan(lookout_chart_sets *s, const char *path);
 /* Take a folder off the list. 1 when it was on it. This deletes nothing: what
  * a bake produced is the shell's to remove. */
 int lookout_chart_sets_remove(lookout_chart_sets *s, const char *path);

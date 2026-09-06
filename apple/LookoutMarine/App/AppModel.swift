@@ -74,6 +74,11 @@ final class AppModel {
         // Chart links live in the core (chartlinks.json beside the marks), so
         // nothing to read here. The old UserDefaults store is handed over in
         // chartDidOpen, which has a handle.
+        //
+        // Every chart-link call goes through a lookout handle, which exists
+        // only while a chart is open. Open a chart of no cells so a link
+        // picked with no charts installed has a core to run through.
+        chartLinks.openChartForLink = { [weak self] in self?.charts.openEmpty() }
     }
 
     /// A chart handle has just been created. The core reads its chart-link
@@ -82,6 +87,8 @@ final class AppModel {
     /// UserDefaults list handed over, once.
     func chartDidOpen() {
         chartLinks.migrate()
+        // The chart-link calls held while no chart was open.
+        chartLinks.chartDidOpen()
         // Dev hook, mirroring $LOOKOUT_OPEN: a style url or a path to a style
         // file draws as the chart at launch. Adding one otherwise needs a
         // form, a paste and a click, which no screenshot run can do.

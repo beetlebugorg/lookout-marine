@@ -43,19 +43,29 @@ final class ChartsModel {
         // still reading them or an open is on its way. The loader fills that
         // gap. An import has a panel of its own with the more specific report
         // of the same wait, so this defers to it.
-        return !hasChart && !libraryIsEmpty && chartWork == nil
+        //
+        // A library that has been read and holds no drawable chart is a
+        // finished wait. The loader used to stay up over one, and the
+        // first-run page never appeared.
+        return !hasChart && !nothingToDraw && chartWork == nil
     }
 
-    /// True once the app has established that there is nothing to draw: no set
-    /// installed, nothing being looked through or prepared, and no open on its
-    /// way.
+    /// True once the app has established that it has no chart to draw and no
+    /// work running that will produce one: no scan, no bake, no open under
+    /// way, and no switched-on set holding a drawable chart.
     ///
     /// The first-run page reads this rather than `hasChart`. `hasChart` is
     /// also false for the second between launch and the scan result, while a
     /// set is being read, and while an import runs.
-    var libraryIsEmpty: Bool {
-        !hasChart && !isOpening && openRequest == nil && !scanning
-            && bake == nil && sets.isEmpty && raster.paths.isEmpty
+    ///
+    /// A set can be installed, read and switched on and still hold no chart
+    /// this app opens, such as a folder whose import failed. The earlier test
+    /// asked only whether a set was installed, so the loader stayed up over
+    /// such a library and the first-run page never appeared.
+    var nothingToDraw: Bool {
+        !hasChart && !isOpening && openRequest == nil && !scanning && bake == nil
+            && raster.paths.isEmpty
+            && !sets.contains { $0.on && $0.hasSomethingToDraw }
     }
 
     /// The phase the startup loader shows. Each phase is a different wait: the
@@ -232,14 +242,27 @@ final class ChartsModel {
         addChartSet(dir)
     }
 
-    private func requestOpen(_ paths: [String]) {
+    /// Open with no cells. A library of pictures alone opens this way too.
+    ///
+    /// The core draws a chart link, and the core exists only while something
+    /// is open, so picking a link with no charts installed needs a chart of no
+    /// cells under it.
+    func openEmpty() {
+        guard !hasChart, !isOpening else { return }
+        requestOpen([], evenWithNothingToDraw: true)
+    }
+
+    private func requestOpen(_ paths: [String], evenWithNothingToDraw: Bool = false) {
         // Nothing left to draw at all. Switching off the last set, or removing
         // it, has to take the chart off the display: leaving the old one up
         // says the charts are still installed when they are not.
         //
         // A set of pictures with no survey in it still draws, so the test is
         // whether anything is installed, rather than whether any CELL is.
-        guard !paths.isEmpty || !raster.paths.isEmpty else { closeChart(); return }
+        guard evenWithNothingToDraw || !paths.isEmpty || !raster.paths.isEmpty else {
+            closeChart()
+            return
+        }
         openSeq += 1
         openRequest = OpenRequest(id: openSeq, paths: paths)
         // Show the loader BEFORE the (synchronous, possibly seconds-long) open
@@ -376,7 +399,18 @@ final class ChartsModel {
         scanningName = (path as NSString).lastPathComponent
         emptyPick = nil
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let found = ChartScan.scan(path)
+            var found = ChartScan.scan(path)
+            var spare: [String] = []
+            // A folder whose charts are inside an archive holds charts. An
+            // agency publishes one .zip and it goes in a folder with other
+            // files. A double click on the archive in the open panel also
+            // arrives here as the folder, because the panel returns the
+            // enclosing directory for a double-clicked item. Both cases used
+            // to report that the folder holds no charts.
+            if found?.cells.isEmpty ?? true, found?.rasters.isEmpty ?? true {
+                spare = ChartScan.archivesHoldingCharts(in: path)
+                if spare.count == 1 { found = ChartScan.scan(spare[0]) }
+            }
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.scanning = false
@@ -385,9 +419,14 @@ final class ChartsModel {
                 // anything Lookout can draw, of either kind.
                 guard let set = found, !set.cells.isEmpty || !set.rasters.isEmpty else {
                     let name = (path as NSString).lastPathComponent
-                    self.emptyPick = "\(name) holds no charts Lookout can read."
+                    // Each archive is a chart set of its own, so with several
+                    // in the folder the mariner picks.
+                    self.emptyPick = spare.count > 1
+                        ? "\(name) holds \(spare.count) chart archives. Open the one you want."
+                        : "\(name) holds no charts Lookout can read."
                     return
                 }
+                self.scanningName = (set.path as NSString).lastPathComponent
                 // Raw cells cannot be drawn. Bake them first, then take the
                 // baked folder as the set.
                 // S-57 and S-101 cells, and BSB/KAP sheets, are all prepared
@@ -413,9 +452,27 @@ final class ChartsModel {
     private func adopt(_ set: ChartSet, reopen: Bool = true) {
         sets.removeAll { $0.path == set.path }
         sets.append(set)
-        ChartSetStore.add(set.path)
+        // add queues a scan for a new path. A set already on the list needs a
+        // rescan instead: the bake has written charts into its prepared
+        // directory, and the core composes no openable path until it reads
+        // them.
+        let rereading = !ChartSetStore.add(set.path) && ChartSetStore.rescan(set.path)
         syncRasterFromSets()
-        if reopen { requestOpen(openPaths) }
+        if reopen {
+            // Both what the core composed and what this scan found. The core
+            // has not read the prepared charts yet, and a rescan of a large
+            // library holds the loader on screen for seconds.
+            var paths = openPaths
+            var seen = Set(paths)
+            for p in set.openablePaths where seen.insert(p).inserted { paths.append(p) }
+            requestOpen(paths.sorted())
+        }
+        // The rescan runs on a worker. With no chart open there is no frame
+        // loop polling for the result.
+        if rereading {
+            scanning = true
+            watchLibraryUntilOpen()
+        }
     }
 
     /// The pictures the switched-on sets carry, installed as the raster charts.

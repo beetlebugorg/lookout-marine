@@ -77,6 +77,12 @@ export fn lookout_chart_sets_add(s: ?*lookout_chart_sets, path: ?[*:0]const u8) 
     return @intFromBool(x.add(span(path)));
 }
 
+/// Read a folder again, after a bake wrote into the prepared root.
+export fn lookout_chart_sets_rescan(s: ?*lookout_chart_sets, path: ?[*:0]const u8) c_int {
+    const x = s orelse return 0;
+    return @intFromBool(x.rescan(span(path)));
+}
+
 export fn lookout_chart_sets_remove(s: ?*lookout_chart_sets, path: ?[*:0]const u8) c_int {
     const x = s orelse return 0;
     return @intFromBool(x.remove(span(path)));

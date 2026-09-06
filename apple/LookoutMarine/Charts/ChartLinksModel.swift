@@ -52,6 +52,18 @@ final class ChartLinksModel {
 
     weak var engine: (any ChartLinkEngine)?
 
+    /// Requests made while no chart was open, in the order they were made.
+    ///
+    /// Every call here goes through a lookout handle, which exists only while
+    /// a chart is open. Without one the call was discarded, so picking a chart
+    /// with no charts installed or during an import had no effect, and add()
+    /// left `busy` set forever.
+    private var waiting: [(any ChartLinkEngine) -> Bool] = []
+
+    /// Called when a request has no chart to run through. AppModel opens one
+    /// of no cells.
+    var openChartForLink: (() -> Void)?
+
     private static let listKey = "lookout.chartlinks"
     private static let activeKey = "lookout.chartlinks.active"
 
@@ -90,6 +102,22 @@ final class ChartLinksModel {
         if attribution != credit { attribution = credit }
     }
 
+    /// Run one call into the core. With no chart open, hold the call and ask
+    /// for a chart.
+    private func through(_ call: @escaping (any ChartLinkEngine) -> Bool) {
+        if let e = engine, call(e) { return }
+        waiting.append(call)
+        openChartForLink?()
+    }
+
+    /// Run the calls held while no chart was open.
+    func chartDidOpen() {
+        guard let e = engine, !waiting.isEmpty else { return }
+        let held = waiting
+        waiting = []
+        for call in held { _ = call(e) }
+    }
+
     /// Add a chart by its style link. The core reads it once and refuses a dead
     /// or non-style link, which surfaces as `error`. The new chart is picked
     /// immediately: adding it is the request to sail on it.
@@ -98,7 +126,7 @@ final class ChartLinksModel {
         guard !trimmed.isEmpty else { return }
         error = nil
         busy = true
-        engine?.addChartLink(trimmed)
+        through { $0.addChartLink(trimmed) }
     }
 
     /// A style file the mariner picked. The same call as a link: the core tells
@@ -113,11 +141,11 @@ final class ChartLinksModel {
     func refresh(_ url: String) {
         error = nil
         busy = true
-        engine?.refreshChartLink(url)
+        through { $0.refreshChartLink(url) }
     }
 
     func remove(_ url: String) {
-        engine?.removeChartLink(url)
+        through { $0.removeChartLink(url) }
     }
 
     func select(_ url: String?) {
@@ -128,6 +156,6 @@ final class ChartLinksModel {
         if url != nil, url == active, error == nil { return }
         error = nil
         if url != nil { busy = true }
-        engine?.selectChartLink(url)
+        through { $0.selectChartLink(url) }
     }
 }

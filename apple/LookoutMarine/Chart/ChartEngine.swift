@@ -36,10 +36,12 @@ protocol RasterEngine: AnyObject {
 /// the styles and persists them, so all of this is "ask" and "read back".
 @MainActor
 protocol ChartLinkEngine: AnyObject {
-    func addChartLink(_ link: String)
-    func refreshChartLink(_ url: String)
-    func removeChartLink(_ url: String)
-    func selectChartLink(_ url: String?)
+    // Each of these goes through a lookout handle. They return false when no
+    // chart is open, and the model holds the request until one is.
+    @discardableResult func addChartLink(_ link: String) -> Bool
+    @discardableResult func refreshChartLink(_ url: String) -> Bool
+    @discardableResult func removeChartLink(_ url: String) -> Bool
+    @discardableResult func selectChartLink(_ url: String?) -> Bool
     func importChartLinks(_ json: String)
     func chartLinksSnapshot() -> ChartLinkSnapshot?
 }

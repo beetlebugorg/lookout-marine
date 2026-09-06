@@ -162,6 +162,12 @@ struct ChartSet: Identifiable, Hashable {
     var refusedCount: Int { preparedPath == nil ? 0 : toPrepare.count }
     /// The pictures that are ready to draw now.
     var rasterPaths: [String] { rasters.filter { !$0.needsPrepare }.map(\.path) }
+    /// True when this set holds anything that draws now. `openablePaths` and
+    /// `rasterPaths` build a list of every path in the set; a view body reads
+    /// this on each evaluation, so it stops at the first match.
+    var hasSomethingToDraw: Bool {
+        cells.contains { !$0.needsPrepare } || rasters.contains { !$0.needsPrepare }
+    }
 
     /// The pictures, grouped the way the chart draws them: by whoever made
     /// them. A folder can hold hundreds of tiles from one survey, and a
@@ -266,6 +272,26 @@ enum ChartScan {
         (path as NSString).pathExtension.lowercased() == "zip"
     }
 
+    /// The chart archives directly in a folder, in name order: each .zip whose
+    /// listing holds charts.
+    ///
+    /// Only the top level of the folder. A zip scan reads the listing and
+    /// unpacks no file, so a folder of a few archives is cheap to scan.
+    static func archivesHoldingCharts(in dir: String) -> [String] {
+        let fm = FileManager.default
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: dir, isDirectory: &isDir), isDir.boolValue,
+              let names = try? fm.contentsOfDirectory(atPath: dir)
+        else { return [] }
+        return names.sorted()
+            .map { (dir as NSString).appendingPathComponent($0) }
+            .filter(isArchive)
+            .filter { path in
+                guard let set = scan(path) else { return false }
+                return !set.cells.isEmpty || !set.rasters.isEmpty
+            }
+    }
+
     private static func scanLocked(_ path: String) -> ChartSet? {
         let archive = isArchive(path)
         guard let read = archive ? lookout_scan_zip_read(path) : lookout_scan_read(path),
@@ -339,15 +365,33 @@ enum ChartSetStore {
     /// rather than walking the folder again.
     static func files(of path: String) -> [ScannedCell] {
         guard let h = handle else { return [] }
+        // An entry path is a name inside the archive with no file at it. The
+        // core also lists the charts a bake wrote into the prepared directory,
+        // and those are files on disk. Test the path prefix rather than the
+        // kind of the set. Marking every file in a .zip set as an entry
+        // reported an imported library's own charts as unreadable and left the
+        // set with no openable path.
+        let archive = ChartScan.isArchive(path)
+        // With no prepared directory, every path in an archive set is an entry.
+        let prepared = archive ? ChartBake.preparedDirectory(for: path).map { $0 + "/" } : nil
         return path.withCString { p in
             var n = 0
             guard let rows = lookout_chart_set_files(h, p, &n) else { return [] }
-            // A .zip's entries cannot be handed to the engine as they lie.
-            let archive = ChartScan.isArchive(path)
-            return (0..<n).compactMap { i in
-                rows[i].map { ScannedCell($0.pointee, archived: archive) }
+            return (0..<n).compactMap { i -> ScannedCell? in
+                guard let row = rows[i] else { return nil }
+                let onDisk = prepared.map { String(cString: row.pointee.path).hasPrefix($0) } ?? false
+                return ScannedCell(row.pointee, archived: archive && !onDisk)
             }
         }
+    }
+
+    /// Read a folder again after a bake wrote charts into its prepared
+    /// directory. Until then the row counts every chart as unprepared and
+    /// holds no openable path.
+    @discardableResult
+    static func rescan(_ path: String) -> Bool {
+        guard let h = handle else { return false }
+        return path.withCString { lookout_chart_sets_rescan(h, $0) != 0 }
     }
 
     static func savedPaths() -> [String] { all().map(\.path) }

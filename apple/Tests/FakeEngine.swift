@@ -72,10 +72,16 @@ final class FakeEngine: RasterEngine, ChartLinkEngine, PluginEngine,
     // MARK: Chart links
     /// What chartLinksSnapshot returns. Nil is no change since the last poll.
     var links: ChartLinkSnapshot?
-    func addChartLink(_ link: String) { note("addChartLink(\(link))") }
-    func refreshChartLink(_ url: String) { note("refreshChartLink(\(url))") }
-    func removeChartLink(_ url: String) { note("removeChartLink(\(url))") }
-    func selectChartLink(_ url: String?) { note("selectChartLink(\(url ?? "nil"))") }
+    /// What the chart-link calls return. False stands for a controller with no
+    /// chart open.
+    var hasChartHandle = true
+    func addChartLink(_ link: String) -> Bool { note("addChartLink(\(link))"); return hasChartHandle }
+    func refreshChartLink(_ url: String) -> Bool { note("refreshChartLink(\(url))"); return hasChartHandle }
+    func removeChartLink(_ url: String) -> Bool { note("removeChartLink(\(url))"); return hasChartHandle }
+    func selectChartLink(_ url: String?) -> Bool {
+        note("selectChartLink(\(url ?? "nil"))")
+        return hasChartHandle
+    }
     func importChartLinks(_ json: String) { note("importChartLinks") }
     func chartLinksSnapshot() -> ChartLinkSnapshot? { links }
 
