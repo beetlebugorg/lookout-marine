@@ -7,6 +7,7 @@ const std = @import("std");
 
 const capi = @import("../capi.zig");
 const sets = @import("../chartsets.zig");
+const root = @import("../root.zig"); // the inventory the scan asks through
 const settings = @import("../settings.zig");
 const library = @import("../library.zig");
 
@@ -31,7 +32,7 @@ export fn lookout_chart_sets_open(
     prepared_root: ?[*:0]const u8,
 ) ?*lookout_chart_sets {
     const s = store orelse return null;
-    return sets.Sets.open(gpa, capi_io, s, span(prepared_root)) catch null;
+    return sets.Sets.open(gpa, capi_io, s, span(prepared_root), root.inventory) catch null;
 }
 
 export fn lookout_chart_sets_close(s: ?*lookout_chart_sets) void {

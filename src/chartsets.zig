@@ -78,6 +78,9 @@ pub const Sets = struct {
     /// made from, so a folder scanned after an import does not ask to be
     /// imported again. Empty when the shell prepares nowhere.
     prepared_root: []u8,
+    /// How the scan asks the engine what a file is. Null reads names instead.
+    /// A test with no engine linked passes null.
+    inventory: ?library.TakeInventory,
     mu: Lock = .{},
 
     rows: std.ArrayList(Row) = .empty,
@@ -103,6 +106,7 @@ pub const Sets = struct {
         io: std.Io,
         store: *settings.Store,
         prepared_root: []const u8,
+        inventory: ?library.TakeInventory,
     ) !*Sets {
         const self = try gpa.create(Sets);
         self.* = .{
@@ -110,6 +114,7 @@ pub const Sets = struct {
             .io = io,
             .store = store,
             .prepared_root = try gpa.dupe(u8, prepared_root),
+            .inventory = inventory,
             .reads = std.heap.ArenaAllocator.init(gpa),
         };
         errdefer self.close();
@@ -401,7 +406,7 @@ pub const Sets = struct {
             self.mu.unlock();
             defer self.gpa.free(path);
 
-            var scan = library.scan(self.gpa, self.io, path, null, null) catch continue;
+            var scan = library.scanWith(self.gpa, self.io, path, null, null, self.inventory, null) catch continue;
             defer scan.deinit();
 
             // What the shell prepared from this folder, if anything. It is
@@ -411,7 +416,7 @@ pub const Sets = struct {
             defer if (prepared) |*p| p.deinit();
             if (self.preparedPath(path)) |dir| {
                 defer self.gpa.free(dir);
-                prepared = library.scan(self.gpa, self.io, dir, null, null) catch null;
+                prepared = library.scanWith(self.gpa, self.io, dir, null, null, self.inventory, null) catch null;
             }
             self.land(path, &scan, if (prepared) |*p| p else null);
         }
@@ -595,7 +600,7 @@ const Fixture = struct {
     }
 
     fn open(self: *Fixture) !*Sets {
-        return Sets.open(t.allocator, self.io, self.store, "");
+        return Sets.open(t.allocator, self.io, self.store, "", null);
     }
 };
 
@@ -789,7 +794,7 @@ test "a prepared chart wins over the file it was made from" {
         .data = "x",
     });
 
-    const s = try Sets.open(t.allocator, f.io, f.store, root);
+    const s = try Sets.open(t.allocator, f.io, f.store, root, null);
     defer s.close();
     try t.expect(s.add(src));
     settle(s);
@@ -811,7 +816,7 @@ test "a set with nothing prepared still reports what it holds" {
     const src = try f.folderNamed("Set B", &.{"US5MD1MC.000"});
     defer t.allocator.free(src);
 
-    const s = try Sets.open(t.allocator, f.io, f.store, "");
+    const s = try Sets.open(t.allocator, f.io, f.store, "", null);
     defer s.close();
     try t.expect(s.add(src));
     settle(s);
@@ -837,7 +842,7 @@ test "a set is read again after a bake, and its prepared charts open" {
     const root = try f.folderNamed("Prepared", &.{});
     defer t.allocator.free(root);
 
-    const s = try Sets.open(t.allocator, f.io, f.store, root);
+    const s = try Sets.open(t.allocator, f.io, f.store, root, null);
     defer s.close();
     try t.expect(s.add(src));
     settle(s);
@@ -896,3 +901,4 @@ test "a set being read again keeps what the last scan found" {
     try t.expectEqual(@as(c_int, 0), rows[0].scanned);
     try t.expectEqual(@as(usize, 1), rows[0].charts);
 }
+

@@ -3477,9 +3477,49 @@ fn verifyArchive(_: ?*anyopaque, path: [:0]const u8, out: *library.Facts) librar
     return .chart;
 }
 
+
+/// tile57's answer for one path: what each file that looks like a chart
+/// actually is. This is the whole of the shell's knowledge about chart file
+/// formats now, and it amounts to passing the path along.
+fn takeInventory(
+    _: ?*anyopaque,
+    alloc: std.mem.Allocator,
+    path: []const u8,
+    out: *std.ArrayList(library.InventoryRow),
+) bool {
+    const zpath = alloc.dupeZ(u8, path) catch return false;
+    defer alloc.free(zpath);
+    var inv: ?*cc.tile57_inventory = null;
+    var err: cc.tile57_error = undefined;
+    if (cc.tile57_inventory_open(zpath.ptr, &inv, &err) != cc.TILE57_OK) return false;
+    defer cc.tile57_inventory_close(inv);
+    var n: usize = 0;
+    const rows = cc.tile57_inventory_rows(inv, &n) orelse return true;
+    for (rows[0..n]) |r| {
+        out.append(alloc, .{
+            .path = std.mem.span(r.path),
+            .name = std.mem.span(r.name),
+            .kind = switch (r.kind) {
+                cc.TILE57_FILE_SOURCE => .source,
+                cc.TILE57_FILE_UPDATE => .update,
+                cc.TILE57_FILE_BAKED => .baked,
+                cc.TILE57_FILE_RASTER => .raster,
+                else => .other,
+            },
+            .bytes = r.bytes,
+            .scale = r.scale,
+            .bounds = if (r.has_bounds) .{ r.west, r.south, r.east, r.north } else null,
+        }) catch return false;
+    }
+    return true;
+}
+
+/// What the models that scan a folder pass to library.scanWith.
+pub const inventory: library.TakeInventory = takeInventory;
+
 /// Look through `path` for charts this build draws. The caller owns the Scan.
 pub fn scanCharts(alloc: std.mem.Allocator, io: std.Io, path: []const u8) !library.Scan {
-    return library.scan(alloc, io, path, verifyArchive, null);
+    return library.scanWith(alloc, io, path, verifyArchive, null, inventory, null);
 }
 
 /// The same, for a chart set that arrives as one .zip. The archive is listed
@@ -4037,3 +4077,4 @@ test "what the engine does not persist stays out of the store" {
     try t.expect(!f.store.has(g, "scamin_filter_gate"));
     try t.expect(!f.store.has(g, "viewing_groups_off"));
 }
+

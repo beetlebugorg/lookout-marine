@@ -159,6 +159,32 @@ pub const Verdict = enum {
 /// open, and both carry coverage and a scale.
 pub const Verify = *const fn (ctx: ?*anyopaque, path: [:0]const u8, out: *Facts) Verdict;
 
+/// What the engine reports one file to be.
+pub const InventoryKind = enum { other, source, update, baked, raster };
+
+pub const InventoryRow = struct {
+    /// Borrowed for the length of the call.
+    path: []const u8,
+    name: []const u8 = "",
+    kind: InventoryKind = .other,
+    bytes: u64 = 0,
+    scale: i32 = 0,
+    bounds: ?[4]f64 = null,
+};
+
+/// What a path holds. Appends a row per file that looks like a chart and
+/// returns true. False when the path cannot be read.
+///
+/// root.zig binds this to tile57_inventory_open. A null function reads names
+/// instead, which is what the archive listing does: an entry inflates before
+/// it can be read.
+pub const TakeInventory = *const fn (
+    ctx: ?*anyopaque,
+    alloc: std.mem.Allocator,
+    path: []const u8,
+    out: *std.ArrayList(InventoryRow),
+) bool;
+
 /// One chart file the scan found.
 pub const Cell = struct {
     /// The absolute path, owned by the Scan.
@@ -247,6 +273,20 @@ pub fn scan(
     verify: ?Verify,
     verify_ctx: ?*anyopaque,
 ) !Scan {
+    return scanWith(alloc, io, root, verify, verify_ctx, null, null);
+}
+
+/// The same, with the engine reporting what each file is. A null `inventory`
+/// keeps the name-reading walk.
+pub fn scanWith(
+    alloc: std.mem.Allocator,
+    io: std.Io,
+    root: []const u8,
+    verify: ?Verify,
+    verify_ctx: ?*anyopaque,
+    inventory: ?TakeInventory,
+    inventory_ctx: ?*anyopaque,
+) !Scan {
     var cells: std.ArrayList(Cell) = .empty;
     var raster: std.ArrayList(Cell) = .empty;
     errdefer {
@@ -256,6 +296,66 @@ pub fn scan(
         raster.deinit(alloc);
     }
     var counts = struct { updates: usize = 0, other: usize = 0, refused: usize = 0 }{};
+
+    if (inventory) |ask| {
+        var rows = std.ArrayList(InventoryRow).empty;
+        defer rows.deinit(alloc);
+        if (ask(inventory_ctx, alloc, root, &rows)) {
+            for (rows.items) |r| {
+                switch (r.kind) {
+                    .update => {
+                        counts.updates += 1;
+                        continue;
+                    },
+                    .other => {
+                        counts.other += 1;
+                        continue;
+                    },
+                    else => {},
+                }
+                const path = try alloc.dupeZ(u8, r.path);
+                errdefer alloc.free(path);
+                // A Cell's name is a slice of its path, and the Scan frees the
+                // path alone. The engine states the name; this locates it in the
+                // path so the ownership stays as it was, and falls back to the
+                // stem for a dataset whose DSNM differs from its file name.
+                const base = std.fs.path.basename(path);
+                const at = base.ptr - path.ptr;
+                const name = if (std.mem.indexOf(u8, base, r.name)) |off|
+                    path[at + off ..][0..r.name.len]
+                else
+                    base[0 .. base.len - std.fs.path.extension(base).len];
+                const cell: Cell = .{
+                    .path = path,
+                    .name = name,
+                    .kind = switch (r.kind) {
+                        .source => .source,
+                        .baked => .baked,
+                        .raster => .raster,
+                        else => unreachable,
+                    },
+                    // The band digit an S-57 name states is the producer's own,
+                    // so it is read where the name has one. An S-101 name
+                    // states none.
+                    .band = usageBand(name) orelse 0,
+                    .bytes = r.bytes,
+                    .facts = .{ .scale = r.scale, .bounds = r.bounds },
+                };
+                if (r.kind == .raster) try raster.append(alloc, cell) else try cells.append(alloc, cell);
+            }
+            const found = try cells.toOwnedSlice(alloc);
+            return .{
+                .alloc = alloc,
+                .root = try alloc.dupe(u8, root),
+                .cells = found,
+                .raster = try raster.toOwnedSlice(alloc),
+                .updates = counts.updates,
+                .other = counts.other,
+                .refused = counts.refused,
+                .producer = agreedProducer(found),
+            };
+        }
+    }
 
     const cwd = std.Io.Dir.cwd();
     if (cwd.openDir(io, root, .{ .iterate = true })) |*d| {
