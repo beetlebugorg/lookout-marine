@@ -2477,6 +2477,7 @@ pub const Lookout = struct {
         store.setFlag(g, "date_dependent", m.date_dependent);
         store.setFlag(g, "highlight_date_dependent", m.highlight_date_dependent);
         store.setText(g, "date_view", std.mem.sliceTo(&m.date_view, 0));
+        store.setText(g, "preferred_language", std.mem.sliceTo(&m.preferred_language, 0));
     }
 
     /// Overlay what the store holds onto `m`, which already holds the engine
@@ -2538,6 +2539,11 @@ pub const Lookout = struct {
             @memset(&m.date_view, 0);
             const n = @min(v.len, m.date_view.len - 1);
             @memcpy(m.date_view[0..n], v[0..n]);
+        }
+        if (store.text(g, "preferred_language")) |v| {
+            @memset(&m.preferred_language, 0);
+            const n = @min(v.len, m.preferred_language.len - 1);
+            @memcpy(m.preferred_language[0..n], v[0..n]);
         }
     }
 
@@ -3961,6 +3967,7 @@ test "the mariner settings go into the store field for field" {
     m.date_dependent = false;
     m.highlight_date_dependent = true;
     _ = std.fmt.bufPrintZ(&m.date_view, "20260401", .{}) catch unreachable;
+    _ = std.fmt.bufPrintZ(&m.preferred_language, "zho", .{}) catch unreachable;
     Lookout.writeMariner(f.store, m);
 
     var got: Mariner = undefined;
@@ -3994,6 +4001,7 @@ test "the mariner settings go into the store field for field" {
     try t.expect(!got.date_dependent);
     try t.expect(got.highlight_date_dependent);
     try t.expectEqualStrings("20260401", std.mem.sliceTo(&got.date_view, 0));
+    try t.expectEqualStrings("zho", std.mem.sliceTo(&got.preferred_language, 0));
 }
 
 test "an empty date reads as today, whatever was saved before" {
