@@ -163,7 +163,9 @@ pub const Verify = *const fn (ctx: ?*anyopaque, path: [:0]const u8, out: *Facts)
 pub const InventoryKind = enum { other, source, update, baked, raster };
 
 pub const InventoryRow = struct {
-    /// Borrowed for the length of the call.
+    /// Owned by the allocator the take was given, and freed with the row list.
+    /// The engine's own strings are valid only until its handle closes, and the
+    /// take closes it before returning, so a row holds a copy.
     path: []const u8,
     name: []const u8 = "",
     kind: InventoryKind = .other,
@@ -299,7 +301,13 @@ pub fn scanWith(
 
     if (inventory) |ask| {
         var rows = std.ArrayList(InventoryRow).empty;
-        defer rows.deinit(alloc);
+        defer {
+            for (rows.items) |r| {
+                alloc.free(r.path);
+                alloc.free(r.name);
+            }
+            rows.deinit(alloc);
+        }
         if (ask(inventory_ctx, alloc, root, &rows)) {
             for (rows.items) |r| {
                 switch (r.kind) {
