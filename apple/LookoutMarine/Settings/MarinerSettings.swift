@@ -108,6 +108,52 @@ final class MarinerSettings: ObservableObject {
     @Published var textSizeScale = 1.0
     @Published var soundingSizeScale = 1.0
 
+    // Labels — live, style only
+    /// An ISO 639-2 code such as "zho", or "" for the portrayed name. Any code
+    /// draws an S-57 national name (NOBJNM), which states no language of its
+    /// own; a native S-101 dataset draws the name it holds for that code.
+    @Published var preferredLanguage = ""
+    /// How the name-language setting is offered, which the open charts decide.
+    ///
+    /// S-57 records no language for NOBJNM, so a chart with national names
+    /// states the single code "und" and there is nothing to choose between:
+    /// that is a switch. A native S-101 dataset names its features in real
+    /// languages, and those are a menu. A library stating neither has nothing
+    /// to offer at all.
+    enum LanguageChoice: Equatable {
+        case none
+        case nationalToggle
+        case pick([String])
+    }
+
+    /// The codes come from the chart model, which the open itself writes, so a
+    /// Settings window left up while charts are imported is not describing the
+    /// library that was open when it opened.
+    static func languageChoice(for codes: [String]) -> LanguageChoice {
+        if codes.isEmpty { return .none }
+        if codes == [undetermined] { return .nationalToggle }
+        return .pick(codes)
+    }
+
+    /// The code an S-57 national name is filed under. It matches any language
+    /// the mariner asks for, so the toggle sets it directly.
+    static let undetermined = "und"
+
+    /// The toggle half of `languageChoice`: on when a national name is being
+    /// drawn rather than the portrayed one.
+    var nationalNames: Bool {
+        get { !preferredLanguage.isEmpty }
+        set { preferredLanguage = newValue ? MarinerSettings.undetermined : "" }
+    }
+
+    /// What to call one code in the picker. `und` is not a language, so it is
+    /// named for what it is; anything else takes the system's own name for it
+    /// and falls back to the bare code.
+    static func languageName(_ code: String) -> String {
+        if code == undetermined { return "National name" }
+        return Locale.current.localizedString(forLanguageCode: code)?.localizedCapitalized ?? code
+    }
+
     // Dates — rebuild
     @Published var dateDependent = true
     @Published var highlightDateDependent = false
@@ -173,6 +219,7 @@ final class MarinerSettings: ObservableObject {
         dateDependent = m.date_dependent
         highlightDateDependent = m.highlight_date_dependent
         dateView = m.dateViewString
+        preferredLanguage = m.preferredLanguageString
     }
 
     /// The full struct to hand back to the engine: `raw` with the exposed fields
@@ -208,6 +255,7 @@ final class MarinerSettings: ObservableObject {
         m.date_dependent = dateDependent
         m.highlight_date_dependent = highlightDateDependent
         m.setDateView(dateView)
+        m.setPreferredLanguage(preferredLanguage)
         return m
     }
 
@@ -233,6 +281,28 @@ extension tile57_mariner {
     mutating func setDateView(_ s: String) {
         let utf8 = Array(s.utf8.prefix(8))
         withUnsafeMutableBytes(of: &date_view) { raw in
+            let p = raw.bindMemory(to: CChar.self)
+            for i in 0..<raw.count { p[i] = 0 }
+            for (i, b) in utf8.enumerated() { p[i] = CChar(bitPattern: b) }
+        }
+    }
+
+    // MARK: - preferred_language[4] <-> String
+
+    var preferredLanguageString: String {
+        var copy = preferred_language
+        return withUnsafeBytes(of: &copy) { raw in
+            let p = raw.bindMemory(to: CChar.self)
+            var bytes: [UInt8] = []
+            for c in p { if c == 0 { break }; bytes.append(UInt8(bitPattern: c)) }
+            return String(decoding: bytes, as: UTF8.self)
+        }
+    }
+    /// An ISO 639-2 code is three letters, and the engine drops anything that
+    /// fills the field with no room for the NUL, so this cuts at three.
+    mutating func setPreferredLanguage(_ s: String) {
+        let utf8 = Array(s.lowercased().utf8.prefix(3))
+        withUnsafeMutableBytes(of: &preferred_language) { raw in
             let p = raw.bindMemory(to: CChar.self)
             for i in 0..<raw.count { p[i] = 0 }
             for (i, b) in utf8.enumerated() { p[i] = CChar(bitPattern: b) }

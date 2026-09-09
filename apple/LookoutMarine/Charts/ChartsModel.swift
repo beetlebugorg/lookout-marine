@@ -20,6 +20,12 @@ final class ChartsModel {
 
     var hasChart = false
     var chartPath: String?
+    /// The label languages the OPEN charts state, as ISO 639-2 codes, from
+    /// lookout_chart_languages. Empty when nothing is open, or when every
+    /// chart names its features in English. Settings offers these and nothing
+    /// else: a language the charts do not state draws the portrayed name, so a
+    /// menu of the rest would be a row of settings that do nothing.
+    var chartLanguages: [String] = []
     var openRequest: OpenRequest?
     var openError: String?
     private var openSeq = 0
