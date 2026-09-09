@@ -287,6 +287,17 @@ void lookout_get_mariner(lookout *h, tile57_mariner *out);
  * viewing groups, point/boundary style, overscale, extra size scales) mark a
  * rebuild, done lazily on the next render. */
 void lookout_set_mariner(lookout *h, const tile57_mariner *m);
+/* The label languages the open charts state, as NUL-terminated ISO 639-2
+ * codes, ascending. A shell offers the mariner these and nothing else: a
+ * preferred_language outside the set draws the portrayed name. An S-57 chart
+ * codes its one national name "und", which answers any language, so a set of
+ * exactly {"und"} is a national-names switch rather than a menu.
+ *
+ * NULL with *out_n 0 when the library states none. The array and the codes
+ * belong to the handle and are replaced when the open library changes, so a
+ * shell that keeps them copies them. */
+const char *const *lookout_chart_languages(lookout *h, size_t *out_n);
+
 
 /* ---- build + render ---------------------------------------------------- */
 int lookout_build(lookout *h);                 /* force (re)tessellation */
