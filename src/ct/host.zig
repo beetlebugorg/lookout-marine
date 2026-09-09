@@ -35,6 +35,7 @@ const cbasemap = @import("../basemap.zig");
 const Lock = @import("../lock.zig").Lock;
 const RwLock = @import("../lock.zig").RwLock;
 const clock = @import("../clock.zig");
+const ctpng = ct.png; // the glyph door takes pixels, and tile57 hands over PNG
 
 pub const Map = ct.map_object.Map;
 pub const Camera = ct.camera.Camera;
@@ -675,6 +676,86 @@ pub const Host = struct {
         if (added) self.applyAssets();
     }
 
+    /// How long one frame may spend baking glyphs, on the same reasoning as
+    /// SYMBOL_BUDGET_US: a chart that names hundreds of features in another
+    /// script asks for its whole set at once, and the labels are not drawn
+    /// either way until the sheet lands.
+    const GLYPH_BUDGET_US: i64 = 4000;
+
+    /// How many codepoints go into one bake. A sheet is packed and uploaded
+    /// whole, so a handful of tiny sheets costs more than one modest sheet.
+    const GLYPH_BATCH: usize = 64;
+
+    /// Answer the codepoints the layout could not draw.
+    ///
+    /// The bundled label font covers Latin, Greek and Cyrillic. A chart naming
+    /// its features in another script — an S-57 cell's NOBJNM, or an S-101
+    /// dataset's own languages — wants glyphs no prebaked sheet holds: CJK
+    /// alone is some 20,000, which is more than the atlas has room for and
+    /// far more than any one chart uses. So the layout reports what it wanted,
+    /// and exactly those characters are baked out of the platform's own face.
+    ///
+    /// Same frame discipline as the images: never while a build is in flight,
+    /// and one asset swap per batch rather than per glyph.
+    fn serveMissingGlyphs(self: *Host) void {
+        const probe = std.c.getenv("LOOKOUT_GLYPH_PROBE") != null;
+        const font = self.fallback_font orelse {
+            if (probe) std.debug.print("glyph: no fallback face\n", .{});
+            return;
+        };
+        const b = self.m.scene() orelse {
+            if (probe) std.debug.print("glyph: no scene\n", .{});
+            return;
+        };
+        if (b.missing_glyphs.len == 0) {
+            if (probe) std.debug.print("glyph: nothing missing\n", .{});
+            return;
+        }
+        if (self.m.buildInFlight()) {
+            if (probe) std.debug.print("glyph: build in flight, {d} missing\n", .{b.missing_glyphs.len});
+            return;
+        }
+        if (self.glyph_atlas == null) {
+            if (probe) std.debug.print("glyph: no atlas\n", .{});
+            return;
+        }
+
+        const t0 = clock.ticksUs();
+        var want: [GLYPH_BATCH]u32 = undefined;
+        var n: usize = 0;
+        for (b.missing_glyphs) |cp| {
+            if (self.glyphs_asked.contains(cp)) continue;
+            self.glyphs_asked.put(self.alloc, cp, {}) catch continue;
+            want[n] = cp;
+            n += 1;
+            if (n == want.len) break;
+            if (clock.ticksUs() - t0 > GLYPH_BUDGET_US) break;
+        }
+        if (n == 0) return;
+
+        var assets: cc.tile57_assets = std.mem.zeroes(cc.tile57_assets);
+        var err: cc.tile57_error = undefined;
+        if (cc.tile57_bake_glyph_sdf_codepoints(&assets, font.ptr, font.len, &want, n, &err) != cc.TILE57_OK) {
+            if (probe) std.debug.print("glyph: bake of {d} refused\n", .{n});
+            return;
+        }
+        defer cc.tile57_assets_free(&assets);
+        const json = assets.sprite_json orelse return;
+        const png = assets.sprite_png orelse return;
+        const sheet = png[0..assets.sprite_png_len];
+        // tile57 hands the sheet over as PNG; the atlas takes raw RGBA.
+        var arena = std.heap.ArenaAllocator.init(self.alloc);
+        defer arena.deinit();
+        const img = ctpng.read(arena.allocator(), sheet) catch return;
+        const added = self.glyph_atlas.?.addSdfSheet(json[0..assets.sprite_json_len], img.rgba, img.w, img.h) catch return;
+        if (probe) std.debug.print("glyph: baked {d}, atlas took {d}\n", .{ n, added });
+        if (added == 0) return;
+        self.glyphs_dirty = true;
+        // The resident buckets were laid out with these characters missing, so
+        // they measure and place wrongly until they are laid out again.
+        self.applyAssets();
+    }
+
     /// Rasterize one symbol run into the sprite. Answers the sprite's cell
     /// count so the caller can tell whether anything landed. The caller owns
     /// the asset swap: no build may be in flight (the sheet is mutated in
@@ -831,6 +912,7 @@ pub const Host = struct {
         if (self.raster_pump) |f| f(self.raster_pump_ctx.?);
         const t1 = clock.ticksUs();
         self.serveMissingImages();
+        self.serveMissingGlyphs();
         self.prof_pump_us = t1 - t0;
         self.prof_serve_us = clock.ticksUs() - t1;
     }
