@@ -298,6 +298,41 @@ void lookout_set_mariner(lookout *h, const tile57_mariner *m);
  * shell that keeps them copies them. */
 const char *const *lookout_chart_languages(lookout *h, size_t *out_n);
 
+/* Hand over a font for the scripts the bundled label face has no glyphs for.
+ *
+ * The bundled Noto Sans covers Latin, Greek and Cyrillic. A chart naming its
+ * features in another script draws blanks without this: CJK alone is some
+ * 20,000 glyphs, which no bundled face or prebaked sheet carries. The layout
+ * reports the characters it could not draw and lookout bakes exactly those out
+ * of `bytes`, so only what a chart actually names is ever rasterized.
+ *
+ * Every platform ships a face for the scripts its users read, and each shell
+ * knows where its own font store is, so the SHELL finds the file and lookout
+ * takes the bytes — the same division as lookout_set_cache_dir. `bytes` is a
+ * TrueType file or a collection, of which the first face is read. It is
+ * BORROWED: keep it mapped for the life of the handle. NULL, or len 0, clears
+ * it. A platform with nothing to offer passes nothing and draws blanks, as it
+ * did before. */
+void lookout_set_fallback_font(lookout *h, const uint8_t *bytes, size_t len);
+
+/* 1 when a face can draw a codepoint: it has a glyph for it AND the glyph
+ * baker can read that glyph's outlines. Ask before handing a face over.
+ *
+ * The two are not the same question, and a platform font store answers the
+ * first one only. Apple's UI faces cover CJK and are exactly what CoreText
+ * returns for Chinese text, but they carry Apple's own `cidg` outlines rather
+ * than glyf or CFF, and nothing comes out of them. Installing one draws blank
+ * labels with nothing to say why. Walk the faces the platform offers for a
+ * character of the script and install the first that answers 1. No handle:
+ * this is a question about bytes. */
+int lookout_font_covers(const uint8_t *bytes, size_t len, uint32_t codepoint);
+
+/* The same question about the face lookout already draws labels with, so a
+ * shell can tell which of a chart's languages need a platform font and which
+ * are drawn already. A chart stating Finnish, Inuktitut, Inari Sami and
+ * Swedish needs a face for ONE of them: without this a shell looks up the
+ * first, finds a Latin face it did not need, and leaves the syllabics blank. */
+int lookout_label_font_covers(uint32_t codepoint);
 
 /* ---- build + render ---------------------------------------------------- */
 int lookout_build(lookout *h);                 /* force (re)tessellation */

@@ -168,6 +168,9 @@ final class ChartController: NSObject {
         // also resolves whatever chart link the mariner left selected: the core
         // read the list at open and has been waiting for a way to fetch.
         linkFetch.attach(to: h) { [weak self] in self?.kick() }
+        // The face for scripts the bundled label font cannot draw. After the
+        // open, because which face is wanted depends on what the charts state.
+        installFallbackFont()
         // Empty is legal: a library of pictures alone opens with no cell, and
         // then there is no chart path to report.
         chartPath = paths.isEmpty ? nil
@@ -342,6 +345,8 @@ final class ChartController: NSObject {
         // lookout_close writes the pose down itself, out of the store the
         // shell handed over.
         if let h { lookout_close(h) }
+        // After the close, because the core borrowed these bytes until it.
+        fallbackFont = nil
     }
 
     /// How many vector charts are open. Zero is a library of pictures alone.
@@ -716,6 +721,30 @@ final class ChartController: NSObject {
         var mm = m
         lookout_set_mariner(h, &mm)
         kick(); pushReadouts()
+    }
+
+    /// The mapped face handed to the core, held because the core borrows the
+    /// bytes rather than copying tens of megabytes it will touch a few glyphs
+    /// of. Released when the next open replaces it, or at close.
+    private var fallbackFont: NSData?
+
+    /// Find a face for the scripts the open charts name, and hand the core the
+    /// bytes. A library naming everything in a script the bundled font covers
+    /// gets none, and so does a platform with nothing to offer: the labels
+    /// draw as they did before.
+    private func installFallbackFont() {
+        guard let h = handle else { return }
+        let codes = chartLanguages()
+        guard !codes.isEmpty, let data = LabelFont.forLanguages(codes) else {
+            fallbackFont = nil
+            lookout_set_fallback_font(h, nil, 0)
+            return
+        }
+        // NSData's pointer is stable for the object's life, which is what the
+        // core borrows; Data's is only valid inside withUnsafeBytes.
+        let held = data as NSData
+        fallbackFont = held
+        lookout_set_fallback_font(h, held.bytes.assumingMemoryBound(to: UInt8.self), held.length)
     }
 
     /// The label languages the open charts state, as ISO 639-2 codes. Empty
