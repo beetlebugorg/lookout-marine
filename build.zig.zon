@@ -11,8 +11,8 @@
         // dependency is fetched automatically, so a fresh clone of this repo
         // alone builds. Bump the commit + hash here to move the pin.
         .tile57 = .{
-            .url = "git+https://github.com/beetlebugorg/tile57#ba7848276159a5d6869786258e2ceecc96dcb98e",
-            .hash = "tile57-0.0.0-dev-SAveCPzJIQGj5iLqIR5CEPcsCNg6Cm4TpcG1YiAez9Yn",
+            .url = "git+https://github.com/beetlebugorg/tile57?ref=v0.4.0#90e86ced593fb99a289e9a6d24738678f789bc30",
+            .hash = "tile57-0.0.0-dev-SAveCPWmIgE2JlfqpQDxSLoTN8eTRt6ECVtfnod90Wc2",
             .lazy = true,
         },
         .tile57_local = .{ .path = "../tile57", .lazy = true },
