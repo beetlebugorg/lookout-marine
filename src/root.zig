@@ -3496,9 +3496,17 @@ fn takeInventory(
     var n: usize = 0;
     const rows = cc.tile57_inventory_rows(inv, &n) orelse return true;
     for (rows[0..n]) |r| {
+        // The engine's row strings are valid until tile57_inventory_close,
+        // and the defer above runs it before the scan reads a row. Copy them
+        // into the scan's allocator; scanWith frees them with the row list.
+        const row_path = alloc.dupe(u8, std.mem.span(r.path)) catch return false;
+        const row_name = alloc.dupe(u8, std.mem.span(r.name)) catch {
+            alloc.free(row_path);
+            return false;
+        };
         out.append(alloc, .{
-            .path = std.mem.span(r.path),
-            .name = std.mem.span(r.name),
+            .path = row_path,
+            .name = row_name,
             .kind = switch (r.kind) {
                 cc.TILE57_FILE_SOURCE => .source,
                 cc.TILE57_FILE_UPDATE => .update,
@@ -3509,7 +3517,11 @@ fn takeInventory(
             .bytes = r.bytes,
             .scale = r.scale,
             .bounds = if (r.has_bounds) .{ r.west, r.south, r.east, r.north } else null,
-        }) catch return false;
+        }) catch {
+            alloc.free(row_path);
+            alloc.free(row_name);
+            return false;
+        };
     }
     return true;
 }
