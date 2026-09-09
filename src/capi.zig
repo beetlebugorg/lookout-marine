@@ -286,6 +286,18 @@ export fn lookout_set_mariner(h: ?*lookout, m: *const cc.tile57_mariner) void {
     defer l.apiUnlock();
     l.setMariner(m.*);
 }
+/// The label languages the open charts state. See lookout.h.
+///
+/// The pointers are the engine's own and stay valid until the library changes,
+/// which is why a shell reads them and copies what it keeps.
+export fn lookout_chart_languages(h: ?*lookout, out_n: ?*usize) ?[*]const [*:0]const u8 {
+    const l = locked(h);
+    defer l.apiUnlock();
+    if (out_n) |n| n.* = 0;
+    if (l.language_ptrs.len == 0) return null;
+    if (out_n) |n| n.* = l.language_ptrs.len;
+    return l.language_ptrs.ptr;
+}
 
 // ---- build + render --------------------------------------------------------
 export fn lookout_build(h: ?*lookout) c_int {

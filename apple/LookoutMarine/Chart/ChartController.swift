@@ -273,6 +273,11 @@ final class ChartController: NSObject {
         pushReadouts()
         model?.charts.hasChart = true
         model?.charts.chartPath = chartPath
+        // What the open library states about its labels. On the model rather
+        // than read once by whoever asks: the Settings window may be up while
+        // charts are imported, and a list taken at appear would still describe
+        // the library that was open then.
+        model?.charts.chartLanguages = chartLanguages()
         // A .lkplug opened before the chart was up waited for the plugin
         // layer; it can go to its consent sheet now.
         model?.drainPendingInstall()
@@ -711,6 +716,16 @@ final class ChartController: NSObject {
         var mm = m
         lookout_set_mariner(h, &mm)
         kick(); pushReadouts()
+    }
+
+    /// The label languages the open charts state, as ISO 639-2 codes. Empty
+    /// when nothing is open, or when every chart names its features in
+    /// English. The core owns the strings, so they are copied out here.
+    func chartLanguages() -> [String] {
+        guard let h = handle else { return [] }
+        var n = 0
+        guard let codes = lookout_chart_languages(h, &n), n > 0 else { return [] }
+        return (0..<n).compactMap { codes[$0].map { String(cString: $0) } }
     }
 
     /// Set mariner.device_scale from the view's backing scale factor (physical

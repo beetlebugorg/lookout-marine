@@ -757,6 +757,14 @@ pub const Lookout = struct {
     /// with a native fractional minzoom, so a feature appears at its exact
     /// display scale with no per-frame work. Collected once per composition.
     scamin: []i32 = &.{},
+    /// The label languages the open charts state, as ISO 639-2 codes. A shell
+    /// offers the mariner these and nothing else, because a
+    /// `preferred_language` outside the set draws the portrayed name.
+    /// Collected with `scamin`, from the same charts.
+    languages: []const [:0]u8 = &.{},
+    /// The same codes as a C pointer array, so the ABI hands them over with no
+    /// allocation at the call. Rebuilt with `languages`.
+    language_ptrs: []const [*:0]const u8 = &.{},
     /// The glyph face handed to the overlay store, and the em size its pixel
     /// metrics are measured at (tile57 writes it into the sheet's index).
     glyph_face: GlyphFace = undefined,
@@ -1356,7 +1364,7 @@ pub const Lookout = struct {
         // and never touches the compositor: charttable reads pmtiles itself, so
         // the whole tile path for a single cell is inside it. A library goes
         // through tile57's compositor below, once the partition is built.
-        self.refreshScamin();
+        self.refreshLibraryFacts();
         if (self.charts.items.len == 1) {
             if (self.chartPath(0)) |p| {
                 self.ct.bindChart(p) catch |e| {
@@ -1849,7 +1857,7 @@ pub const Lookout = struct {
             self.ct.bindComposed(c, .mlt) catch |e| {
                 std.debug.print("chart source: {s}\n", .{@errorName(e)});
             };
-            self.refreshScamin();
+            self.refreshLibraryFacts();
             if (replaced != null) self.style_dirty = true;
         }
         // The loader animated self.g.clear to a dark pulse (see render()); now that
@@ -1952,14 +1960,30 @@ pub const Lookout = struct {
         self.deriveLive();
     }
 
-    /// Re-read the library's SCAMIN denominators and rebuild the style with
-    /// them. The manifest decides how the style's `_scamin` layers are split,
-    /// so charts arriving with new denominators need a fresh style, not just a
-    /// fresh composition.
-    fn refreshScamin(self: *Lookout) void {
+    /// Re-read what the open library states about itself: the SCAMIN
+    /// denominators, which the style splits its `_scamin` layers by, and the
+    /// label languages, which a shell builds its language menu from. Charts
+    /// arriving with new denominators need a fresh style, not just a fresh
+    /// composition, so this marks the style dirty.
+    fn refreshLibraryFacts(self: *Lookout) void {
         if (self.scamin.len != 0) self.alloc.free(self.scamin);
         self.scamin = cstyle.collectScamin(self.alloc, self.charts.items);
+        self.freeLanguages();
+        self.languages = cstyle.collectLanguages(self.alloc, self.charts.items);
+        if (self.languages.len != 0) {
+            if (self.alloc.alloc([*:0]const u8, self.languages.len)) |ptrs| {
+                for (self.languages, ptrs) |code, *dst| dst.* = code.ptr;
+                self.language_ptrs = ptrs;
+            } else |_| {}
+        }
         self.style_dirty = true;
+    }
+
+    fn freeLanguages(self: *Lookout) void {
+        cstyle.freeLanguages(self.alloc, self.languages);
+        self.languages = &.{};
+        if (self.language_ptrs.len != 0) self.alloc.free(self.language_ptrs);
+        self.language_ptrs = &.{};
     }
 
     fn zoomRange(self: *Lookout) [2]f64 {
@@ -2007,6 +2031,7 @@ pub const Lookout = struct {
         self.clearAltPacks();
         self.alt_packs.deinit(self.alloc);
         if (self.scamin.len != 0) self.alloc.free(self.scamin);
+        self.freeLanguages();
         if (self.compose) |c| cc.tile57_compose_close(c); // BEFORE the charts
         for (self.charts.items) |ch| cc.tile57_chart_close(ch);
         self.charts.deinit(self.alloc);
@@ -2477,6 +2502,7 @@ pub const Lookout = struct {
         store.setFlag(g, "date_dependent", m.date_dependent);
         store.setFlag(g, "highlight_date_dependent", m.highlight_date_dependent);
         store.setText(g, "date_view", std.mem.sliceTo(&m.date_view, 0));
+        store.setText(g, "preferred_language", std.mem.sliceTo(&m.preferred_language, 0));
     }
 
     /// Overlay what the store holds onto `m`, which already holds the engine
@@ -2538,6 +2564,11 @@ pub const Lookout = struct {
             @memset(&m.date_view, 0);
             const n = @min(v.len, m.date_view.len - 1);
             @memcpy(m.date_view[0..n], v[0..n]);
+        }
+        if (store.text(g, "preferred_language")) |v| {
+            @memset(&m.preferred_language, 0);
+            const n = @min(v.len, m.preferred_language.len - 1);
+            @memcpy(m.preferred_language[0..n], v[0..n]);
         }
     }
 
@@ -3973,6 +4004,7 @@ test "the mariner settings go into the store field for field" {
     m.date_dependent = false;
     m.highlight_date_dependent = true;
     _ = std.fmt.bufPrintZ(&m.date_view, "20260401", .{}) catch unreachable;
+    _ = std.fmt.bufPrintZ(&m.preferred_language, "zho", .{}) catch unreachable;
     Lookout.writeMariner(f.store, m);
 
     var got: Mariner = undefined;
@@ -4006,6 +4038,7 @@ test "the mariner settings go into the store field for field" {
     try t.expect(!got.date_dependent);
     try t.expect(got.highlight_date_dependent);
     try t.expectEqualStrings("20260401", std.mem.sliceTo(&got.date_view, 0));
+    try t.expectEqualStrings("zho", std.mem.sliceTo(&got.preferred_language, 0));
 }
 
 test "an empty date reads as today, whatever was saved before" {

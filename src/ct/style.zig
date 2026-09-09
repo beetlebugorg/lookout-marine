@@ -382,7 +382,57 @@ pub fn collectScamin(alloc: std.mem.Allocator, charts: []const *cc.tile57_chart)
     return vals;
 }
 
+/// The label languages the open charts state, as ISO 639-2 codes, sorted and
+/// deduplicated. The compositor borrows its charts, so a quilt's set is the
+/// union of theirs, the same as SCAMIN. `und` is one of them: an S-57 chart
+/// codes its single national name that way, because S-57 records no language
+/// for NOBJNM.
+///
+/// The caller owns the slice and every code in it. The codes are
+/// NUL-terminated, so a C ABI hands them straight over.
+pub fn collectLanguages(alloc: std.mem.Allocator, charts: []const *cc.tile57_chart) []const [:0]u8 {
+    var out = std.ArrayList([:0]u8).empty;
+    for (charts) |c| {
+        var codes: [*c]const [*c]const u8 = null;
+        var n: usize = 0;
+        var err: cc.tile57_error = undefined;
+        if (cc.tile57_chart_languages(c, &codes, &n, &err) != cc.TILE57_OK or codes == null) continue;
+        defer cc.tile57_free(@ptrCast(@constCast(codes)));
+        for (codes[0..n]) |code| {
+            if (code == null) continue;
+            const lang = std.mem.span(@as([*:0]const u8, @ptrCast(code)));
+            if (lang.len == 0) continue;
+            var seen = false;
+            for (out.items) |have| {
+                if (std.mem.eql(u8, have, lang)) seen = true;
+            }
+            if (seen) continue;
+            const owned = alloc.dupeZ(u8, lang) catch continue;
+            out.append(alloc, owned) catch alloc.free(owned);
+        }
+    }
+    const vals = out.toOwnedSlice(alloc) catch return &.{};
+    std.mem.sort([:0]u8, vals, {}, struct {
+        fn lt(_: void, x: [:0]u8, y: [:0]u8) bool {
+            return std.mem.lessThan(u8, x, y);
+        }
+    }.lt);
+    return vals;
+}
+
+/// Release what `collectLanguages` returned.
+pub fn freeLanguages(alloc: std.mem.Allocator, langs: []const [:0]u8) void {
+    for (langs) |l| alloc.free(l);
+    alloc.free(langs);
+}
+
 // ---- tests -----------------------------------------------------------------
+
+test "collectLanguages: no charts states no language" {
+    const langs = collectLanguages(std.testing.allocator, &.{});
+    defer freeLanguages(std.testing.allocator, langs);
+    try std.testing.expectEqual(@as(usize, 0), langs.len);
+}
 
 test "collectScamin: no charts is an empty manifest" {
     const vals = collectScamin(std.testing.allocator, &.{});
@@ -509,7 +559,7 @@ test "every mariner toggle changes the built style" {
         const same = std.mem.eql(u8, s_off.json, s_on.json);
         if (same) inert += 1;
         std.debug.print("  {s:<32} off={d:>7} on={d:>7} bytes  {s}\n", .{
-            t.name, s_off.json.len, s_on.json.len,
+            t.name,                                       s_off.json.len, s_on.json.len,
             if (same) "NO EFFECT ON THE STYLE" else "ok",
         });
         // Exact equality: any toggle going inert fails, by name, above.
