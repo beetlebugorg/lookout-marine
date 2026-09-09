@@ -57,6 +57,7 @@ xcodebuild -project "$REPO/apple/LookoutMarine.xcodeproj" -scheme LookoutMarine 
   DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
   ENABLE_HARDENED_RUNTIME=YES \
   OTHER_CODE_SIGN_FLAGS=--timestamp \
+  CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
   MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD" \
   build
 
