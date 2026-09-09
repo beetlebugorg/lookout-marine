@@ -130,6 +130,14 @@ pub const Host = struct {
     /// Missing-image names already answered, so a name is rendered once and
     /// not once per frame.
     reported: std.StringHashMapUnmanaged(void) = .empty,
+    /// The face the shell found for the scripts the bundled Noto Sans has no
+    /// glyphs for. Borrowed: the shell owns the bytes and keeps them mapped
+    /// for the life of the handle. Null on a platform with nothing to offer,
+    /// which draws those labels as blanks, as it did before.
+    fallback_font: ?[]const u8 = null,
+    /// Codepoints already asked of the fallback face, answered or not, so a
+    /// label the face cannot draw is not re-baked once per frame.
+    glyphs_asked: std.AutoHashMapUnmanaged(u21, void) = .empty,
     /// The density and scheme the symbol runs are rendered at, so a runtime
     /// symbol matches the sheet it lands beside.
     asset_ratio: f32 = 1.0,
@@ -177,6 +185,7 @@ pub const Host = struct {
         var it = self.reported.keyIterator();
         while (it.next()) |k| self.alloc.free(k.*);
         self.reported.deinit(self.alloc);
+        self.glyphs_asked.deinit(self.alloc);
         // After the map has stopped: it holds the source this binds, and the
         // chart archive below, for as long as it runs.
         if (self.basemap) |b| b.destroy(self.alloc);
@@ -468,6 +477,17 @@ pub const Host = struct {
         // palette at the old density.
         self.forgetReported();
         return true;
+    }
+
+    /// Take the face the shell found for the scripts the bundled font has no
+    /// glyphs for. The bytes are BORROWED: the shell keeps them mapped for the
+    /// life of the handle, and a second call replaces the first.
+    ///
+    /// Setting one forgets which codepoints have been asked for, so a label
+    /// that drew blank under the old face is tried again under the new one.
+    pub fn setFallbackFont(self: *Host, bytes: []const u8) void {
+        self.fallback_font = if (bytes.len == 0) null else bytes;
+        self.glyphs_asked.clearRetainingCapacity();
     }
 
     /// tile57's SDF glyph sheet, which is exactly the shape charttable's

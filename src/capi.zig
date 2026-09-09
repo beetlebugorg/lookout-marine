@@ -286,6 +286,35 @@ export fn lookout_set_mariner(h: ?*lookout, m: *const cc.tile57_mariner) void {
     defer l.apiUnlock();
     l.setMariner(m.*);
 }
+/// True when the bundled label face can draw a codepoint. See lookout.h.
+export fn lookout_label_font_covers(codepoint: u32) c_int {
+    var covers: bool = false;
+    var err: cc.tile57_error = undefined;
+    if (cc.tile57_label_font_covers(codepoint, &covers, &err) != cc.TILE57_OK) return 0;
+    return @intFromBool(covers);
+}
+
+/// True when a face can draw a codepoint. See lookout.h.
+export fn lookout_font_covers(bytes: ?[*]const u8, len: usize, codepoint: u32) c_int {
+    const b = bytes orelse return 0;
+    if (len == 0) return 0;
+    var covers: bool = false;
+    var err: cc.tile57_error = undefined;
+    if (cc.tile57_font_covers(b, len, codepoint, &covers, &err) != cc.TILE57_OK) return 0;
+    return @intFromBool(covers);
+}
+
+/// Take the shell's fallback label face. See lookout.h.
+export fn lookout_set_fallback_font(h: ?*lookout, bytes: ?[*]const u8, len: usize) void {
+    const l = locked(h);
+    defer l.apiUnlock();
+    const b = bytes orelse {
+        l.ct.setFallbackFont(&.{});
+        return;
+    };
+    l.ct.setFallbackFont(b[0..len]);
+}
+
 /// The label languages the open charts state. See lookout.h.
 ///
 /// The pointers are the engine's own and stay valid until the library changes,
