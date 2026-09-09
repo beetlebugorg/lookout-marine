@@ -205,6 +205,7 @@
 		DDB11483FF3DEE919A04B9C8 /* ChartFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9B414D76B8FFB4298A58494 /* ChartFixture.swift */; };
 		DE55FD74596BCB2F9B39B686 /* ZoomControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0FF81FD7BD06CE338EF4E09 /* ZoomControls.swift */; };
 		DE59CBC001F2C93EFEEFB316 /* ChartsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21D746F565B07FFB055106D0 /* ChartsSection.swift */; };
+		DE7E58613244A25D01851767 /* LabelFont.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F945910CFA105B03A6D767D /* LabelFont.swift */; };
 		E114A387274E00A905B754AA /* ScaleParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5771B481220434E34EA6F794 /* ScaleParser.swift */; };
 		E14F467FD61BB3AB1A54AB95 /* DisplaySection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3257A1088AC4BCC3FBBFB97E /* DisplaySection.swift */; };
 		E554375935120FD341B56223 /* CoordinateParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 850ACAEA7CC105683D93D3E3 /* CoordinateParser.swift */; };
@@ -217,6 +218,7 @@
 		E911C978C197F55B85E6DFAF /* ChartMenuPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB8AD6DFED21DF30B2636C6C /* ChartMenuPanel.swift */; };
 		E9FFEE36804207C41DC2E1CA /* PluginInstallTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58C86FCD4EE381351EDD9D9E /* PluginInstallTests.swift */; };
 		EE1D3DEE63D56BA4BC2BB685 /* ShellTestCase.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39FCF4CF9169327DF0FA8FBB /* ShellTestCase.swift */; };
+		EEC8E67DA453210BDBFBC4CA /* LabelFont.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F945910CFA105B03A6D767D /* LabelFont.swift */; };
 		F0BE2056E172248A93FDFA7B /* ScaleParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BD93ECA0EF5B7BC7893551B /* ScaleParserTests.swift */; };
 		F0BE52AE80B81553B494FEDD /* StoreImport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85B12425865DA036F999C16D /* StoreImport.swift */; };
 		F0BEF83589EF79DCF51DC90F /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8FB061C18A2E1449AB1D30F1 /* Metal.framework */; };
@@ -361,6 +363,7 @@
 		9C7090FA8708C087510A6B66 /* PluginTableTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginTableTests.swift; sourceTree = "<group>"; };
 		9CE71623E18E6C2ED36FEF9D /* HoverTip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoverTip.swift; sourceTree = "<group>"; };
 		9D5D7B15F4286B70544A80B2 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
+		9F945910CFA105B03A6D767D /* LabelFont.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabelFont.swift; sourceTree = "<group>"; };
 		9FAE0C61602607D05CF24596 /* LicensesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LicensesTests.swift; sourceTree = "<group>"; };
 		A03D3BC7A7816F10B65863B0 /* LookoutMarineApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LookoutMarineApp.swift; sourceTree = "<group>"; };
 		A53C303F269185DBB7200970 /* UITestCase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UITestCase.swift; sourceTree = "<group>"; };
@@ -575,6 +578,7 @@
 				DB61B848C1E900A1F3615B91 /* ChartUIView.swift */,
 				5EBE7ED9891268BB429691A0 /* ChartValues.swift */,
 				E99E812450B1710B0945A9EE /* Instruments.swift */,
+				9F945910CFA105B03A6D767D /* LabelFont.swift */,
 				E7AE039534D7B01FBAAD147A /* OverlayLayer.swift */,
 				58CA6572430DD9F43DEA85E3 /* OverlayModel.swift */,
 				0D36819F503E24F82BD18F6B /* ViewState.swift */,
@@ -994,6 +998,7 @@
 				1D392087983C4CFA266EBAC4 /* EmptyChartState.swift in Sources */,
 				26E8F47E6DC2301DB9B687A6 /* HoverTip.swift in Sources */,
 				D8DE92A54522E48CF85722DE /* Instruments.swift in Sources */,
+				EEC8E67DA453210BDBFBC4CA /* LabelFont.swift in Sources */,
 				9EF506240F429BE5ECA1D33A /* Licenses.swift in Sources */,
 				C2A7920E23D12CA2B606E75C /* LookoutMarineApp.swift in Sources */,
 				B3ED2372659B6AA2D4F07172 /* MarinerSettings.swift in Sources */,
@@ -1114,6 +1119,7 @@
 				795E2C8B01CCC740FBFD9B6E /* EmptyChartState.swift in Sources */,
 				B4FA78A0F7B85E81C4F28CB2 /* HoverTip.swift in Sources */,
 				830C2CB5F625B40225EE8AF2 /* Instruments.swift in Sources */,
+				DE7E58613244A25D01851767 /* LabelFont.swift in Sources */,
 				B65E3546E971AC80B295ECF0 /* Licenses.swift in Sources */,
 				1D784EA4414260DF4C62E8B4 /* LookoutMarineApp.swift in Sources */,
 				8A8814B7709EC3A575C8ECBC /* MarinerSettings.swift in Sources */,
