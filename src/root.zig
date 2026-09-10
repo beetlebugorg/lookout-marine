@@ -1487,12 +1487,14 @@ pub const Lookout = struct {
             std.debug.print("overlay build failed: {s}\n", .{@errorName(e)});
             return;
         };
-        // The overlay pass draws from the frame's OWN origin. Its vertices are
-        // relative to it, so the MVP and the antimeridian wrap must be too.
-        // The camera does not move between here and this frame's draw.
+        // The overlay pass draws from the frame's OWN origin, so its MVP is
+        // built for that origin. mvpOrigin wraps the x delta itself, which
+        // covers the antimeridian. charttable used to want the wrap stated
+        // alongside and applied it per vertex, splitting any primitive lying
+        // across the half-world seam. The camera does not move between here
+        // and this frame's draw.
         var u = self.ct.m.uniforms();
         u.mvp = self.cam.mvpOrigin(frame.origin);
-        u.wrap_x = @floatCast(camera.wrapDx(self.cam.center.x, frame.origin.x));
         // The store's vertex and the renderer's overlay vertex are the same
         // 24 bytes in the same order — asserted, because a silent skew here
         // would draw the mariner's marks as noise rather than fail.
