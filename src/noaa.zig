@@ -42,6 +42,9 @@ pub const Cell = struct {
     zip_bytes: u64 = 0,
     /// The Coast Guard district NOAA files it under. 0 when absent.
     district: u8 = 0,
+    /// Usage band, 1 overview to 6 berthing, from the third character of the
+    /// cell name (US5MD1MC is band 5). 0 when the name does not carry one.
+    band: u8 = 0,
     /// Coverage, from every vertex of every panel.
     box: Box = .{},
 
@@ -98,27 +101,43 @@ pub const Region = struct {
     /// number, and a mariner picks the place instead.
     name: [:0]const u8,
     blurb: [:0]const u8,
+    /// Where to draw this region on a picker's map, in degrees. A rough
+    /// extent for display. What a region actually selects comes from the
+    /// catalog, so these numbers never decide which cells download.
+    west: f64,
+    south: f64,
+    east: f64,
+    north: f64,
 };
 
 pub const regions = [_]Region{
     .{ .id = "d1", .district = 1, .name = "Northeast",
-       .blurb = "Maine south to northern New Jersey" },
+       .blurb = "Maine south to northern New Jersey",
+       .west = -74.5, .south = 39.6, .east = -66.9, .north = 45.2 },
     .{ .id = "d5", .district = 5, .name = "Mid-Atlantic",
-       .blurb = "New Jersey to North Carolina, and the Chesapeake and Delaware bays" },
+       .blurb = "New Jersey to North Carolina, and the Chesapeake and Delaware bays",
+       .west = -78.5, .south = 33.8, .east = -73.4, .north = 40.6 },
     .{ .id = "d7", .district = 7, .name = "Southeast",
-       .blurb = "South Carolina, Georgia and eastern Florida, with Puerto Rico and the Virgin Islands" },
+       .blurb = "South Carolina, Georgia and eastern Florida, with Puerto Rico and the Virgin Islands",
+       .west = -83.4, .south = 24.2, .east = -75.0, .north = 33.9 },
     .{ .id = "d8", .district = 8, .name = "Gulf Coast",
-       .blurb = "Western Florida to Texas, and the Western Rivers" },
+       .blurb = "Western Florida to Texas, and the Western Rivers",
+       .west = -97.4, .south = 25.8, .east = -81.0, .north = 31.4 },
     .{ .id = "d9", .district = 9, .name = "Great Lakes",
-       .blurb = "All five lakes and the St Lawrence Seaway" },
+       .blurb = "All five lakes and the St Lawrence Seaway",
+       .west = -92.4, .south = 41.2, .east = -76.0, .north = 49.0 },
     .{ .id = "d11", .district = 11, .name = "California",
-       .blurb = "The California coast" },
+       .blurb = "The California coast",
+       .west = -125.0, .south = 32.5, .east = -117.1, .north = 42.0 },
     .{ .id = "d13", .district = 13, .name = "Pacific Northwest",
-       .blurb = "Oregon and Washington" },
+       .blurb = "Oregon and Washington",
+       .west = -125.4, .south = 42.0, .east = -122.0, .north = 49.0 },
     .{ .id = "d14", .district = 14, .name = "Pacific Islands",
-       .blurb = "Hawaii, Guam and American Samoa" },
+       .blurb = "Hawaii, Guam and American Samoa",
+       .west = -160.6, .south = 18.6, .east = -154.6, .north = 22.4 },
     .{ .id = "d17", .district = 17, .name = "Alaska",
-       .blurb = "All of Alaska" },
+       .blurb = "All of Alaska",
+       .west = -169.0, .south = 51.5, .east = -130.5, .north = 71.4 },
 };
 
 /// The region with this id, or null.
@@ -213,6 +232,13 @@ fn tagInt(s: []const u8, comptime name: []const u8, comptime T: type) T {
     return std.fmt.parseInt(T, v, 10) catch 0;
 }
 
+/// The usage band a cell name states. S-57 puts it in the third character.
+fn bandOf(name: []const u8) u8 {
+    if (name.len < 3) return 0;
+    const c = name[2];
+    return if (c >= '1' and c <= '6') c - '0' else 0;
+}
+
 /// A cell's coverage, from every vertex of every panel.
 ///
 /// This gathers the vertices first and decides the span afterward. One vertex
@@ -304,6 +330,7 @@ pub fn parse(gpa: std.mem.Allocator, xml: []const u8) !Catalog {
             .zip_url = try a.dupe(u8, tag(block, "zipfile_location") orelse ""),
             .zip_bytes = tagInt(block, "zipfile_size", u64),
             .district = tagInt(block, "coast_guard_district", u8),
+            .band = bandOf(name),
             .box = try coverage(a, block),
         });
     }
@@ -346,12 +373,22 @@ pub fn selectRegions(
         }
     }
 
-    // Pass two: everything that reaches into the same water. A cell already
-    // in needs no test, and a member is never tested against itself.
+    // Pass two: everything that reaches into the same water at the same
+    // scale. A cell already in needs no test, and a member is never tested
+    // against itself.
+    //
+    // The bands must match. A band 1 cell covers an entire ocean basin, so
+    // testing every band against every other selects a third of the country
+    // for one district: measured against NOAA's own catalog, district 5 went
+    // from 910 cells to 3,005. The gap this pass closes is a cell that
+    // straddles a district line, and such a cell is the same scale as the
+    // neighbor it abuts.
     for (cat.cells, 0..) |c, i| {
-        if (in[i] or !c.box.known) continue;
+        if (in[i] or !c.box.known or c.band == 0) continue;
         for (members.items) |mi| {
-            if (c.box.overlaps(cat.cells[mi].box)) {
+            const m = cat.cells[mi];
+            if (m.band != c.band) continue;
+            if (c.box.overlaps(m.box)) {
                 in[i] = true;
                 break;
             }
@@ -471,6 +508,44 @@ test "a region selects every cell covering its water" {
     const c = cost(&cat, picked);
     try testing.expectEqual(@as(u32, 3), c.cells);
     try testing.expectEqual(@as(u64, 1048576 + 2097152 + 4194304), c.bytes);
+}
+
+test "an overview cell does not drag in the harbors beneath it" {
+    // US1EEZ5M covers the whole eastern seaboard. Without the band match it
+    // overlaps every harbor cell on the coast, and picking district 5 selected
+    // a third of NOAA's catalog.
+    const xml =
+        \\<x><cell><name>US1EEZ5M</name><coast_guard_district>5</coast_guard_district>
+        \\<panel><vertex><lat>24</lat><long>-82</long></vertex>
+        \\<vertex><lat>45</lat><long>-65</long></vertex></panel></cell>
+        \\<cell><name>US5MA1MC</name><coast_guard_district>1</coast_guard_district>
+        \\<panel><vertex><lat>42.2</lat><long>-71.1</long></vertex>
+        \\<vertex><lat>42.4</lat><long>-70.9</long></vertex></panel></cell>
+        \\<cell><name>US1EEZ1M</name><coast_guard_district>1</coast_guard_district>
+        \\<panel><vertex><lat>40</lat><long>-74</long></vertex>
+        \\<vertex><lat>45</lat><long>-66</long></vertex></panel></cell></x>
+    ;
+    var cat = try parse(testing.allocator, xml);
+    defer cat.deinit();
+    try testing.expectEqual(@as(u8, 1), cat.cells[0].band);
+    try testing.expectEqual(@as(u8, 5), cat.cells[1].band);
+
+    const picked = try selectRegions(testing.allocator, &cat, &.{5});
+    defer testing.allocator.free(picked);
+
+    // The district-5 overview cell, and the district-1 overview cell that
+    // overlaps it at the same scale. The Boston harbor cell stays out.
+    try testing.expectEqual(@as(usize, 2), picked.len);
+    try testing.expectEqual(@as(u32, 0), picked[0]);
+    try testing.expectEqual(@as(u32, 2), picked[1]);
+}
+
+test "a cell name states its usage band" {
+    try testing.expectEqual(@as(u8, 5), bandOf("US5MD1MC"));
+    try testing.expectEqual(@as(u8, 1), bandOf("US1EEZ1M"));
+    try testing.expectEqual(@as(u8, 0), bandOf("US"));
+    try testing.expectEqual(@as(u8, 0), bandOf("USXMD1MC"));
+    try testing.expectEqual(@as(u8, 0), bandOf("US9MD1MC"));
 }
 
 test "selection is symmetric across a district line" {

@@ -9,10 +9,15 @@ import Foundation
 @MainActor
 extension ChartController {
 
-    func noaaRefresh() {
-        guard let h = handle else { return }
+    /// False when no chart is open. Every call here goes through a chart
+    /// handle, which lookout_open creates after the first layout, so a refresh
+    /// asked for at launch has nothing to run through.
+    @discardableResult
+    func noaaRefresh() -> Bool {
+        guard let h = handle else { return false }
         lookout_noaa_refresh(h)
         kick()
+        return true
     }
 
     func noaaState() -> NoaaState {

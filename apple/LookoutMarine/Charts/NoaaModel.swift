@@ -12,6 +12,12 @@ struct NoaaRegion: Identifiable, Hashable {
     let name: String
     let blurb: String
     let district: Int
+    /// Where to draw it on the picker's map, in degrees. A rough extent. What
+    /// the region selects comes from the catalog.
+    let west: Double
+    let south: Double
+    let east: Double
+    let north: Double
 }
 
 /// A cell already installed, for the update check.
@@ -52,10 +58,16 @@ final class NoaaModel {
     private(set) var cells: UInt32 = 0
     private(set) var bytes: UInt64 = 0
 
+    /// True when a catalog read was asked for before a chart was open. Every
+    /// call here goes through a chart handle, so a read asked for at launch
+    /// had nothing to run through.
+    private var wantsCatalog = false
+
     weak var engine: (any NoaaEngine)? {
         didSet {
             guard engine != nil else { return }
             poll()
+            if wantsCatalog { refresh() }
         }
     }
 
@@ -73,7 +85,9 @@ final class NoaaModel {
             return NoaaRegion(id: String(cString: r.id),
                               name: String(cString: r.name),
                               blurb: String(cString: r.blurb),
-                              district: Int(r.district))
+                              district: Int(r.district),
+                              west: r.west, south: r.south,
+                              east: r.east, north: r.north)
         }
     }
 
@@ -89,8 +103,18 @@ final class NoaaModel {
 
     /// Read NOAA's catalog. The result arrives through poll().
     func refresh() {
-        engine?.noaaRefresh()
+        guard let engine, engine.noaaRefresh() else {
+            wantsCatalog = true
+            return
+        }
+        wantsCatalog = false
         poll()
+    }
+
+    /// A chart is open. Anything asked for before the handle existed runs now.
+    func chartDidOpen() {
+        poll()
+        if wantsCatalog { refresh() }
     }
 
     /// Take the core's snapshot and reprice the pick.

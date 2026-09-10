@@ -106,6 +106,29 @@ final class AppModel {
     func considerFirstRun() {
         guard !firstRun.showing, FirstRunModel.shouldRun(charts) else { return }
         firstRun.begin()
+        showWholeCountry()
+    }
+
+    /// The three views the coverage picker photographs.
+    ///
+    /// One view cannot hold the lower 48, Alaska and Hawaii. The three need
+    /// 128 degrees of longitude, and at that scale their latitude span is
+    /// taller than the window. An atlas prints Alaska and Hawaii as insets for
+    /// the same reason.
+    static let countryView = lookout_view(lon: -96, lat: 38, zoom: 5.0, rotation_deg: 0)
+    static let alaskaView = lookout_view(lon: -152, lat: 63, zoom: 4.6, rotation_deg: 0)
+    static let hawaiiView = lookout_view(lon: -157.3, lat: 20.5, zoom: 7.0, rotation_deg: 0)
+
+    /// Frame the lower 48 behind setup, so the chart under the sheet shows the
+    /// coastline the mariner is choosing from.
+    func showWholeCountry() {
+        guard let controller else { return }
+        controller.setView(Self.countryView)
+        // United States charts label depths in feet, and setup is the one
+        // moment the unit can be chosen before the first sounding draws.
+        var mariner = controller.getMariner()
+        mariner.depth_unit = tile57_depth_unit(UInt32(MarinerDepthUnit.feet.rawValue))
+        controller.setMariner(mariner)
     }
 
     /// A .lkplug that arrived before the chart did, now that the chart is up.
@@ -140,6 +163,10 @@ final class AppModel {
     /// its fetcher, so nothing has to be replayed here — only the mariner's old
     /// UserDefaults list handed over, once.
     func chartDidOpen() {
+        // Setup frames the country and reads NOAA's catalog. Both go through
+        // the chart handle, which exists only now.
+        if firstRun.showing { showWholeCountry() }
+        noaa.chartDidOpen()
         chartLinks.migrate()
         // The chart-link calls held while no chart was open.
         chartLinks.chartDidOpen()

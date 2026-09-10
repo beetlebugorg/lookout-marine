@@ -21,54 +21,79 @@ struct FirstRunFlow: View {
     /// draws, and a mariner who changes it here must find it changed there.
     @StateObject private var m = MarinerSettings()
 
+    /// The height the step's own content wants. A ScrollView accepts whatever
+    /// height it is offered, so without measuring, the sheet grows to fill the
+    /// window and leaves the cards floating above an empty half.
+    @State private var contentHeight: CGFloat = 0
+
     var body: some View {
         frame.onAppear { m.bind(to: model.controller) }
     }
 
     @ViewBuilder private var frame: some View {
         #if os(macOS)
-        ZStack {
-            // The running app dims but stays visible. It is the reason the
-            // page does not read as a window that failed to load.
-            Chrome.scrim
-                .ignoresSafeArea()
-            sheet
-                .frame(width: step.sheetWidth)
-                .background(Chrome.surface,
-                            in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(Chrome.edge, lineWidth: 1))
-                .shadow(color: .black.opacity(0.32), radius: 32, y: 24)
-                .padding(Chrome.margin)
+        GeometryReader { geo in
+            ZStack {
+                // The running app dims and stays visible, so the sheet reads
+                // as something raised over a running chart.
+                Chrome.scrim
+                    .ignoresSafeArea()
+                sheet(maxContent: geo.size.height - Chrome.margin * 2 - footerHeight)
+                    .frame(width: step.sheetWidth)
+                    .background(Chrome.surface)
+                    // Clips, so the welcome hero bleeding to the top edge
+                    // takes the card's corners instead of squaring them off.
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(Chrome.edge, lineWidth: 1))
+                    .shadow(color: .black.opacity(0.32), radius: 32, y: 24)
+                    .padding(Chrome.margin)
+            }
+            .frame(width: geo.size.width, height: geo.size.height)
         }
         #else
         // No window to float over, so the step IS the screen.
         VStack(spacing: 0) {
             navigationBar
-            sheet
+            sheet(maxContent: nil)
         }
         .background(Chrome.surface.ignoresSafeArea())
         #endif
     }
 
+    /// Roughly what the footer and its rule occupy. Only the sheet's scrolling
+    /// half is capped, so this keeps the whole card inside the window.
+    private var footerHeight: CGFloat { step == .welcome ? 110 : 60 }
+
     private var step: FirstRunModel.Step { flow.step }
 
     // MARK: The step, and the action under it
 
-    @ViewBuilder private var sheet: some View {
+    /// The step, and the action under it.
+    ///
+    /// `maxContent` caps the scrolling half so the card hugs a short step and
+    /// scrolls a long one. nil offers the step whatever is left, which is what
+    /// a full screen phone step wants.
+    @ViewBuilder private func sheet(maxContent: CGFloat?) -> some View {
         VStack(spacing: 0) {
             ScrollView {
-                switch step {
-                case .welcome: WelcomeStep(flow: flow)
-                case .source: SourceStep(flow: flow)
-                case .coverage: CoverageStep(model: model, noaa: model.noaa, m: m)
-                case .onlineChart: OnlineChartStep(model: model, flow: flow, m: m)
-                }
+                stepContent
+                    .measureSize { contentHeight = $0.height }
             }
             // The welcome page's hero bleeds to the top edge, so the step
             // owns its own insets rather than taking them from here.
             .scrollBounceBehavior(.basedOnSize)
+            .frame(height: maxContent.map { min(contentHeight, max($0, 120)) })
             footer
+        }
+    }
+
+    @ViewBuilder private var stepContent: some View {
+        switch step {
+        case .welcome: WelcomeStep(flow: flow)
+        case .source: SourceStep(flow: flow)
+        case .coverage: CoverageStep(model: model, noaa: model.noaa)
+        case .onlineChart: OnlineChartStep(model: model, flow: flow, m: m)
         }
     }
 
@@ -239,7 +264,7 @@ private extension FirstRunModel.Step {
         switch self {
         case .welcome: return 640
         case .source: return 760
-        case .coverage: return 780
+        case .coverage: return 900
         case .onlineChart: return 980
         }
     }

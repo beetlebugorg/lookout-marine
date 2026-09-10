@@ -69,7 +69,7 @@ final class ChartController: NSObject {
 
     /// The backing view we render into; used for center-anchored zoom and to
     /// build the display link.
-    private weak var view: PlatformView?
+    private(set) weak var view: PlatformView?
 
     /// Pushed live readouts to the UI (cursor coord, scale, scheme, rotation…).
     weak var model: AppModel?

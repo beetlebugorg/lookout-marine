@@ -1882,7 +1882,11 @@ pub const Lookout = struct {
     /// All of these are in the RENDERER's zoom convention, because that is what
     /// they are compared against: a chart's declared min/max are tile levels,
     /// and a tile level is a charttable zoom.
-    const MIN_ZOOM_FLOOR = 4.0;
+    /// The basemap bakes zoom 0 through 5 (tools/basemap.zig), so zooming out
+    /// past the chart data still draws a coastline. The floor is the level
+    /// where the mercator square stops being larger than the screen, matching
+    /// the alt-style path below.
+    const MIN_ZOOM_FLOOR = 2.0;
     fn updateZoomLimits(self: *Lookout) void {
         // An alt chart is the publisher's map, not the library's: its own
         // sources say how deep it goes, and the ENC's coverage must not

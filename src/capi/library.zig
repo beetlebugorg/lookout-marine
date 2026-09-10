@@ -407,6 +407,10 @@ pub const lookout_noaa_region = extern struct {
     name: [*:0]const u8,
     blurb: [*:0]const u8,
     district: c_int,
+    west: f64,
+    south: f64,
+    east: f64,
+    north: f64,
 };
 
 pub const lookout_noaa_state = noaajob.State;
@@ -427,6 +431,10 @@ const noaa_regions = blk: {
             .name = r.name.ptr,
             .blurb = r.blurb.ptr,
             .district = r.district,
+            .west = r.west,
+            .south = r.south,
+            .east = r.east,
+            .north = r.north,
         };
     }
     break :blk out;

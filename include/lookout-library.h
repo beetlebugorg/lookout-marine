@@ -758,6 +758,10 @@ typedef struct {
     const char *name;    /* "Mid-Atlantic" */
     const char *blurb;   /* the waters it covers, in one line */
     int district;        /* the Coast Guard district number */
+    /* Where to draw the region on a picker's map, in degrees. A rough extent
+     * for display. What a region selects comes from the catalog, so these
+     * never decide which cells download. */
+    double west, south, east, north;
 } lookout_noaa_region;
 
 /* The regions, and how many. `out` may be NULL to ask only for the count. The

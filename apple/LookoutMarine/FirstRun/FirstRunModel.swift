@@ -84,12 +84,28 @@ final class FirstRunModel {
 
     /// LOOKOUT_FIRST_RUN=1 runs setup whatever the store says, and =0 keeps it
     /// down. A screenshot run and a UI test both need to choose, because the
-    /// store carries over between launches on one device.
+    /// store keeps the answer between launches on one device.
+    ///
+    /// A step name in place of 1 opens setup on that step: welcome, source,
+    /// coverage, online. A screenshot run has no pointer to click Continue
+    /// with.
+    private static var setting: String? {
+        ProcessInfo.processInfo.environment["LOOKOUT_FIRST_RUN"]
+    }
+
     private static var override: Bool? {
-        guard let v = ProcessInfo.processInfo.environment["LOOKOUT_FIRST_RUN"] else {
-            return nil
+        guard let v = setting else { return nil }
+        return v != "0"
+    }
+
+    /// The step LOOKOUT_FIRST_RUN names, or welcome.
+    static var openingStep: Step {
+        switch setting {
+        case "source": return .source
+        case "coverage": return .coverage
+        case "online": return .onlineChart
+        default: return .welcome
         }
-        return v == "1"
     }
 
     /// The flow runs once, over an app that has settled on having no chart to
@@ -103,7 +119,7 @@ final class FirstRunModel {
     // MARK: Moving through it
 
     func begin() {
-        step = .welcome
+        step = Self.openingStep
         showing = true
     }
 

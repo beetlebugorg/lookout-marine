@@ -52,7 +52,7 @@ protocol ChartLinkEngine: AnyObject {
 /// catalog, chooses the cells a region needs and fetches them; these are the
 /// calls that start it and read where it got to.
 protocol NoaaEngine: AnyObject {
-    func noaaRefresh()
+    @discardableResult func noaaRefresh() -> Bool
     func noaaState() -> NoaaState
     func noaaCost(regionIDs: String) -> (cells: UInt32, bytes: UInt64)?
     func noaaDownload(regionIDs: String, destination: String)
