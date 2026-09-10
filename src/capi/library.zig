@@ -6,6 +6,8 @@ const std = @import("std");
 
 const lk = @import("../root.zig");
 const clinks = @import("../chartlinks.zig");
+const noaa = @import("../noaa.zig");
+const noaajob = @import("../noaajob.zig");
 const craster = @import("../ct/raster.zig");
 const capi = @import("../capi.zig");
 
@@ -164,7 +166,13 @@ export fn lookout_set_http_provider(h: ?*lookout, get: ?lk.Lookout.HttpGetFn, ca
 export fn lookout_http_respond(h: ?*lookout, req_id: u64, bytes: ?[*]const u8, len: usize, status: c_int) void {
     if (h == null) return;
     const slice: []const u8 = if (bytes != null and len != 0) bytes.?[0..len] else &.{};
-    cast(h).links.respond(req_id, slice, status);
+    // NOAA sets bit 63 on the ids it issues, so the two services share one
+    // fetcher without sharing an id space.
+    if (noaajob.ownsId(req_id)) {
+        cast(h).noaa.respond(req_id, slice, status);
+    } else {
+        cast(h).links.respond(req_id, slice, status);
+    }
 }
 
 /// Add a chart by link. See lookout.h.
@@ -389,4 +397,137 @@ export fn lookout_raster_set_count(h: ?*lookout) u32 {
     const l = locked(h);
     defer l.apiUnlock();
     return @intCast(l.rasterSetCount());
+}
+
+// ---- NOAA charts -----------------------------------------------------------
+
+/// One region a mariner picks. See lookout-library.h.
+pub const lookout_noaa_region = extern struct {
+    id: [*:0]const u8,
+    name: [*:0]const u8,
+    blurb: [*:0]const u8,
+    district: c_int,
+};
+
+pub const lookout_noaa_state = noaajob.State;
+
+/// A cell already installed, for the update check. See lookout-library.h.
+pub const lookout_noaa_installed = extern struct {
+    name: [*:0]const u8,
+    edition: u32,
+    update: u32,
+};
+
+/// The region table, built once from src/noaa.zig.
+const noaa_regions = blk: {
+    var out: [noaa.regions.len]lookout_noaa_region = undefined;
+    for (noaa.regions, 0..) |r, i| {
+        out[i] = .{
+            .id = r.id.ptr,
+            .name = r.name.ptr,
+            .blurb = r.blurb.ptr,
+            .district = r.district,
+        };
+    }
+    break :blk out;
+};
+
+/// The regions and how many. See lookout-library.h.
+export fn lookout_noaa_regions(out: ?*[*]const lookout_noaa_region) usize {
+    if (out) |o| o.* = &noaa_regions;
+    return noaa_regions.len;
+}
+
+/// Read NOAA's product catalog. See lookout-library.h.
+export fn lookout_noaa_refresh(h: ?*lookout) void {
+    const l = locked(h);
+    defer l.apiUnlock();
+    l.noaa.refresh();
+}
+
+/// The catalog and download state. See lookout-library.h.
+export fn lookout_noaa_poll(h: ?*lookout, out: ?*lookout_noaa_state) void {
+    const o = out orelse return;
+    if (h == null) {
+        o.* = .{};
+        return;
+    }
+    const l = locked(h);
+    defer l.apiUnlock();
+    o.* = l.noaa.snapshot();
+}
+
+/// What downloading these regions costs. See lookout-library.h.
+export fn lookout_noaa_cost(h: ?*lookout, region_ids: ?[*:0]const u8,
+                            out_cells: ?*u32, out_bytes: ?*u64) c_int {
+    if (out_cells) |c| c.* = 0;
+    if (out_bytes) |b| b.* = 0;
+    if (h == null) return 0;
+    const l = locked(h);
+    defer l.apiUnlock();
+    if (!l.noaa.haveCatalog()) return 0;
+    var buf: [noaa.regions.len]u8 = undefined;
+    const ids = if (region_ids) |r| std.mem.span(r) else "";
+    const c = l.noaa.costOf(noaa.districtsFromIds(&buf, ids));
+    if (out_cells) |o| o.* = c.cells;
+    if (out_bytes) |o| o.* = c.bytes;
+    return 1;
+}
+
+/// Download every cell covering these regions. See lookout-library.h.
+export fn lookout_noaa_download(h: ?*lookout, region_ids: ?[*:0]const u8,
+                                dest_dir: ?[*:0]const u8) void {
+    const l = locked(h);
+    defer l.apiUnlock();
+    const dest = dest_dir orelse return;
+    var buf: [noaa.regions.len]u8 = undefined;
+    const ids = if (region_ids) |r| std.mem.span(r) else "";
+    l.noaa.start(noaa.districtsFromIds(&buf, ids), std.mem.span(dest));
+}
+
+/// How many of these cells NOAA has reissued. See lookout-library.h.
+export fn lookout_noaa_outdated(h: ?*lookout, have: ?[*]const lookout_noaa_installed,
+                                n: usize) u32 {
+    if (h == null or have == null or n == 0) return 0;
+    const l = locked(h);
+    defer l.apiUnlock();
+    const list = gpa.alloc(noaa.Installed, n) catch return 0;
+    defer gpa.free(list);
+    for (have.?[0..n], 0..) |c, i| {
+        list[i] = .{
+            .name = std.mem.span(c.name),
+            .edition = c.edition,
+            .update = c.update,
+        };
+    }
+    const cat = &(l.noaa.cat orelse return 0);
+    const stale = noaa.outdated(gpa, cat, list) catch return 0;
+    defer gpa.free(stale);
+    return @intCast(stale.len);
+}
+
+/// Download the reissued editions of these cells. See lookout-library.h.
+export fn lookout_noaa_update(h: ?*lookout, have: ?[*]const lookout_noaa_installed,
+                              n: usize, dest_dir: ?[*:0]const u8) void {
+    const l = locked(h);
+    defer l.apiUnlock();
+    const dest = dest_dir orelse return;
+    if (have == null or n == 0) return;
+    const list = gpa.alloc(noaa.Installed, n) catch return;
+    defer gpa.free(list);
+    for (have.?[0..n], 0..) |c, i| {
+        list[i] = .{
+            .name = std.mem.span(c.name),
+            .edition = c.edition,
+            .update = c.update,
+        };
+    }
+    l.noaa.startUpdate(list, std.mem.span(dest));
+}
+
+/// Stop the download that is running. See lookout-library.h.
+export fn lookout_noaa_cancel(h: ?*lookout) void {
+    const l = locked(h);
+    defer l.apiUnlock();
+    l.noaa.cancelAll();
 }

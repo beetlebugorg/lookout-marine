@@ -22,6 +22,7 @@ const cstyle = @import("ct/style.zig");
 const craster = @import("ct/raster.zig"); // the raster underlay's data half
 const ctprovided = @import("ct/provided.zig");
 const clinks = @import("chartlinks.zig"); // charts by link: resolve, serve, persist
+const noaajob = @import("noaajob.zig"); // NOAA chart catalog and downloads
 const camera = @import("charttable").camera; // charttable's camera IS the camera
 const pick_rules = @import("pick.zig"); // what a cursor pick reports, and in what order
 pub const library = @import("library.zig"); // what a folder of charts holds
@@ -700,6 +701,9 @@ pub const Lookout = struct {
     /// tiles the style names. The shell keeps one job, fetching bytes for a
     /// url. See src/chartlinks.zig.
     links: clinks.Links = undefined,
+    /// NOAA's chart catalog and the downloads run from it. Shares the shell's
+    /// fetcher with links. See src/noaajob.zig.
+    noaa: noaajob.Service = undefined,
 
     // API-entry lock (see capi.locked): serializes the C ABI between the
     // host's input thread and its render thread. Distinct from engine_mu,
@@ -893,6 +897,7 @@ pub const Lookout = struct {
         // and neither belongs to a chart. Nothing resolves until the shell
         // supplies a fetcher (setHttpProvider).
         self.links = clinks.Links.init(alloc, self.linksSink());
+        self.noaa = noaajob.Service.init(alloc);
         if (marks.supportDirAlloc(alloc)) |d| {
             defer alloc.free(d);
             self.links.openStore(d);
@@ -2021,6 +2026,7 @@ pub const Lookout = struct {
         // BEFORE the renderer: standing the link machine down answers the
         // tiles it has outstanding, and those answers go through the renderer.
         self.links.deinit();
+        self.noaa.deinit();
         self.pollCompose(true); // finish any in-flight partition build first
         // BEFORE the composition and the charts: the renderer's tile workers
         // read the compositor, and its deinit is what stops them.
@@ -2356,6 +2362,7 @@ pub const Lookout = struct {
         }
         // A resolve's answer stalls on the first one without this.
         self.links.adopt();
+        self.noaa.adopt();
         // The store coalesces its writes, so something has to ask it whether
         // the window has passed. A settings file written once at startup and
         // never again would otherwise never reach the disk.
@@ -2772,6 +2779,7 @@ pub const Lookout = struct {
     pub fn setHttpProvider(self: *Lookout, get: ?clinks.HttpGetFn, cancel: ?clinks.HttpCancelFn, user: ?*anyopaque) void {
         self.ct.setCoreTileSink(if (get != null) linkAskTile else null, self);
         self.links.setProvider(get, cancel, user);
+        self.noaa.setProvider(get, cancel, user);
     }
 
     pub const TileStatus = ctprovided.Status;
@@ -2921,6 +2929,7 @@ pub const Lookout = struct {
         // frame ran. A resolve that completes here sets its style before
         // ensureStyle below, so the chart it assembled draws in THIS frame.
         self.links.adopt();
+        self.noaa.adopt();
         // charttable adopts the real drawable size at acquire (a wrapped native
         // view can be laid out or rescaled behind our back) — follow it here so
         // the camera's logical viewport always matches what is on screen.
@@ -3097,6 +3106,7 @@ pub const Lookout = struct {
         // draws on demand would never tick, and a resolve would stall on its
         // first answer.
         if (self.links.pending()) return true;
+        if (self.noaa.pending()) return true;
         if (self.ct.needsRedraw()) return true;
         // What the BOAT did. Own ship's display position walks between fixes,
         // a plugin can post geometry from its own thread, and under follow the
