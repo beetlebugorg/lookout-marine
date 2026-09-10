@@ -20,6 +20,7 @@ final class AppModel {
             // ChartEngine.swift.
             charts.engine = controller
             chartLinks.engine = controller
+            noaa.engine = controller
             raster.engine = controller
             readouts.engine = controller
             plugins.engine = controller
@@ -32,11 +33,19 @@ final class AppModel {
     // One per subject, each holding its own state and the calls that act on it.
 
     let chartLinks = ChartLinksModel()
+    /// NOAA's catalog, the regions a mariner picks, and the downloads run from
+    /// them. See src/noaa.zig for what a region selects.
+    let noaa = NoaaModel()
+    /// Follows a NOAA download to its end. Cancelled when a new one starts.
+    private var noaaWatch: Task<Void, Never>?
     let raster = RasterModel()
     let plugins = PluginsModel()
     let overlay = OverlayModel()
     let readouts = ReadoutsModel()
     let chrome = ChromeModel()
+    /// Setup. It runs once, over an app that has settled on having no chart to
+    /// draw. See FirstRunModel.shouldRun.
+    let firstRun = FirstRunModel()
     /// Adding a set installs the pictures it carries, so this one is built
     /// with the raster model rather than beside it.
     let charts: ChartsModel
@@ -52,6 +61,51 @@ final class AppModel {
             return
         }
         plugins.begin(path)
+    }
+
+    /// Download the picked NOAA regions, then bake what arrives.
+    ///
+    /// The core writes one zip per cell into a single directory, so the whole
+    /// download bakes as one chart set once the transfers finish.
+    func startNoaaDownload() {
+        guard let dest = NoaaModel.downloadDirectory else {
+            charts.openError = "Couldn't find a place to download charts to."
+            return
+        }
+        noaa.download(to: dest)
+        watchNoaaDownload(dest)
+    }
+
+    /// Follow a download to its end and bake the directory it filled.
+    ///
+    /// A poll rather than a callback, because the core reports progress and
+    /// accepts no callback across the C ABI. It ends when the download ends, so
+    /// an idle app runs no timer.
+    private func watchNoaaDownload(_ dest: String) {
+        noaaWatch?.cancel()
+        noaaWatch = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(500))
+                guard let self else { return }
+                self.noaa.poll()
+                guard self.noaa.state.phase != .downloading else { continue }
+                // Bake only when something arrived. A download that failed
+                // every cell leaves an empty directory and its own error.
+                if self.noaa.state.done > 0 { self.charts.openChartDirectory(dest) }
+                return
+            }
+        }
+    }
+
+    /// Raise setup on a first run with no chart to draw.
+    ///
+    /// Called from the overlay whenever the answer can have changed, rather
+    /// than once at launch. `nothingToDraw` is false for the first moment of
+    /// every launch while the scan reads the library, and raising the flow on
+    /// that puts it over a mariner's own charts.
+    func considerFirstRun() {
+        guard !firstRun.showing, FirstRunModel.shouldRun(charts) else { return }
+        firstRun.begin()
     }
 
     /// A .lkplug that arrived before the chart did, now that the chart is up.

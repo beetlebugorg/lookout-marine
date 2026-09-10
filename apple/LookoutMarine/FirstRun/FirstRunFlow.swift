@@ -1,0 +1,255 @@
+//  FirstRunFlow.swift: setup, over the running app.
+//
+//  A sheet on the Mac and the whole screen on a phone, because a phone has no
+//  window to float a sheet over. The two share every step and every word. The
+//  frame around them differs, and so does the place of the primary action: a
+//  footer button on the right for a pointer, a 50pt button above the home
+//  indicator for a thumb.
+//
+//  The app keeps running behind it. This flow leaves the chart open and the
+//  plugins running, so Set Up Later returns the mariner to a working app.
+
+import SwiftUI
+
+/// The step on screen, in the frame this platform gives it.
+struct FirstRunFlow: View {
+    var model: AppModel
+    @Bindable var flow: FirstRunModel
+
+    /// The flow's own settings object, bound to the controller like the
+    /// settings window's. Setup asks for the depth unit before the first chart
+    /// draws, and a mariner who changes it here must find it changed there.
+    @StateObject private var m = MarinerSettings()
+
+    var body: some View {
+        frame.onAppear { m.bind(to: model.controller) }
+    }
+
+    @ViewBuilder private var frame: some View {
+        #if os(macOS)
+        ZStack {
+            // The running app dims but stays visible. It is the reason the
+            // page does not read as a window that failed to load.
+            Chrome.scrim
+                .ignoresSafeArea()
+            sheet
+                .frame(width: step.sheetWidth)
+                .background(Chrome.surface,
+                            in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(Chrome.edge, lineWidth: 1))
+                .shadow(color: .black.opacity(0.32), radius: 32, y: 24)
+                .padding(Chrome.margin)
+        }
+        #else
+        // No window to float over, so the step IS the screen.
+        VStack(spacing: 0) {
+            navigationBar
+            sheet
+        }
+        .background(Chrome.surface.ignoresSafeArea())
+        #endif
+    }
+
+    private var step: FirstRunModel.Step { flow.step }
+
+    // MARK: The step, and the action under it
+
+    @ViewBuilder private var sheet: some View {
+        VStack(spacing: 0) {
+            ScrollView {
+                switch step {
+                case .welcome: WelcomeStep(flow: flow)
+                case .source: SourceStep(flow: flow)
+                case .coverage: CoverageStep(model: model, noaa: model.noaa, m: m)
+                case .onlineChart: OnlineChartStep(model: model, flow: flow, m: m)
+                }
+            }
+            // The welcome page's hero bleeds to the top edge, so the step
+            // owns its own insets rather than taking them from here.
+            .scrollBounceBehavior(.basedOnSize)
+            footer
+        }
+    }
+
+    #if os(iOS)
+    /// Back to the previous step, the step's name, and the way out. Cancel
+    /// shows on the source step. Past that fork the mariner is choosing a
+    /// chart, and Back returns them here.
+    private var navigationBar: some View {
+        ZStack {
+            Text(step.title)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(Chrome.ink)
+            HStack {
+                if flow.canGoBack {
+                    Button { flow.back() } label: {
+                        Label("Back", systemImage: "chevron.left")
+                            .labelStyle(.titleAndIcon)
+                    }
+                    .accessibilityIdentifier("first-run-back")
+                }
+                Spacer()
+                if step == .source {
+                    Button("Cancel") { flow.finish() }
+                        .accessibilityIdentifier("first-run-cancel")
+                }
+            }
+            .font(.system(size: 16))
+            .tint(Chrome.accent)
+        }
+        .frame(height: 44)
+        .padding(.horizontal, 16)
+        .overlay(alignment: .bottom) { Divider() }
+    }
+    #endif
+
+    /// The primary action, and the way back or out beside it.
+    @ViewBuilder private var footer: some View {
+        #if os(macOS)
+        // The welcome page centers its action under the prose. It has no
+        // previous step, and a lone Continue in the right corner of a 640pt
+        // sheet reads as a half filled form.
+        if step == .welcome {
+            VStack(spacing: 14) {
+                primaryButton.frame(width: 300)
+                Button("Set Up Later") { flow.finish() }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Chrome.accent)
+                    .accessibilityIdentifier("first-run-later")
+            }
+            .padding(.bottom, 30)
+        } else {
+            HStack(spacing: 12) {
+                if let note = footnote {
+                    Text(note)
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(Chrome.muted)
+                        .monospacedDigit()
+                }
+                Spacer(minLength: 12)
+                Button("Back") { flow.back() }
+                    .accessibilityIdentifier("first-run-back")
+                primaryButton
+            }
+            .controlSize(.regular)
+            .padding(.horizontal, 24)
+            .padding(.vertical, 14)
+            .overlay(alignment: .top) { Divider() }
+        }
+        #else
+        VStack(spacing: 0) {
+            if let note = footnote {
+                Text(note)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(Chrome.muted)
+                    .monospacedDigit()
+                    .multilineTextAlignment(.center)
+                    .padding(.bottom, 10)
+            }
+            primaryButton
+            if step == .welcome {
+                Button("Set Up Later") { flow.finish() }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 16))
+                    .foregroundStyle(Chrome.accent)
+                    .frame(height: 44)
+                    .accessibilityIdentifier("first-run-later")
+            }
+        }
+        .padding(.horizontal, 18)
+        .padding(.top, 12)
+        .padding(.bottom, 8)
+        .background(Chrome.surface)
+        .overlay(alignment: .top) { if step != .welcome { Divider() } }
+        #endif
+    }
+
+    private var primaryButton: some View {
+        Button {
+            act()
+        } label: {
+            #if os(macOS)
+            Text(flow.primaryTitle(nil))
+            #else
+            Text(flow.primaryTitle(nil))
+                .font(.system(size: 17, weight: .semibold))
+                .frame(maxWidth: .infinity)
+                .frame(height: 50)
+                .foregroundStyle(.white)
+                .background(Chrome.accent,
+                            in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            #endif
+        }
+        #if os(macOS)
+        .buttonStyle(.borderedProminent)
+        #else
+        .buttonStyle(.plain)
+        #endif
+        .keyboardShortcut(.defaultAction)
+        .disabled(!primaryEnabled)
+        .accessibilityIdentifier("first-run-continue")
+    }
+
+    /// Whether the primary action has anything to do. Download with no region
+    /// picked, and with no catalog to price it from, does nothing.
+    private var primaryEnabled: Bool {
+        switch step {
+        case .welcome, .source, .onlineChart: return true
+        case .coverage:
+            return model.noaa.state.haveCatalog && !model.noaa.picked.isEmpty
+        }
+    }
+
+    /// The line beside the primary action: the credit the active chart asks
+    /// for.
+    private var footnote: String? {
+        switch step {
+        case .welcome, .source: return nil
+        case .coverage:
+            let n = model.noaa
+            guard n.state.haveCatalog else { return nil }
+            guard n.cells > 0 else { return "Pick at least one region." }
+            return "\(n.cells) charts, \(NoaaModel.sizeText(n.bytes))"
+        case .onlineChart:
+            return model.chartLinks.attribution
+        }
+    }
+
+    /// The primary action. The flow chooses the next step, and the shell does
+    /// the part the flow cannot.
+    private func act() {
+        guard let source = flow.advance() else { return }
+        switch source {
+        case .files:
+            model.requestOpenPicker()
+        case .online:
+            break   // the chart the mariner picked is already selected
+        case .noaa:
+            model.startNoaaDownload()
+        }
+    }
+}
+
+private extension FirstRunModel.Step {
+    /// The design's three sheet widths. A step is as wide as its content, and
+    /// a row of cards needs more room than a paragraph.
+    var sheetWidth: CGFloat {
+        switch self {
+        case .welcome: return 640
+        case .source: return 760
+        case .coverage: return 780
+        case .onlineChart: return 980
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .welcome: return "Welcome"
+        case .source: return "Add charts"
+        case .coverage: return "Coverage"
+        case .onlineChart: return "Online chart"
+        }
+    }
+}

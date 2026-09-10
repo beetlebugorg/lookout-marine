@@ -1,12 +1,15 @@
-//  FirstRunTests.swift — the empty state, which is the whole app until a
-//  chart is installed.
+//  FirstRunTests.swift: the empty page, shown once setup has run and no chart
+//  is installed.
+//
+//  LOOKOUT_FIRST_RUN=0 keeps the setup flow down. Setup stands over this page
+//  on a fresh install, and SetupFlowTests covers that.
 
 import XCTest
 
 final class FirstRunTests: UITestCase {
 
     private func emptyApp() throws -> XCUIApplication {
-        try app(["LOOKOUT_NO_CHART": "1"])
+        try app(["LOOKOUT_NO_CHART": "1", "LOOKOUT_FIRST_RUN": "0"])
     }
 
     /// The page states what the app is, why it is empty, and what to do, and

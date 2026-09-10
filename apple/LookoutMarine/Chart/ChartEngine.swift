@@ -48,6 +48,19 @@ protocol ChartLinkEngine: AnyObject {
 
 /// What PluginsModel asks the chart for.
 @MainActor
+/// NOAA's chart catalog and the downloads run from it. The core reads the
+/// catalog, chooses the cells a region needs and fetches them; these are the
+/// calls that start it and read where it got to.
+protocol NoaaEngine: AnyObject {
+    func noaaRefresh()
+    func noaaState() -> NoaaState
+    func noaaCost(regionIDs: String) -> (cells: UInt32, bytes: UInt64)?
+    func noaaDownload(regionIDs: String, destination: String)
+    func noaaOutdated(_ have: [NoaaInstalledCell]) -> UInt32
+    func noaaUpdate(_ have: [NoaaInstalledCell], destination: String)
+    func noaaCancel()
+}
+
 protocol PluginEngine: AnyObject {
     func tableSpecs() -> [PluginTableSpec]
     func pluginAlerts() -> (seq: Int, alerts: [PluginAlert])?
@@ -94,5 +107,5 @@ protocol OverlayEngine: AnyObject {
     @discardableResult func removeMarker(_ id: UInt64) -> Bool
 }
 
-extension ChartController: RasterEngine, ChartLinkEngine, PluginEngine,
+extension ChartController: RasterEngine, ChartLinkEngine, NoaaEngine, PluginEngine,
                           ChartOpenEngine, ReadoutEngine, OverlayEngine {}

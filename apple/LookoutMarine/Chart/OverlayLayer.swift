@@ -246,7 +246,14 @@ struct OverlayLayer: View {
                     // The picker asked a question the mariner has answered.
                     // While the answer is being acted on, the work stands in
                     // its place.
-                    if model.charts.nothingToDraw, model.charts.chartWork == nil {
+                    if model.firstRun.showing {
+                        // Setup stands over the running app, which keeps
+                        // drawing behind it. The empty page is what a mariner
+                        // who pressed Set Up Later comes back to.
+                        FirstRunFlow(model: model, flow: model.firstRun)
+                            .chromeHitRegion("first-run")
+                            .transition(.opacity)
+                    } else if model.charts.nothingToDraw, model.charts.chartWork == nil {
                         EmptyChartState(model: model).chromeHitRegion("empty-state")
                             .transition(.opacity)
                     }
@@ -265,6 +272,11 @@ struct OverlayLayer: View {
                             .transition(.opacity)
                     }
                 }
+                // Setup asks to be raised whenever the app's answer to "have
+                // I anything to draw" could have changed.
+                .task { model.considerFirstRun() }
+                .onChange(of: model.charts.nothingToDraw) { model.considerFirstRun() }
+                .animation(.easeInOut(duration: 0.3), value: model.firstRun.showing)
                 .animation(.easeInOut(duration: 0.5), value: model.charts.hasChart)
                 .animation(.easeInOut(duration: 0.25), value: model.charts.chartWork == nil)
                 // The overlay hover tooltip, clear of the pointer. Padding,
