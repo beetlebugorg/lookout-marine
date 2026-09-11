@@ -116,38 +116,46 @@ private struct ChartTile: View {
     }
 
     private var art: some View {
-        ZStack(alignment: .topLeading) {
-            switch kind {
-            case .lookout:
-                Image("WelcomeChart")
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-            case .link:
-                // No picture: see the note at the top of this file.
-                Chrome.panel
-                    .overlay(
-                        Image(systemName: "globe.americas")
-                            .font(.system(size: 26, weight: .light))
-                            .foregroundStyle(Chrome.accent.opacity(0.55))
-                    )
-            }
-            if active {
-                Text("ACTIVE")
-                    .font(.system(size: 10, weight: .bold))
-                    .kerning(0.3)
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 3)
-                    .background(Chrome.accent, in: RoundedRectangle(cornerRadius: 5))
-                    .padding(7)
-            }
-        }
-        .frame(height: ChartGallery.Metrics.art)
-        .frame(maxWidth: .infinity)
-        .clipped()
-        .overlay(alignment: .topTrailing) { menu }
+        picture
+            .frame(width: ChartGallery.Metrics.tile, height: ChartGallery.Metrics.art)
+            .clipped()
+            // Over the clipped tile, and not inside it. A picture that fills by
+            // covering is wider than the tile, so a badge aligned inside it
+            // started left of the tile's own edge and lost its first letter.
+            .overlay(alignment: .topLeading) { badge }
+            .overlay(alignment: .topTrailing) { menu }
         .overlay(alignment: .bottom) {
             Rectangle().fill(Chrome.edge.opacity(0.5)).frame(height: 1)
+        }
+    }
+
+    @ViewBuilder private var picture: some View {
+        switch kind {
+        case .lookout:
+            Image("WelcomeChart")
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+        case .link:
+            // No picture: see the note at the top of this file.
+            Chrome.panel
+                .overlay(
+                    Image(systemName: "globe.americas")
+                        .font(.system(size: 26, weight: .light))
+                        .foregroundStyle(Chrome.accent.opacity(0.55))
+                )
+        }
+    }
+
+    @ViewBuilder private var badge: some View {
+        if active {
+            Text("ACTIVE")
+                .font(.system(size: 10, weight: .bold))
+                .kerning(0.3)
+                .foregroundStyle(.white)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(Chrome.accent, in: RoundedRectangle(cornerRadius: 5))
+                .padding(7)
         }
     }
 
