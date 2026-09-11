@@ -12,7 +12,8 @@
 const std = @import("std");
 const noaa = @import("noaa.zig");
 const clinks = @import("chartlinks.zig");
-const Lock = @import("lock.zig").Lock;
+const lock = @import("lock.zig");
+const Lock = lock.Lock;
 const clock = @import("clock.zig");
 
 /// Set on every request id this service issues.
@@ -26,6 +27,7 @@ pub fn ownsId(id: u64) bool {
 /// How many cell zips transfer at once. NOAA serves a public archive, and a
 /// mariner on a marina uplink gains little past four.
 pub const MAX_INFLIGHT = 4;
+
 
 /// A cell zip larger than this is not the file we asked for.
 pub const MAX_ZIP_BYTES: usize = 64 << 20;
@@ -58,6 +60,29 @@ const Req = struct {
 
 const Answer = struct {
     id: u64,
+    /// The catalog's bytes. A cell's bytes are unpacked on the fetch thread
+    /// and do not reach here.
+    bytes: []u8,
+    status: c_int,
+    /// A cell zip that was unpacked into the staging directory, and its size.
+    stored: bool = false,
+    size: usize = 0,
+    /// Set when the unpack failed, for the error adopt reports.
+    write_failed: bool = false,
+};
+
+/// One outstanding cell. The fetch thread reads the name to unpack the bytes
+/// it receives.
+const Stage = struct {
+    id: u64,
+    name: []u8,
+};
+
+/// One fetched cell, waiting to be written. Owned by the unpack thread once
+/// it is queued.
+const Pending = struct {
+    id: u64,
+    name: []u8,
     bytes: []u8,
     status: c_int,
 };
@@ -110,6 +135,38 @@ pub const Service = struct {
     bytes_total: u64 = 0,
     dest: []u8 = &.{},
 
+    /// The staging directory and the cell behind each outstanding request, as
+    /// the fetch threads read them.
+    ///
+    /// A second lock, and not the api lock. Unpacking a cell is file work.
+    /// Doing it where adopt runs held the api lock for the length of the
+    /// download, the shell's poll blocked on that lock, and the count sat at
+    /// 1 of 829 while the disk filled.
+    stage_mu: Lock = .{},
+    stage_dest: []u8 = &.{},
+    stage: std.ArrayList(Stage) = .empty,
+
+    /// Cells fetched and not yet written, and the thread that writes them.
+    ///
+    /// A thread of its own, because writing a cell is file work of a few
+    /// milliseconds. On the frame loop it held the api lock and the window
+    /// stopped repainting. On the fetch thread it held the shell's fetch
+    /// lock, which the frame loop needs to start the next transfer. Under
+    /// both, the count sat at 1 of 829 while the disk filled.
+    unpack_mu: Lock = .{},
+    unpack_q: std.ArrayList(Pending) = .empty,
+    unpack_stop: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    unpack_thread: ?std.Thread = null,
+
+    /// The snapshot a shell reads, and the lock that guards it.
+    ///
+    /// A lock of its own, held for one struct copy. The api lock is
+    /// os_unfair_lock and the frame loop reclaims it the instant it drops it,
+    /// so a poll on the main thread blocked for the whole download and the
+    /// count read 0 of 829 until it ended.
+    pub_mu: Lock = .{},
+    pub_state: State = .{},
+
     /// Answers from the shell's fetch threads, guarded by inbox_mu alone.
     inbox_mu: Lock = .{},
     inbox: std.ArrayList(Answer) = .empty,
@@ -121,6 +178,10 @@ pub const Service = struct {
 
     pub fn deinit(self: *Service) void {
         self.cancelAll();
+        self.stopUnpacker();
+        self.unpack_q.deinit(self.alloc);
+        self.freeStr(&self.stage_dest);
+        self.stage.deinit(self.alloc);
         if (self.cat) |*c| c.deinit();
         self.cat = null;
         self.freeStr(&self.err);
@@ -158,6 +219,43 @@ pub const Service = struct {
 
     /// Hand one url to the shell. Returns the request id, or 0 when no
     /// fetcher is set or the request could not be recorded.
+    /// Record which cell an outstanding request fetches, for the fetch
+    /// thread.
+    fn stageCell(self: *Service, id: u64, name: []const u8) void {
+        const own = self.alloc.dupe(u8, name) catch return;
+        self.stage_mu.lock();
+        defer self.stage_mu.unlock();
+        self.stage.append(self.alloc, .{ .id = id, .name = own }) catch self.alloc.free(own);
+    }
+
+    /// Take an outstanding cell's name, or null for a request that is not one.
+    /// The caller owns the name and frees it.
+    fn takeStaged(self: *Service, id: u64) ?[]u8 {
+        self.stage_mu.lock();
+        defer self.stage_mu.unlock();
+        for (self.stage.items, 0..) |st, i| {
+            if (st.id == id) return self.stage.swapRemove(i).name;
+        }
+        return null;
+    }
+
+    /// Where the fetch threads unpack. Set when the download starts, before
+    /// any request goes out.
+    fn setStageDest(self: *Service, dest: []const u8) void {
+        const own = self.alloc.dupe(u8, dest) catch return;
+        self.stage_mu.lock();
+        defer self.stage_mu.unlock();
+        if (self.stage_dest.len != 0) self.alloc.free(self.stage_dest);
+        self.stage_dest = own;
+    }
+
+    fn clearStage(self: *Service) void {
+        self.stage_mu.lock();
+        defer self.stage_mu.unlock();
+        for (self.stage.items) |st| self.alloc.free(st.name);
+        self.stage.clearRetainingCapacity();
+    }
+
     fn issue(self: *Service, url: []const u8, kind: Kind, job: usize) u64 {
         const get = self.get orelse return 0;
         const z = self.alloc.dupeZ(u8, url) catch return 0;
@@ -165,6 +263,7 @@ pub const Service = struct {
         const id = self.next_req | id_mark;
         self.next_req += 1;
         self.reqs.append(self.alloc, .{ .id = id, .kind = kind, .job = job }) catch return 0;
+        if (kind == .cell) self.stageCell(id, self.plan.items[job].name);
         // The api lock is held. The shell starts the fetch and returns. It may
         // respond before this call ends, and respond only enqueues, so that
         // ordering is safe.
@@ -185,6 +284,7 @@ pub const Service = struct {
             for (self.reqs.items) |r| c(self.user, r.id);
         }
         self.reqs.clearRetainingCapacity();
+        self.clearStage();
         self.inflight = 0;
         if (self.phase == .downloading or self.phase == .reading_catalog) {
             self.phase = if (self.cat != null) .ready else .idle;
@@ -279,6 +379,8 @@ pub const Service = struct {
             self.setErr("could not create the download directory");
             return;
         };
+        self.setStageDest(dest);
+        self.startUnpacker();
 
         self.phase = .downloading;
         self.changed = true;
@@ -331,6 +433,8 @@ pub const Service = struct {
             self.setErr("could not create the download directory");
             return;
         };
+        self.setStageDest(dest);
+        self.startUnpacker();
 
         self.phase = .downloading;
         self.changed = true;
@@ -364,21 +468,120 @@ pub const Service = struct {
     /// Take one answer from a fetch thread. Does not hold the api lock.
     pub fn respond(self: *Service, req_id: u64, bytes: []const u8, status: c_int) void {
         const too_big = bytes.len > MAX_ZIP_BYTES;
-        const keep: []u8 = if (bytes.len == 0 or too_big)
-            &.{}
-        else
-            self.alloc.dupe(u8, bytes) catch &.{};
+        var answer: Answer = .{
+            .id = req_id,
+            .bytes = &.{},
+            .status = if (too_big) 0 else status,
+        };
+
+        // Unpack a cell on the thread that fetched it. adopt runs under the
+        // api lock, and this file work there blocked the shell's poll for the
+        // length of the download.
+        if (self.takeStaged(req_id)) |name| {
+            const ok = !too_big and bytes.len != 0 and status >= 200 and status < 300;
+            if (ok and self.queueUnpack(req_id, name, bytes, status)) return;
+            self.alloc.free(name);
+            self.post(answer);
+            return;
+        }
+
+        // The catalog is parsed once, under the api lock, so its bytes go
+        // through the inbox.
+        if (!too_big and bytes.len != 0) {
+            answer.bytes = self.alloc.dupe(u8, bytes) catch &.{};
+        }
+        self.post(answer);
+    }
+
+    /// Queue one answer for the next adopt.
+    fn post(self: *Service, a: Answer) void {
         self.inbox_mu.lock();
         defer self.inbox_mu.unlock();
-        self.inbox.append(self.alloc, .{
-            .id = req_id,
-            .bytes = keep,
-            .status = if (too_big) 0 else status,
-        }) catch {
-            if (keep.len != 0) self.alloc.free(keep);
+        self.inbox.append(self.alloc, a) catch {
+            if (a.bytes.len != 0) self.alloc.free(a.bytes);
             return;
         };
         self.inbox_len.store(self.inbox.items.len, .release);
+    }
+
+    /// Hand a fetched cell to the unpack thread. Owns `name` on success.
+    /// Returns false when the queue could not be grown, and the caller then
+    /// posts the answer itself.
+    fn queueUnpack(self: *Service, id: u64, name: []u8, bytes: []const u8, status: c_int) bool {
+        const own = self.alloc.dupe(u8, bytes) catch return false;
+        self.unpack_mu.lock();
+        defer self.unpack_mu.unlock();
+        self.unpack_q.append(self.alloc, .{
+            .id = id,
+            .name = name,
+            .bytes = own,
+            .status = status,
+        }) catch {
+            self.alloc.free(own);
+            return false;
+        };
+        return true;
+    }
+
+    /// The unpack thread. Writes one cell at a time and posts an answer for
+    /// each.
+    fn unpackMain(self: *Service) void {
+        // A poll, for the reason src/ct/tiles.zig gives: Zig 0.16 has no
+        // std.Thread.Condition outside an Io. The download bounds it.
+        while (!self.unpack_stop.load(.acquire)) {
+            var wrote = false;
+            while (true) {
+                var job: Pending = undefined;
+                {
+                    self.unpack_mu.lock();
+                    defer self.unpack_mu.unlock();
+                    if (self.unpack_q.items.len == 0) break;
+                    job = self.unpack_q.orderedRemove(0);
+                }
+                defer self.alloc.free(job.name);
+                defer self.alloc.free(job.bytes);
+
+                self.stage_mu.lock();
+                const dest = self.alloc.dupe(u8, self.stage_dest) catch &.{};
+                self.stage_mu.unlock();
+                defer if (dest.len != 0) self.alloc.free(dest);
+
+                var a: Answer = .{ .id = job.id, .bytes = &.{}, .status = job.status };
+                if (dest.len == 0) {
+                    a.write_failed = true;
+                } else if (self.write(dest, job.name, job.bytes)) {
+                    a.stored = true;
+                    a.size = job.bytes.len;
+                } else |_| {
+                    a.write_failed = true;
+                }
+                self.post(a);
+                wrote = true;
+            }
+            if (!wrote) lock.sleepMs(1);
+        }
+    }
+
+    /// Start the unpack thread, once per download.
+    fn startUnpacker(self: *Service) void {
+        if (self.unpack_thread != null) return;
+        self.unpack_stop.store(false, .release);
+        self.unpack_thread = std.Thread.spawn(.{}, unpackMain, .{self}) catch null;
+    }
+
+    /// Stop it and wait for the cell it is on.
+    fn stopUnpacker(self: *Service) void {
+        const th = self.unpack_thread orelse return;
+        self.unpack_stop.store(true, .release);
+        th.join();
+        self.unpack_thread = null;
+        self.unpack_mu.lock();
+        defer self.unpack_mu.unlock();
+        for (self.unpack_q.items) |j| {
+            self.alloc.free(j.name);
+            self.alloc.free(j.bytes);
+        }
+        self.unpack_q.clearRetainingCapacity();
     }
 
     /// True while an answer waits to be adopted.
@@ -389,29 +592,35 @@ pub const Service = struct {
     /// Adopt every queued answer. Called from the frame loop under the api
     /// lock.
     pub fn adopt(self: *Service) void {
-        if (!self.pending()) return;
-        var taken: std.ArrayList(Answer) = .empty;
-        {
-            self.inbox_mu.lock();
-            defer self.inbox_mu.unlock();
-            taken = self.inbox;
-            self.inbox = .empty;
-            self.inbox_len.store(0, .release);
+        if (!self.pending()) {
+            // No answer arrived. The api side may still have changed the
+            // state since the last frame.
+            if (self.changed) self.publish();
+            return;
         }
-        defer taken.deinit(self.alloc);
-
-        for (taken.items) |a| {
+        while (true) {
+            var a: Answer = undefined;
+            {
+                self.inbox_mu.lock();
+                defer self.inbox_mu.unlock();
+                if (self.inbox.items.len == 0) break;
+                a = self.inbox.items[0];
+                const left = self.inbox.items.len - 1;
+                std.mem.copyForwards(Answer, self.inbox.items[0..left], self.inbox.items[1..]);
+                self.inbox.shrinkRetainingCapacity(left);
+                self.inbox_len.store(left, .release);
+            }
             defer if (a.bytes.len != 0) self.alloc.free(a.bytes);
-            const req = self.retire(a.id) orelse continue;
-            switch (req.kind) {
+            if (self.retire(a.id)) |req| switch (req.kind) {
                 .catalog => self.tookCatalog(a),
                 .cell => {
                     self.inflight -= 1;
                     self.tookCell(req.job, a);
                 },
-            }
+            };
         }
         if (self.phase == .downloading) self.pump();
+        self.publish();
     }
 
     fn tookCatalog(self: *Service, a: Answer) void {
@@ -440,19 +649,14 @@ pub const Service = struct {
 
     fn tookCell(self: *Service, job: usize, a: Answer) void {
         if (job >= self.plan.items.len) return;
-        const cell = self.plan.items[job];
-        if (a.status < 200 or a.status >= 300 or a.bytes.len == 0) {
+        if (!a.stored) {
             self.failed += 1;
+            if (a.write_failed) self.setErr("could not write a downloaded chart");
             self.changed = true;
             return;
         }
-        self.write(cell.name, a.bytes) catch {
-            self.failed += 1;
-            self.setErr("could not write a downloaded chart");
-            return;
-        };
         self.done += 1;
-        self.bytes_done += a.bytes.len;
+        self.bytes_done += a.size;
         self.changed = true;
     }
 
@@ -462,23 +666,53 @@ pub const Service = struct {
     /// the zips in place gave the shell a directory of 829 archives, and it
     /// bakes a folder of cells or a single archive, so it refused the pick.
     /// Extracting turns the directory into an ordinary ENC_ROOT.
-    fn write(self: *Service, name: []const u8, bytes: []const u8) !void {
+    fn write(self: *Service, dest: []const u8, name: []const u8, bytes: []const u8) !void {
+        _ = self;
         const io = std.Io.Threaded.global_single_threaded.io();
         var buf: [512]u8 = undefined;
-        const tmp = try std.fmt.bufPrint(&buf, "{s}/{s}.zip.part", .{ self.dest, name });
+        const tmp = try std.fmt.bufPrint(&buf, "{s}/{s}.zip.part", .{ dest, name });
         try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = tmp, .data = bytes });
         defer std.Io.Dir.cwd().deleteFile(io, tmp) catch {};
 
-        var dir = try std.Io.Dir.cwd().openDir(io, self.dest, .{});
+        var dir = try std.Io.Dir.cwd().openDir(io, dest, .{});
         defer dir.close(io);
         var f = try std.Io.Dir.cwd().openFile(io, tmp, .{});
         defer f.close(io);
         var reader_buf: [4096]u8 = undefined;
         var fr = f.reader(io, &reader_buf);
-        try std.zip.extract(dir, &fr, .{ .allow_backslashes = true });
+
+        // Entry by entry. std.zip.extract stops at the first file already on
+        // disk, every cell's exchange set holds its own ENC_ROOT/CATALOG.031,
+        // and they all unpack into the one directory. From the second cell on
+        // that entry collided and the rest of the archive went unread, so 828
+        // of 829 cells counted as failures.
+        var iter = try std.zip.Iterator.init(&fr);
+        var name_buf: [std.fs.max_path_bytes]u8 = undefined;
+        while (try iter.next()) |entry| {
+            entry.extract(&fr, .{ .allow_backslashes = true }, &name_buf, dir) catch |e| switch (e) {
+                error.PathAlreadyExists => {},
+                else => return e,
+            };
+        }
     }
 
     // ---- the snapshot -----------------------------------------------------
+
+    /// Copy the state where a shell can read it without the api lock. Called
+    /// from the api side, the only side that changes it.
+    pub fn publish(self: *Service) void {
+        const s = self.snapshot();
+        self.pub_mu.lock();
+        defer self.pub_mu.unlock();
+        self.pub_state = s;
+    }
+
+    /// The last published state. Safe from any thread.
+    pub fn published(self: *Service) State {
+        self.pub_mu.lock();
+        defer self.pub_mu.unlock();
+        return self.pub_state;
+    }
 
     pub fn snapshot(self: *Service) State {
         var s = State{

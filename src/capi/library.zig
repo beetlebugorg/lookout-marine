@@ -501,6 +501,7 @@ export fn lookout_noaa_refresh(h: ?*lookout) void {
     const l = locked(h);
     defer l.apiUnlock();
     l.noaa.refresh();
+    l.noaa.publish();
 }
 
 /// The catalog and download state. See lookout-library.h.
@@ -510,9 +511,11 @@ export fn lookout_noaa_poll(h: ?*lookout, out: ?*lookout_noaa_state) void {
         o.* = .{};
         return;
     }
-    const l = locked(h);
-    defer l.apiUnlock();
-    o.* = l.noaa.snapshot();
+    // No api lock. That lock is os_unfair_lock and the frame loop reclaims it
+    // the moment it drops it. A download requests a frame for every answer, so
+    // a poll on the main thread blocked for the whole transfer and the count
+    // read 0 of 829 until it ended. The frame loop publishes this copy.
+    o.* = cast(h).noaa.published();
 }
 
 /// What downloading these regions costs. See lookout-library.h.
@@ -541,6 +544,7 @@ export fn lookout_noaa_download(h: ?*lookout, region_ids: ?[*:0]const u8,
     var buf: [noaa.regions.len]u8 = undefined;
     const ids = if (region_ids) |r| std.mem.span(r) else "";
     l.noaa.start(noaa.districtsFromIds(&buf, ids), std.mem.span(dest));
+    l.noaa.publish();
 }
 
 /// How many of these cells NOAA has reissued. See lookout-library.h.
@@ -581,6 +585,7 @@ export fn lookout_noaa_update(h: ?*lookout, have: ?[*]const lookout_noaa_install
         };
     }
     l.noaa.startUpdate(list, std.mem.span(dest));
+    l.noaa.publish();
 }
 
 /// Stop the download that is running. See lookout-library.h.
@@ -588,4 +593,5 @@ export fn lookout_noaa_cancel(h: ?*lookout) void {
     const l = locked(h);
     defer l.apiUnlock();
     l.noaa.cancelAll();
+    l.noaa.publish();
 }

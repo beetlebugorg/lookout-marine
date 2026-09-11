@@ -120,7 +120,16 @@ final class ChartsModel {
     var sets: [ChartSet] = []
     /// True while a folder is being looked through. The full NOAA library takes
     /// about 3 seconds.
-    var scanning = false
+    var scanning = false {
+        didSet { if !scanning { runQueuedPick() } }
+    }
+    /// A folder picked while other chart work was running.
+    ///
+    /// addChartSet used to refuse such a pick and report it on the empty
+    /// page. A NOAA download that arrived during the launch scan hit that
+    /// refusal, and setup never shows that page, so it waited for an import
+    /// that had been dropped.
+    private var queuedPick: String?
     /// True while the scan running was asked for by the mariner.
     var scanRequested = false
     /// The folder being looked through, for the first-run text.
@@ -391,13 +400,14 @@ final class ChartsModel {
         // own job, and then Cancel stops only the one the pill happens to
         // hold: the mariner presses stop and the machine keeps working.
         guard bake == nil, !scanning else {
-            // The scan at launch has no name to give: it is looking through
-            // everything saved, not one thing the mariner just picked. Without
-            // this the refusal read "Still working on . Wait for it to finish."
+            // Queue the pick. It runs once the work in front of it ends. The
+            // scan at launch has no name to report: it reads everything saved,
+            // and not one folder the mariner just picked.
+            queuedPick = path
             let busy = bake?.name ?? scanningName
             emptyPick = busy.isEmpty
-                ? "Still looking through the charts already installed. Try again in a moment."
-                : "Still working on \(busy). Wait for it to finish."
+                ? "Still looking through the charts already installed. Yours starts next."
+                : "Still working on \(busy). Yours starts next."
             return
         }
         scanning = true
@@ -446,6 +456,21 @@ final class ChartsModel {
                 }
                 self.adopt(set)
             }
+        }
+    }
+
+    /// Run a pick that arrived while something else was working.
+    ///
+    /// Dispatched to the next turn of the runloop. This runs inside the
+    /// didSet of `scanning`, and addChartSet sets that flag again.
+    private func runQueuedPick() {
+        guard queuedPick != nil else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.bake == nil, !self.scanning,
+                  let next = self.queuedPick else { return }
+            self.queuedPick = nil
+            self.emptyPick = nil
+            self.addChartSet(next)
         }
     }
 
