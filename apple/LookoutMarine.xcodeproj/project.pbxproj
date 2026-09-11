@@ -8,7 +8,6 @@
 
 /* Begin PBXBuildFile section */
 		01E9C851AE2AFBF1C12F09F9 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 7DE881BB41EFEF6FD7443244 /* Assets.xcassets */; };
-		01F7E57414B914883ACB6649 /* FirstRunTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 607E7979DEB0E1563E586E09 /* FirstRunTests.swift */; };
 		02BEB8DB1EBC2B61CC1CEB36 /* Chrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8ABF98AA4261380DCAF4621C /* Chrome.swift */; };
 		037C654341DDCD78BD9C0F8E /* NoaaRegionList.swift in Sources */ = {isa = PBXBuildFile; fileRef = A84D161B86E9E858C398FE6C /* NoaaRegionList.swift */; };
 		047DB0D652AA68083A2B43A1 /* FirstRunFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE36262A44201EEF33B87681 /* FirstRunFlow.swift */; };
@@ -37,7 +36,6 @@
 		1BF3259967105BE75AEBE75F /* LicensesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FAE0C61602607D05CF24596 /* LicensesTests.swift */; };
 		1CC2EEC8A6FA6384EAD7A66B /* PluginAlertTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28D24F09A3F5CB1D1A2E3E49 /* PluginAlertTests.swift */; };
 		1CD5B1869FFFB378BD8DC35B /* ChartGallery.swift in Sources */ = {isa = PBXBuildFile; fileRef = F430F5A314DA26FBA1E5FDF5 /* ChartGallery.swift */; };
-		1D392087983C4CFA266EBAC4 /* EmptyChartState.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDC82FE85405E2169A271617 /* EmptyChartState.swift */; };
 		1D784EA4414260DF4C62E8B4 /* LookoutMarineApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A03D3BC7A7816F10B65863B0 /* LookoutMarineApp.swift */; };
 		1F47658C4F59CFF5A1B54416 /* Platform.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43C05F8392EA5DB00E75425A /* Platform.swift */; };
 		1F6348B56169B23E77BEFAF1 /* SearchField.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C90666B68F88AA600900DFB /* SearchField.swift */; };
@@ -119,7 +117,6 @@
 		762B68E44214C16DB6661709 /* DepthStep.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3328E106480C671EAA411B76 /* DepthStep.swift */; };
 		77E3B55244A0DF4C771232F6 /* CoverageMap.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3171D7FE76E08E0699495D45 /* CoverageMap.swift */; };
 		784566F54334706217860CD0 /* ZoomControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0FF81FD7BD06CE338EF4E09 /* ZoomControls.swift */; };
-		795E2C8B01CCC740FBFD9B6E /* EmptyChartState.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDC82FE85405E2169A271617 /* EmptyChartState.swift */; };
 		799A673D0307B96939D71353 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16F8DF0D1C7780BEF76AEE22 /* AppModel.swift */; };
 		79ADA8573328C109282E8A80 /* SettingsRows.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CED6DE8C50508326D0E097C /* SettingsRows.swift */; };
 		7D0993B29FF0B336545055B6 /* AuxFileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFAB0A8EAF5C8563D93EA939 /* AuxFileView.swift */; };
@@ -389,7 +386,6 @@
 		5A0B8C7B273A6E8D538848ED /* ChartSets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartSets.swift; sourceTree = "<group>"; };
 		5E856FD037203427CE8B9E9C /* CompactHudTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompactHudTests.swift; sourceTree = "<group>"; };
 		5EBE7ED9891268BB429691A0 /* ChartValues.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartValues.swift; sourceTree = "<group>"; };
-		607E7979DEB0E1563E586E09 /* FirstRunTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirstRunTests.swift; sourceTree = "<group>"; };
 		6152AE14014203A46906CD92 /* PluginConsentSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginConsentSheet.swift; sourceTree = "<group>"; };
 		6473AB9A6EC7604E642EB8B9 /* LicenseManifestTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LicenseManifestTests.swift; sourceTree = "<group>"; };
 		64FA13C7BC1FB5316BEA40DB /* ChartController+Noaa.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChartController+Noaa.swift"; sourceTree = "<group>"; };
@@ -456,7 +452,6 @@
 		C73EED5D81CE4D0D4A578E1A /* ChartsModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartsModelTests.swift; sourceTree = "<group>"; };
 		C92108B96F87BAE129BE6656 /* FakeEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FakeEngine.swift; sourceTree = "<group>"; };
 		CB8AD6DFED21DF30B2636C6C /* ChartMenuPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartMenuPanel.swift; sourceTree = "<group>"; };
-		CDC82FE85405E2169A271617 /* EmptyChartState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmptyChartState.swift; sourceTree = "<group>"; };
 		D234494177794FA934BAB596 /* ChromeModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromeModel.swift; sourceTree = "<group>"; };
 		D31BFC1DAC5265A5DAC8F20D /* ChartLinkFetch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartLinkFetch.swift; sourceTree = "<group>"; };
 		DA903A3F5328FE7634B5B1C4 /* ScaleEntryPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScaleEntryPanel.swift; sourceTree = "<group>"; };
@@ -515,7 +510,6 @@
 				F71C72C16BAED59FED342AD2 /* ChartInteractionTests.swift */,
 				3E8D780864440AD03BD12813 /* ChartSettingsTests.swift */,
 				5E856FD037203427CE8B9E9C /* CompactHudTests.swift */,
-				607E7979DEB0E1563E586E09 /* FirstRunTests.swift */,
 				289ADF58E60CB5CBBD3FF7EF /* HudTests.swift */,
 				9FAE0C61602607D05CF24596 /* LicensesTests.swift */,
 				1E0D029EF275F380E404C6A3 /* PickReportTests.swift */,
@@ -772,7 +766,6 @@
 				8ABF98AA4261380DCAF4621C /* Chrome.swift */,
 				48C28C1F70D85569D7DEA1F7 /* ChromeHitRegion.swift */,
 				D234494177794FA934BAB596 /* ChromeModel.swift */,
-				CDC82FE85405E2169A271617 /* EmptyChartState.swift */,
 				7C90666B68F88AA600900DFB /* SearchField.swift */,
 				43B1D53AEBA3A1562C76642D /* StartupLoader.swift */,
 				F0FF81FD7BD06CE338EF4E09 /* ZoomControls.swift */,
@@ -1119,7 +1112,6 @@
 				31BCCB75B9AB2C81B34A46EF /* DevHooks.swift in Sources */,
 				689E24910C8ECF894D1FA847 /* Discovery.swift in Sources */,
 				048482DA2781F36826865895 /* DisplaySection.swift in Sources */,
-				1D392087983C4CFA266EBAC4 /* EmptyChartState.swift in Sources */,
 				281005567BD58CF59FF46FCB /* FirstRunFlow.swift in Sources */,
 				4758BB9D3DF9B21A2B441740 /* FirstRunModel.swift in Sources */,
 				C4C543D94D4D8ED21A52DA07 /* FirstRunParts.swift in Sources */,
@@ -1262,7 +1254,6 @@
 				A479486780F2F040A5E24E0F /* DevHooks.swift in Sources */,
 				0BFBE84D0B1DE20C265E75D1 /* Discovery.swift in Sources */,
 				E14F467FD61BB3AB1A54AB95 /* DisplaySection.swift in Sources */,
-				795E2C8B01CCC740FBFD9B6E /* EmptyChartState.swift in Sources */,
 				047DB0D652AA68083A2B43A1 /* FirstRunFlow.swift in Sources */,
 				A6C58796691A693D11EBA6C3 /* FirstRunModel.swift in Sources */,
 				FE238FF6C4278D6F99E84EE1 /* FirstRunParts.swift in Sources */,
@@ -1324,7 +1315,6 @@
 				DAFCDF511109AE0461E947F2 /* ChartInteractionTests.swift in Sources */,
 				913307D54B2056675A7DBBDA /* ChartSettingsTests.swift in Sources */,
 				C82892E31FE36680817F7113 /* CompactHudTests.swift in Sources */,
-				01F7E57414B914883ACB6649 /* FirstRunTests.swift in Sources */,
 				5DD02716900498D0448E04AB /* HudTests.swift in Sources */,
 				1BF3259967105BE75AEBE75F /* LicensesTests.swift in Sources */,
 				090026F5B8DB917F9CE93BA7 /* PickReportTests.swift in Sources */,

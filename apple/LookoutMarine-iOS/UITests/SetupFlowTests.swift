@@ -30,12 +30,18 @@ final class SetupFlowTests: UITestCase {
         XCTAssertFalse(app.buttons["first-run-back"].exists)
     }
 
-    /// Set Up Later leaves setup and lands on the empty page.
+    /// Set Up Later leaves setup and lands on the chart.
     func testSetUpLaterLeaves() throws {
         let app = try setupApp()
         XCTAssertTrue(app.buttons["first-run-later"].waitForExistence(timeout: 20))
         app.buttons["first-run-later"].tap()
-        XCTAssertTrue(app.staticTexts["No charts yet"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["first-run-continue"].waitForNonExistence(timeout: 10),
+                      "setup stayed up")
+        XCTAssertFalse(app.staticTexts["Welcome to Lookout Marine"].exists)
+        // The chrome the chart comes with, rather than a page over it.
+        XCTAssertTrue(app.otherElements["scale-bar"].waitForExistence(timeout: 10)
+                      || app.buttons["compass"].exists,
+                      "the chart chrome did not come back")
     }
 
     /// Continue reaches the source step, which offers all three sources with

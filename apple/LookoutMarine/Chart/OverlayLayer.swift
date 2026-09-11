@@ -243,18 +243,16 @@ struct OverlayLayer: View {
                     }
                 }
                 .overlay {
-                    // The picker asked a question the mariner has answered.
-                    // While the answer is being acted on, the work stands in
-                    // its place.
+                    // Setup stands over the running app, which keeps drawing
+                    // behind it. It is the whole answer to an empty library:
+                    // a page saying there are no charts said what to do
+                    // without doing any of it, and setup does it.
+                    //
+                    // Set Up Later leaves the chart and the chrome, and the
+                    // next launch with nothing to draw asks again.
                     if model.firstRun.showing {
-                        // Setup stands over the running app, which keeps
-                        // drawing behind it. The empty page is what a mariner
-                        // who pressed Set Up Later comes back to.
                         FirstRunFlow(model: model, flow: model.firstRun)
                             .chromeHitRegion("first-run")
-                            .transition(.opacity)
-                    } else if model.charts.nothingToDraw, model.charts.chartWork == nil {
-                        EmptyChartState(model: model).chromeHitRegion("empty-state")
                             .transition(.opacity)
                     }
                 }
