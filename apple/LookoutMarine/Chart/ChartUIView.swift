@@ -385,14 +385,25 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate {
     /// The running total, so each report zooms by its own delta. The
     /// recognizer reports the translation since the scroll began.
     private var lastScrollY: CGFloat = 0
+    /// True while the running scroll began over the chrome, so the rest of it
+    /// belongs to the chrome too.
+    private var scrollOverChrome = false
 
     @objc private func onScroll(_ g: UIPanGestureRecognizer) {
         switch g.state {
         case .began:
+            // A trackpad scroll over the chrome belongs to the chrome, the
+            // same rule the Mac keeps. The window's hit test holds touches
+            // off the chart, and this recognizer listens for indirect scrolls
+            // rather than touches, so it is never asked.
+            scrollOverChrome = ChromeHitMap.shared
+                .contains(inChromeSpace(g.location(in: self)))
+            guard !scrollOverChrome else { return }
             notePointerInput("scroll")
             lastScrollY = 0
             controller?.flingStart(vx: 0, vy: 0)   // a scroll stops any coast
         case .changed:
+            guard !scrollOverChrome else { return }
             let y = g.translation(in: self).y
             let dy = y - lastScrollY
             lastScrollY = y
@@ -400,7 +411,7 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate {
             // Scrolling up zooms in, which is the direction the Mac takes.
             controller?.zoom(Double(dy) * Self.scrollZoom, atPt: g.location(in: self))
         default:
-            break
+            scrollOverChrome = false
         }
     }
 
