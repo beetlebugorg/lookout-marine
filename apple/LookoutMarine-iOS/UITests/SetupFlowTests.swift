@@ -70,6 +70,23 @@ final class SetupFlowTests: UITestCase {
                        "district 3 was disestablished and ships no cells")
     }
 
+    /// The regions run past the bottom of a phone screen, so the step scrolls
+    /// to reach the last of them.
+    func testCoverageStepScrollsToTheLastRegion() throws {
+        let app = try setupApp()
+        XCTAssertTrue(app.buttons["first-run-continue"].waitForExistence(timeout: 20))
+        app.buttons["first-run-continue"].tap()
+        XCTAssertTrue(app.buttons["source-NOAA charts"].waitForExistence(timeout: 10))
+        app.buttons["first-run-continue"].tap()
+
+        XCTAssertTrue(app.staticTexts["Which waters do you sail?"].waitForExistence(timeout: 10))
+        let last = app.buttons["region-d17"]   // Alaska, the last one listed
+        XCTAssertTrue(last.waitForExistence(timeout: 10))
+        try XCTSkipIf(last.isHittable, "every region is on screen, so there is no scroll to test")
+        app.swipeUp()
+        XCTAssertTrue(last.isHittable, "the step did not scroll to the last region")
+    }
+
     /// Picking Online chart reaches the link field, and Back returns.
     func testOnlineChartStepAndBack() throws {
         let app = try setupApp()

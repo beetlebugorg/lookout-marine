@@ -42,19 +42,44 @@ struct CoverageMap: View {
     private static let land = Color(red: 0.64, green: 0.59, blue: 0.33).opacity(0.55)
 
     var body: some View {
+        #if os(macOS)
+        // Room for the insets to sit in the Pacific without reaching the
+        // coast, at the width the sheet gives the map.
+        lower48.overlay(alignment: .bottomLeading) { corners.padding(8) }
+        #else
+        // Under the map rather than on it. On a screen this narrow the Alaska
+        // frame reached the west coast, and a region cannot be picked through
+        // the frame of another one.
+        VStack(alignment: .leading, spacing: 8) {
+            lower48
+            corners
+        }
+        #endif
+    }
+
+    private var lower48: some View {
         panel(Self.main)
             .aspectRatio(Self.main.window.aspect, contentMode: .fit)
-            .overlay(alignment: .bottomLeading) {
-                HStack(alignment: .bottom, spacing: 8) {
-                    inset(Self.insets[0], width: 134)
-                    inset(Self.insets[1], width: 72)
-                }
-                .padding(8)
-            }
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .strokeBorder(Chrome.edge.opacity(0.6), lineWidth: 1))
     }
+
+    private var corners: some View {
+        HStack(alignment: .bottom, spacing: 8) {
+            inset(Self.insets[0], width: cornerWidth)
+            inset(Self.insets[1], width: cornerWidth * 0.54)
+        }
+    }
+
+    #if os(macOS)
+    private var cornerWidth: CGFloat { 134 }
+    #else
+    /// Smaller than the Mac's. These sit under the map on a phone rather than
+    /// in a corner of it, so every point they are tall is a point the regions
+    /// below them lose.
+    private var cornerWidth: CGFloat { 100 }
+    #endif
 
     /// Alaska and Hawaii keep their own frames, so each reads as itself rather
     /// than as something floating off the coast of Oregon.
@@ -211,4 +236,63 @@ struct NoaaRegionPills: View {
     // A thumb needs the full target.
     private var pillHeight: CGFloat { 44 }
     #endif
+}
+
+
+/// The regions as rows, for a narrow screen.
+///
+/// Nine pills wrap to three ragged lines on a phone and leave the rest of the
+/// page empty under them. A row is the width of the screen, says which water
+/// the region covers rather than making the map answer that, and is a target a
+/// thumb cannot miss.
+struct NoaaRegionRows: View {
+    let regions: [NoaaRegion]
+    let picked: Set<String>
+    let enabled: Bool
+    let toggle: (String) -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(regions.enumerated()), id: \.element.id) { i, r in
+                if i > 0 { Divider().padding(.leading, 14) }
+                row(r)
+            }
+        }
+        .background(Chrome.surface,
+                    in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .strokeBorder(Chrome.edge.opacity(0.8), lineWidth: 1))
+        .opacity(enabled ? 1 : 0.5)
+    }
+
+    private func row(_ r: NoaaRegion) -> some View {
+        let on = picked.contains(r.id)
+        return Button { toggle(r.id) } label: {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(r.name)
+                        .font(.system(size: 15, weight: on ? .semibold : .regular))
+                        .foregroundStyle(Chrome.ink)
+                    Text(r.blurb)
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(Chrome.muted)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: on ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 20))
+                    .foregroundStyle(on ? Chrome.accent : Chrome.ink.opacity(0.25))
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
+            .frame(minHeight: 56)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .accessibilityLabel("\(r.name). \(r.blurb)")
+        .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
+        .accessibilityIdentifier("region-\(r.id)")
+    }
 }

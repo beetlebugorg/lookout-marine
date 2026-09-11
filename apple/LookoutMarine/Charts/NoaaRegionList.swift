@@ -64,10 +64,13 @@ struct NoaaCatalogLine: View {
 }
 
 
-/// The map, and the regions as pills under it. The two drive one selection.
+/// The map, and the regions under it. The two drive one selection.
 struct NoaaRegionList: View {
     var model: AppModel
     @Bindable var noaa: NoaaModel
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var width
+    #endif
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -79,10 +82,30 @@ struct NoaaRegionList: View {
                         coverage: noaa.coverage) { noaa.toggle($0) }
                 .frame(maxWidth: .infinity)
 
-            NoaaRegionPills(regions: noaa.regions,
-                            picked: noaa.picked,
-                            enabled: noaa.state.haveCatalog) { noaa.toggle($0) }
+            picker
         }
+    }
+
+    /// Pills where there is room to lay them out in a line or two, rows where
+    /// there is not. A phone is the narrow case.
+    @ViewBuilder private var picker: some View {
+        #if os(iOS)
+        if width == .compact {
+            NoaaRegionRows(regions: noaa.regions,
+                           picked: noaa.picked,
+                           enabled: noaa.state.haveCatalog) { noaa.toggle($0) }
+        } else {
+            pills
+        }
+        #else
+        pills
+        #endif
+    }
+
+    private var pills: some View {
+        NoaaRegionPills(regions: noaa.regions,
+                        picked: noaa.picked,
+                        enabled: noaa.state.haveCatalog) { noaa.toggle($0) }
     }
 }
 
