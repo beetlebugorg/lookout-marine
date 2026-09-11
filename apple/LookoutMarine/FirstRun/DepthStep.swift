@@ -37,7 +37,10 @@ struct DepthStep: View {
             : [2, 5, 10, 20, 30, 50, 75, 100]
     }
 
-    private var safetyDepth: Double { draft + clearance }
+    /// Draft plus clearance, rounded up to a whole foot or metre. A chart
+    /// names its depths in whole numbers, and the fraction belongs to the
+    /// keel rather than to the water.
+    private var safetyDepth: Double { (draft + clearance).rounded(.up) }
     private var safetyContour: Double {
         ladder.first { $0 >= safetyDepth } ?? ladder.last!
     }
@@ -45,7 +48,7 @@ struct DepthStep: View {
     /// The deep contour. The step does not ask for it, so it comes off the
     /// same ladder as the safety contour and displays round.
     private var deepContour: Double {
-        let want = safetyContour * 3
+        let want = safetyContour * 2
         return ladder.first { $0 >= want } ?? ladder.last!
     }
 
@@ -188,6 +191,9 @@ struct DepthStep: View {
             derivedRow(
                 "Safety contour", measure(safetyContour),
                 "Water shallower than this shades as unsafe. Rounded up to a contour the survey draws, so \(measure(safetyDepth)) reads as \(measure(safetyContour)).")
+            derivedRow(
+                "Deep contour", measure(deepContour),
+                "Water deeper than this draws in the lightest shade. Twice the safety contour, up the same ladder the safety contour came off.")
         }
     }
 
@@ -352,18 +358,14 @@ struct DepthStep: View {
     /// mariner works, and moves only when the contour steps to the next one
     /// the survey draws. The shading is what answers every keystroke.
     private static let spots: [(Int, Double, CGFloat)] = [
-        (0, 0.15, 0.30), (1, 0.22, 0.72), (2, 0.30, 0.16), (3, 0.40, 0.52),
-        (4, 0.55, 0.86), (5, 0.70, 0.34), (6, 0.90, 0.64), (7, 1.10, 0.20),
-        (8, 1.40, 0.46), (9, 1.75, 0.80), (10, 2.20, 0.28), (11, 2.70, 0.60),
-        (12, 3.30, 0.40), (13, 3.90, 0.74),
+        (0, 0.12, 0.28), (1, 0.30, 0.68), (2, 0.45, 0.14), (3, 0.62, 0.50),
+        (4, 0.80, 0.84), (5, 1.00, 0.32), (6, 1.22, 0.62), (7, 1.48, 0.20),
+        (8, 1.78, 0.44), (9, 2.12, 0.78), (10, 2.50, 0.34), (11, 2.85, 0.58),
     ]
 
-    /// A sounding as a chart prints it, in the unit on screen: tenths in the
-    /// shallows, whole numbers once the boat has water under it.
-    private func sounding(_ v: Double) -> String {
-        if feet || v >= 10 { return "\(Int(v.rounded()))" }
-        return String(format: "%.1f", (v * 10).rounded() / 10)
-    }
+    /// A sounding in the unit on screen, rounded up. Whole numbers, the way
+    /// the two contours read.
+    private func sounding(_ v: Double) -> String { "\(Int(v.rounded(.up)))" }
 
     /// One depth line, from the shore out. The same shape at every depth,
     /// moved further out as the water deepens.
