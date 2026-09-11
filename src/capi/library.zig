@@ -441,6 +441,16 @@ const noaa_regions = blk: {
 };
 
 /// The regions and how many. See lookout-library.h.
+/// One S-52 colour by token, for a shell drawing its own chart legend.
+/// See lookout-library.h.
+export fn lookout_s52_color(token: ?[*:0]const u8, scheme: u32, out: ?*[4]f32) c_int {
+    const t = token orelse return 0;
+    const dst = out orelse return 0;
+    const rgba = lk.s52Color(std.mem.span(t), scheme) orelse return 0;
+    dst.* = rgba;
+    return 1;
+}
+
 export fn lookout_noaa_regions(out: ?*[*]const lookout_noaa_region) usize {
     if (out) |o| o.* = &noaa_regions;
     return noaa_regions.len;

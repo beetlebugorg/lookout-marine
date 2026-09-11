@@ -764,6 +764,17 @@ typedef struct {
     double west, south, east, north;
 } lookout_noaa_region;
 
+/* ---- S-52 colours ------------------------------------------------------ */
+
+/* One colour from the palette the engine draws with, by S-52 token (DEPVS,
+ * DEPMS, DEPMD, DEPDW, LANDA, ...) and scheme (tile57_scheme: 0 day, 1 dusk,
+ * 2 night), as RGBA in 0..1. Returns 1 and fills `out` when the token is in
+ * the table, else 0.
+ *
+ * For a shell drawing its own chart legend. Reading the engine's own table
+ * keeps a legend and the chart from drifting apart. */
+int lookout_s52_color(const char *token, uint32_t scheme, float out[4]);
+
 /* The regions, and how many. `out` may be NULL to ask only for the count. The
  * table is static and valid for the life of the process. */
 size_t lookout_noaa_regions(const lookout_noaa_region **out);

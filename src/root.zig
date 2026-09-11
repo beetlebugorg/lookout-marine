@@ -62,6 +62,48 @@ fn schemeName(s: Scheme) []const u8 {
     };
 }
 
+/// One S-52 colour from the palette the engine draws with, as RGBA in 0..1.
+///
+/// The colortables are baked into tile57 and keyed by token and scheme. A
+/// shell that draws its own depth legend reads them here rather than typing
+/// hex in, so the legend and the chart cannot drift apart.
+pub fn s52Color(token: []const u8, scheme: Scheme) ?[4]f32 {
+    var ct: [*c]u8 = null;
+    var ct_len: usize = 0;
+    var err: cc.tile57_error = undefined;
+    if (cc.tile57_colortables_default(&ct, &ct_len, &err) != cc.TILE57_OK or ct == null) return null;
+    defer cc.tile57_free(ct);
+
+    const alloc = std.heap.c_allocator;
+    const parsed = std.json.parseFromSlice(std.json.Value, alloc, ct[0..ct_len], .{}) catch return null;
+    defer parsed.deinit();
+    const root = switch (parsed.value) {
+        .object => |o| o,
+        else => return null,
+    };
+    const table = switch (root.get(schemeName(scheme)) orelse return null) {
+        .object => |o| o,
+        else => return null,
+    };
+    const hex = switch (table.get(token) orelse return null) {
+        .string => |v| v,
+        else => return null,
+    };
+    return rgbaFromHex(hex);
+}
+
+/// "#rrggbb" as RGBA in 0..1.
+fn rgbaFromHex(hex: []const u8) ?[4]f32 {
+    const body = if (hex.len > 0 and hex[0] == '#') hex[1..] else hex;
+    if (body.len != 6) return null;
+    var out: [4]f32 = .{ 0, 0, 0, 1 };
+    for (0..3) |i| {
+        const v = std.fmt.parseInt(u8, body[i * 2 .. i * 2 + 2], 16) catch return null;
+        out[i] = @as(f32, @floatFromInt(v)) / 255.0;
+    }
+    return out;
+}
+
 /// A camera pose. rotation_deg is course-up rotation (0 = north-up).
 pub const View = struct { lon: f64, lat: f64, zoom: f64, rotation_deg: f64 = 0 };
 

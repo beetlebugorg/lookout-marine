@@ -32,7 +32,9 @@ struct DepthStep: View {
     /// contour is the first of these at or past the safety depth, because the
     /// chart shades on a contour the survey has.
     private var ladder: [Double] {
-        feet ? [6, 12, 18, 30, 60, 120, 300] : [2, 5, 10, 20, 30, 50, 100]
+        feet
+            ? [6, 12, 18, 30, 60, 90, 120, 180, 240, 300]
+            : [2, 5, 10, 20, 30, 50, 75, 100]
     }
 
     private var safetyDepth: Double { draft + clearance }
@@ -241,10 +243,10 @@ struct DepthStep: View {
                 }
                 .overlay(alignment: .bottom) { Divider() }
             HStack(spacing: 0) {
-                key(Self.unsafeShade, "Unsafe", "0 – \(measure(safetyDepth))")
-                key(Self.shallowShade, "Shallow", "\(measure(safetyDepth)) – \(measure(safetyContour))")
-                key(Self.mediumShade, "Medium", "\(measure(safetyContour)) – \(measure(deepContour))")
-                key(Self.deepShade, "Deep", "\(measure(deepContour)) +")
+                key(unsafeShade, "Unsafe", "0 – \(measure(safetyDepth))")
+                key(shallowShade, "Shallow", "\(measure(safetyDepth)) – \(measure(safetyContour))")
+                key(mediumShade, "Medium", "\(measure(safetyContour)) – \(measure(deepContour))")
+                key(deepShade, "Deep", "\(measure(deepContour)) +")
             }
         }
         .background(Chrome.surface)
@@ -253,60 +255,54 @@ struct DepthStep: View {
             .strokeBorder(Color.primary.opacity(0.14)))
     }
 
-    /// The four shades, approximating the day palette. A legend, and not the
-    /// palette the engine draws with.
-    private static let unsafeShade = Color(red: 0.38, green: 0.72, blue: 1.0)
-    private static let shallowShade = Color(red: 0.51, green: 0.79, blue: 1.0)
-    private static let mediumShade = Color(red: 0.65, green: 0.85, blue: 0.98)
-    private static let deepShade = Color(red: 0.79, green: 0.93, blue: 1.0)
-    private static let shore = Color(red: 0.84, green: 0.82, blue: 0.66)
+    /// The S-52 tokens the engine shades four-shade water with, deepest last,
+    /// and the land under them.
+    private var unsafeShade: Color { s52("DEPVS", fallback: .init(red: 0.38, green: 0.72, blue: 1)) }
+    private var shallowShade: Color { s52("DEPMS", fallback: .init(red: 0.51, green: 0.79, blue: 1)) }
+    private var mediumShade: Color { s52("DEPMD", fallback: .init(red: 0.65, green: 0.85, blue: 0.98)) }
+    private var deepShade: Color { s52("DEPDW", fallback: .init(red: 0.79, green: 0.93, blue: 1)) }
+    private var shore: Color { s52("LANDA", fallback: .init(red: 0.75, green: 0.75, blue: 0.56)) }
+    private var contourInk: Color { s52("DEPCN", fallback: .init(red: 0.46, green: 0.55, blue: 0.59)) }
+    private var soundingInk: Color { s52("SNDG2", fallback: .black) }
 
-    /// Where each contour falls across the panel. Fixed, so every band has
-    /// room. On a depth scale the water a small boat draws measures a few
-    /// pixels against a 20 m contour.
+    /// One colour out of the engine's own palette, in the scheme on screen.
+    /// The legend and the chart then cannot drift apart.
+    private func s52(_ token: String, fallback: Color) -> Color {
+        var rgba: [Float] = [0, 0, 0, 1]
+        let ok = token.withCString { t in
+            rgba.withUnsafeMutableBufferPointer {
+                lookout_s52_color(t, UInt32(m.scheme.rawValue), $0.baseAddress)
+            }
+        }
+        guard ok != 0 else { return fallback }
+        return Color(.sRGB, red: Double(rgba[0]), green: Double(rgba[1]),
+                     blue: Double(rgba[2]), opacity: Double(rgba[3]))
+    }
+
+    /// The seabed, as a fixed slope measured in safety contours.
+    ///
+    /// The soundings are the seabed and hold still; the shading is the
+    /// mariner's and moves over them. Their depths are read off this slope, so
+    /// they change only when the contour steps to the next one the survey
+    /// draws. A chart behaves the same way when a boat changes.
+    ///
+    /// Measured in contours rather than metres because the answers span a
+    /// dinghy and a ship: a fixed 40 m slope puts a 5 ft contour in the first
+    /// pixel of the panel and a 30 ft one halfway up it.
     private static let shoreAt: CGFloat = 0.14
-    private static let depthAt: CGFloat = 0.36
-    private static let contourAt: CGFloat = 0.58
-    private static let deepAt: CGFloat = 0.80
+    /// How steeply the slope falls away. Shallow water gets most of the
+    /// panel, because that is where both contours fall.
+    private static let slopeK = 2.07
 
-    /// The deepest water drawn, so the deep band has water past its contour.
-    private var floor: Double { deepContour * 1.6 }
+    /// The deepest water drawn, half again past the deep contour so the last
+    /// shade has water in it.
+    private var floor: Double { deepContour * 1.5 }
 
     /// How far out a depth lies, as a fraction of the panel.
     private func reach(_ depth: Double) -> CGFloat {
-        let stops: [(Double, CGFloat)] = [
-            (0, Self.shoreAt), (safetyDepth, Self.depthAt),
-            (safetyContour, Self.contourAt), (deepContour, Self.deepAt), (floor, 1),
-        ]
-        for i in 1..<stops.count {
-            let (d0, r0) = stops[i - 1]
-            let (d1, r1) = stops[i]
-            if depth <= d1 {
-                let span = d1 - d0
-                let f = span > 0 ? CGFloat((depth - d0) / span) : 0
-                return r0 + (r1 - r0) * min(max(f, 0), 1)
-            }
-        }
-        return 1
-    }
-
-    /// The depth at a point on the panel: `reach` read backwards, so a spot
-    /// depth goes where it is legible and still reports its own water.
-    private func depth(atReach r: CGFloat) -> Double {
-        let stops: [(Double, CGFloat)] = [
-            (0, Self.shoreAt), (safetyDepth, Self.depthAt),
-            (safetyContour, Self.contourAt), (deepContour, Self.deepAt), (floor, 1),
-        ]
-        for i in 1..<stops.count {
-            let (d0, r0) = stops[i - 1]
-            let (d1, r1) = stops[i]
-            if r <= r1 {
-                let span = r1 - r0
-                let f = span > 0 ? Double((r - r0) / span) : 0
-                return d0 + (d1 - d0) * min(max(f, 0), 1)
-            }
-        }
-        return floor
+        guard floor > 0 else { return Self.shoreAt }
+        let f = pow(max(0, min(1, depth / floor)), 1 / Self.slopeK)
+        return Self.shoreAt + (1 - Self.shoreAt) * CGFloat(f)
     }
 
     private var seabed: some View {
@@ -314,17 +310,17 @@ struct DepthStep: View {
             let w = geo.size.width
             let h = geo.size.height
             ZStack {
-                Self.deepShade
-                shoal(w: w, h: h, at: reach(deepContour)).fill(Self.mediumShade)
-                shoal(w: w, h: h, at: reach(safetyContour)).fill(Self.shallowShade)
-                shoal(w: w, h: h, at: reach(safetyDepth)).fill(Self.unsafeShade)
+                deepShade
+                shoal(w: w, h: h, at: reach(deepContour)).fill(mediumShade)
+                shoal(w: w, h: h, at: reach(safetyContour)).fill(shallowShade)
+                shoal(w: w, h: h, at: reach(safetyDepth)).fill(unsafeShade)
                 // The safety contour, drawn bold the way S-52 draws the
                 // contour the boat is measured against.
                 shoal(w: w, h: h, at: reach(safetyContour))
                     .stroke(Color.black.opacity(0.45), lineWidth: 1.8)
                 shoal(w: w, h: h, at: reach(deepContour))
                     .stroke(Color.black.opacity(0.18), lineWidth: 0.8)
-                shoal(w: w, h: h, at: Self.shoreAt).fill(Self.shore)
+                shoal(w: w, h: h, at: Self.shoreAt).fill(shore)
                 shoal(w: w, h: h, at: Self.shoreAt)
                     .stroke(Color.black.opacity(0.45), lineWidth: 1)
                 soundings(w: w, h: h)
@@ -338,8 +334,8 @@ struct DepthStep: View {
     /// depth does to a chart, and the only way to watch the number move.
     private func soundings(w: CGFloat, h: CGFloat) -> some View {
         ForEach(Self.spots, id: \.0) { spot in
-            let depth = depth(atReach: spot.1)
-            let at = curvePoint(w: w, h: h, t: spot.1, u: spot.2)
+            let depth = safetyContour * spot.1
+            let at = curvePoint(w: w, h: h, t: reach(depth), u: spot.2)
             Text(sounding(depth))
                 .font(.system(size: 10.5,
                               weight: depth <= safetyDepth ? .bold : .regular))
@@ -349,14 +345,17 @@ struct DepthStep: View {
         }
     }
 
-    /// Each spot depth: an id, how far out across the panel, and how far
-    /// along that line. Spread over the four bands, so the bold ones the
-    /// safety depth makes are always among them.
-    private static let spots: [(Int, CGFloat, CGFloat)] = [
-        (0, 0.21, 0.30), (1, 0.26, 0.70), (2, 0.31, 0.14), (3, 0.33, 0.52),
-        (4, 0.42, 0.36), (5, 0.46, 0.84), (6, 0.51, 0.22), (7, 0.54, 0.62),
-        (8, 0.63, 0.44), (9, 0.67, 0.16), (10, 0.71, 0.78), (11, 0.76, 0.36),
-        (12, 0.85, 0.58), (13, 0.90, 0.44), (14, 0.94, 0.88),
+    /// Each spot depth: an id, its depth as a multiple of the safety contour,
+    /// and how far along its line it stands.
+    ///
+    /// Multiples, so a sounding holds both its place and its number while the
+    /// mariner works, and moves only when the contour steps to the next one
+    /// the survey draws. The shading is what answers every keystroke.
+    private static let spots: [(Int, Double, CGFloat)] = [
+        (0, 0.15, 0.30), (1, 0.22, 0.72), (2, 0.30, 0.16), (3, 0.40, 0.52),
+        (4, 0.55, 0.86), (5, 0.70, 0.34), (6, 0.90, 0.64), (7, 1.10, 0.20),
+        (8, 1.40, 0.46), (9, 1.75, 0.80), (10, 2.20, 0.28), (11, 2.70, 0.60),
+        (12, 3.30, 0.40), (13, 3.90, 0.74),
     ]
 
     /// A sounding as a chart prints it, in the unit on screen: tenths in the
