@@ -88,10 +88,19 @@ struct NoaaRegionList: View {
 
 
 /// Picking regions from Mariner settings, after setup has run.
+///
+/// A sheet on a phone and a window on the Mac, where the map wants more room
+/// than a form gives it. `close` is the window's, and nil in a sheet, which
+/// dismisses itself.
 struct NoaaPickerSheet: View {
     var model: AppModel
     @Bindable var noaa: NoaaModel
+    var close: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
+
+    private func shut() {
+        if let close { close() } else { dismiss() }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -115,10 +124,10 @@ struct NoaaPickerSheet: View {
                         .monospacedDigit()
                 }
                 Spacer(minLength: 8)
-                Button("Cancel") { dismiss() }
+                Button("Cancel") { shut() }
                 Button("Download") {
                     model.startNoaaDownload()
-                    dismiss()
+                    shut()
                 }
                 .keyboardShortcut(.defaultAction)
                 .disabled(!noaa.state.haveCatalog || noaa.picked.isEmpty)

@@ -21,6 +21,15 @@ struct ChartsSections: View {
     @State private var showNoaaPicker = false
     @State private var newChartLink = ""
 
+    /// The picker, in a window on the Mac and a sheet on a phone.
+    private func openNoaaPicker() {
+        #if os(macOS)
+        NoaaWindowController.shared.show(model: model)
+        #else
+        showNoaaPicker = true
+        #endif
+    }
+
     var body: some View {
         // Which chart DRAWS. Lookout's own chart is built from the sets below;
         // a link is a publisher's style drawn instead of it. One draws at a
@@ -34,17 +43,14 @@ struct ChartsSections: View {
                     .foregroundStyle(.secondary)
             }
         } header: { Text("Active chart") } footer: {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Pick a chart to draw it. A linked chart keeps its publisher's own portrayal.")
-                // Said only while a link draws, because that is when the rest
-                // of this window stops shaping the chart and the mariner is
-                // owed a reason.
-                if model.chartLinks.active != nil {
-                    Text("While a linked chart draws, the display, depth and symbol settings do not shape it. You are seeing its publisher's own portrayal.")
-                }
+            // Only while a link draws, because that is when the rest of this
+            // window stops shaping the chart and the mariner is owed a reason.
+            // That a tile draws when it is picked needs no saying.
+            if model.chartLinks.active != nil {
+                Text("While a linked chart draws, the display, depth and symbol settings do not shape it. You are seeing its publisher's own portrayal.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-            .font(.caption)
-            .foregroundStyle(.secondary)
         }
 
         // The installed sets. A set is a folder the mariner added; switching
@@ -108,7 +114,7 @@ struct ChartsSections: View {
         }
 
         Section {
-            Button { showNoaaPicker = true } label: {
+            Button { openNoaaPicker() } label: {
                 AddChartRow(icon: "cloud",
                             title: "Get charts from NOAA…",
                             detail: "Pick the waters you sail. Lookout downloads the cells and prepares them. Free.",
@@ -131,9 +137,13 @@ struct ChartsSections: View {
             Text("S-57 and S-101 cells (.000 with their updates) · charts Lookout has already prepared (.pmtiles) · imagery and vendor charts (.mbtiles) · BSB/KAP raster sheets (.kap, .bsb). Cells and raster sheets are converted once on the way in. Encrypted S-63 cells are not supported.")
                 .captionFooter()
         }
+        // The Mac opens a window instead: the picker is a map of the country
+        // and the form is 660pt wide. A phone has no windows.
+        #if !os(macOS)
         .sheet(isPresented: $showNoaaPicker) {
             NoaaPickerSheet(model: model, noaa: model.noaa)
         }
+        #endif
         .sheet(isPresented: $showAddChart) {
             AddChartSheet(model: model, link: $newChartLink)
         }
