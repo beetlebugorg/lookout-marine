@@ -197,6 +197,32 @@ export fn lookout_chart_link_remove(h: ?*lookout, url: ?[*:0]const u8) void {
     l.links.remove(std.mem.span(s));
 }
 
+/// Read every link's style for its tile template. See lookout-library.h.
+export fn lookout_chart_links_preview(h: ?*lookout) void {
+    const l = locked(h);
+    defer l.apiUnlock();
+    l.links.previewAll();
+}
+
+/// The tile url that pictures one chart. See lookout-library.h.
+export fn lookout_chart_link_preview_url(
+    h: ?*lookout,
+    url: ?[*:0]const u8,
+    lon: f64,
+    lat: f64,
+    zoom: i32,
+    out: ?[*]u8,
+    out_len: usize,
+) c_int {
+    const s = url orelse return 0;
+    const dst = out orelse return 0;
+    if (out_len == 0) return 0;
+    const l = locked(h);
+    defer l.apiUnlock();
+    const built = l.links.previewUrl(std.mem.span(s), lon, lat, zoom, dst[0..out_len]) orelse return 0;
+    return if (built.len == 0) 0 else 1;
+}
+
 export fn lookout_chart_link_refresh(h: ?*lookout, url: ?[*:0]const u8) void {
     const l = locked(h);
     defer l.apiUnlock();

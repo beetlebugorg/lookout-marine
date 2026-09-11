@@ -60,6 +60,36 @@ extension ChartController {
     /// Everything the chart list shows, or nil when nothing changed since the
     /// last poll. The flag has ONE consumer, so this is called from exactly one
     /// place: pushReadouts.
+    /// Read every link's style for the tile its picture comes from. The core
+    /// keeps the template with the link and raises its changed flag.
+    func previewChartLinks() {
+        guard let h = handle else { return }
+        lookout_chart_links_preview(h)
+        kick()
+    }
+
+    func chartLinkPreviewURL(_ url: String, lon: Double, lat: Double, zoom: Int) -> String? {
+        guard let h = handle else { return nil }
+        var buf = [CChar](repeating: 0, count: 2048)
+        let ok = url.withCString { u in
+            buf.withUnsafeMutableBufferPointer {
+                lookout_chart_link_preview_url(h, u, lon, lat, Int32(zoom),
+                                               $0.baseAddress, $0.count)
+            }
+        }
+        guard ok != 0 else { return nil }
+        return String(cString: buf)
+    }
+
+    /// Where the chart is now. Every tile pictures the same water, so the
+    /// styles are what differ between them.
+    func viewCenter() -> (lon: Double, lat: Double)? {
+        guard let h = handle else { return nil }
+        var v = lookout_view()
+        lookout_get_view(h, &v)
+        return (v.lon, v.lat)
+    }
+
     func chartLinksSnapshot() -> ChartLinkSnapshot? {
         guard let h = handle, lookout_chart_links_changed(h) != 0 else { return nil }
         guard let read = lookout_links_read(h), let st = lookout_links_state(read) else { return nil }

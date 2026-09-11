@@ -668,6 +668,26 @@ void lookout_chart_link_remove(lookout *h, const char *url);
  * read, the kept text stands and the error below is set. */
 void lookout_chart_link_refresh(lookout *h, const char *url);
 
+/* ---- chart previews -------------------------------------------------------
+ *
+ * The engine draws one chart at a time, so a shell listing six of them cannot
+ * ask for six renders. What it can have is one TILE of each: a style says
+ * where its tiles come from, and the same z/x/y off every publisher puts the
+ * same water side by side, so the styles are what differ.
+ *
+ * Call lookout_chart_links_preview when the list goes on screen. It reads the
+ * style of every link whose template is not known yet, keeps that template
+ * with the link, and raises lookout_chart_links_changed. Nothing here touches
+ * the chart being drawn. */
+void lookout_chart_links_preview(lookout *h);
+
+/* The url of the tile that pictures `link` at a point, or 0 when the style
+ * names no raster tiles (a vector style draws no single-tile picture). Writes
+ * a NUL-terminated url into `out`. The shell fetches it like any other url. */
+int lookout_chart_link_preview_url(lookout *h, const char *link,
+                                   double lon, double lat, int zoom,
+                                   char *out, size_t out_len);
+
 /* Everything the UI renders, as one transfer-full document:
  *   {"links":[{"url":…,"name":…}…],
  *    "active":…,          // null = lookout's own chart

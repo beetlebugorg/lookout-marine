@@ -44,6 +44,13 @@ protocol ChartLinkEngine: AnyObject {
     @discardableResult func selectChartLink(_ url: String?) -> Bool
     func importChartLinks(_ json: String)
     func chartLinksSnapshot() -> ChartLinkSnapshot?
+    /// Read every link's style for the tile its picture comes from.
+    func previewChartLinks()
+    /// The tile url that pictures one chart at a point, or nil when the style
+    /// names no raster tiles.
+    func chartLinkPreviewURL(_ url: String, lon: Double, lat: Double, zoom: Int) -> String?
+    /// Where the chart is now, for a preview every tile shares.
+    func viewCenter() -> (lon: Double, lat: Double)?
 }
 
 /// What PluginsModel asks the chart for.

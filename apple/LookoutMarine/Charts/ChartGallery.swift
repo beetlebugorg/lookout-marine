@@ -20,6 +20,8 @@ struct ChartGallery: View {
     let onAdd: () -> Void
 
     private var links: ChartLinksModel { model.chartLinks }
+    /// One tile of each linked chart, at the water the mariner is on.
+    @State private var previews = ChartPreviews()
 
     var body: some View {
         ScrollView(.horizontal) {
@@ -35,6 +37,7 @@ struct ChartGallery: View {
                               name: link.name,
                               detail: link.url,
                               active: links.active == link.url,
+                              picture: previews.images[link.url],
                               onRefresh: { links.refresh(link.url) },
                               onRemove: { links.remove(link.url) }) {
                         links.select(link.url)
@@ -45,6 +48,13 @@ struct ChartGallery: View {
             .padding(.vertical, 2)
             .padding(.horizontal, 12)
         }
+        .onAppear {
+            previews.bind(to: model.controller)
+            previews.refresh(links.list.map(\.url))
+        }
+        // The core answers a style read by raising its changed flag, and the
+        // list model polls that. A new template is a new picture to ask for.
+        .onChange(of: links.list) { _, now in previews.refresh(now.map(\.url)) }
         .scrollIndicators(.automatic)
         // The row starts at its first tile. Without this the form can hand the
         // scroll view an offset and the active tile is cut off at the left.
@@ -83,6 +93,8 @@ private struct ChartTile: View {
     let name: String
     let detail: String
     let active: Bool
+    /// One tile of this chart, once it has been fetched.
+    var picture: Image? = nil
     var onRefresh: (() -> Void)? = nil
     var onRemove: (() -> Void)? = nil
     let select: () -> Void
@@ -116,7 +128,7 @@ private struct ChartTile: View {
     }
 
     private var art: some View {
-        picture
+        chartPicture
             .frame(width: ChartGallery.Metrics.tile, height: ChartGallery.Metrics.art)
             .clipped()
             // Over the clipped tile, and not inside it. A picture that fills by
@@ -129,20 +141,28 @@ private struct ChartTile: View {
         }
     }
 
-    @ViewBuilder private var picture: some View {
+    /// The picture at the top of the tile: this chart at the point every
+    /// tile in the row is drawn at.
+    @ViewBuilder private var chartPicture: some View {
         switch kind {
         case .lookout:
             Image("WelcomeChart")
                 .resizable()
                 .aspectRatio(contentMode: .fill)
         case .link:
-            // No picture: see the note at the top of this file.
-            Chrome.panel
-                .overlay(
-                    Image(systemName: "globe.americas")
-                        .font(.system(size: 26, weight: .light))
-                        .foregroundStyle(Chrome.accent.opacity(0.55))
-                )
+            if let picture {
+                picture
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } else {
+                // A style with vector tiles, or a tile that has yet to land.
+                Chrome.panel
+                    .overlay(
+                        Image(systemName: "globe.americas")
+                            .font(.system(size: 26, weight: .light))
+                            .foregroundStyle(Chrome.accent.opacity(0.55))
+                    )
+            }
         }
     }
 
