@@ -574,10 +574,11 @@ export fn lookout_noaa_have(h: ?*lookout, names: ?[*]const ?[*:0]const u8, n: us
 
 export fn lookout_noaa_cost(h: ?*lookout, region_ids: ?[*:0]const u8,
                             out_cells: ?*u32, out_bytes: ?*u64,
-                            out_held: ?*u32) c_int {
+                            out_held: ?*u32, out_held_bytes: ?*u64) c_int {
     if (out_cells) |c| c.* = 0;
     if (out_bytes) |b| b.* = 0;
     if (out_held) |x| x.* = 0;
+    if (out_held_bytes) |x| x.* = 0;
     if (h == null) return 0;
     const l = locked(h);
     defer l.apiUnlock();
@@ -588,6 +589,7 @@ export fn lookout_noaa_cost(h: ?*lookout, region_ids: ?[*:0]const u8,
     if (out_cells) |o| o.* = c.cells;
     if (out_bytes) |o| o.* = c.bytes;
     if (out_held) |o| o.* = c.held;
+    if (out_held_bytes) |o| o.* = c.held_bytes;
     return 1;
 }
 

@@ -28,6 +28,14 @@ struct NoaaRegion: Identifiable, Hashable {
     let north: Double
 }
 
+/// What picking regions costs: the download, and the cells already installed.
+struct NoaaCost {
+    var cells: UInt32 = 0
+    var bytes: UInt64 = 0
+    var held: UInt32 = 0
+    var heldBytes: UInt64 = 0
+}
+
 /// A cell already installed, for the update check.
 struct NoaaInstalledCell: Hashable {
     let name: String
@@ -72,6 +80,8 @@ final class NoaaModel {
     /// so a number far under the region's size reads as a saving rather than
     /// a mistake.
     private(set) var held: UInt32 = 0
+    /// What fetching the installed ones again costs, for a repair.
+    private(set) var heldBytes: UInt64 = 0
 
     /// True when a catalog read was asked for before a chart was open. Every
     /// call here goes through a chart handle, so a read asked for at launch
@@ -116,13 +126,24 @@ final class NoaaModel {
         recost()
     }
 
+    /// Called when a read has no chart to run through. AppModel opens one of
+    /// no cells, the way a chart link does.
+    var openChartForCatalog: (() -> Void)?
+
     /// Read NOAA's catalog. The result arrives through poll().
     func refresh() {
         guard let engine, engine.noaaRefresh() else {
             wantsCatalog = true
+            // Every call here goes through a lookout handle, which exists
+            // only while a chart is open. On a first run there are no charts,
+            // so the catalog read had no handle to use and the coverage step
+            // sat with its regions dim and no line to say why.
+            openChartForCatalog?()
             return
         }
         wantsCatalog = false
+        // The core set the phase to reading when it took the call. Read it
+        // back, so the view watching the phase starts its own poll.
         poll()
     }
 
@@ -161,16 +182,19 @@ final class NoaaModel {
             cells = 0
             bytes = 0
             held = 0
+            heldBytes = 0
             return
         }
         if let c = engine.noaaCost(regionIDs: pickedIDs) {
             cells = c.cells
             bytes = c.bytes
             held = c.held
+            heldBytes = c.heldBytes
         } else {
             cells = 0
             bytes = 0
             held = 0
+            heldBytes = 0
         }
     }
 
@@ -188,7 +212,9 @@ final class NoaaModel {
 
     /// What a pick costs, in the mariner's words.
     var costLine: String {
-        if cells == 0 && held > 0 { return "\(held) charts, all installed" }
+        if allInstalled {
+            return "\(held) charts, all installed · \(NoaaModel.sizeText(heldBytes)) to fetch again"
+        }
         var s = "\(cells) charts, \(NoaaModel.sizeText(bytes))"
         if held > 0 { s += " · \(held) already installed" }
         return s

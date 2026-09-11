@@ -205,6 +205,8 @@ pub const Cost = struct {
     /// The cells the regions name that are already installed. A mariner who
     /// picks the same water twice fetches the second half of it.
     held: u32 = 0,
+    /// What fetching those again costs, for a repair or a refresh.
+    held_bytes: u64 = 0,
 };
 
 /// A cell already on this device.
@@ -418,6 +420,7 @@ pub fn cost(cat: *const Catalog, picked: []const u32, held: []const []const u8) 
         if (i >= cat.cells.len) continue;
         if (isHeld(held, cat.cells[i].name)) {
             c.held += 1;
+            c.held_bytes += cat.cells[i].zip_bytes;
             continue;
         }
         c.cells += 1;

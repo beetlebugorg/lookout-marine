@@ -44,13 +44,17 @@ extension ChartController {
         return s
     }
 
-    func noaaCost(regionIDs: String) -> (cells: UInt32, bytes: UInt64, held: UInt32)? {
+    func noaaCost(regionIDs: String) -> NoaaCost? {
         guard let h = handle else { return nil }
         var cells: UInt32 = 0
         var bytes: UInt64 = 0
         var held: UInt32 = 0
-        let ok = regionIDs.withCString { lookout_noaa_cost(h, $0, &cells, &bytes, &held) }
-        return ok != 0 ? (cells, bytes, held) : nil
+        var heldBytes: UInt64 = 0
+        let ok = regionIDs.withCString {
+            lookout_noaa_cost(h, $0, &cells, &bytes, &held, &heldBytes)
+        }
+        return ok != 0 ? NoaaCost(cells: cells, bytes: bytes,
+                                  held: held, heldBytes: heldBytes) : nil
     }
 
     /// Name the NOAA cells already on this device, so a pick prices what is

@@ -260,7 +260,9 @@ struct FirstRunFlow: View {
         case .coverage:
             let n = model.noaa
             guard n.state.haveCatalog else { return nil }
-            guard n.cells > 0 else { return "Pick at least one region." }
+            // Held counts as picked, so a region wholly installed prices as
+            // that rather than reading as an empty pick.
+            guard n.cells > 0 || n.held > 0 else { return "Pick at least one region." }
             return n.costLine
         case .importing:
             return nil
@@ -292,7 +294,8 @@ struct FirstRunFlow: View {
             flow.noaaOrder = .init(
                 regions: n.regions.filter { n.picked.contains($0.id) }
                     .map(\.name).joined(separator: ", "),
-                charts: n.allInstalled ? n.held : n.cells, bytes: n.bytes)
+                charts: n.allInstalled ? n.held : n.cells,
+                bytes: n.allInstalled ? n.heldBytes : n.bytes)
             model.startNoaaDownload(again: n.allInstalled)
         }
     }

@@ -859,11 +859,11 @@ void lookout_noaa_poll(lookout *h, lookout_noaa_state *out);
 void lookout_noaa_have(lookout *h, const char *const *names, size_t n);
 
 /* What picking these regions costs. `out_cells` and `out_bytes` size the
- * download, and `out_held` counts the region's cells that are already
- * installed. Any of the three may be NULL. */
+ * download, `out_held` counts the region's cells that are already installed,
+ * and `out_held_bytes` sizes fetching those again. Any may be NULL. */
 int lookout_noaa_cost(lookout *h, const char *region_ids,
                       uint32_t *out_cells, uint64_t *out_bytes,
-                      uint32_t *out_held);
+                      uint32_t *out_held, uint64_t *out_held_bytes);
 
 /* Download the cells covering these regions into `dest_dir`, created if it is
  * not there. Each cell is written there as <NAME>.zip, so the whole

@@ -64,7 +64,7 @@ protocol ChartLinkEngine: AnyObject {
 protocol NoaaEngine: AnyObject {
     @discardableResult func noaaRefresh() -> Bool
     func noaaState() -> NoaaState
-    func noaaCost(regionIDs: String) -> (cells: UInt32, bytes: UInt64, held: UInt32)?
+    func noaaCost(regionIDs: String) -> NoaaCost?
     /// Name the NOAA cells already installed, so a pick prices the rest.
     func noaaHave(_ names: [String])
     func noaaDownload(regionIDs: String, destination: String, again: Bool)

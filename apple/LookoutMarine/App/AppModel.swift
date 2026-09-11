@@ -156,6 +156,9 @@ final class AppModel {
         // only while a chart is open. Open a chart of no cells so a link
         // picked with no charts installed has a core to run through.
         chartLinks.openChartForLink = { [weak self] in self?.charts.openEmpty() }
+        // The same for NOAA's catalog, which setup reads before the mariner
+        // has a single chart.
+        noaa.openChartForCatalog = { [weak self] in self?.charts.openEmpty() }
     }
 
     /// A chart handle has just been created. The core reads its chart-link
