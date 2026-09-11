@@ -913,6 +913,69 @@ public final class Lookout implements AutoCloseable {
     public void chartLinksImport(String json)    { if (h != 0) nChartLinksImport(h, json); }
     /** Is a chart link the one being drawn? */
     public boolean altStyleActive()              { return h != 0 && nAltStyleActive(h); }
+
+    // ---- pictures of a linked chart ------------------------------------
+
+    /** Read every link's style for the tile its picture comes from. The
+     *  answers arrive through the fetcher. */
+    public void chartLinksPreview()              { if (h != 0) nChartLinksPreview(h); }
+    /** The tile that pictures one chart at a point, or null when the style
+     *  names no raster tiles. */
+    public String chartLinkPreviewUrl(String link, double lon, double lat, int zoom) {
+        return h == 0 ? null : nChartLinkPreviewUrl(h, link, lon, lat, zoom);
+    }
+    /** Draw this style without keeping the link, picking it or writing the
+     *  list. For a handle with no window, to picture a chart nobody chose. */
+    public void chartLinkDraw(String url)        { if (h != 0) nChartLinkDraw(h, url); }
+    /** The last frame as RGBA, width * height * 4 bytes. */
+    public boolean snapshotRgba(byte[] dst)      { return h != 0 && nSnapshotRgba(h, dst); }
+
+    // ---- S-52 colours ---------------------------------------------------
+
+    /** One colour the engine draws with, by S-52 token (DEPVS, DEPMS, DEPMD,
+     *  DEPDW, LANDA, DEPCN) and scheme (0 day, 1 dusk, 2 night), as RGBA in
+     *  0..1. False when the token is not in the table. No handle: the palette
+     *  is the core's own. */
+    public static boolean s52Color(String token, int scheme, float[] rgba) {
+        return nS52Color(token, scheme, rgba);
+    }
+
+    // ---- NOAA's charts --------------------------------------------------
+
+    /** The region table: id, name, blurb and "west,south,east,north" for each,
+     *  four strings per region. Static for the life of the process. */
+    public static String[] noaaRegions()         { return nNoaaRegions(); }
+    /** The boxes of a region's coverage, flattened as west, south, east,
+     *  north. Returns how many boxes there are, which may be more than `out`
+     *  held. */
+    public int noaaRegionCoverage(String regionId, double[] out) {
+        return h == 0 ? 0 : nNoaaRegionCoverage(h, regionId, out);
+    }
+    /** Read NOAA's catalog. Non-blocking; watch nNoaaPoll. */
+    public void noaaRefresh()                    { if (h != 0) nNoaaRefresh(h); }
+    /** Where the catalog and the download have got to. out[0] phase, [1]
+     *  checked at, [2] catalog cells, [3] total, [4] done, [5] failed,
+     *  [6] bytes total, [7] bytes done. Returns whether a catalog is loaded. */
+    public boolean noaaPoll(long[] out)          { return h != 0 && nNoaaPoll(h, out); }
+    /** NOAA's validity date for the loaded catalog, or an empty string. */
+    public String noaaDate()                     { return h == 0 ? "" : nNoaaDate(h); }
+    /** What went wrong, or an empty string. */
+    public String noaaError()                    { return h == 0 ? "" : nNoaaError(h); }
+    /** What picking these regions costs: out[0] cells, [1] bytes, [2] cells
+     *  already held, [3] what fetching those again would cost. */
+    public boolean noaaCost(String regionIds, long[] out) {
+        return h != 0 && nNoaaCost(h, regionIds, out);
+    }
+    /** The cells this device holds, as names without an extension. A pick then
+     *  prices what is missing rather than all of it. */
+    public void noaaHave(String[] names)         { if (h != 0) nNoaaHave(h, names); }
+    /** Fetch the cells covering these regions into destDir, one zip each, so
+     *  the whole directory bakes in one order. */
+    public void noaaDownload(String regionIds, String destDir, boolean again) {
+        if (h != 0) nNoaaDownload(h, regionIds, destDir, again);
+    }
+    /** Stop the download. What arrived stays. */
+    public void noaaCancel()                     { if (h != 0) nNoaaCancel(h); }
     /** A live grant flip; a revoked call answers -1 to the running plugin. */
     public boolean pluginGrantSet(String id, String cap, boolean on) {
         return h != 0 && nPluginGrantSet(h, id, cap, on);
@@ -935,6 +998,21 @@ public final class Lookout implements AutoCloseable {
     private static native String nChartLinksJson(long h);
     private static native boolean nChartLinksChanged(long h);
     private static native void nChartLinksImport(long h, String json);
+    private static native void nChartLinksPreview(long h);
+    private static native String nChartLinkPreviewUrl(long h, String link, double lon, double lat, int zoom);
+    private static native void nChartLinkDraw(long h, String url);
+    private static native boolean nSnapshotRgba(long h, byte[] dst);
+    private static native boolean nS52Color(String token, int scheme, float[] out);
+    private static native String[] nNoaaRegions();
+    private static native int nNoaaRegionCoverage(long h, String regionId, double[] out);
+    private static native void nNoaaRefresh(long h);
+    private static native boolean nNoaaPoll(long h, long[] out);
+    private static native String nNoaaDate(long h);
+    private static native String nNoaaError(long h);
+    private static native boolean nNoaaCost(long h, String regionIds, long[] out);
+    private static native void nNoaaHave(long h, String[] names);
+    private static native void nNoaaDownload(long h, String regionIds, String destDir, boolean again);
+    private static native void nNoaaCancel(long h);
     private static native String[] nTables(long h);
     private static native String[] nTableRows(long h, String id, String key, String sortKey, boolean ascending);
     private static native boolean nPluginTableOpen(long h, String id, String key, boolean open);
