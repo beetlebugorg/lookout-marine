@@ -23,7 +23,7 @@ struct CoverageMap: View {
     }
 
     private static let main = Panel(
-        window: MapWindow(west: -127, east: -64, south: 22, north: 52),
+        window: MapWindow(west: -132, east: -64, south: 20, north: 52),
         ids: ["d1", "d5", "d7", "d8", "d9", "d11", "d13"], label: nil)
 
     private static let insets = [

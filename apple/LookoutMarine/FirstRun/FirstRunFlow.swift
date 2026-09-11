@@ -259,7 +259,7 @@ private extension FirstRunModel.Step {
         switch self {
         case .welcome: return 640
         case .source: return 760
-        case .coverage: return 900
+        case .coverage: return 1040
         case .onlineChart: return 980
         }
     }

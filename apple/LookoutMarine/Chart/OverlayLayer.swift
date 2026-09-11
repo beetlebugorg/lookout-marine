@@ -263,6 +263,16 @@ struct OverlayLayer: View {
                 // while there is nothing to look at, then it travels to the top
                 // and closes once charts are drawing. Same view, so the move is
                 // something the eye can follow.
+                // The NOAA download, where the bake panel stands. Setup closes
+                // when it starts, so this is the only report of it.
+                .overlay(alignment: model.charts.hasChart ? .top : .center) {
+                    if model.noaa.state.phase == .downloading {
+                        NoaaDownloadPanel(model: model, compact: model.charts.hasChart)
+                            .padding(.top, model.charts.hasChart ? 10 : 0)
+                            .chromeHitRegion("noaa-download")
+                            .transition(.opacity)
+                    }
+                }
                 .overlay(alignment: model.charts.hasChart ? .top : .center) {
                     if let b = model.charts.chartWork {
                         ChartWorkPanel(progress: b, compact: model.charts.hasChart,

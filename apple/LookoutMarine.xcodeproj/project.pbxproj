@@ -82,6 +82,7 @@
 		4D8D188DC9CAAF8A4D739A90 /* SettingsWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4548244FA1C95958287A425 /* SettingsWindow.swift */; };
 		4DB8F0D543395E687C8A97D7 /* SetupFlowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E98173928E7D25E7D44D8702 /* SetupFlowTests.swift */; };
 		4DCC3DBF302CBC272D2917EB /* UniformTypeIdentifiers.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 063DCA330E7899B8CCE880A8 /* UniformTypeIdentifiers.framework */; };
+		4E59A732E71D7E85754AB566 /* NoaaDownloadPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B4B9BB999CB71B57595C57F /* NoaaDownloadPanel.swift */; };
 		4EB00556E31353D10C0D809F /* OverlayLayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7AE039534D7B01FBAAD147A /* OverlayLayer.swift */; };
 		50C214AAD062B26FCB84D7BE /* RasterChartTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3F841BB92E185C6D2C47A7A /* RasterChartTests.swift */; };
 		52AFAE4BCB8FA4AFBD4C103D /* PlacementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1C44341E0A9C0B713D97E32 /* PlacementTests.swift */; };
@@ -259,6 +260,7 @@
 		F3D929E4CACC81F62BFDBB78 /* ChartArchiveSetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F41AFA7BFC35E02D2CD7FD6 /* ChartArchiveSetTests.swift */; };
 		F5573A263F96357B6BB4982E /* OverlayModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C662FFE95992970B22324BF0 /* OverlayModelTests.swift */; };
 		F56FFB5B0B4315E5CAB193E8 /* ChartValues.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EBE7ED9891268BB429691A0 /* ChartValues.swift */; };
+		F59AEC65B4658550EF153A55 /* NoaaDownloadPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B4B9BB999CB71B57595C57F /* NoaaDownloadPanel.swift */; };
 		F5ACE48CDAAC757EA7F003E9 /* ChartWorkPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 362582E4EA060B062BAF11EB /* ChartWorkPanel.swift */; };
 		F5B4B871DD276DE2066E2E68 /* ChartValues.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EBE7ED9891268BB429691A0 /* ChartValues.swift */; };
 		F5C70C9002FD669202166D89 /* PluginTableView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B7482797128261B463A8277 /* PluginTableView.swift */; };
@@ -376,6 +378,7 @@
 		64FA13C7BC1FB5316BEA40DB /* ChartController+Noaa.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChartController+Noaa.swift"; sourceTree = "<group>"; };
 		68828190C8B7D95B175B2ED1 /* ChartLinksModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartLinksModel.swift; sourceTree = "<group>"; };
 		6B35807C0ABB9C564DABEC58 /* Store.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Store.swift; sourceTree = "<group>"; };
+		6B4B9BB999CB71B57595C57F /* NoaaDownloadPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoaaDownloadPanel.swift; sourceTree = "<group>"; };
 		6BC336600CCD8C3660EBE446 /* Commands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Commands.swift; sourceTree = "<group>"; };
 		6BF0A8EA8646D981F5F411D0 /* LookoutMarineTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LookoutMarineTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		6CED6DE8C50508326D0E097C /* SettingsRows.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsRows.swift; sourceTree = "<group>"; };
@@ -715,6 +718,7 @@
 				59206D279B28F48EC767ADEA /* ChartsModel.swift */,
 				21D746F565B07FFB055106D0 /* ChartsSection.swift */,
 				3171D7FE76E08E0699495D45 /* CoverageMap.swift */,
+				6B4B9BB999CB71B57595C57F /* NoaaDownloadPanel.swift */,
 				4CEFDA036DEABF80B487EA4F /* NoaaModel.swift */,
 				A84D161B86E9E858C398FE6C /* NoaaRegionList.swift */,
 				3BB6523A66DFCC61B512AB19 /* RasterModel.swift */,
@@ -1095,6 +1099,7 @@
 				9EF506240F429BE5ECA1D33A /* Licenses.swift in Sources */,
 				C2A7920E23D12CA2B606E75C /* LookoutMarineApp.swift in Sources */,
 				B3ED2372659B6AA2D4F07172 /* MarinerSettings.swift in Sources */,
+				4E59A732E71D7E85754AB566 /* NoaaDownloadPanel.swift in Sources */,
 				9A2C9EE28CE8064F75143144 /* NoaaModel.swift in Sources */,
 				037C654341DDCD78BD9C0F8E /* NoaaRegionList.swift in Sources */,
 				6529B3A68ADADA5D750087A1 /* OnlineChartStep.swift in Sources */,
@@ -1231,6 +1236,7 @@
 				B65E3546E971AC80B295ECF0 /* Licenses.swift in Sources */,
 				1D784EA4414260DF4C62E8B4 /* LookoutMarineApp.swift in Sources */,
 				8A8814B7709EC3A575C8ECBC /* MarinerSettings.swift in Sources */,
+				F59AEC65B4658550EF153A55 /* NoaaDownloadPanel.swift in Sources */,
 				660B3BBE42B71316CE7A4A02 /* NoaaModel.swift in Sources */,
 				2D9C44E2619F9A689AC51BC3 /* NoaaRegionList.swift in Sources */,
 				FB762F8D8D3E2A3389570ACB /* OnlineChartStep.swift in Sources */,

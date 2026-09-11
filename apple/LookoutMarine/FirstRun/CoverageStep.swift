@@ -19,8 +19,8 @@ struct CoverageStep: View {
                 centered: centered)
                 .padding(.top, topInset)
 
-            NoaaCatalogLine(noaa: noaa).padding(.top, 14)
-            NoaaRegionList(model: model, noaa: noaa).padding(.top, 12)
+            NoaaCatalogLine(noaa: noaa).padding(.top, 12)
+            NoaaRegionList(model: model, noaa: noaa).padding(.top, 10)
         }
         .padding(.horizontal, horizontalInset)
         .padding(.bottom, 22)
@@ -32,8 +32,8 @@ struct CoverageStep: View {
 
     #if os(macOS)
     private var centered: Bool { true }
-    private var topInset: CGFloat { 30 }
-    private var horizontalInset: CGFloat { 32 }
+    private var topInset: CGFloat { 26 }
+    private var horizontalInset: CGFloat { 20 }
     #else
     private var centered: Bool { false }
     private var topInset: CGFloat { 16 }
