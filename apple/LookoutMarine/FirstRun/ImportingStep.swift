@@ -148,12 +148,19 @@ struct ImportingStep: View {
 
     /// Determinate once something has counted the charts. A dropped folder has
     /// no count until the scan finishes, so the bar runs until then.
+    ///
+    /// Both states are a bar across the panel. Left to itself an indeterminate
+    /// ProgressView draws a small circular spinner on iOS, which sat at the
+    /// left of the row where the bar goes and read as a mistake.
     @ViewBuilder private var bar: some View {
-        if let total = barTotal, total > 0 {
-            ProgressView(value: Double(barDone), total: Double(total))
-        } else {
-            ProgressView()
+        Group {
+            if let total = barTotal, total > 0 {
+                ProgressView(value: Double(barDone), total: Double(total))
+            } else {
+                ProgressView()
+            }
         }
+        .progressViewStyle(.linear)
     }
 
     private var barDone: Int {
