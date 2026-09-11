@@ -87,19 +87,10 @@ final class FirstRunModel {
 
     // MARK: Whether it runs
 
-    private static let group = "firstrun"
-    private static let doneKey = "done"
-
-    /// True once the mariner has been through setup, or said Set Up Later.
-    /// Kept in the core store beside the other shell preferences, so both
-    /// platforms read the same value.
-    static var completed: Bool {
-        get { Store.shared.bool(group, doneKey, false) ?? false }
-        set {
-            Store.shared.set(newValue, group, doneKey)
-            Store.shared.flush()
-        }
-    }
+    /// True once the mariner has put setup away for this run. Set Up Later is
+    /// "not now", not an answer, so it holds only until the app is next
+    /// started with nothing to draw.
+    private var putAway = false
 
     /// LOOKOUT_FIRST_RUN=1 runs setup whatever the store says, and =0 keeps it
     /// down. A screenshot run and a UI test both need to choose, because the
@@ -129,12 +120,20 @@ final class FirstRunModel {
         }
     }
 
-    /// The flow runs once, over an app that has settled on having no chart to
-    /// draw. It stays down over a chart, because a mariner holding charts has
-    /// already answered every question in it.
-    static func shouldRun(_ charts: ChartsModel) -> Bool {
-        if let override { return override }
-        return !completed && charts.nothingToDraw && charts.chartWork == nil
+    /// The flow runs over an app that has settled on having no chart to draw,
+    /// on every platform and on every launch.
+    ///
+    /// Not once per device. A mariner with an empty library has the same
+    /// questions to answer whether this is their first launch or their
+    /// fiftieth, and the way back to the library they lost is the same page
+    /// that built it.
+    ///
+    /// A linked chart is a chart. Somebody sailing on a published style has no
+    /// empty library to fill, so setup stays down over one.
+    func shouldRun(charts: ChartsModel, links: ChartLinksModel) -> Bool {
+        if let override = Self.override { return override }
+        guard !putAway, links.active == nil else { return false }
+        return charts.nothingToDraw && charts.chartWork == nil
     }
 
     // MARK: Moving through it
@@ -201,10 +200,11 @@ final class FirstRunModel {
         }
     }
 
-    /// Set Up Later, and the end of a completed run. Both record that setup
-    /// has run, so it does not ask again.
+    /// Set Up Later, and the end of a run that finished. Both put setup away
+    /// for the rest of this launch. A run that finished leaves a chart behind
+    /// it, and a chart is what keeps setup down after that.
     func finish() {
-        Self.completed = true
+        putAway = true
         showing = false
         step = .welcome
     }

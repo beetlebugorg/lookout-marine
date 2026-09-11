@@ -43,8 +43,8 @@ final class AppModel {
     let overlay = OverlayModel()
     let readouts = ReadoutsModel()
     let chrome = ChromeModel()
-    /// Setup. It runs once, over an app that has settled on having no chart to
-    /// draw. See FirstRunModel.shouldRun.
+    /// Setup. It runs over an app that has settled on having no chart to
+    /// draw, on every launch that finds one. See FirstRunModel.shouldRun.
     let firstRun = FirstRunModel()
     /// Adding a set installs the pictures it carries, so this one is built
     /// with the raster model rather than beside it.
@@ -104,7 +104,8 @@ final class AppModel {
     /// every launch while the scan reads the library, and raising the flow on
     /// that puts it over a mariner's own charts.
     func considerFirstRun() {
-        guard !firstRun.showing, FirstRunModel.shouldRun(charts) else { return }
+        guard !firstRun.showing,
+              firstRun.shouldRun(charts: charts, links: chartLinks) else { return }
         firstRun.begin()
         showWholeCountry()
     }
