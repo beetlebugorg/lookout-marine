@@ -55,6 +55,16 @@ enum DevHooks {
         case "settings":
             model.openSettings()
             model.chrome.settingsTab = part.count > 1 ? part[1] : "display"
+        // The NOAA picker. A screenshot cannot reach it: it opens from a row
+        // inside the settings form, and there is no pointer to press.
+        case "noaa":
+            model.openSettings()
+            model.chrome.settingsTab = "charts"
+            #if os(macOS)
+            NoaaWindowController.shared.show(model: model)
+            #else
+            model.chrome.showSettingsNoaaPicker = true
+            #endif
         case "scale":
             model.beginScaleEntry()
         case "search":

@@ -161,7 +161,10 @@ struct NoaaPickerSheet: View {
             .padding(.horizontal, 18)
             .padding(.vertical, 12)
         }
+        #if os(macOS)
+        // The window this opens in has no size of its own to start from.
         .frame(minWidth: 460, minHeight: 520)
+        #endif
         .onAppear {
             noaa.poll()
             noaa.noteInstalled(model.charts.installedCellNames)

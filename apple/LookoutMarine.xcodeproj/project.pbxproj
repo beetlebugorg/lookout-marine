@@ -143,6 +143,7 @@
 		8DA009DEDAE728D38DFE062E /* PluginTableTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C7090FA8708C087510A6B66 /* PluginTableTests.swift */; };
 		8EF72BD101D31073F394013C /* PluginConsentSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6152AE14014203A46906CD92 /* PluginConsentSheet.swift */; };
 		8F197CD206DDF556863202DC /* ReadoutsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0DD5929CA735D0DD9F3F142 /* ReadoutsModel.swift */; };
+		913307D54B2056675A7DBBDA /* ChartSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E8D780864440AD03BD12813 /* ChartSettingsTests.swift */; };
 		914951BD6949A5A8DCDA4BAD /* Coastline.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5363B36E741F4F10A43B9CBE /* Coastline.swift */; };
 		916B52F53F9EE0EC839591AA /* ChartPreviews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15839E0805A8858A9BE1B7E8 /* ChartPreviews.swift */; };
 		920F8FA17C671FC70BD0CFDE /* WelcomeStep.swift in Sources */ = {isa = PBXBuildFile; fileRef = B664B45A6D4D73D186AA0354 /* WelcomeStep.swift */; };
@@ -365,6 +366,7 @@
 		39FCF4CF9169327DF0FA8FBB /* ShellTestCase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShellTestCase.swift; sourceTree = "<group>"; };
 		3BB6523A66DFCC61B512AB19 /* RasterModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RasterModel.swift; sourceTree = "<group>"; };
 		3DE9B6AC4AEED69AB4302BC9 /* PluginTableWindow+Open.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PluginTableWindow+Open.swift"; sourceTree = "<group>"; };
+		3E8D780864440AD03BD12813 /* ChartSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartSettingsTests.swift; sourceTree = "<group>"; };
 		4116F62995684CE961ACFBFE /* RasterPill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RasterPill.swift; sourceTree = "<group>"; };
 		429A3DC2D37A94F800391B26 /* SmokeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmokeTests.swift; sourceTree = "<group>"; };
 		43B1D53AEBA3A1562C76642D /* StartupLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartupLoader.swift; sourceTree = "<group>"; };
@@ -511,6 +513,7 @@
 			children = (
 				A9B414D76B8FFB4298A58494 /* ChartFixture.swift */,
 				F71C72C16BAED59FED342AD2 /* ChartInteractionTests.swift */,
+				3E8D780864440AD03BD12813 /* ChartSettingsTests.swift */,
 				5E856FD037203427CE8B9E9C /* CompactHudTests.swift */,
 				607E7979DEB0E1563E586E09 /* FirstRunTests.swift */,
 				289ADF58E60CB5CBBD3FF7EF /* HudTests.swift */,
@@ -1319,6 +1322,7 @@
 			files = (
 				DDB11483FF3DEE919A04B9C8 /* ChartFixture.swift in Sources */,
 				DAFCDF511109AE0461E947F2 /* ChartInteractionTests.swift in Sources */,
+				913307D54B2056675A7DBBDA /* ChartSettingsTests.swift in Sources */,
 				C82892E31FE36680817F7113 /* CompactHudTests.swift in Sources */,
 				01F7E57414B914883ACB6649 /* FirstRunTests.swift in Sources */,
 				5DD02716900498D0448E04AB /* HudTests.swift in Sources */,

@@ -18,7 +18,6 @@ struct ChartsSections: View {
     /// the charts already in flight.
     @State private var cancellingBake = false
     @State private var showAddChart = false
-    @State private var showNoaaPicker = false
     @State private var newChartLink = ""
 
     /// The picker, in a window on the Mac and a sheet on a phone.
@@ -26,7 +25,7 @@ struct ChartsSections: View {
         #if os(macOS)
         NoaaWindowController.shared.show(model: model)
         #else
-        showNoaaPicker = true
+        model.chrome.showSettingsNoaaPicker = true
         #endif
     }
 
@@ -137,13 +136,6 @@ struct ChartsSections: View {
             Text("S-57 and S-101 cells (.000 with their updates) · charts Lookout has already prepared (.pmtiles) · imagery and vendor charts (.mbtiles) · BSB/KAP raster sheets (.kap, .bsb). Cells and raster sheets are converted once on the way in. Encrypted S-63 cells are not supported.")
                 .captionFooter()
         }
-        // The Mac opens a window instead: the picker is a map of the country
-        // and the form is 660pt wide. A phone has no windows.
-        #if !os(macOS)
-        .sheet(isPresented: $showNoaaPicker) {
-            NoaaPickerSheet(model: model, noaa: model.noaa)
-        }
-        #endif
         .sheet(isPresented: $showAddChart) {
             AddChartSheet(model: model, link: $newChartLink)
         }
