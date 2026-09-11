@@ -274,7 +274,7 @@ export fn lookout_geo_to_screen(h: ?*lookout, lon: f64, lat: f64, x_px: *f32, y_
 
 // ---- mariner (ALL S-52 settings) -------------------------------------------
 export fn lookout_mariner_defaults(m: *cc.tile57_mariner) void {
-    cc.tile57_mariner_defaults(m);
+    m.* = lk.marinerDefaults();
 }
 export fn lookout_get_mariner(h: ?*lookout, out: *cc.tile57_mariner) void {
     const l = locked(h);

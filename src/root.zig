@@ -630,6 +630,36 @@ pub const FrameProf = struct {
     }
 };
 
+/// The mariner settings a chart opens with: the look of a traditional paper
+/// chart, using only mariner settings.
+///
+/// tile57's defaults are already half-way there (day scheme, four-shade
+/// graduated-blue water, symbolized boundaries, full point symbols, and none
+/// of the "simplified" ECDIS symbology). What is left is the content. A paper
+/// chart has no display categories and no ECDIS overscale indicator.
+///
+/// lookout_mariner_defaults returns this, so a host that reads the defaults
+/// before opening a chart gets what the engine itself starts with. It used to
+/// return tile57's defaults, where soundings follow the display category and
+/// the category is STANDARD, so the first settings write from a host that had
+/// read them turned soundings off.
+pub fn marinerDefaults() cc.tile57_mariner {
+    var m: cc.tile57_mariner = undefined;
+    cc.tile57_mariner_defaults(&m);
+    // Show seabed, cables and contour labels, the OTHER content paper has.
+    m.display_other = true;
+    // Paper is covered in spot soundings. Show them whatever the category.
+    m.soundings = 1;
+    // AP(OVERSC01) hatch is an ECDIS artifact that paper never has.
+    m.show_overscale = false;
+    // The ECDIS-only OTHER overlays (info callouts, meta boundaries, data
+    // quality) stay off in tile57's defaults, so display_other gives the paper
+    // content without the ECDIS clutter. finishOpen -> applyZoomAndView
+    // derives the live gates (cat_mask/sound_on/clear) from this before the
+    // first render.
+    return m;
+}
+
 pub const Lookout = struct {
     alloc: std.mem.Allocator,
     charts: std.ArrayList(*cc.tile57_chart) = .empty, // 1 (single) or many (composed)
@@ -908,21 +938,7 @@ pub const Lookout = struct {
         }
         self.n_schemes = @min(opts.schemes.len, MAX_SCHEMES);
         for (0..self.n_schemes) |i| self.schemes[i] = opts.schemes[i];
-        cc.tile57_mariner_defaults(&self.mariner);
-        // Default to the look of a traditional paper chart, using only mariner
-        // settings. tile57's defaults are already half-way there (day scheme,
-        // four-shade graduated-blue water, symbolized boundaries, full point
-        // symbols — none of the "simplified" ECDIS symbology). What's left is
-        // the *content*: a paper chart has no display categories and no ECDIS
-        // overscale indicator, so —
-        self.mariner.display_other = true; // show seabed, cables, contour labels — the OTHER content paper always carries
-        self.mariner.soundings = 1; // paper is covered in spot soundings; show them regardless of category
-        self.mariner.show_overscale = false; // AP(OVERSC01) hatch is an ECDIS-only artifact, never on paper
-        // The ECDIS-only OTHER overlays (info callouts, meta boundaries, data
-        // quality) stay off in tile57's defaults, so display_other brings the
-        // paper content without the ECDIS clutter. finishOpen -> applyZoomAndView
-        // derives the live gates (cat_mask/sound_on/clear) from this before the
-        // first render.
+        self.mariner = marinerDefaults();
         // The marks the mariner already had, on the chart before the first
         // frame: they belong to the boat, not to the cell being opened. AFTER
         // the mariner state above, because the marks are posted in the colours
@@ -2525,16 +2541,23 @@ pub const Lookout = struct {
     /// Exported as lookout_store_read_mariner.
     pub fn restoreMariner(store: *settings.Store, m: *Mariner) void {
         const g = settings.group_mariner;
+        // A value that cannot be read counts as absent, so the field keeps the
+        // engine default. A shell that wrote the wrong type otherwise pushed
+        // every unreadable key to 0 or false: an Apple shell migrating the old
+        // UserDefaults dictionary stored every number as "true", and soundings
+        // read 0 from that and went off on every launch.
         const num = struct {
             fn go(s: *settings.Store, key: []const u8) ?f64 {
-                if (!s.has(g, key)) return null;
-                return s.number(g, key, 0);
+                const t = s.text(g, key) orelse return null;
+                return std.fmt.parseFloat(f64, t) catch null;
             }
         }.go;
         const flag = struct {
             fn go(s: *settings.Store, key: []const u8) ?bool {
-                if (!s.has(g, key)) return null;
-                return s.flag(g, key, false);
+                const t = s.text(g, key) orelse return null;
+                if (std.mem.eql(u8, t, "true") or std.mem.eql(u8, t, "1")) return true;
+                if (std.mem.eql(u8, t, "false") or std.mem.eql(u8, t, "0")) return false;
+                return null;
             }
         }.go;
 
