@@ -44,12 +44,25 @@ extension ChartController {
         return s
     }
 
-    func noaaCost(regionIDs: String) -> (cells: UInt32, bytes: UInt64)? {
+    func noaaCost(regionIDs: String) -> (cells: UInt32, bytes: UInt64, held: UInt32)? {
         guard let h = handle else { return nil }
         var cells: UInt32 = 0
         var bytes: UInt64 = 0
-        let ok = regionIDs.withCString { lookout_noaa_cost(h, $0, &cells, &bytes) }
-        return ok != 0 ? (cells, bytes) : nil
+        var held: UInt32 = 0
+        let ok = regionIDs.withCString { lookout_noaa_cost(h, $0, &cells, &bytes, &held) }
+        return ok != 0 ? (cells, bytes, held) : nil
+    }
+
+    /// Name the NOAA cells already on this device, so a pick prices what is
+    /// missing from the water rather than all of it.
+    func noaaHave(_ names: [String]) {
+        guard let h = handle else { return }
+        let copies = names.map { strdup($0)! }
+        defer { for c in copies { free(c) } }
+        var pointers = copies.map { UnsafePointer<CChar>?($0) }
+        pointers.withUnsafeMutableBufferPointer {
+            lookout_noaa_have(h, $0.baseAddress, $0.count)
+        }
     }
 
     func noaaDownload(regionIDs: String, destination: String) {

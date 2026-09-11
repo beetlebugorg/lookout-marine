@@ -237,6 +237,7 @@ struct FirstRunFlow: View {
         case .welcome, .source, .onlineChart: return true
         case .coverage:
             return model.noaa.state.haveCatalog && !model.noaa.picked.isEmpty
+                && model.noaa.cells > 0
         // ChartBake opens the library once the import finishes, so there is
         // nothing to continue to until it has.
         case .importing: return importFinished
@@ -261,7 +262,7 @@ struct FirstRunFlow: View {
             let n = model.noaa
             guard n.state.haveCatalog else { return nil }
             guard n.cells > 0 else { return "Pick at least one region." }
-            return "\(n.cells) charts, \(NoaaModel.sizeText(n.bytes))"
+            return n.costLine
         case .importing:
             return nil
         case .depths:

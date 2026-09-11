@@ -555,10 +555,29 @@ export fn lookout_noaa_poll(h: ?*lookout, out: ?*lookout_noaa_state) void {
 }
 
 /// What downloading these regions costs. See lookout-library.h.
+/// Name the NOAA cells this device already holds. See lookout-library.h.
+export fn lookout_noaa_have(h: ?*lookout, names: ?[*]const ?[*:0]const u8, n: usize) void {
+    const l = locked(h);
+    defer l.apiUnlock();
+    const src = names orelse {
+        l.noaa.setHeld(&.{});
+        return;
+    };
+    var list: std.ArrayList([]const u8) = .empty;
+    defer list.deinit(std.heap.c_allocator);
+    for (0..n) |i| {
+        const p = src[i] orelse continue;
+        list.append(std.heap.c_allocator, std.mem.span(p)) catch break;
+    }
+    l.noaa.setHeld(list.items);
+}
+
 export fn lookout_noaa_cost(h: ?*lookout, region_ids: ?[*:0]const u8,
-                            out_cells: ?*u32, out_bytes: ?*u64) c_int {
+                            out_cells: ?*u32, out_bytes: ?*u64,
+                            out_held: ?*u32) c_int {
     if (out_cells) |c| c.* = 0;
     if (out_bytes) |b| b.* = 0;
+    if (out_held) |x| x.* = 0;
     if (h == null) return 0;
     const l = locked(h);
     defer l.apiUnlock();
@@ -568,6 +587,7 @@ export fn lookout_noaa_cost(h: ?*lookout, region_ids: ?[*:0]const u8,
     const c = l.noaa.costOf(noaa.districtsFromIds(&buf, ids));
     if (out_cells) |o| o.* = c.cells;
     if (out_bytes) |o| o.* = c.bytes;
+    if (out_held) |o| o.* = c.held;
     return 1;
 }
 

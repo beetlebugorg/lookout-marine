@@ -117,8 +117,8 @@ struct NoaaPickerSheet: View {
             }
             Divider()
             HStack(spacing: 12) {
-                if noaa.state.haveCatalog, noaa.cells > 0 {
-                    Text("\(noaa.cells) charts, \(NoaaModel.sizeText(noaa.bytes))")
+                if noaa.state.haveCatalog, noaa.cells > 0 || noaa.held > 0 {
+                    Text(noaa.costLine)
                         .font(.system(size: 12.5))
                         .foregroundStyle(Chrome.muted)
                         .monospacedDigit()
@@ -130,7 +130,7 @@ struct NoaaPickerSheet: View {
                     shut()
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(!noaa.state.haveCatalog || noaa.picked.isEmpty)
+                .disabled(!noaa.state.haveCatalog || noaa.picked.isEmpty || noaa.cells == 0)
             }
             .padding(.horizontal, 18)
             .padding(.vertical, 12)
@@ -138,6 +138,7 @@ struct NoaaPickerSheet: View {
         .frame(minWidth: 460, minHeight: 520)
         .onAppear {
             noaa.poll()
+            noaa.noteInstalled(model.charts.installedCellNames)
             if !noaa.state.haveCatalog { noaa.refresh() }
         }
     }

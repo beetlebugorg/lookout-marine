@@ -146,6 +146,11 @@ pub const Service = struct {
     stage_dest: []u8 = &.{},
     stage: std.ArrayList(Stage) = .empty,
 
+    /// The cells this device already holds, sorted by name. The shell reads
+    /// them off the chart sets and hands them over, so picking water that is
+    /// already downloaded fetches what is missing from it.
+    held: std.ArrayList([]u8) = .empty,
+
     /// Cells fetched and not yet written, and the thread that writes them.
     ///
     /// A thread of its own, because writing a cell is file work of a few
@@ -177,6 +182,8 @@ pub const Service = struct {
     }
 
     pub fn deinit(self: *Service) void {
+        for (self.held.items) |n| self.alloc.free(n);
+        self.held.deinit(self.alloc);
         self.cancelAll();
         self.stopUnpacker();
         self.unpack_q.deinit(self.alloc);
@@ -320,7 +327,28 @@ pub const Service = struct {
         const cat = &(self.cat orelse return .{});
         const picked = noaa.selectRegions(self.alloc, cat, districts) catch return .{};
         defer self.alloc.free(picked);
-        return noaa.cost(cat, picked);
+        return noaa.cost(cat, picked, self.held.items);
+    }
+
+    /// Replace the list of cells this device holds. Sorted here, so the
+    /// caller hands them over in whatever order it walked its folders.
+    pub fn setHeld(self: *Service, names: []const []const u8) void {
+        for (self.held.items) |n| self.alloc.free(n);
+        self.held.clearRetainingCapacity();
+        for (names) |n| {
+            if (n.len == 0) continue;
+            const copy = self.alloc.dupe(u8, n) catch continue;
+            self.held.append(self.alloc, copy) catch {
+                self.alloc.free(copy);
+                break;
+            };
+        }
+        std.mem.sort([]u8, self.held.items, {}, struct {
+            fn lt(_: void, a: []u8, b: []u8) bool {
+                return std.mem.order(u8, a, b) == .lt;
+            }
+        }.lt);
+        self.changed = true;
     }
 
     // ---- the download -----------------------------------------------------
@@ -358,6 +386,9 @@ pub const Service = struct {
         for (picked) |i| {
             const c = cat.cells[i];
             if (c.zip_url.len == 0) continue;
+            // Already on the device. A mariner picking water they have adds
+            // what is missing from it.
+            if (noaa.isHeld(self.held.items, c.name)) continue;
             self.plan.append(self.alloc, .{
                 .name = c.name,
                 .url = c.zip_url,
@@ -366,7 +397,7 @@ pub const Service = struct {
             self.bytes_total += c.zip_bytes;
         }
         if (self.plan.items.len == 0) {
-            self.setErr("those regions name no cells");
+            self.setErr("every chart for those regions is already installed");
             return;
         }
 

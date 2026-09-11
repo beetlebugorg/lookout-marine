@@ -115,6 +115,19 @@ final class ChartsModel {
 
     // MARK: The installed sets
 
+    /// The dataset names of every cell installed, in any set, switched on or
+    /// off. A NOAA pick prices what is missing from the water rather than the
+    /// whole of it, and a cell is that cell whichever folder it arrived in.
+    var installedCellNames: [String] {
+        var seen = Set<String>()
+        for set in sets {
+            for cell in set.cells where !cell.isRaster {
+                seen.insert(cell.stem.uppercased())
+            }
+        }
+        return Array(seen)
+    }
+
     /// The installed folders of charts, in the order added. A set on this list has
     /// been looked through and holds charts, so it always opens.
     var sets: [ChartSet] = []

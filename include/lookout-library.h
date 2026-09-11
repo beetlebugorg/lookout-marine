@@ -847,8 +847,23 @@ void lookout_noaa_poll(lookout *h, lookout_noaa_state *out);
  * exchange-set zip. `region_ids` is a comma separated list of region ids
  * ("d5,d8"); an id no region answers to is skipped. Returns 0 when no catalog
  * is loaded, leaving both outputs at 0. */
+/* Name the NOAA cells this device already holds, as dataset names without an
+ * extension (US5MD11M). The cost below leaves them out, and a download skips
+ * them: a mariner who picks water they have already downloaded fetches what is
+ * missing from it rather than all of it again.
+ *
+ * By NAME. A cell NOAA has reissued since it was installed still counts as
+ * held, because a file on disk does not say which edition it is. Reissues are
+ * lookout_noaa_outdated and lookout_noaa_update, which take the editions from
+ * the caller. Pass NULL to forget the list. */
+void lookout_noaa_have(lookout *h, const char *const *names, size_t n);
+
+/* What picking these regions costs. `out_cells` and `out_bytes` size the
+ * download, and `out_held` counts the region's cells that are already
+ * installed. Any of the three may be NULL. */
 int lookout_noaa_cost(lookout *h, const char *region_ids,
-                      uint32_t *out_cells, uint64_t *out_bytes);
+                      uint32_t *out_cells, uint64_t *out_bytes,
+                      uint32_t *out_held);
 
 /* Download every cell covering these regions into `dest_dir`, which is created
  * if it does not exist. Each cell is written there as <NAME>.zip, so the whole

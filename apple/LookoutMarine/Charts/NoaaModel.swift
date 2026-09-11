@@ -68,6 +68,10 @@ final class NoaaModel {
     /// What the current pick costs, refreshed whenever the pick changes.
     private(set) var cells: UInt32 = 0
     private(set) var bytes: UInt64 = 0
+    /// Cells the pick names that are already installed. The mariner is told,
+    /// so a number far under the region's size reads as a saving rather than
+    /// a mistake.
+    private(set) var held: UInt32 = 0
 
     /// True when a catalog read was asked for before a chart was open. Every
     /// call here goes through a chart handle, so a read asked for at launch
@@ -156,15 +160,34 @@ final class NoaaModel {
         guard let engine, state.haveCatalog else {
             cells = 0
             bytes = 0
+            held = 0
             return
         }
         if let c = engine.noaaCost(regionIDs: pickedIDs) {
             cells = c.cells
             bytes = c.bytes
+            held = c.held
         } else {
             cells = 0
             bytes = 0
+            held = 0
         }
+    }
+
+    /// Hand the core the NOAA cells already installed, then price again. The
+    /// names come off the chart sets, so a set added by hand counts the same
+    /// as one this app downloaded.
+    func noteInstalled(_ names: [String]) {
+        engine?.noaaHave(names)
+        recost()
+    }
+
+    /// What a pick costs, in the mariner's words.
+    var costLine: String {
+        if cells == 0 && held > 0 { return "\(held) charts, all installed" }
+        var s = "\(cells) charts, \(NoaaModel.sizeText(bytes))"
+        if held > 0 { s += " · \(held) already installed" }
+        return s
     }
 
     /// Download the picked regions into `destination`.

@@ -198,8 +198,13 @@ pub const Catalog = struct {
 /// What a selection costs. `bytes` sums the cells' own zips, so it measures
 /// the download rather than the prepared chart on disk.
 pub const Cost = struct {
+    /// The download: the cells the regions name that this device does not
+    /// already hold.
     cells: u32 = 0,
     bytes: u64 = 0,
+    /// The cells the regions name that are already installed. A mariner who
+    /// picks the same water twice fetches the second half of it.
+    held: u32 = 0,
 };
 
 /// A cell already on this device.
@@ -404,14 +409,36 @@ pub fn selectRegions(
 }
 
 /// What a set of selected indices costs to download.
-pub fn cost(cat: *const Catalog, picked: []const u32) Cost {
+/// What picking these regions costs. `held` names the cells already on the
+/// device, sorted, so a mariner who picks water they have already downloaded
+/// is told what is left rather than made to fetch it again.
+pub fn cost(cat: *const Catalog, picked: []const u32, held: []const []const u8) Cost {
     var c = Cost{};
     for (picked) |i| {
         if (i >= cat.cells.len) continue;
+        if (isHeld(held, cat.cells[i].name)) {
+            c.held += 1;
+            continue;
+        }
         c.cells += 1;
         c.bytes += cat.cells[i].zip_bytes;
     }
     return c;
+}
+
+/// True when `name` is in the sorted list of cells this device holds.
+pub fn isHeld(held: []const []const u8, name: []const u8) bool {
+    var lo: usize = 0;
+    var hi: usize = held.len;
+    while (lo < hi) {
+        const mid = lo + (hi - lo) / 2;
+        switch (std.mem.order(u8, held[mid], name)) {
+            .lt => lo = mid + 1,
+            .gt => hi = mid,
+            .eq => return true,
+        }
+    }
+    return false;
 }
 
 // ---- updates --------------------------------------------------------------
@@ -505,7 +532,7 @@ test "a region selects every cell covering its water" {
     // New Jersey.
     try testing.expectEqual(@as(usize, 3), picked.len);
 
-    const c = cost(&cat, picked);
+    const c = cost(&cat, picked, &.{});
     try testing.expectEqual(@as(u32, 3), c.cells);
     try testing.expectEqual(@as(u64, 1048576 + 2097152 + 4194304), c.bytes);
 }
@@ -565,7 +592,7 @@ test "an empty selection is free" {
     const picked = try selectRegions(testing.allocator, &cat, &.{});
     defer testing.allocator.free(picked);
     try testing.expectEqual(@as(usize, 0), picked.len);
-    try testing.expectEqual(@as(u32, 0), cost(&cat, picked).cells);
+    try testing.expectEqual(@as(u32, 0), cost(&cat, picked, &.{}).cells);
 }
 
 test "a cell across the antimeridian keeps a narrow span" {
@@ -680,4 +707,21 @@ test "region ids read into districts, skipping unknowns and repeats" {
 test "a district buffer smaller than the request fills and stops" {
     var buf: [2]u8 = undefined;
     try testing.expectEqualSlices(u8, &.{ 1, 5 }, districtsFromIds(&buf, "d1,d5,d7,d8"));
+}
+
+test "cost leaves out the cells the device already holds" {
+    var cat = try parse(testing.allocator, sample);
+    defer cat.deinit();
+    const picked = try selectRegions(testing.allocator, &cat, &.{5});
+    defer testing.allocator.free(picked);
+    try testing.expect(picked.len >= 2);
+
+    // Sorted, the way setHeld hands them over.
+    var held: [1][]const u8 = .{cat.cells[picked[0]].name};
+    const whole = cost(&cat, picked, &.{});
+    const rest = cost(&cat, picked, &held);
+    try testing.expectEqual(whole.cells - 1, rest.cells);
+    try testing.expectEqual(@as(u32, 1), rest.held);
+    try testing.expect(rest.bytes < whole.bytes);
+    try testing.expect(isHeld(&held, cat.cells[picked[0]].name));
 }
