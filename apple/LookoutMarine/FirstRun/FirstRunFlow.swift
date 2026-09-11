@@ -237,7 +237,6 @@ struct FirstRunFlow: View {
         case .welcome, .source, .onlineChart: return true
         case .coverage:
             return model.noaa.state.haveCatalog && !model.noaa.picked.isEmpty
-                && model.noaa.cells > 0
         // ChartBake opens the library once the import finishes, so there is
         // nothing to continue to until it has.
         case .importing: return importFinished
@@ -293,8 +292,8 @@ struct FirstRunFlow: View {
             flow.noaaOrder = .init(
                 regions: n.regions.filter { n.picked.contains($0.id) }
                     .map(\.name).joined(separator: ", "),
-                charts: n.cells, bytes: n.bytes)
-            model.startNoaaDownload()
+                charts: n.allInstalled ? n.held : n.cells, bytes: n.bytes)
+            model.startNoaaDownload(again: n.allInstalled)
         }
     }
 }

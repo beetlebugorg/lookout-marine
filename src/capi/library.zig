@@ -593,13 +593,13 @@ export fn lookout_noaa_cost(h: ?*lookout, region_ids: ?[*:0]const u8,
 
 /// Download every cell covering these regions. See lookout-library.h.
 export fn lookout_noaa_download(h: ?*lookout, region_ids: ?[*:0]const u8,
-                                dest_dir: ?[*:0]const u8) void {
+                                dest_dir: ?[*:0]const u8, again: c_int) void {
     const l = locked(h);
     defer l.apiUnlock();
     const dest = dest_dir orelse return;
     var buf: [noaa.regions.len]u8 = undefined;
     const ids = if (region_ids) |r| std.mem.span(r) else "";
-    l.noaa.start(noaa.districtsFromIds(&buf, ids), std.mem.span(dest));
+    l.noaa.start(noaa.districtsFromIds(&buf, ids), std.mem.span(dest), again != 0);
     l.noaa.publish();
 }
 

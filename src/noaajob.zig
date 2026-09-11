@@ -358,7 +358,9 @@ pub const Service = struct {
     /// Replaces any download already running. `dest` is created if it does not
     /// exist, and each cell is written there as <NAME>.zip for the shell to
     /// bake as one directory.
-    pub fn start(self: *Service, districts: []const u8, dest: []const u8) void {
+    /// `again` fetches the cells this device already holds as well, so a
+    /// mariner can repair or refresh water they have.
+    pub fn start(self: *Service, districts: []const u8, dest: []const u8, again: bool) void {
         const cat = &(self.cat orelse {
             self.setErr("no catalog yet");
             return;
@@ -387,8 +389,8 @@ pub const Service = struct {
             const c = cat.cells[i];
             if (c.zip_url.len == 0) continue;
             // Already on the device. A mariner picking water they have adds
-            // what is missing from it.
-            if (noaa.isHeld(self.held.items, c.name)) continue;
+            // what is missing from it, unless they asked for the rest again.
+            if (!again and noaa.isHeld(self.held.items, c.name)) continue;
             self.plan.append(self.alloc, .{
                 .name = c.name,
                 .url = c.zip_url,
@@ -809,7 +811,7 @@ test "a service with no fetcher reports why and stays idle" {
 test "a download refuses to start before a catalog is read" {
     var s = Service.init(testing.allocator);
     defer s.deinit();
-    s.start(&.{5}, "/tmp/lookout-noaa-test-should-not-exist");
+    s.start(&.{5}, "/tmp/lookout-noaa-test-should-not-exist", false);
     try testing.expectEqual(Phase.idle, s.phase);
     try testing.expect(s.err.len != 0);
 }

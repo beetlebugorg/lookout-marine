@@ -65,11 +65,13 @@ extension ChartController {
         }
     }
 
-    func noaaDownload(regionIDs: String, destination: String) {
+    /// `again` fetches the cells already installed as well, for a mariner
+    /// repairing or refreshing water they hold.
+    func noaaDownload(regionIDs: String, destination: String, again: Bool) {
         guard let h = handle else { return }
         regionIDs.withCString { ids in
             destination.withCString { dest in
-                lookout_noaa_download(h, ids, dest)
+                lookout_noaa_download(h, ids, dest, again ? 1 : 0)
             }
         }
         kick()

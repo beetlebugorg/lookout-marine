@@ -182,6 +182,10 @@ final class NoaaModel {
         recost()
     }
 
+    /// True when every cell the pick names is already on the device. The
+    /// download then repairs or refreshes them rather than adding any.
+    var allInstalled: Bool { cells == 0 && held > 0 }
+
     /// What a pick costs, in the mariner's words.
     var costLine: String {
         if cells == 0 && held > 0 { return "\(held) charts, all installed" }
@@ -191,9 +195,9 @@ final class NoaaModel {
     }
 
     /// Download the picked regions into `destination`.
-    func download(to destination: String) {
+    func download(to destination: String, again: Bool = false) {
         guard !picked.isEmpty else { return }
-        engine?.noaaDownload(regionIDs: pickedIDs, destination: destination)
+        engine?.noaaDownload(regionIDs: pickedIDs, destination: destination, again: again)
         poll()
     }
 

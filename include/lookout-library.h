@@ -865,12 +865,16 @@ int lookout_noaa_cost(lookout *h, const char *region_ids,
                       uint32_t *out_cells, uint64_t *out_bytes,
                       uint32_t *out_held);
 
-/* Download every cell covering these regions into `dest_dir`, which is created
- * if it does not exist. Each cell is written there as <NAME>.zip, so the whole
+/* Download the cells covering these regions into `dest_dir`, created if it is
+ * not there. Each cell is written there as <NAME>.zip, so the whole
  * directory bakes in one lookout_bake_start. Replaces a download already
- * running. Progress surfaces through lookout_noaa_poll. */
+ * running. Progress surfaces through lookout_noaa_poll.
+ *
+ * Cells named by lookout_noaa_have are left out, so picking water that is
+ * partly installed fetches the rest of it. `again` nonzero fetches those too,
+ * so a mariner can repair or refresh charts they already hold. */
 void lookout_noaa_download(lookout *h, const char *region_ids,
-                           const char *dest_dir);
+                           const char *dest_dir, int again);
 
 /* A cell already installed, for the update check. */
 typedef struct {

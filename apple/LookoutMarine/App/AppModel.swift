@@ -67,12 +67,12 @@ final class AppModel {
     ///
     /// The core writes one zip per cell into a single directory, so the whole
     /// download bakes as one chart set once the transfers finish.
-    func startNoaaDownload() {
+    func startNoaaDownload(again: Bool = false) {
         guard let dest = NoaaModel.downloadDirectory else {
             charts.openError = "Couldn't find a place to download charts to."
             return
         }
-        noaa.download(to: dest)
+        noaa.download(to: dest, again: again)
         watchNoaaDownload(dest)
     }
 

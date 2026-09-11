@@ -125,12 +125,15 @@ struct NoaaPickerSheet: View {
                 }
                 Spacer(minLength: 8)
                 Button("Cancel") { shut() }
-                Button("Download") {
-                    model.startNoaaDownload()
+                // Water already held is fetched again rather than left with
+                // a dead button. It is how a mariner repairs a set, or gets
+                // the current edition of one NOAA has reissued.
+                Button(noaa.allInstalled ? "Download Again" : "Download") {
+                    model.startNoaaDownload(again: noaa.allInstalled)
                     shut()
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(!noaa.state.haveCatalog || noaa.picked.isEmpty || noaa.cells == 0)
+                .disabled(!noaa.state.haveCatalog || noaa.picked.isEmpty)
             }
             .padding(.horizontal, 18)
             .padding(.vertical, 12)
