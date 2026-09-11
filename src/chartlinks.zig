@@ -126,7 +126,10 @@ const TileSource = struct {
     tms: bool = false,
 };
 
-const Op = enum { add, select, refresh };
+/// `preview` draws a style and changes no state a mariner owns: it never
+/// keeps the link, never selects it, and never writes the list. For a host
+/// rendering a picture of a chart on a handle of its own.
+const Op = enum { add, select, refresh, preview };
 
 const Phase = enum { style, sibling, tilejson, sprites };
 
@@ -574,6 +577,17 @@ pub const Links = struct {
         self.start(.refresh, e.url, e.url, isLocalPath(e.url));
     }
 
+    /// Draw a style on this handle without adding it to the list.
+    ///
+    /// For a host rendering a picture of a chart offscreen: every other path
+    /// here keeps the link and writes the list, and a second handle doing that
+    /// rewrites the mariner's own list under them.
+    pub fn drawOnly(self: *Links, link: []const u8) void {
+        const trimmed = std.mem.trim(u8, link, " \t\r\n");
+        if (trimmed.len == 0) return;
+        self.start(.preview, trimmed, trimmed, isLocalPath(trimmed));
+    }
+
     /// Drop one chart. Its kept style text goes with it, and if it was the one
     /// being drawn, lookout's own chart comes back.
     pub fn remove(self: *Links, url: []const u8) void {
@@ -924,7 +938,7 @@ pub const Links = struct {
             self.dropResolve();
             return;
         }
-        if (rs.op != .add) {
+        if (rs.op != .add and rs.op != .preview) {
             const act = self.active orelse {
                 self.dropResolve();
                 return;
@@ -962,6 +976,18 @@ pub const Links = struct {
         }
 
         self.installSources(style);
+        if (rs.op == .preview) {
+            // A picture of the chart and no more. The list, the pick and the
+            // credit belong to the mariner's own handle.
+            for (rs.packs.items) |p| {
+                const j = p.json orelse continue;
+                const b = p.png orelse continue;
+                _ = self.sink.spritePack(self.sink.ctx, p.prefix, j, b);
+            }
+            self.changed = true;
+            self.dropResolve();
+            return;
+        }
         // AFTER the style: setting one clears the previous style's packs.
         for (rs.packs.items) |p| {
             const j = p.json orelse continue;

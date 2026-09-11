@@ -41,6 +41,7 @@ struct OnlineChartStep: View {
                     ForEach(links.list) { link in
                         ChartLinkCard(link: link,
                                       picture: previews.images[link.url],
+                                      drawing: previews.drawing.contains(link.url),
                                       picked: links.active == link.url,
                                       onPick: { links.select(link.url) },
                                       onRemove: { links.remove(link.url) })
@@ -76,15 +77,11 @@ struct OnlineChartStep: View {
         .padding(.bottom, 26)
         .onAppear {
             previews.bind(to: model.controller)
-            previews.capture(active: links.active)
+            drawPreviews()
         }
-        // The chart the mariner just picked, once it has drawn.
-        .task(id: links.active) {
-            let want = links.active
-            await previews.watch(active: want) {
-                links.active == want && links.error == nil
-            }
-        }
+        // The list arrives from the core a moment after the step appears.
+        .onChange(of: links.list) { _, _ in drawPreviews() }
+        .onDisappear { previews.stopRendering() }
     }
 
     /// Paste a link, or open one already on this device. The app treats both
@@ -114,6 +111,14 @@ struct OnlineChartStep: View {
                 .accessibilityLabel("Add a chart style file")
             }
         }
+    }
+
+    /// Every chart on the list, drawn off to one side at the water the mariner
+    /// is on, so a card has its picture without being picked.
+    private func drawPreviews() {
+        guard !links.list.isEmpty else { return }
+        let at = model.controller?.viewCenter() ?? (lon: -76.48, lat: 38.97)
+        previews.renderAll(links.list.map(\.url), lon: at.lon, lat: at.lat, zoom: 12)
     }
 
     private func submit() {
@@ -146,8 +151,10 @@ struct OnlineChartStep: View {
 /// first.
 private struct ChartLinkCard: View {
     let link: ChartLinksModel.ChartLink
-    /// This chart as the engine drew it, once it has been picked once.
+    /// This chart as the engine drew it, off to one side.
     var picture: Image? = nil
+    /// True while that render is running.
+    var drawing = false
     let picked: Bool
     let onPick: () -> Void
     let onRemove: () -> Void
@@ -201,11 +208,20 @@ private struct ChartLinkCard: View {
                     .aspectRatio(contentMode: .fill)
             } else {
                 Chrome.panel
-                    .overlay(
-                        Image(systemName: "globe.americas")
-                            .font(.system(size: 20, weight: .light))
-                            .foregroundStyle(Chrome.accent.opacity(0.5))
-                    )
+                    .overlay {
+                        if drawing {
+                            VStack(spacing: 7) {
+                                ProgressView().controlSize(.small)
+                                Text("Drawing this chart…")
+                                    .font(.system(size: 11.5))
+                                    .foregroundStyle(Chrome.muted)
+                            }
+                        } else {
+                            Image(systemName: "globe.americas")
+                                .font(.system(size: 20, weight: .light))
+                                .foregroundStyle(Chrome.accent.opacity(0.5))
+                        }
+                    }
             }
         }
         .frame(maxWidth: .infinity)

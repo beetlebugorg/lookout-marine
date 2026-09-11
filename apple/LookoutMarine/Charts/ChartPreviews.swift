@@ -21,12 +21,18 @@ final class ChartPreviews {
     private(set) var images: [String: Image] = [:]
     /// Links whose style names no raster tiles. They draw their kind instead.
     private(set) var unavailable: Set<String> = []
+    /// Links being drawn now, so a card says it is working.
+    private(set) var drawing: Set<String> = []
 
     /// The zoom the tiles are fetched at. Low enough that one tile holds a
     /// recognisable stretch of coast, high enough to carry a chart's detail.
     private static let zoom = 9
 
     private var inFlight: Set<String> = []
+    /// A second engine with no window, for drawing charts the mariner has not
+    /// picked. Opened at the first preview and closed with the view.
+    private let offscreen = ChartPreviewEngine()
+    private var rendering: Task<Void, Never>?
     /// The point every picture was fetched at. The mariner moves, and a
     /// preview of water they have left says nothing about the style.
     private var center: (lon: Double, lat: Double)?
@@ -66,6 +72,44 @@ final class ChartPreviews {
             guard drawing() else { return }
             capture(active: active)
         }
+    }
+
+    /// Draw every chart that has no picture, one at a time, on an engine of
+    /// its own. Nothing here changes the chart on screen.
+    func renderAll(_ links: [String], lon: Double, lat: Double, zoom: Double) {
+        rendering?.cancel()
+        // What was drawn on a previous run, at once. A style takes seconds to
+        // resolve, fetch and draw, and paying that on every visit to the list
+        // is the difference between a picture and a wait.
+        for url in links where images[url] == nil {
+            if let kept = ChartPreviewEngine.cached(link: url, lon: lon, lat: lat, zoom: zoom) {
+                images[url] = kept
+            }
+        }
+        rendering = Task { [weak self] in
+            for url in links {
+                guard let self, !Task.isCancelled else { return }
+                if self.images[url] != nil { continue }
+                self.drawing.insert(url)
+                defer { self.drawing.remove(url) }
+                guard let shot = await self.offscreen.render(
+                    link: url, lon: lon, lat: lat, zoom: zoom)
+                else {
+                    self.unavailable.insert(url)
+                    continue
+                }
+                self.images[url] = shot
+                self.unavailable.remove(url)
+            }
+            self?.offscreen.close()
+        }
+    }
+
+    /// Stop drawing and close the second engine.
+    func stopRendering() {
+        rendering?.cancel()
+        rendering = nil
+        offscreen.close()
     }
 
     /// Ask for what is missing. Called when the chart list goes on screen.

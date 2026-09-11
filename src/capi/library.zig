@@ -223,6 +223,14 @@ export fn lookout_chart_link_preview_url(
     return if (built.len == 0) 0 else 1;
 }
 
+/// Draw a style without adding it to the list. See lookout-library.h.
+export fn lookout_chart_link_draw(h: ?*lookout, url: ?[*:0]const u8) void {
+    const l = locked(h);
+    defer l.apiUnlock();
+    const s = url orelse return;
+    l.links.drawOnly(std.mem.span(s));
+}
+
 export fn lookout_chart_link_refresh(h: ?*lookout, url: ?[*:0]const u8) void {
     const l = locked(h);
     defer l.apiUnlock();

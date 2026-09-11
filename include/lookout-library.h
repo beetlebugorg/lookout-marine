@@ -668,6 +668,13 @@ void lookout_chart_link_remove(lookout *h, const char *url);
  * read, the kept text stands and the error below is set. */
 void lookout_chart_link_refresh(lookout *h, const char *url);
 
+/* Draw a style on this handle without adding it to the list, selecting it or
+ * writing anything down. For a host rendering a picture of a chart on a handle
+ * opened for that (lookout_open_charts with want_window 0): every other path
+ * here keeps the link and saves the list, and a second handle doing that
+ * rewrites the list under the handle the mariner is using. */
+void lookout_chart_link_draw(lookout *h, const char *url);
+
 /* ---- chart previews -------------------------------------------------------
  *
  * The engine draws one chart at a time, so a shell listing six of them cannot

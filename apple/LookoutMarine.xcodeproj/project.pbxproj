@@ -167,11 +167,13 @@
 		A128EBBC67A9799E5F36CFDE /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4C35EFB09859DBE0A7FFC92 /* SettingsView.swift */; };
 		A26BE99590C76FD74BF2E521 /* RasterPillTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9CB7F2EE01F7A2521E623AD /* RasterPillTests.swift */; };
 		A2B1831C4109BB26076FE692 /* FakeEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = C92108B96F87BAE129BE6656 /* FakeEngine.swift */; };
+		A46991DC0DC8E7CF233B09DD /* ChartPreviewEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AACD5211CA10FC5BBD5D661A /* ChartPreviewEngine.swift */; };
 		A479486780F2F040A5E24E0F /* DevHooks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81985287C200A1BA384DA9D8 /* DevHooks.swift */; };
 		A5B8F5CA1C6A308EFB760327 /* PositionReadout.swift in Sources */ = {isa = PBXBuildFile; fileRef = B48090BE5EB194EC371E4A0D /* PositionReadout.swift */; };
 		A6C58796691A693D11EBA6C3 /* FirstRunModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C47A753C575320AC1BB4A44C /* FirstRunModel.swift */; };
 		A6EEB61F653356864321AF83 /* ChartBake.swift in Sources */ = {isa = PBXBuildFile; fileRef = C440A0CF1A4AE2740ACEFF2F /* ChartBake.swift */; };
 		A81EC2A233089F5F6CB889CB /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4C35EFB09859DBE0A7FFC92 /* SettingsView.swift */; };
+		A82FE0EC387B02B7E0690E17 /* ChartPreviewEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AACD5211CA10FC5BBD5D661A /* ChartPreviewEngine.swift */; };
 		A9D1AA03743D4E13ED98E4E8 /* PluginTableTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C7090FA8708C087510A6B66 /* PluginTableTests.swift */; };
 		AA57905B74D7272259E6FC71 /* RasterModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD12651F04161741811A5386 /* RasterModelTests.swift */; };
 		AAEAA11652744E72897F0250 /* FakeEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = C92108B96F87BAE129BE6656 /* FakeEngine.swift */; };
@@ -431,6 +433,7 @@
 		A84D161B86E9E858C398FE6C /* NoaaRegionList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoaaRegionList.swift; sourceTree = "<group>"; };
 		A9B414D76B8FFB4298A58494 /* ChartFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartFixture.swift; sourceTree = "<group>"; };
 		AACCF77D4F5568A745094D65 /* ChartController+Raster.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChartController+Raster.swift"; sourceTree = "<group>"; };
+		AACD5211CA10FC5BBD5D661A /* ChartPreviewEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartPreviewEngine.swift; sourceTree = "<group>"; };
 		AAEA99096E77BC63671F921D /* About.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = About.swift; sourceTree = "<group>"; };
 		ADA39FB96EFFB96A6985C0C9 /* OpenPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenPanel.swift; sourceTree = "<group>"; };
 		B0DD5929CA735D0DD9F3F142 /* ReadoutsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadoutsModel.swift; sourceTree = "<group>"; };
@@ -728,6 +731,7 @@
 				F430F5A314DA26FBA1E5FDF5 /* ChartGallery.swift */,
 				D31BFC1DAC5265A5DAC8F20D /* ChartLinkFetch.swift */,
 				68828190C8B7D95B175B2ED1 /* ChartLinksModel.swift */,
+				AACD5211CA10FC5BBD5D661A /* ChartPreviewEngine.swift */,
 				15839E0805A8858A9BE1B7E8 /* ChartPreviews.swift */,
 				5A0B8C7B273A6E8D538848ED /* ChartSets.swift */,
 				59206D279B28F48EC767ADEA /* ChartsModel.swift */,
@@ -1084,6 +1088,7 @@
 				30890066C10762A1D5C7BE19 /* ChartLinksModel.swift in Sources */,
 				AE777CEB11DB23DC4042FCC1 /* ChartMenuPanel.swift in Sources */,
 				B99F6D4997B065CC138CA7BC /* ChartNSView.swift in Sources */,
+				A82FE0EC387B02B7E0690E17 /* ChartPreviewEngine.swift in Sources */,
 				916B52F53F9EE0EC839591AA /* ChartPreviews.swift in Sources */,
 				97DCF3B7900A5C58FF7A40BB /* ChartSets.swift in Sources */,
 				C0F12C9177AB56898D1EDFBD /* ChartUIView.swift in Sources */,
@@ -1225,6 +1230,7 @@
 				DD40AB266B659985FF76A1E7 /* ChartLinksModel.swift in Sources */,
 				E911C978C197F55B85E6DFAF /* ChartMenuPanel.swift in Sources */,
 				CA27A0A049F55035DE8F9535 /* ChartNSView.swift in Sources */,
+				A46991DC0DC8E7CF233B09DD /* ChartPreviewEngine.swift in Sources */,
 				DD034F4926D923FB2CCC84E7 /* ChartPreviews.swift in Sources */,
 				D1B707AE0BF481BB0E24C5F9 /* ChartSets.swift in Sources */,
 				D140C3EBA8F42641232C0369 /* ChartUIView.swift in Sources */,
