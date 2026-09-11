@@ -5,8 +5,13 @@
 //  way its publisher styled it.
 //
 //  The app ships no list of styles. Lookout runs none of these services, so a
-//  card naming one states a relationship the app does not have. The step offers
-//  a link field. Mariner settings owns the depth unit and the light sectors.
+//  card naming one states a relationship the app does not have. The cards are
+//  the mariner's own links, and the field below adds another.
+//
+//  A card shows a picture of its chart once the engine has drawn it. Picking
+//  one is what draws it. Artboard 7d shows every card already pictured;
+//  the engine draws one chart at a time, so they fill in as the mariner looks
+//  through them.
 
 import SwiftUI
 
@@ -15,6 +20,8 @@ struct OnlineChartStep: View {
     @Bindable var flow: FirstRunModel
 
     @State private var entry = ""
+    /// A picture of each chart, once the engine has drawn it.
+    @State private var previews = ChartPreviews()
 
     private var links: ChartLinksModel { model.chartLinks }
 
@@ -22,23 +29,35 @@ struct OnlineChartStep: View {
         VStack(alignment: .leading, spacing: 0) {
             StepHeading(
                 title: "Choose an online chart",
-                blurb: "Paste a MapLibre style link or a TileJSON tile link. It renders straight away, worldwide, and stores nothing.",
+                blurb: "An online chart renders straight away, worldwide, and stores nothing. One shows at a time, and while it is on it is the chart.",
                 centered: centered)
                 .padding(.top, topInset)
 
-            linkEntry.padding(.top, 22)
-
+            // The charts first, the way to add one after them. Side by side,
+            // so two styles are compared by looking rather than by scrolling
+            // between them.
             if !links.list.isEmpty {
-                VStack(spacing: 11) {
+                LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
                     ForEach(links.list) { link in
                         ChartLinkCard(link: link,
+                                      picture: previews.images[link.url],
                                       picked: links.active == link.url,
                                       onPick: { links.select(link.url) },
                                       onRemove: { links.remove(link.url) })
                     }
                 }
-                .padding(.top, 16)
+                .padding(.top, 20)
             }
+
+            Text("Another link")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Chrome.ink)
+                .padding(.top, links.list.isEmpty ? 22 : 18)
+            linkEntry.padding(.top, 8)
+            Text("MapLibre style or TileJSON link")
+                .font(.system(size: 11.5))
+                .foregroundStyle(Chrome.muted)
+                .padding(.top, 6)
 
             if let error = links.error {
                 Label(error, systemImage: "exclamationmark.triangle")
@@ -55,6 +74,17 @@ struct OnlineChartStep: View {
         }
         .padding(.horizontal, horizontalInset)
         .padding(.bottom, 26)
+        .onAppear {
+            previews.bind(to: model.controller)
+            previews.capture(active: links.active)
+        }
+        // The chart the mariner just picked, once it has drawn.
+        .task(id: links.active) {
+            let want = links.active
+            await previews.watch(active: want) {
+                links.active == want && links.error == nil
+            }
+        }
     }
 
     /// Paste a link, or open one already on this device. The app treats both
@@ -96,10 +126,15 @@ struct OnlineChartStep: View {
     private var centered: Bool { true }
     private var topInset: CGFloat { 34 }
     private var horizontalInset: CGFloat { 40 }
+    /// Two across. A third column makes a preview too small to tell a style by.
+    private var columns: [GridItem] {
+        [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
+    }
     #else
     private var centered: Bool { false }
     private var topInset: CGFloat { 16 }
     private var horizontalInset: CGFloat { 18 }
+    private var columns: [GridItem] { [GridItem(.flexible())] }
     #endif
 }
 
@@ -111,42 +146,76 @@ struct OnlineChartStep: View {
 /// first.
 private struct ChartLinkCard: View {
     let link: ChartLinksModel.ChartLink
+    /// This chart as the engine drew it, once it has been picked once.
+    var picture: Image? = nil
     let picked: Bool
     let onPick: () -> Void
     let onRemove: () -> Void
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Button(action: onPick) {
-                HStack(alignment: .top, spacing: 12) {
-                    Image(systemName: picked ? "checkmark.circle.fill" : "circle")
-                        .font(.system(size: 18))
-                        .foregroundStyle(picked ? Chrome.accent : Chrome.ink.opacity(0.30))
-                    VStack(alignment: .leading, spacing: 4) {
+        Button(action: onPick) {
+            VStack(alignment: .leading, spacing: 0) {
+                art
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 7) {
+                        Image(systemName: picked ? "checkmark.circle.fill" : "circle")
+                            .font(.system(size: 14))
+                            .foregroundStyle(picked ? Chrome.accent : Chrome.ink.opacity(0.30))
                         Text(link.name)
                             .font(.system(size: 14, weight: .semibold))
                             .foregroundStyle(Chrome.ink)
-                        Text(link.url)
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(Chrome.muted)
-                            .fixedSize(horizontal: false, vertical: true)
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                        Button(action: onRemove) {
+                            Image(systemName: "minus.circle")
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Chrome.muted)
+                        .accessibilityLabel("Remove \(link.name)")
                     }
-                    Spacer(minLength: 0)
+                    Text(link.url)
+                        .font(.system(size: 10.5, design: .monospaced))
+                        .foregroundStyle(Chrome.muted)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .contentShape(Rectangle())
+                .padding(.horizontal, 11)
+                .padding(.top, 9)
+                .padding(.bottom, 11)
             }
-            .buttonStyle(.plain)
-            .accessibilityAddTraits(picked ? [.isButton, .isSelected] : .isButton)
-
-            Button(action: onRemove) {
-                Image(systemName: "minus.circle")
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(Chrome.muted)
-            .accessibilityLabel("Remove \(link.name)")
+            .contentShape(Rectangle())
         }
-        .padding(.vertical, 13)
-        .padding(.horizontal, 14)
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(picked ? [.isButton, .isSelected] : .isButton)
         .modifier(CardSkin(picked: picked, radius: 12))
+    }
+
+    /// The chart, or the room it will take. A style renders through the engine
+    /// and the engine draws one at a time, so a chart never picked has none.
+    private var art: some View {
+        Group {
+            if let picture {
+                picture
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } else {
+                Chrome.panel
+                    .overlay(
+                        Image(systemName: "globe.americas")
+                            .font(.system(size: 20, weight: .light))
+                            .foregroundStyle(Chrome.accent.opacity(0.5))
+                    )
+            }
+        }
+        .frame(maxWidth: .infinity)
+        // Nearer square than a strip: a chart style is told apart by its water
+        // and its marks, and both want height.
+        .aspectRatio(4.0 / 3.0, contentMode: .fill)
+        .frame(maxHeight: 210)
+        .clipped()
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Chrome.edge.opacity(0.5)).frame(height: 1)
+        }
     }
 }

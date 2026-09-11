@@ -269,7 +269,11 @@ struct FirstRunFlow: View {
         case .depths:
             return "Change any of this later in Mariner settings, in Depths."
         case .onlineChart:
-            return model.chartLinks.attribution
+            // The publisher's credit, and the thing a mariner about to pick a
+            // link most wants to know: their own charts are still there.
+            let kept = "installed charts stay installed"
+            guard let credit = model.chartLinks.attribution, !credit.isEmpty else { return kept }
+            return "\(credit) · \(kept)"
         }
     }
 

@@ -54,10 +54,16 @@ final class ChartPreviews {
     /// Keep capturing the chart being drawn while it settles. A link resolves
     /// its style and fetches its tiles first, so the frame at the moment it
     /// was picked is the chart it replaced.
-    func watch(active: String?) async {
+    ///
+    /// `drawing` says whether that chart is still the one on screen. A style
+    /// the core refuses drops the pick, and the frame then holds whatever came
+    /// back: filing it under the link that failed puts another chart's picture
+    /// under its name.
+    func watch(active: String?, drawing: @escaping () -> Bool) async {
         for _ in 0..<10 {
             try? await Task.sleep(for: .milliseconds(900))
             if Task.isCancelled { return }
+            guard drawing() else { return }
             capture(active: active)
         }
     }

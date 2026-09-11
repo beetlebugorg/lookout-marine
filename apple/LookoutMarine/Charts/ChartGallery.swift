@@ -60,7 +60,12 @@ struct ChartGallery: View {
         // A linked chart resolves its style and fetches its tiles before it
         // has anything to picture, so this keeps looking rather than deciding
         // on the first frame.
-        .task(id: links.active) { await previews.watch(active: links.active) }
+        .task(id: links.active) {
+            let want = links.active
+            await previews.watch(active: want) {
+                links.active == want && links.error == nil
+            }
+        }
         // The core answers a style read by raising its changed flag, and the
         // list model polls that. A new template is a new picture to ask for.
         .onChange(of: links.list) { _, now in previews.refresh(now.map(\.url)) }
