@@ -367,30 +367,39 @@ struct DepthStep: View {
     /// the two contours read.
     private func sounding(_ v: Double) -> String { "\(Int(v.rounded(.up)))" }
 
-    /// One depth line, from the shore out. The same shape at every depth,
-    /// moved further out as the water deepens.
+    /// One depth line across the panel.
+    ///
+    /// Every line is the same shape, moved up by its depth, so each band keeps
+    /// its share of the panel from edge to edge. Scaling the curve by the
+    /// depth instead gathered them all into the bottom right corner, and the
+    /// deep band came out seven pixels tall on the left.
     private func shoal(w: CGFloat, h: CGFloat, at t: CGFloat) -> Path {
         Path { p in
             p.move(to: CGPoint(x: 0, y: h))
-            p.addLine(to: CGPoint(x: 0, y: h - h * t))
-            p.addCurve(to: CGPoint(x: w, y: h - h * t * 0.42),
-                       control1: CGPoint(x: w * 0.34, y: h - h * t * 1.18),
-                       control2: CGPoint(x: w * 0.62, y: h - h * t * 0.22))
+            p.addLine(to: seabed(w: w, h: h, t: t, u: 0))
+            var i = 1
+            while i <= Self.steps {
+                p.addLine(to: seabed(w: w, h: h, t: t, u: CGFloat(i) / CGFloat(Self.steps)))
+                i += 1
+            }
             p.addLine(to: CGPoint(x: w, y: h))
             p.closeSubpath()
         }
     }
 
-    /// A point on one depth line, `u` of the way along it.
+    private static let steps = 48
+
+    /// A point on one depth line, `u` of the way across.
+    private func seabed(w: CGFloat, h: CGFloat, t: CGFloat, u: CGFloat) -> CGPoint {
+        // The wave and the rise to the right are the same for every line, so
+        // the lines never cross and the bands never pinch.
+        let wave = 0.055 * sin(u * .pi * 1.7 + 0.4) + 0.045 * u
+        return CGPoint(x: u * w, y: h - h * t + h * CGFloat(wave))
+    }
+
+    /// Where a spot depth stands on its own line.
     private func curvePoint(w: CGFloat, h: CGFloat, t: CGFloat, u: CGFloat) -> CGPoint {
-        let p0 = CGPoint(x: 0, y: h - h * t)
-        let c1 = CGPoint(x: w * 0.34, y: h - h * t * 1.18)
-        let c2 = CGPoint(x: w * 0.62, y: h - h * t * 0.22)
-        let p3 = CGPoint(x: w, y: h - h * t * 0.42)
-        let v = 1 - u
-        let x = v * v * v * p0.x + 3 * v * v * u * c1.x + 3 * v * u * u * c2.x + u * u * u * p3.x
-        let y = v * v * v * p0.y + 3 * v * v * u * c1.y + 3 * v * u * u * c2.y + u * u * u * p3.y
-        return CGPoint(x: x, y: y)
+        seabed(w: w, h: h, t: t, u: u)
     }
 
     private func key(_ color: Color, _ name: String, _ range: String) -> some View {
