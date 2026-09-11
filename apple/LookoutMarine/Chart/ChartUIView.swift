@@ -13,6 +13,35 @@ import UIKit
 
 #if os(iOS)
 
+/// How the settings form comes up: a sheet on a phone, the whole screen on an
+/// iPad.
+///
+/// An iPad page sheet is already nearly the size of the screen, and it gets
+/// there by scaling up out of the middle of it. A cover rises from the bottom
+/// the way the phone's sheet does, and the form is a sidebar and a pane, which
+/// is what the Mac gives a window of its own.
+///
+/// Both presentations are always attached, and the size class decides which
+/// one can be true. Choosing between them with an `if` would rebuild the chrome
+/// under them every time an iPad changed size class in Split View.
+private struct SettingsPresentation<Form: View>: ViewModifier {
+    @Binding var showing: Bool
+    @ViewBuilder let form: () -> Form
+    @Environment(\.horizontalSizeClass) private var width
+
+    func body(content: Content) -> some View {
+        content
+            .sheet(isPresented: shown(whenRegular: false)) { form() }
+            .fullScreenCover(isPresented: shown(whenRegular: true)) { form() }
+    }
+
+    private func shown(whenRegular: Bool) -> Binding<Bool> {
+        Binding(get: { showing && (width == .regular) == whenRegular },
+                set: { if !$0 { showing = false } })
+    }
+}
+
+
 struct ChartView: View {
     let model: AppModel
     /// Held, not taken locally in `body`. A binding cannot be made through
@@ -41,7 +70,7 @@ struct ChartView: View {
         // The form brings its OWN navigation: a stack on a phone, a sidebar
         // and pane on an iPad. It cannot be given one from out here, because
         // only the form knows how wide it came up.
-        .sheet(isPresented: $chrome.showSettings) {
+        .modifier(SettingsPresentation(showing: $chrome.showSettings) {
             SettingsView(model: model)
                 // The form follows the chart's scheme, like the rest of the
                 // chrome. The scheme is set here because OverlayLayer sets it
@@ -52,7 +81,7 @@ struct ChartView: View {
                 // does not remove a preference already applied to an open
                 // sheet. The OS scheme makes a return to Day a change.
                 .preferredColorScheme(model.readouts.scheme == 0 ? osScheme : .dark)
-        }
+        })
         .fileImporter(isPresented: $chrome.showImporter,
                       allowedContentTypes: [.item, .folder]) { result in
             if case .success(let url) = result { model.openImported(url) }
