@@ -113,6 +113,10 @@ pub const Entry = struct {
     tms: bool = false,
 };
 
+/// Which rule chose a saved preview template. A template saved under an older
+/// rule is read as absent, and the style is read again.
+const TILES_RULE = 2;
+
 /// Where a source's tiles come from, after the style is resolved.
 const TileSource = struct {
     name: []u8,
@@ -1111,20 +1115,32 @@ pub const Links = struct {
     /// TileJSON names its tiles at the top level and has no sources.
     const Template = struct { template: []const u8, tms: bool };
 
+    /// Only a chart whose tiles are ALL raster has a picture in one tile.
+    ///
+    /// A style that draws vector seamarks over a raster base is the base plus
+    /// the publisher's own work. The base alone is somebody else's map: a
+    /// seamark style over OpenStreetMap previewed as OpenStreetMap, under the
+    /// publisher's name.
     fn firstRasterTemplate(doc: std.json.Value) ?Template {
         if (doc != .object) return null;
         if (doc.object.get("sources")) |sources| {
             if (sources == .object) {
+                var found: ?Template = null;
                 for (sources.object.keys()) |name| {
                     const src = sources.object.get(name) orelse continue;
                     if (src != .object) continue;
                     const kind = memberString(src, "type") orelse "";
-                    if (!std.mem.eql(u8, kind, "raster")) continue;
-                    if (firstTemplateOf(src)) |t| return t;
+                    if (!std.mem.eql(u8, kind, "raster")) return null;
+                    if (found == null) found = firstTemplateOf(src);
                 }
+                return found;
             }
         }
-        return firstTemplateOf(doc);
+        const bare = firstTemplateOf(doc) orelse return null;
+        // A bare TileJSON names no type. Its extension does.
+        if (std.mem.endsWith(u8, bare.template, ".pbf")) return null;
+        if (std.mem.endsWith(u8, bare.template, ".mvt")) return null;
+        return bare;
     }
 
     fn firstTemplateOf(obj: std.json.Value) ?Template {
@@ -1300,6 +1316,7 @@ pub const Links = struct {
                 try out.appendSlice(alloc, ",\"tiles\":");
                 try jsonString(alloc, out, e.tiles);
                 if (e.tms) try out.appendSlice(alloc, ",\"tms\":true");
+                try out.print(alloc, ",\"tilesrule\":{d}", .{TILES_RULE});
             }
             try out.append(alloc, '}');
         }
@@ -1421,7 +1438,14 @@ pub const Links = struct {
             // file is not there, which spares a stat per row at load.
             // The tile template a preview was drawn from, so a shell has its
             // thumbnails at the first frame rather than after a round trip.
-            const tmpl = memberString(it, "tiles") orelse "";
+            // Only a template this build's rule chose. Rule 1 read the first
+            // raster source of any style, and previewed a seamark chart as the
+            // raster map under it.
+            const rule = switch (it.object.get("tilesrule") orelse std.json.Value{ .integer = 0 }) {
+                .integer => |v| v,
+                else => 0,
+            };
+            const tmpl = if (rule == TILES_RULE) memberString(it, "tiles") orelse "" else "";
             const t: []u8 = if (tmpl.len == 0)
                 &.{}
             else
@@ -2807,6 +2831,22 @@ test "chartlinks: a vector style has no preview tile" {
     try f.answer("style.json",
         \\{"version":8,"sources":{"v":{"type":"vector",
         \\ "tiles":["https://t.example/{z}/{x}/{y}.pbf"]}},"layers":[]}
+    , 200);
+    var buf: [512]u8 = undefined;
+    try testing.expect(f.links.previewUrl("https://t.example/style.json", 0, 0, 1, &buf) == null);
+}
+
+test "chartlinks: a raster base under vector work is not a preview of it" {
+    const f = try Fake.open(testing.allocator);
+    defer f.close();
+    f.links.add("https://t.example/style.json");
+    // Seamarks drawn over somebody else's raster map. The base is not this
+    // publisher's chart, and previewing it puts their name on it.
+    try f.answer("style.json",
+        \\{"version":8,"sources":{
+        \\ "base":{"type":"raster","tiles":["https://osm.example/{z}/{x}/{y}.png"]},
+        \\ "marks":{"type":"vector","tiles":["https://t.example/{z}/{x}/{y}.pbf"]}},
+        \\ "layers":[]}
     , 200);
     var buf: [512]u8 = undefined;
     try testing.expect(f.links.previewUrl("https://t.example/style.json", 0, 0, 1, &buf) == null);

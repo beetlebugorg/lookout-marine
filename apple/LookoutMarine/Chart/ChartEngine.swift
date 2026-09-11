@@ -14,6 +14,7 @@
 //  and are empty, because the methods are already there.
 
 import Foundation
+import SwiftUI
 
 /// What RasterModel asks the chart for.
 @MainActor
@@ -51,6 +52,8 @@ protocol ChartLinkEngine: AnyObject {
     func chartLinkPreviewURL(_ url: String, lon: Double, lat: Double, zoom: Int) -> String?
     /// Where the chart is now, for a preview every tile shares.
     func viewCenter() -> (lon: Double, lat: Double)?
+    /// The chart as it is drawing. The one true picture of the active chart.
+    func snapshot() -> Image?
 }
 
 /// What PluginsModel asks the chart for.

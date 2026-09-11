@@ -37,6 +37,31 @@ final class ChartPreviews {
         self.engine = engine
     }
 
+    /// The chart being drawn, as the engine draws it. The key is the link's
+    /// url, or "" for Lookout's own chart.
+    ///
+    /// The one true picture of a publisher's portrayal. A style that layers
+    /// its own work over somebody else's raster base otherwise previews as
+    /// that base, another map under this publisher's name.
+    @discardableResult
+    func capture(active: String?) -> Bool {
+        guard let engine, let shot = engine.snapshot() else { return false }
+        images[active ?? ""] = shot
+        unavailable.remove(active ?? "")
+        return true
+    }
+
+    /// Keep capturing the chart being drawn while it settles. A link resolves
+    /// its style and fetches its tiles first, so the frame at the moment it
+    /// was picked is the chart it replaced.
+    func watch(active: String?) async {
+        for _ in 0..<10 {
+            try? await Task.sleep(for: .milliseconds(900))
+            if Task.isCancelled { return }
+            capture(active: active)
+        }
+    }
+
     /// Ask for what is missing. Called when the chart list goes on screen.
     ///
     /// The core reads each style over the network, so a template is rarely
@@ -68,6 +93,8 @@ final class ChartPreviews {
         center = now
         var settled = true
         for url in links {
+            // A picture the engine drew stands. It is this chart, rather than
+            // one of the sources it draws from.
             if images[url] != nil || inFlight.contains(url) {
                 if images[url] == nil { settled = false }
                 continue

@@ -5,6 +5,7 @@
 //  ChartLinkFetch is the door they fetch through.
 
 import Foundation
+import SwiftUI
 
 @MainActor
 extension ChartController {
@@ -79,6 +80,42 @@ extension ChartController {
         }
         guard ok != 0 else { return nil }
         return String(cString: buf)
+    }
+
+    /// The chart as it is drawing, as a picture.
+    ///
+    /// The engine draws one chart at a time, so this is the only true picture
+    /// of a publisher's portrayal: their own style, rendered by the engine,
+    /// at the water the mariner is on.
+    func snapshot() -> Image? {
+        guard let h = handle, let view else { return nil }
+        let scale = Platform.backingScale(of: view)
+        let w = Int((view.bounds.width * scale).rounded())
+        let h_px = Int((view.bounds.height * scale).rounded())
+        guard w > 0, h_px > 0 else { return nil }
+        var pixels = [UInt8](repeating: 0, count: w * h_px * 4)
+        // 0 is success here, unlike the rest of this ABI.
+        let ok = pixels.withUnsafeMutableBufferPointer {
+            lookout_snapshot_rgba(h, $0.baseAddress, $0.count)
+        }
+        guard ok == 0 else { return nil }
+        return Self.image(w: w, h: h_px, rgba: pixels)
+    }
+
+    private static func image(w: Int, h: Int, rgba: [UInt8]) -> Image? {
+        let space = CGColorSpaceCreateDeviceRGB()
+        let info = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)
+        guard let provider = CGDataProvider(data: Data(rgba) as CFData),
+              let cg = CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32,
+                               bytesPerRow: w * 4, space: space, bitmapInfo: info,
+                               provider: provider, decode: nil, shouldInterpolate: true,
+                               intent: .defaultIntent)
+        else { return nil }
+        #if os(macOS)
+        return Image(nsImage: NSImage(cgImage: cg, size: NSSize(width: w, height: h)))
+        #else
+        return Image(uiImage: UIImage(cgImage: cg))
+        #endif
     }
 
     /// Where the chart is now. Every tile pictures the same water, so the

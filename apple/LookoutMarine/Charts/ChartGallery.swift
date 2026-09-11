@@ -29,7 +29,8 @@ struct ChartGallery: View {
                 ChartTile(kind: .lookout,
                           name: "Lookout chart",
                           detail: lookoutDetail,
-                          active: links.active == nil) {
+                          active: links.active == nil,
+                          picture: previews.images[""]) {
                     links.select(nil)
                 }
                 ForEach(links.list) { link in
@@ -50,8 +51,16 @@ struct ChartGallery: View {
         }
         .onAppear {
             previews.bind(to: model.controller)
+            // The chart on screen, as the engine draws it. Whichever chart the
+            // mariner picks next is captured the same way, so the row fills
+            // with real portrayals as they look through it.
+            previews.capture(active: links.active)
             previews.refresh(links.list.map(\.url))
         }
+        // A linked chart resolves its style and fetches its tiles before it
+        // has anything to picture, so this keeps looking rather than deciding
+        // on the first frame.
+        .task(id: links.active) { await previews.watch(active: links.active) }
         // The core answers a style read by raising its changed flag, and the
         // list model polls that. A new template is a new picture to ask for.
         .onChange(of: links.list) { _, now in previews.refresh(now.map(\.url)) }
@@ -146,9 +155,15 @@ private struct ChartTile: View {
     @ViewBuilder private var chartPicture: some View {
         switch kind {
         case .lookout:
-            Image("WelcomeChart")
-                .resizable()
-                .aspectRatio(contentMode: .fill)
+            if let picture {
+                picture
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } else {
+                Image("WelcomeChart")
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            }
         case .link:
             if let picture {
                 picture
