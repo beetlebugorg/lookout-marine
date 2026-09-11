@@ -2144,7 +2144,14 @@ pub const Lookout = struct {
     const DEFAULT_VIEW_ZOOM = 5.0;
     pub fn defaultView(self: *Lookout) View {
         var v = self.fitChart();
-        v.zoom = std.math.clamp(DEFAULT_VIEW_ZOOM, self.cam.min_zoom, self.cam.max_zoom);
+        // With no survey and no pictures there is nothing to frame, and
+        // fitChart says so by returning the whole world. Pulling in to
+        // DEFAULT_VIEW_ZOOM opened a fresh install on one stretch of empty
+        // ocean off West Africa, at a scale the basemap has no detail for.
+        const empty = self.charts.items.len == 0 and self.rasters.coverage() == null;
+        if (!empty) {
+            v.zoom = std.math.clamp(DEFAULT_VIEW_ZOOM, self.cam.min_zoom, self.cam.max_zoom);
+        }
         v.rotation_deg = 0;
         return v;
     }

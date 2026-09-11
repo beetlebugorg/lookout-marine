@@ -166,8 +166,11 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate {
               bounds.width > 1, bounds.height > 1 else { return }
         // A pending open request beats the startup default (it can only exist
         // this early if something opened a chart before first layout).
+        // An install with no charts still opens. The engine draws the basemap
+        // under an empty library, which is what a mariner picking their first
+        // chart should be looking at; returning here left the window grey
+        // until something else asked for a chart.
         let paths = model?.charts.openRequest?.paths ?? model?.charts.initialChartPaths() ?? []
-        guard !paths.isEmpty else { return }
         didAutoOpen = true
         lastSizePt = bounds.size
         model?.charts.openingCells = paths.count

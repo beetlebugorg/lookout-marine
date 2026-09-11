@@ -234,8 +234,11 @@ final class ChartNSView: NSView {
         controller?.attachView(self)
         // A request raised before this view had a size is the newer list: the
         // scan or the import worked it out after the walk ran.
+        // An install with no charts still opens. The engine draws the basemap
+        // under an empty library, which is what a mariner picking their first
+        // chart should be looking at; returning here left the window grey
+        // until something else asked for a chart.
         let paths = model?.charts.openRequest?.paths ?? model?.charts.initialChartPaths() ?? []
-        guard !paths.isEmpty else { return }
         didAutoOpen = true
         // No frame restoration for this window: the chart reopens from our own
         // recents, and the fromServer frame restore is exactly the mid-load
