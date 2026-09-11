@@ -280,6 +280,7 @@ final class ChartController: NSObject {
         startDisplayLink()
         pushReadouts()
         model?.charts.hasChart = true
+        model?.charts.chartIsEmpty = paths.isEmpty
         model?.charts.chartPath = chartPath
         // What the open library states about its labels. On the model rather
         // than read once by whoever asks: the Settings window may be up while

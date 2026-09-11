@@ -249,7 +249,7 @@ struct FirstRunFlow: View {
         flow.sawBake
             && model.noaa.state.phase != .downloading
             && model.charts.chartWork == nil
-            && model.charts.hasChart
+            && model.charts.hasChart && !model.charts.chartIsEmpty
     }
 
     /// The line beside the primary action: the credit the active chart asks
@@ -270,10 +270,12 @@ struct FirstRunFlow: View {
             return "Change any of this later in Mariner settings, in Depths."
         case .onlineChart:
             // The publisher's credit, and the thing a mariner about to pick a
-            // link most wants to know: their own charts are still there.
-            let kept = "installed charts stay installed"
-            guard let credit = model.chartLinks.attribution, !credit.isEmpty else { return kept }
-            return "\(credit) · \(kept)"
+            // link most wants to know: their own charts are still there. An
+            // install with no charts has none to reassure them about.
+            let kept = model.charts.nothingToDraw ? nil : "installed charts stay installed"
+            let credit = model.chartLinks.attribution.flatMap { $0.isEmpty ? nil : $0 }
+            let line = [credit, kept].compactMap { $0 }.joined(separator: " · ")
+            return line.isEmpty ? nil : line
         }
     }
 

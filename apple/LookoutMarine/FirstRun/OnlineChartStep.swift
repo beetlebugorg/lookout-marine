@@ -142,8 +142,14 @@ struct OnlineChartStep: View {
 
     /// Every chart on the shelf, drawn off to one side at the water the mariner
     /// is on, so a card has its picture without being picked.
+    ///
+    /// A shipped picture stands while there is no water of the mariner's own.
+    /// An install with no charts opens on the whole world, and a render at the
+    /// centre of that is a picture of open ocean rather than of the style.
     private func drawPreviews() {
+        let own = !model.charts.nothingToDraw
         let charts = shelf.map(\.url)
+            .filter { own || ChartCatalog.art(for: $0) == nil }
         guard !charts.isEmpty else { return }
         let at = model.controller?.viewCenter() ?? (lon: -76.48, lat: 38.97)
         previews.renderAll(charts, lon: at.lon, lat: at.lat, zoom: 12)

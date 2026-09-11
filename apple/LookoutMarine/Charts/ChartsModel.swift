@@ -19,6 +19,10 @@ final class ChartsModel {
     // MARK: The chart that is open, or opening
 
     var hasChart = false
+    /// True when the chart that is open holds no charts: the engine draws the
+    /// basemap and the library behind it is empty. An install with nothing in
+    /// it still opens, so `hasChart` alone no longer says a chart is drawn.
+    var chartIsEmpty = false
     var chartPath: String?
     /// The label languages the OPEN charts state, as ISO 639-2 codes, from
     /// lookout_chart_languages. Empty when nothing is open, or when every
@@ -69,7 +73,8 @@ final class ChartsModel {
     /// asked only whether a set was installed, so the loader stayed up over
     /// such a library and the first-run page never appeared.
     var nothingToDraw: Bool {
-        !hasChart && !isOpening && openRequest == nil && !scanning && bake == nil
+        (!hasChart || chartIsEmpty) && !isOpening && openRequest == nil
+            && !scanning && bake == nil
             && raster.paths.isEmpty
             && !sets.contains { $0.on && $0.hasSomethingToDraw }
     }
@@ -319,6 +324,7 @@ final class ChartsModel {
         openRequest = nil
         chartPath = nil
         hasChart = false
+        chartIsEmpty = false
         firstBuildDone = false
         isOpening = false
     }
