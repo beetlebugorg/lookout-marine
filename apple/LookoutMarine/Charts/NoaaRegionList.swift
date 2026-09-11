@@ -69,57 +69,14 @@ struct NoaaRegionList: View {
     var model: AppModel
     @Bindable var noaa: NoaaModel
 
-    /// The app's own basemap: the lower 48, with Alaska and Hawaii inset.
-    @State private var basemaps = CoverageBasemaps()
-
-    /// Photograph the three views the picker draws, then put the chart back
-    /// where the mariner had it.
-    ///
-    /// Each picture holds the corners it was taken under, so the boxes stay
-    /// true whatever the chart does afterward.
-    private func photograph() async {
-        guard let saved = model.controller?.currentView else { return }
-        basemaps.main = await shoot(AppModel.countryView)
-        basemaps.alaska = await shoot(AppModel.alaskaView)
-        basemaps.hawaii = await shoot(AppModel.hawaiiView)
-        // Setup asks which waters a mariner sails, so the chart under the
-        // sheet goes back to the lower 48 rather than to a harbor they have no
-        // chart for.
-        model.controller?.setView(basemaps.main == nil ? saved : AppModel.countryView)
-    }
-
-    /// Ask for a view until the chart holds it, then take the picture.
-    /// Opening a chart applies its own default view, which can land after the
-    /// first ask.
-    private func shoot(_ view: lookout_view) async -> ChartSnapshot? {
-        for _ in 0..<40 {
-            guard let c = model.controller else {
-                try? await Task.sleep(for: .milliseconds(300))
-                continue
-            }
-            c.setView(view)
-            try? await Task.sleep(for: .milliseconds(300))
-            guard c.isShowing(view) else { continue }
-            // The framing has landed. The tiles for it have not: a picture
-            // taken now is the empty frame before the basemap draws.
-            try? await Task.sleep(for: .milliseconds(900))
-            guard let shot = c.currentSnapshot() else { continue }
-            return shot
-        }
-        lkLog("coverage map: the chart never held a framing")
-        return nil
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             // Full width. The height follows from the picture's own shape, so
             // the map is never stretched.
             CoverageMap(regions: noaa.regions,
                         picked: noaa.picked,
-                        enabled: noaa.state.haveCatalog,
-                        basemaps: basemaps) { noaa.toggle($0) }
+                        enabled: noaa.state.haveCatalog) { noaa.toggle($0) }
                 .frame(maxWidth: .infinity)
-                .task { await photograph() }
 
             NoaaRegionPills(regions: noaa.regions,
                             picked: noaa.picked,

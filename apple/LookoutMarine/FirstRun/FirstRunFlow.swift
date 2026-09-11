@@ -16,18 +16,13 @@ struct FirstRunFlow: View {
     var model: AppModel
     @Bindable var flow: FirstRunModel
 
-    /// The flow's own settings object, bound to the controller like the
-    /// settings window's. Setup asks for the depth unit before the first chart
-    /// draws, and a mariner who changes it here must find it changed there.
-    @StateObject private var m = MarinerSettings()
-
     /// The height the step's own content wants. A ScrollView accepts whatever
     /// height it is offered, so without measuring, the sheet grows to fill the
     /// window and leaves the cards floating above an empty half.
     @State private var contentHeight: CGFloat = 0
 
     var body: some View {
-        frame.onAppear { m.bind(to: model.controller) }
+        frame
     }
 
     @ViewBuilder private var frame: some View {
@@ -93,7 +88,7 @@ struct FirstRunFlow: View {
         case .welcome: WelcomeStep(flow: flow)
         case .source: SourceStep(flow: flow)
         case .coverage: CoverageStep(model: model, noaa: model.noaa)
-        case .onlineChart: OnlineChartStep(model: model, flow: flow, m: m)
+        case .onlineChart: OnlineChartStep(model: model, flow: flow)
         }
     }
 

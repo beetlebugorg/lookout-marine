@@ -23,7 +23,6 @@
 		0FC9AB6BCEAC0324767C7253 /* ChartController+Raster.swift in Sources */ = {isa = PBXBuildFile; fileRef = AACCF77D4F5568A745094D65 /* ChartController+Raster.swift */; };
 		1001392DF7ECEB52C30F7AD5 /* SmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 429A3DC2D37A94F800391B26 /* SmokeTests.swift */; };
 		11BC973584FA218201793360 /* CalloutPlacement.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D9C576826C26FDC1702FDD5 /* CalloutPlacement.swift */; };
-		11F3A6BD850101D8C723A844 /* ChartController+Snapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE03BEA5A87181E7E57CEBCF /* ChartController+Snapshot.swift */; };
 		138A4F680ACD73391F8D9340 /* ChartLinksModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A6C878008109734E6888D48 /* ChartLinksModelTests.swift */; };
 		14273C54003A4AEBB439A5E3 /* Store.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B35807C0ABB9C564DABEC58 /* Store.swift */; };
 		1624F24699FFA672BA87FF22 /* Commands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BC336600CCD8C3660EBE446 /* Commands.swift */; };
@@ -96,12 +95,14 @@
 		5CE2A0D966DE83049C387273 /* PluginsModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35D97963E69370785A4AF0A7 /* PluginsModelTests.swift */; };
 		5DD02716900498D0448E04AB /* HudTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 289ADF58E60CB5CBBD3FF7EF /* HudTests.swift */; };
 		5EDBC7A846272B37C846C95C /* ReadoutsCapsule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02618015841FF6935C44305E /* ReadoutsCapsule.swift */; };
+		5FCB5A3F2112C083E349184B /* Coastline.bin in Resources */ = {isa = PBXBuildFile; fileRef = 74514DA3CB4855F686DF7AB0 /* Coastline.bin */; };
 		603569A05512C360E24F0E1D /* WelcomeStep.swift in Sources */ = {isa = PBXBuildFile; fileRef = B664B45A6D4D73D186AA0354 /* WelcomeStep.swift */; };
 		606C8CB59EE44B3D51EA08DE /* PluginPackageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 821B5ED7454E2C00FA897B56 /* PluginPackageTests.swift */; };
 		61E0DAE3345D167C0F437344 /* StoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EA86C2284DD80FD535E34EE /* StoreTests.swift */; };
 		6529B3A68ADADA5D750087A1 /* OnlineChartStep.swift in Sources */ = {isa = PBXBuildFile; fileRef = 293361D8887B5B7FF9F4F480 /* OnlineChartStep.swift */; };
 		660B3BBE42B71316CE7A4A02 /* NoaaModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CEFDA036DEABF80B487EA4F /* NoaaModel.swift */; };
 		667ACA81D8076DE1F5E0FCB6 /* ChromeModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D234494177794FA934BAB596 /* ChromeModel.swift */; };
+		6891397399E2C6776A03801A /* Coastline.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5363B36E741F4F10A43B9CBE /* Coastline.swift */; };
 		689E24910C8ECF894D1FA847 /* Discovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9341B7F1F58D9B158ABC67EE /* Discovery.swift */; };
 		698A5FAED378AD7A354AD368 /* ChartController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C315E2FD12D936B349662AB2 /* ChartController.swift */; };
 		699DD0B45A659EC7A3C2951F /* About.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAEA99096E77BC63671F921D /* About.swift */; };
@@ -125,7 +126,6 @@
 		861542B1BFCFA79A0159F5E0 /* OverlayModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58CA6572430DD9F43DEA85E3 /* OverlayModel.swift */; };
 		87A28B54E0386BF45FFC1C1A /* ChartEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25170EA011726656A1803B82 /* ChartEngine.swift */; };
 		882229E32D58BFFB90A121A7 /* MarinerSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F7AFFDA812DB39C72788868 /* MarinerSettingsTests.swift */; };
-		88E6388822BDF82346129144 /* USOutline.swift in Sources */ = {isa = PBXBuildFile; fileRef = E02351F0EF553306AACC774F /* USOutline.swift */; };
 		89A4726EAB6D55604C60CD2E /* PluginPackageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 821B5ED7454E2C00FA897B56 /* PluginPackageTests.swift */; };
 		8A8814B7709EC3A575C8ECBC /* MarinerSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B88B8511C390ECCC17E905E /* MarinerSettings.swift */; };
 		8AAEA190EA9AC9B493ACFFE8 /* StartupLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43B1D53AEBA3A1562C76642D /* StartupLoader.swift */; };
@@ -136,13 +136,13 @@
 		8DA009DEDAE728D38DFE062E /* PluginTableTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C7090FA8708C087510A6B66 /* PluginTableTests.swift */; };
 		8EF72BD101D31073F394013C /* PluginConsentSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6152AE14014203A46906CD92 /* PluginConsentSheet.swift */; };
 		8F197CD206DDF556863202DC /* ReadoutsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0DD5929CA735D0DD9F3F142 /* ReadoutsModel.swift */; };
+		914951BD6949A5A8DCDA4BAD /* Coastline.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5363B36E741F4F10A43B9CBE /* Coastline.swift */; };
 		920F8FA17C671FC70BD0CFDE /* WelcomeStep.swift in Sources */ = {isa = PBXBuildFile; fileRef = B664B45A6D4D73D186AA0354 /* WelcomeStep.swift */; };
 		9310F043177B162A821FDF99 /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8FB061C18A2E1449AB1D30F1 /* Metal.framework */; };
 		93410ED10B7262DA9DDCE3BA /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7391C6EA25BA24468EDAD1AD /* CoreGraphics.framework */; };
 		9415C65FA1CE55A4AEE8C458 /* SearchField.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C90666B68F88AA600900DFB /* SearchField.swift */; };
 		954D5A326F5AC370A4DE558E /* AuxFileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFAB0A8EAF5C8563D93EA939 /* AuxFileView.swift */; };
 		95C13C0BBEEDEB126C85C3E5 /* PluginManageSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9678B3409AC6184055D285AD /* PluginManageSection.swift */; };
-		962AFAD7D7E36DCA1E8EBA0D /* ChartController+Snapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE03BEA5A87181E7E57CEBCF /* ChartController+Snapshot.swift */; };
 		975D7A97AEDE359E19292148 /* ChartSetStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52541E0740AE0F9E3BBC236D /* ChartSetStoreTests.swift */; };
 		97DCF3B7900A5C58FF7A40BB /* ChartSets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0B8C7B273A6E8D538848ED /* ChartSets.swift */; };
 		9877A4D5F67C23B4B2EA89C0 /* StoreImportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15F128F00C9ECD678E99816B /* StoreImportTests.swift */; };
@@ -225,6 +225,7 @@
 		D4053EFD7BBC6FD277438F1D /* CoordFormatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80A6678722FC01CA46E10CE0 /* CoordFormatTests.swift */; };
 		D592C74889CB79128A0A81C5 /* PluginTableView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B7482797128261B463A8277 /* PluginTableView.swift */; };
 		D77E6462A28F0B1C63856A12 /* ChartsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59206D279B28F48EC767ADEA /* ChartsModel.swift */; };
+		D8AD554317FB9A4CBE1FF2A5 /* Coastline.bin in Resources */ = {isa = PBXBuildFile; fileRef = 74514DA3CB4855F686DF7AB0 /* Coastline.bin */; };
 		D8B07B8A647C1B9C9EC398BA /* ReadoutsCapsule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02618015841FF6935C44305E /* ReadoutsCapsule.swift */; };
 		D8DE92A54522E48CF85722DE /* Instruments.swift in Sources */ = {isa = PBXBuildFile; fileRef = E99E812450B1710B0945A9EE /* Instruments.swift */; };
 		D98D644F63B6A27A5BA219F7 /* LicenseManifestTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6473AB9A6EC7604E642EB8B9 /* LicenseManifestTests.swift */; };
@@ -256,7 +257,6 @@
 		F0BEF83589EF79DCF51DC90F /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8FB061C18A2E1449AB1D30F1 /* Metal.framework */; };
 		F2D04DA787C9802949F999C0 /* ReadoutsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0DD5929CA735D0DD9F3F142 /* ReadoutsModel.swift */; };
 		F3D929E4CACC81F62BFDBB78 /* ChartArchiveSetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F41AFA7BFC35E02D2CD7FD6 /* ChartArchiveSetTests.swift */; };
-		F47A6B97473EF2D4A3EA47EF /* USOutline.swift in Sources */ = {isa = PBXBuildFile; fileRef = E02351F0EF553306AACC774F /* USOutline.swift */; };
 		F5573A263F96357B6BB4982E /* OverlayModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C662FFE95992970B22324BF0 /* OverlayModelTests.swift */; };
 		F56FFB5B0B4315E5CAB193E8 /* ChartValues.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EBE7ED9891268BB429691A0 /* ChartValues.swift */; };
 		F5ACE48CDAAC757EA7F003E9 /* ChartWorkPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 362582E4EA060B062BAF11EB /* ChartWorkPanel.swift */; };
@@ -359,6 +359,7 @@
 		5103742FA53C331F5306B3ED /* PluginsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginsModel.swift; sourceTree = "<group>"; };
 		51ECDDE552CF03F985815D94 /* ChartController+Plugins.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChartController+Plugins.swift"; sourceTree = "<group>"; };
 		52541E0740AE0F9E3BBC236D /* ChartSetStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartSetStoreTests.swift; sourceTree = "<group>"; };
+		5363B36E741F4F10A43B9CBE /* Coastline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Coastline.swift; sourceTree = "<group>"; };
 		539774253A46E025DD1B5E20 /* CoordFormat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoordFormat.swift; sourceTree = "<group>"; };
 		5624860C29AF07752A4CE208 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		573750B823F6706B68397BCF /* SourceStep.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceStep.swift; sourceTree = "<group>"; };
@@ -383,6 +384,7 @@
 		6F41AFA7BFC35E02D2CD7FD6 /* ChartArchiveSetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartArchiveSetTests.swift; sourceTree = "<group>"; };
 		7275481E39C90E641E17E551 /* PluginPollTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginPollTests.swift; sourceTree = "<group>"; };
 		7391C6EA25BA24468EDAD1AD /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
+		74514DA3CB4855F686DF7AB0 /* Coastline.bin */ = {isa = PBXFileReference; lastKnownFileType = archive.macbinary; path = Coastline.bin; sourceTree = "<group>"; };
 		76764861EF306D902A212929 /* CoverageStep.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoverageStep.swift; sourceTree = "<group>"; };
 		7A6C878008109734E6888D48 /* ChartLinksModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartLinksModelTests.swift; sourceTree = "<group>"; };
 		7C90666B68F88AA600900DFB /* SearchField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchField.swift; sourceTree = "<group>"; };
@@ -416,7 +418,6 @@
 		AACCF77D4F5568A745094D65 /* ChartController+Raster.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChartController+Raster.swift"; sourceTree = "<group>"; };
 		AAEA99096E77BC63671F921D /* About.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = About.swift; sourceTree = "<group>"; };
 		ADA39FB96EFFB96A6985C0C9 /* OpenPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenPanel.swift; sourceTree = "<group>"; };
-		AE03BEA5A87181E7E57CEBCF /* ChartController+Snapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChartController+Snapshot.swift"; sourceTree = "<group>"; };
 		B0DD5929CA735D0DD9F3F142 /* ReadoutsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadoutsModel.swift; sourceTree = "<group>"; };
 		B1C44341E0A9C0B713D97E32 /* PlacementTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlacementTests.swift; sourceTree = "<group>"; };
 		B4548244FA1C95958287A425 /* SettingsWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsWindow.swift; sourceTree = "<group>"; };
@@ -437,7 +438,6 @@
 		D31BFC1DAC5265A5DAC8F20D /* ChartLinkFetch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartLinkFetch.swift; sourceTree = "<group>"; };
 		DA903A3F5328FE7634B5B1C4 /* ScaleEntryPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScaleEntryPanel.swift; sourceTree = "<group>"; };
 		DB61B848C1E900A1F3615B91 /* ChartUIView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartUIView.swift; sourceTree = "<group>"; };
-		E02351F0EF553306AACC774F /* USOutline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = USOutline.swift; sourceTree = "<group>"; };
 		E04C1A7E97E0DA615380347A /* PluginTableModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginTableModel.swift; sourceTree = "<group>"; };
 		E261A2F97520F9A46F0F43E5 /* AdvancedSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdvancedSection.swift; sourceTree = "<group>"; };
 		E7AE039534D7B01FBAAD147A /* OverlayLayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverlayLayer.swift; sourceTree = "<group>"; };
@@ -550,6 +550,8 @@
 		457A971586808E99CF7DA616 /* FirstRun */ = {
 			isa = PBXGroup;
 			children = (
+				74514DA3CB4855F686DF7AB0 /* Coastline.bin */,
+				5363B36E741F4F10A43B9CBE /* Coastline.swift */,
 				76764861EF306D902A212929 /* CoverageStep.swift */,
 				7F069A044A2B7DB415DA8A02 /* FirstRun.xcassets */,
 				FE36262A44201EEF33B87681 /* FirstRunFlow.swift */,
@@ -706,7 +708,6 @@
 				80820CEC30CD0EB74AE12CAB /* ChartController+ChartLinks.swift */,
 				64FA13C7BC1FB5316BEA40DB /* ChartController+Noaa.swift */,
 				AACCF77D4F5568A745094D65 /* ChartController+Raster.swift */,
-				AE03BEA5A87181E7E57CEBCF /* ChartController+Snapshot.swift */,
 				F430F5A314DA26FBA1E5FDF5 /* ChartGallery.swift */,
 				D31BFC1DAC5265A5DAC8F20D /* ChartLinkFetch.swift */,
 				68828190C8B7D95B175B2ED1 /* ChartLinksModel.swift */,
@@ -717,7 +718,6 @@
 				4CEFDA036DEABF80B487EA4F /* NoaaModel.swift */,
 				A84D161B86E9E858C398FE6C /* NoaaRegionList.swift */,
 				3BB6523A66DFCC61B512AB19 /* RasterModel.swift */,
-				E02351F0EF553306AACC774F /* USOutline.swift */,
 			);
 			path = Charts;
 			sourceTree = "<group>";
@@ -941,6 +941,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				01E9C851AE2AFBF1C12F09F9 /* Assets.xcassets in Resources */,
+				D8AD554317FB9A4CBE1FF2A5 /* Coastline.bin in Resources */,
 				B7BDE5C0FBA6C178534775C4 /* FirstRun.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -950,6 +951,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				C05F4D5EB4E32576C253AD19 /* Assets.xcassets in Resources */,
+				5FCB5A3F2112C083E349184B /* Coastline.bin in Resources */,
 				E3FE6ACB60C5D830FD3A7E7B /* FirstRun.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1054,7 +1056,6 @@
 				07961A5660076B4E5D1A0734 /* ChartController+Pick.swift in Sources */,
 				49CC49C3B92B59E4BE8D381E /* ChartController+Plugins.swift in Sources */,
 				CD8608AD6B1FD02089DE519F /* ChartController+Raster.swift in Sources */,
-				11F3A6BD850101D8C723A844 /* ChartController+Snapshot.swift in Sources */,
 				8BACDDC03E0D62CCA2725465 /* ChartController+Tables.swift in Sources */,
 				698A5FAED378AD7A354AD368 /* ChartController.swift in Sources */,
 				87A28B54E0386BF45FFC1C1A /* ChartEngine.swift in Sources */,
@@ -1072,6 +1073,7 @@
 				02BEB8DB1EBC2B61CC1CEB36 /* Chrome.swift in Sources */,
 				340BAA0AB5066CB75B4DB2B8 /* ChromeHitRegion.swift in Sources */,
 				B1419C547F1615D20EBEE3EA /* ChromeModel.swift in Sources */,
+				914951BD6949A5A8DCDA4BAD /* Coastline.swift in Sources */,
 				FFDEBD8A71166206983735DB /* Commands.swift in Sources */,
 				CDEDF34B3202F6D9F0746A37 /* ContentView.swift in Sources */,
 				AB753B2BDEE44483CCDD903C /* CoordFormat.swift in Sources */,
@@ -1127,7 +1129,6 @@
 				29D69EB0C3BEBC71F0CCBF36 /* Store.swift in Sources */,
 				80CE281DC2EC9E4EC6486C59 /* StoreImport.swift in Sources */,
 				1FB72A8CCF4595933D5EFB6B /* TextSection.swift in Sources */,
-				88E6388822BDF82346129144 /* USOutline.swift in Sources */,
 				9A7402704824F7BDC3E43058 /* ViewState.swift in Sources */,
 				920F8FA17C671FC70BD0CFDE /* WelcomeStep.swift in Sources */,
 				DE55FD74596BCB2F9B39B686 /* ZoomControls.swift in Sources */,
@@ -1191,7 +1192,6 @@
 				4148E59BA5FAB3A4D649B10E /* ChartController+Pick.swift in Sources */,
 				841C835197E484DA0A66E250 /* ChartController+Plugins.swift in Sources */,
 				0FC9AB6BCEAC0324767C7253 /* ChartController+Raster.swift in Sources */,
-				962AFAD7D7E36DCA1E8EBA0D /* ChartController+Snapshot.swift in Sources */,
 				2519D0331ED9B6BE7956E9D2 /* ChartController+Tables.swift in Sources */,
 				9B5E568A4400963C83A8E4FE /* ChartController.swift in Sources */,
 				2D18C3C1548A171547BCD515 /* ChartEngine.swift in Sources */,
@@ -1209,6 +1209,7 @@
 				B82495034138B87BEB0D8619 /* Chrome.swift in Sources */,
 				9B5D5B30A13DEA2CAA3AA35F /* ChromeHitRegion.swift in Sources */,
 				667ACA81D8076DE1F5E0FCB6 /* ChromeModel.swift in Sources */,
+				6891397399E2C6776A03801A /* Coastline.swift in Sources */,
 				1624F24699FFA672BA87FF22 /* Commands.swift in Sources */,
 				DCCD94EA9FFFD7C0438FE580 /* ContentView.swift in Sources */,
 				CBD34D994087975A903346EA /* CoordFormat.swift in Sources */,
@@ -1264,7 +1265,6 @@
 				14273C54003A4AEBB439A5E3 /* Store.swift in Sources */,
 				F0BE52AE80B81553B494FEDD /* StoreImport.swift in Sources */,
 				58AC131857390A27742AD81A /* TextSection.swift in Sources */,
-				F47A6B97473EF2D4A3EA47EF /* USOutline.swift in Sources */,
 				1B66B5D3EC47042E2E462BBF /* ViewState.swift in Sources */,
 				603569A05512C360E24F0E1D /* WelcomeStep.swift in Sources */,
 				784566F54334706217860CD0 /* ZoomControls.swift in Sources */,

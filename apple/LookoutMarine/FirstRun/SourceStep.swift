@@ -48,7 +48,7 @@ struct SourceStep: View {
         SourceCard(
             icon: source.icon,
             title: source.title,
-            recommended: source == .online,
+            recommended: source == .noaa,
             blurb: source.blurb,
             picked: flow.source == source,
             stacked: stacked

@@ -6,15 +6,13 @@
 //
 //  The app ships no list of styles. Lookout runs none of these services, so a
 //  card naming one states a relationship the app does not have. The step offers
-//  a link field and the two settings a mariner sets before the first chart
-//  draws.
+//  a link field. Mariner settings owns the depth unit and the light sectors.
 
 import SwiftUI
 
 struct OnlineChartStep: View {
     var model: AppModel
     @Bindable var flow: FirstRunModel
-    @ObservedObject var m: MarinerSettings
 
     @State private var entry = ""
 
@@ -49,8 +47,6 @@ struct OnlineChartStep: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.top, 12)
             }
-
-            settings.padding(.top, 22)
 
             StepWarning(
                 lead: "Not for navigation.",
@@ -88,34 +84,6 @@ struct OnlineChartStep: View {
                 .accessibilityLabel("Add a chart style file")
             }
         }
-    }
-
-    /// The two settings to ask before the first chart draws. The unit belongs
-    /// here rather than later in Mariner settings, because every sounding and
-    /// readout is about to be labeled in it.
-    private var settings: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            StepControlRow(label: "Depths in",
-                           note: "Applies to every sounding, contour and readout.") {
-                Picker("", selection: $m.depthUnit) {
-                    ForEach(MarinerDepthUnit.allCases) { Text($0.label).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .fixedSize()
-            }
-            StepControlRow(label: "Show light sectors",
-                           note: "Draws each light's full arc of visibility.") {
-                Toggle("", isOn: $m.showFullSectorLines)
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-            }
-        }
-        .padding(.vertical, 16)
-        .padding(.horizontal, 18)
-        .background(Chrome.panel, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
-            .strokeBorder(Chrome.edge.opacity(0.5), lineWidth: 1))
     }
 
     private func submit() {
