@@ -18,8 +18,10 @@ import UIKit
 @MainActor
 final class ChartPreviewEngine {
     /// The size a picture is rendered at, in pixels. A card draws it about
-    /// 400pt wide, so this is enough at 1x and cheap to render.
-    private static let size = (w: 480, h: 360)
+    /// 400pt wide, and this covers that at 2x. It is also the size of the
+    /// pictures in ChartCatalog, so a render replacing a shipped one is the
+    /// same picture at the same sharpness.
+    private static let size = (w: 960, h: 720)
     /// How long one chart has to resolve its style and fetch its tiles: the
     /// style, its sprite sheets and a screen of tiles, over the network.
     private static let patience = 70
