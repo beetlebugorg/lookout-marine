@@ -59,9 +59,26 @@ final class FirstRunModel {
         case source
         case coverage
         case onlineChart
+        /// Charts arriving and converting. Setup stays open through it,
+        /// because the chart opens when the import finishes.
+        case importing
     }
 
     var step: Step = .welcome
+    /// True once a bake has been seen running. Without it an import that has
+    /// yet to start reads the same as one that has finished, because both
+    /// report no work.
+    var sawBake = false
+    /// What the mariner asked NOAA for, kept from the moment they asked. The
+    /// service's own counters are for the transfer, and the panel outlives it.
+    var noaaOrder: NoaaOrder?
+
+    /// A NOAA download as it was ordered.
+    struct NoaaOrder: Equatable {
+        let regions: String
+        let charts: UInt32
+        let bytes: UInt64
+    }
     var source: Source = .noaa
     /// True while the flow is over the chart.
     var showing = false
@@ -104,6 +121,7 @@ final class FirstRunModel {
         case "source": return .source
         case "coverage": return .coverage
         case "online": return .onlineChart
+        case "importing": return .importing
         default: return .welcome
         }
     }
@@ -145,11 +163,14 @@ final class FirstRunModel {
                 return .files
             }
         case .coverage:
-            finish()
+            step = .importing
             return .noaa
         case .onlineChart:
             finish()
             return .online
+        case .importing:
+            finish()
+            return nil
         }
     }
 
@@ -161,6 +182,7 @@ final class FirstRunModel {
         case .welcome: break
         case .source: step = .welcome
         case .coverage, .onlineChart: step = .source
+        case .importing: break
         }
     }
 
@@ -180,6 +202,7 @@ final class FirstRunModel {
         switch step {
         case .welcome, .source: return "Continue"
         case .coverage: return "Download"
+        case .importing: return "Continue"
         case .onlineChart: return chosenChartName.map { "Use \($0)" } ?? "Continue"
         }
     }

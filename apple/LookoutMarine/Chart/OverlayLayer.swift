@@ -266,7 +266,9 @@ struct OverlayLayer: View {
                 // The NOAA download, where the bake panel stands. Setup closes
                 // when it starts, so this is the only report of it.
                 .overlay(alignment: model.charts.hasChart ? .top : .center) {
-                    if model.noaa.state.phase == .downloading {
+                    // Setup reports the download in its own step, so this is
+                    // for a download started from the Charts pane.
+                    if model.noaa.state.phase == .downloading, !model.firstRun.showing {
                         NoaaDownloadPanel(model: model, compact: model.charts.hasChart)
                             .padding(.top, model.charts.hasChart ? 10 : 0)
                             .chromeHitRegion("noaa-download")

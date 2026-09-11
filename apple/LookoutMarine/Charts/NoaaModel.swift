@@ -6,6 +6,14 @@
 
 import Foundation
 
+/// A lon/lat box, as the catalog states it.
+struct GeoBox: Equatable {
+    let west: Double
+    let south: Double
+    let east: Double
+    let north: Double
+}
+
 /// One region a mariner picks, as the core lists it.
 struct NoaaRegion: Identifiable, Hashable {
     let id: String
@@ -54,6 +62,9 @@ final class NoaaModel {
     /// Which regions the mariner picked, by id.
     var picked: Set<String> = []
     private(set) var state = NoaaState()
+    /// Each region's real coverage, read once the catalog is in. A region
+    /// drawn as one rectangle claims water it does not cover.
+    private(set) var coverage: [String: [GeoBox]] = [:]
     /// What the current pick costs, refreshed whenever the pick changes.
     private(set) var cells: UInt32 = 0
     private(set) var bytes: UInt64 = 0
@@ -121,9 +132,24 @@ final class NoaaModel {
     func poll() {
         guard let engine else { return }
         let next = engine.noaaState()
+        // Assigning an equal value still invalidates every view reading it,
+        // and this polls several times a second.
+        guard next != state else { return }
         let gained = next.haveCatalog && !state.haveCatalog
         state = next
-        if gained { recost() }
+        if gained {
+            recost()
+            loadCoverage()
+        }
+    }
+
+    /// Read every region's coverage. The catalog holds it and does not change
+    /// while it is loaded, so this runs once.
+    private func loadCoverage() {
+        guard let engine else { return }
+        var out: [String: [GeoBox]] = [:]
+        for r in regions { out[r.id] = engine.noaaRegionCoverage(r.id) }
+        coverage = out
     }
 
     private func recost() {

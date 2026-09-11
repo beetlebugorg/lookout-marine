@@ -768,6 +768,23 @@ typedef struct {
  * table is static and valid for the life of the process. */
 size_t lookout_noaa_regions(const lookout_noaa_region **out);
 
+/* One box of a region's coverage, in degrees. */
+typedef struct {
+    double west, south, east, north;
+} lookout_noaa_box;
+
+/* The coverage of one region, as the boxes of the finest coarse band it has:
+ * band 3 hugs the coast, and a district without one falls back to 2 then 1.
+ * There are tens of them. Writes at most `cap`
+ * boxes and returns how many there are, so a caller sizes its buffer by
+ * calling once with `out` NULL. Returns 0 before a catalog is read.
+ *
+ * A region drawn as one rectangle claims water it does not cover: district 8
+ * runs Texas to the Keys around the Florida peninsula, and its bounding box
+ * paints across Miami. These boxes are what the catalog actually says. */
+size_t lookout_noaa_region_coverage(lookout *h, const char *region_id,
+                                    lookout_noaa_box *out, size_t cap);
+
 /* Read NOAA's product catalog. Non-blocking, and it drives the fetcher. One
  * read is outstanding at a time; calling again while one runs does nothing.
  * Progress and the result surface through lookout_noaa_poll. */

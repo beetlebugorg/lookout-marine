@@ -13,6 +13,9 @@ struct CoverageMap: View {
     let regions: [NoaaRegion]
     let picked: Set<String>
     let enabled: Bool
+    /// Each region's real coverage from the catalog. A region with none yet
+    /// falls back to its rough extent.
+    var coverage: [String: [GeoBox]] = [:]
     let toggle: (String) -> Void
 
     /// One panel: the ground it covers, and the regions drawn on it.
@@ -121,22 +124,42 @@ struct CoverageMap: View {
 
     private func box(_ r: NoaaRegion, _ p: Panel, in size: CGSize) -> some View {
         let on = picked.contains(r.id)
-        let a = p.window.point(lon: r.west, lat: r.north, in: size)
-        let b = p.window.point(lon: r.east, lat: r.south, in: size)
-        let rect = CGRect(x: min(a.x, b.x), y: min(a.y, b.y),
-                          width: abs(b.x - a.x), height: abs(b.y - a.y))
-        // The gesture goes on before position(). A view that has been
-        // positioned fills its parent, so a contentShape applied after it
-        // claims the whole panel and the last box drawn gets every tap.
-        return RoundedRectangle(cornerRadius: 3, style: .continuous)
-            .fill(Chrome.accent.opacity(on ? 0.45 : 0.14))
-            .overlay(RoundedRectangle(cornerRadius: 3, style: .continuous)
-                .strokeBorder(on ? Chrome.accent : Chrome.accent.opacity(0.65),
-                              lineWidth: on ? 2 : 1.2))
-            .frame(width: max(rect.width, 8), height: max(rect.height, 8))
-            .contentShape(Rectangle())
+        let shape = RegionShape(boxes: boxes(r), window: p.window)
+        // The gesture goes on the shape, so a tap lands on the region's own
+        // water rather than on a rectangle around it.
+        // Filled, with no stroke. Outlining the path draws every cell box in
+        // it, which reads as a mesh over the coast rather than one region.
+        return shape
+            .fill(Chrome.accent.opacity(on ? 0.5 : 0.16))
+            .contentShape(shape)
             .onTapGesture { if enabled { toggle(r.id) } }
-            .position(x: rect.midX, y: rect.midY)
+    }
+
+    /// The catalog's boxes for a region, or its rough extent until the catalog
+    /// is in.
+    private func boxes(_ r: NoaaRegion) -> [GeoBox] {
+        if let c = coverage[r.id], !c.isEmpty { return c }
+        return [GeoBox(west: r.west, south: r.south, east: r.east, north: r.north)]
+    }
+}
+
+
+/// One region's coverage, as the boxes the catalog states for its coarse
+/// cells. Drawn as a single path, so overlapping cells do not stack their fill.
+struct RegionShape: Shape {
+    let boxes: [GeoBox]
+    let window: MapWindow
+
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        for b in boxes {
+            let a = window.point(lon: b.west, lat: b.north, in: rect.size)
+            let c = window.point(lon: b.east, lat: b.south, in: rect.size)
+            p.addRect(CGRect(x: min(a.x, c.x), y: min(a.y, c.y),
+                             width: max(abs(c.x - a.x), 1.5),
+                             height: max(abs(c.y - a.y), 1.5)))
+        }
+        return p
     }
 }
 

@@ -456,11 +456,26 @@ pub const Service = struct {
         self.changed = true;
     }
 
+    /// Unpack one cell's exchange set into the staging directory.
+    ///
+    /// The zip is written to a scratch file, extracted, and removed. Leaving
+    /// the zips in place gave the shell a directory of 829 archives, and it
+    /// bakes a folder of cells or a single archive, so it refused the pick.
+    /// Extracting turns the directory into an ordinary ENC_ROOT.
     fn write(self: *Service, name: []const u8, bytes: []const u8) !void {
-        var buf: [512]u8 = undefined;
-        const path = try std.fmt.bufPrint(&buf, "{s}/{s}.zip", .{ self.dest, name });
         const io = std.Io.Threaded.global_single_threaded.io();
-        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = bytes });
+        var buf: [512]u8 = undefined;
+        const tmp = try std.fmt.bufPrint(&buf, "{s}/{s}.zip.part", .{ self.dest, name });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = tmp, .data = bytes });
+        defer std.Io.Dir.cwd().deleteFile(io, tmp) catch {};
+
+        var dir = try std.Io.Dir.cwd().openDir(io, self.dest, .{});
+        defer dir.close(io);
+        var f = try std.Io.Dir.cwd().openFile(io, tmp, .{});
+        defer f.close(io);
+        var reader_buf: [4096]u8 = undefined;
+        var fr = f.reader(io, &reader_buf);
+        try std.zip.extract(dir, &fr, .{ .allow_backslashes = true });
     }
 
     // ---- the snapshot -----------------------------------------------------

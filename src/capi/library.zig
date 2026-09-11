@@ -446,6 +446,56 @@ export fn lookout_noaa_regions(out: ?*[*]const lookout_noaa_region) usize {
     return noaa_regions.len;
 }
 
+/// One box of a region's coverage. See lookout-library.h.
+pub const lookout_noaa_box = extern struct {
+    west: f64,
+    south: f64,
+    east: f64,
+    north: f64,
+};
+
+/// The coverage of one region's coarse cells. See lookout-library.h.
+export fn lookout_noaa_region_coverage(h: ?*lookout, region_id: ?[*:0]const u8,
+                                       out: ?[*]lookout_noaa_box, cap: usize) usize {
+    if (h == null) return 0;
+    const l = locked(h);
+    defer l.apiUnlock();
+    const cat = &(l.noaa.cat orelse return 0);
+    const id = std.mem.span(region_id orelse return 0);
+    const region = noaa.regionById(id) orelse return 0;
+    // The finest of the coarse bands this district has. Band 3 is coastal and
+    // hugs the shore; band 1 is an ocean basin and blots out the coastline it
+    // is meant to describe. The Great Lakes have no band 3, so the choice is
+    // made per district rather than fixed.
+    var band: u8 = 0;
+    for ([_]u8{ 3, 2, 1 }) |b| {
+        for (cat.cells) |c| {
+            if (c.district == region.district and c.band == b and c.box.known) {
+                band = b;
+                break;
+            }
+        }
+        if (band != 0) break;
+    }
+    if (band == 0) return 0;
+
+    var n: usize = 0;
+    for (cat.cells) |c| {
+        if (c.district != region.district or !c.box.known) continue;
+        if (c.band != band) continue;
+        if (out) |o| {
+            if (n < cap) o[n] = .{
+                .west = c.box.start,
+                .south = c.box.south,
+                .east = c.box.start + c.box.width,
+                .north = c.box.north,
+            };
+        }
+        n += 1;
+    }
+    return n;
+}
+
 /// Read NOAA's product catalog. See lookout-library.h.
 export fn lookout_noaa_refresh(h: ?*lookout) void {
     const l = locked(h);

@@ -75,7 +75,8 @@ struct NoaaRegionList: View {
             // the map is never stretched.
             CoverageMap(regions: noaa.regions,
                         picked: noaa.picked,
-                        enabled: noaa.state.haveCatalog) { noaa.toggle($0) }
+                        enabled: noaa.state.haveCatalog,
+                        coverage: noaa.coverage) { noaa.toggle($0) }
                 .frame(maxWidth: .infinity)
 
             NoaaRegionPills(regions: noaa.regions,

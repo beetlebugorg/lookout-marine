@@ -30,6 +30,18 @@ enum ChartWorkKind: Equatable {
 }
 
 /// Where a bake has got to.
+/// One usage band in a set, and how much of it the bake has prepared.
+struct BandTotal: Equatable, Identifiable {
+    let band: Int
+    let name: String
+    let total: Int
+    var done: Int = 0
+    var id: Int { band }
+
+    var isComplete: Bool { done >= total && total > 0 }
+    var isWaiting: Bool { done == 0 }
+}
+
 struct BakeProgress: Equatable {
     var kind: ChartWorkKind = .importing
     var done: Int = 0
@@ -38,6 +50,32 @@ struct BakeProgress: Equatable {
     var name: String = ""
     /// Seconds since the bake started.
     var elapsed: Double = 0
+    /// How many charts landed. The core stores this once, when every phase
+    /// has run (src/bakejob.zig), so it reads 0 for the whole bake and only
+    /// means anything on the last report.
+    var baked: Int = 0
+    /// What the set holds per usage band, coarse to fine, as the scan found
+    /// it. lookout_bake_order runs the bake in this order, so `done` says how
+    /// far down the list the bake has reached.
+    var bands: [BandTotal] = []
+
+    /// How many charts were refused, on a report that has a count to compare.
+    /// Zero while the bake runs, because `baked` is written at the end.
+    var refused: Int { baked > 0 ? max(done - baked, 0) : 0 }
+
+    /// Each band with how many of it are prepared.
+    ///
+    /// The bake runs coarse band first (lookout_bake_order, see
+    /// include/lookout-library.h), so the count walks down the bands in that
+    /// order until it runs out.
+    var bandProgress: [BandTotal] {
+        var left = done
+        return bands.map { b in
+            let n = min(left, b.total)
+            left -= n
+            return BandTotal(band: b.band, name: b.name, total: b.total, done: n)
+        }
+    }
 
     var fraction: Double { total > 0 ? Double(done) / Double(total) : 0 }
 
@@ -106,7 +144,8 @@ final class ChartBakeJob {
                     done: Int(p.done),
                     total: Int(p.total),
                     name: self.name,
-                    elapsed: Date().timeIntervalSince(self.started)))
+                    elapsed: Date().timeIntervalSince(self.started),
+                    baked: Int(p.baked)))
                 guard p.running == 0 else { return }
                 timer.invalidate()
                 self.poll = nil

@@ -511,6 +511,10 @@ final class ChartsModel {
     /// Any chart work running now: a scan or a bake. The pill, the first-run
     /// panel and the Charts settings all read this one value, so the work
     /// appears wherever the mariner is looking.
+    /// How many charts the last bake refused. Read by the setup panel, which
+    /// outlives the bake.
+    var lastBakeRefused = 0
+
     var chartWork: BakeProgress? {
         if let b = bake { return b }
         // Freeing the disk after a set is removed. It is not the mariner's
@@ -539,7 +543,14 @@ final class ChartsModel {
         bakeSource = sourceDir
         let total = cells.filter(\.needsPrepare).count
         let title = named ?? (sourceDir as NSString).lastPathComponent
-        bake = BakeProgress(done: 0, total: total, name: title)
+        // The bake runs coarse band first, so the panel reads its band list in
+        // that order (lookout_bake_order, include/lookout-library.h).
+        let toPrepare = cells.filter(\.needsPrepare)
+        let bands: [BandTotal] = (1...6).compactMap { b in
+            let n = toPrepare.filter { $0.band == b }.count
+            return n == 0 ? nil : BandTotal(band: b, name: ChartSet.bandName(b), total: n)
+        }
+        bake = BakeProgress(done: 0, total: total, name: title, bands: bands)
         job.onProgress = { [weak self, weak job] p in
             // Only the job this model still owns may speak for it. A removed
             // set cancels its bake, but tile57 stops at the next chart
@@ -555,6 +566,12 @@ final class ChartsModel {
             // given; who made the charts in it is the scan's answer, and every
             // progress tick would otherwise put the folder name back.
             shown.name = title
+            // The band list comes from the scan, and the job reports none.
+            shown.bands = bands
+            // The core counts what landed once every phase has run, so the
+            // last report is the only one that can name a refusal. Kept here
+            // because the bake is gone by the time anything reads it.
+            if shown.refused > 0 { self.lastBakeRefused = shown.refused }
             self.bake = shown
         }
         ChartBake.run(sourceDir: sourceDir, cells: cells, job: job) { [weak self] outDir in

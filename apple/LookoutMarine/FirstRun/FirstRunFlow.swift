@@ -89,6 +89,7 @@ struct FirstRunFlow: View {
         case .source: SourceStep(flow: flow)
         case .coverage: CoverageStep(model: model, noaa: model.noaa)
         case .onlineChart: OnlineChartStep(model: model, flow: flow)
+        case .importing: ImportingStep(model: model, flow: flow)
         }
     }
 
@@ -149,8 +150,13 @@ struct FirstRunFlow: View {
                         .monospacedDigit()
                 }
                 Spacer(minLength: 12)
-                Button("Back") { flow.back() }
-                    .accessibilityIdentifier("first-run-back")
+                if step == .importing {
+                    Button("Stop") { stopImport() }
+                        .accessibilityIdentifier("first-run-stop")
+                } else {
+                    Button("Back") { flow.back() }
+                        .accessibilityIdentifier("first-run-back")
+                }
                 primaryButton
             }
             .controlSize(.regular)
@@ -219,7 +225,18 @@ struct FirstRunFlow: View {
         case .welcome, .source, .onlineChart: return true
         case .coverage:
             return model.noaa.state.haveCatalog && !model.noaa.picked.isEmpty
+        // ChartBake opens the library once the import finishes, so there is
+        // nothing to continue to until it has.
+        case .importing: return importFinished
         }
+    }
+
+    /// True once the charts have arrived, converted, and opened.
+    private var importFinished: Bool {
+        flow.sawBake
+            && model.noaa.state.phase != .downloading
+            && model.charts.chartWork == nil
+            && model.charts.hasChart
     }
 
     /// The line beside the primary action: the credit the active chart asks
@@ -232,9 +249,18 @@ struct FirstRunFlow: View {
             guard n.state.haveCatalog else { return nil }
             guard n.cells > 0 else { return "Pick at least one region." }
             return "\(n.cells) charts, \(NoaaModel.sizeText(n.bytes))"
+        case .importing:
+            return importFinished ? nil : "You can leave this running and come back."
         case .onlineChart:
             return model.chartLinks.attribution
         }
+    }
+
+    /// Stop the download and the bake. Whatever landed stays: a cancelled
+    /// bake still leaves a library, and the bake runs coarse band first.
+    private func stopImport() {
+        model.noaa.cancel()
+        model.charts.cancelBake()
     }
 
     /// The primary action. The flow chooses the next step, and the shell does
@@ -247,6 +273,11 @@ struct FirstRunFlow: View {
         case .online:
             break   // the chart the mariner picked is already selected
         case .noaa:
+            let n = model.noaa
+            flow.noaaOrder = .init(
+                regions: n.regions.filter { n.picked.contains($0.id) }
+                    .map(\.name).joined(separator: ", "),
+                charts: n.cells, bytes: n.bytes)
             model.startNoaaDownload()
         }
     }
@@ -260,6 +291,7 @@ private extension FirstRunModel.Step {
         case .welcome: return 640
         case .source: return 760
         case .coverage: return 1040
+        case .importing: return 940
         case .onlineChart: return 980
         }
     }
@@ -269,6 +301,7 @@ private extension FirstRunModel.Step {
         case .welcome: return "Welcome"
         case .source: return "Add charts"
         case .coverage: return "Coverage"
+        case .importing: return "Preparing"
         case .onlineChart: return "Online chart"
         }
     }

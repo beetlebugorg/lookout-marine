@@ -44,6 +44,7 @@
 		26E8F47E6DC2301DB9B687A6 /* HoverTip.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CE71623E18E6C2ED36FEF9D /* HoverTip.swift */; };
 		27BD8996C99ECDE5B5242A1A /* RasterModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BB6523A66DFCC61B512AB19 /* RasterModel.swift */; };
 		281005567BD58CF59FF46FCB /* FirstRunFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE36262A44201EEF33B87681 /* FirstRunFlow.swift */; };
+		28CBD50225637D7C9ED8BA06 /* ImportingStep.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AB13FDD660FF07A05E4B91E /* ImportingStep.swift */; };
 		290D9208A65A5AA6D68642AF /* ReadoutsModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06BD91FFFE38B9BD5B086791 /* ReadoutsModelTests.swift */; };
 		29D69EB0C3BEBC71F0CCBF36 /* Store.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B35807C0ABB9C564DABEC58 /* Store.swift */; };
 		2CAAB96A58BB675F015568F5 /* ChartController+Markers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3679C3C6EF257BD3E89496F0 /* ChartController+Markers.swift */; };
@@ -178,6 +179,7 @@
 		B08078D4BC34B60AEA3FABE6 /* ChartController+ChartLinks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80820CEC30CD0EB74AE12CAB /* ChartController+ChartLinks.swift */; };
 		B1419C547F1615D20EBEE3EA /* ChromeModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D234494177794FA934BAB596 /* ChromeModel.swift */; };
 		B1774F9EA0735A56300C1850 /* MarinerSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F7AFFDA812DB39C72788868 /* MarinerSettingsTests.swift */; };
+		B2809F0F617FEC1B49158EED /* ImportingStep.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AB13FDD660FF07A05E4B91E /* ImportingStep.swift */; };
 		B32B89A37A49BA618336DBD3 /* UITestCase.swift in Sources */ = {isa = PBXBuildFile; fileRef = A53C303F269185DBB7200970 /* UITestCase.swift */; };
 		B372E30B227615DF4350B502 /* PickReportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CFF9284FC01F1CF6E286197 /* PickReportTests.swift */; };
 		B39BFB0F4B97B6474895CC8F /* OverlayModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58CA6572430DD9F43DEA85E3 /* OverlayModel.swift */; };
@@ -409,6 +411,7 @@
 		9341B7F1F58D9B158ABC67EE /* Discovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Discovery.swift; sourceTree = "<group>"; };
 		94035290B713FCF01DC12E77 /* ChartController+Tables.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChartController+Tables.swift"; sourceTree = "<group>"; };
 		9678B3409AC6184055D285AD /* PluginManageSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginManageSection.swift; sourceTree = "<group>"; };
+		9AB13FDD660FF07A05E4B91E /* ImportingStep.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportingStep.swift; sourceTree = "<group>"; };
 		9C7090FA8708C087510A6B66 /* PluginTableTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginTableTests.swift; sourceTree = "<group>"; };
 		9CE71623E18E6C2ED36FEF9D /* HoverTip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoverTip.swift; sourceTree = "<group>"; };
 		9D5D7B15F4286B70544A80B2 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
@@ -561,6 +564,7 @@
 				C47A753C575320AC1BB4A44C /* FirstRunModel.swift */,
 				F14DA28C776E9CBFF5B0BE23 /* FirstRunParts.swift */,
 				16480C754104380B481BF06B /* FirstRunWords.swift */,
+				9AB13FDD660FF07A05E4B91E /* ImportingStep.swift */,
 				293361D8887B5B7FF9F4F480 /* OnlineChartStep.swift */,
 				573750B823F6706B68397BCF /* SourceStep.swift */,
 				B664B45A6D4D73D186AA0354 /* WelcomeStep.swift */,
@@ -1094,6 +1098,7 @@
 				C4C543D94D4D8ED21A52DA07 /* FirstRunParts.swift in Sources */,
 				E45659390CCFF4A6B2EF4F27 /* FirstRunWords.swift in Sources */,
 				26E8F47E6DC2301DB9B687A6 /* HoverTip.swift in Sources */,
+				B2809F0F617FEC1B49158EED /* ImportingStep.swift in Sources */,
 				D8DE92A54522E48CF85722DE /* Instruments.swift in Sources */,
 				EEC8E67DA453210BDBFBC4CA /* LabelFont.swift in Sources */,
 				9EF506240F429BE5ECA1D33A /* Licenses.swift in Sources */,
@@ -1231,6 +1236,7 @@
 				FE238FF6C4278D6F99E84EE1 /* FirstRunParts.swift in Sources */,
 				8D8AF936B56E9F0884BEB3C2 /* FirstRunWords.swift in Sources */,
 				B4FA78A0F7B85E81C4F28CB2 /* HoverTip.swift in Sources */,
+				28CBD50225637D7C9ED8BA06 /* ImportingStep.swift in Sources */,
 				830C2CB5F625B40225EE8AF2 /* Instruments.swift in Sources */,
 				DE7E58613244A25D01851767 /* LabelFont.swift in Sources */,
 				B65E3546E971AC80B295ECF0 /* Licenses.swift in Sources */,

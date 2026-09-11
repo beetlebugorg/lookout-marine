@@ -59,6 +59,7 @@ protocol NoaaEngine: AnyObject {
     func noaaOutdated(_ have: [NoaaInstalledCell]) -> UInt32
     func noaaUpdate(_ have: [NoaaInstalledCell], destination: String)
     func noaaCancel()
+    func noaaRegionCoverage(_ regionID: String) -> [GeoBox]
 }
 
 protocol PluginEngine: AnyObject {
