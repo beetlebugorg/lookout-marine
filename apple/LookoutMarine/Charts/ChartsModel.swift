@@ -292,7 +292,8 @@ final class ChartsModel {
             return
         }
         openSeq += 1
-        openRequest = OpenRequest(id: openSeq, paths: paths)
+        let id = openSeq
+        openRequest = OpenRequest(id: id, paths: paths)
         // Show the loader BEFORE the (synchronous, possibly seconds-long) open
         // runs: flag now, open on the next runloop turn so SwiftUI paints.
         openingCells = paths.count
@@ -304,7 +305,7 @@ final class ChartsModel {
             // view stops receiving updates, so a published request would sit
             // unserviced. The update path remains only as the fallback for a
             // request racing the first layout.
-            if let e = self.engine, e.reopen(charts: paths) {
+            if let e = self.engine, e.reopen(charts: paths, requestID: id) {
                 self.openRequest = nil
             }
             self.isOpening = false

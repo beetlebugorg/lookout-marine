@@ -116,6 +116,9 @@ final class ChartController: NSObject {
     /// This shell's whole part in charts by link: fetch bytes for a url the
     /// core hands it. See ChartLinkFetch.swift.
     private let linkFetch = ChartLinkFetch()
+    /// The open request this controller has serviced. Both paths that open a
+    /// chart check it, so one request opens one handle.
+    var lastOpenId = 0
 
     // MARK: - Lifecycle
 
@@ -324,8 +327,14 @@ final class ChartController: NSObject {
     /// after the first open — the AppModel calls this directly because SwiftUI
     /// stops updating the wrapped content view). False when no view yet.
     @discardableResult
-    func reopen(charts paths: [String]) -> Bool {
+    func reopen(charts paths: [String], requestID: Int) -> Bool {
         guard let view else { return false }
+        // Already open for this request. The view's update path and the
+        // model's direct drive both answer it, and the second open destroys
+        // the handle the first one made along with the work running through
+        // it: the NOAA catalog read, a style resolve, a build in progress.
+        if requestID != 0, requestID == lastOpenId { return true }
+        lastOpenId = requestID
         return open(charts: paths, in: view)
     }
 

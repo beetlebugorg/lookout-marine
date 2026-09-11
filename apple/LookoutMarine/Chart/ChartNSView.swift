@@ -34,8 +34,8 @@ struct ChartView: NSViewRepresentable {
         // A pending open request the model couldn't service (no view attached
         // yet when it was made) — normally requestOpen drives the controller
         // directly; see AppModel.requestOpen.
-        if let req = model.charts.openRequest, req.id != v.lastOpenId {
-            v.lastOpenId = req.id
+        if let req = model.charts.openRequest, req.id != controller.lastOpenId {
+            controller.lastOpenId = req.id
             _ = controller.open(charts: req.paths, in: v)
             v.raiseOverlay()
             v.syncMetalLayerScale()
@@ -84,7 +84,6 @@ final class PassThroughHostingView<Content: View>: NSHostingView<Content> {
 final class ChartNSView: NSView {
     weak var controller: ChartController?
     weak var model: AppModel?
-    var lastOpenId = 0
     private var didAutoOpen = false
     private var overlayHost: NSView?
     private var fsObservers: [NSObjectProtocol] = []
@@ -250,7 +249,7 @@ final class ChartNSView: NSView {
             guard let self else { return }
             defer { self.model?.charts.isOpening = false; self.model?.charts.preparingSymbols = false }
             guard self.controller?.handle == nil else { return }
-            self.lastOpenId = self.model?.charts.openRequest?.id ?? 0
+            self.controller?.lastOpenId = self.model?.charts.openRequest?.id ?? 0
             _ = self.controller?.open(charts: paths, in: self)
             self.raiseOverlay()
             self.syncMetalLayerScale()

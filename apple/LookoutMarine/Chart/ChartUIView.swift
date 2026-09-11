@@ -86,7 +86,6 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate {
     /// The SwiftUI chrome window (set by SceneDelegate) — re-asserted key and
     /// topmost after lookout's chart window appears.
     weak var chromeWindow: UIWindow?
-    var lastOpenId = 0
     private var didAutoOpen = false
     private var lastSizePt = CGSize.zero
 
@@ -178,7 +177,7 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate {
             guard let self else { return }
             defer { self.model?.charts.isOpening = false; self.model?.charts.preparingSymbols = false }
             guard self.controller?.handle == nil else { return }
-            self.lastOpenId = self.model?.charts.openRequest?.id ?? 0
+            self.controller?.lastOpenId = self.model?.charts.openRequest?.id ?? 0
             _ = self.controller?.open(charts: paths, in: self)
             self.hostWindowAboveChart()
         }

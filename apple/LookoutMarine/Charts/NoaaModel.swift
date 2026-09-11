@@ -87,6 +87,10 @@ final class NoaaModel {
     /// call here goes through a chart handle, so a read asked for at launch
     /// had nothing to run through.
     private var wantsCatalog = false
+    /// True once anything has asked for the catalog in this session. The
+    /// catalog belongs to the chart handle, so a chart that closes takes it
+    /// along with any read still running through it.
+    private var asked = false
 
     weak var engine: (any NoaaEngine)? {
         didSet {
@@ -142,15 +146,17 @@ final class NoaaModel {
             return
         }
         wantsCatalog = false
+        asked = true
         // The core set the phase to reading when it took the call. Read it
         // back, so the view watching the phase starts its own poll.
         poll()
     }
 
-    /// A chart is open. Anything asked for before the handle existed runs now.
+    /// A chart is open. Anything asked for before the handle existed runs now,
+    /// and so does a read the old handle took with it when it closed.
     func chartDidOpen() {
         poll()
-        if wantsCatalog { refresh() }
+        if wantsCatalog || (asked && !state.haveCatalog) { refresh() }
     }
 
     /// Take the core's snapshot and reprice the pick.

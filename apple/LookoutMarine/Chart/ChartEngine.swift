@@ -100,7 +100,7 @@ protocol ReadoutEngine: AnyObject {
 /// What ChartsModel asks the chart for: open a library, and put it away.
 @MainActor
 protocol ChartOpenEngine: AnyObject {
-    @discardableResult func reopen(charts: [String]) -> Bool
+    @discardableResult func reopen(charts: [String], requestID: Int) -> Bool
     func close()
 }
 
