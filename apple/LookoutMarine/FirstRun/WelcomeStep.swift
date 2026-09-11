@@ -43,12 +43,21 @@ struct WelcomeStep: View {
 
     /// The chart, bleeding to the top edge. It sits behind the status bar on a
     /// phone, so the page has no title above it.
+    ///
+    /// The picture draws in an overlay over a box of the size this wants, so
+    /// its own width stays out of the layout. Filling a fixed height gives a
+    /// picture this wide its natural width to ask for, and on a phone, where
+    /// no sheet caps it, that width set the width of the whole step: the rows
+    /// below were laid out wider than the screen and clipped at both edges.
     private var hero: some View {
-        Image("WelcomeChart")
-            .resizable()
-            .aspectRatio(contentMode: .fill)
+        Color.clear
             .frame(height: heroHeight)
             .frame(maxWidth: .infinity)
+            .overlay {
+                Image("WelcomeChart")
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            }
             .clipped()
             .accessibilityLabel("A Lookout chart of Annapolis")
     }

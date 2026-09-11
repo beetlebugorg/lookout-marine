@@ -59,7 +59,13 @@ struct FirstRunFlow: View {
         // No window to float over, so the step IS the screen.
         VStack(spacing: 0) {
             navigationBar
+            // An iPad is wider than any of these steps wants to be. The step
+            // keeps a column and centres it, rather than running a line of
+            // body text the whole way across the screen. On a phone the cap
+            // is past the screen, so nothing there changes.
             sheet(maxContent: nil)
+                .frame(maxWidth: min(step.sheetWidth, 700))
+                .frame(maxWidth: .infinity)
         }
         .background(Chrome.surface.ignoresSafeArea())
         #endif
