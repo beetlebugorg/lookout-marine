@@ -16,6 +16,13 @@ struct FirstRunFlow: View {
     var model: AppModel
     @Bindable var flow: FirstRunModel
 
+    /// The depth step's settings. Its own, because setup runs before the
+    /// settings window has ever been opened, and it binds to the controller
+    /// the same way that window's does.
+    @StateObject private var mariner = MarinerSettings()
+
+
+
     /// The height the step's own content wants. A ScrollView accepts whatever
     /// height it is offered, so without measuring, the sheet grows to fill the
     /// window and leaves the cards floating above an empty half.
@@ -23,6 +30,17 @@ struct FirstRunFlow: View {
 
     var body: some View {
         frame
+            // The engine's own values, and every change written back to it.
+            .onAppear {
+                mariner.bind(to: model.controller)
+                frameChart(step)
+            }
+            .onChange(of: step) { _, now in frameChart(now) }
+            // The core can still be opening the charts when setup reaches
+            // this step. Until it has them, its opening view is the whole
+            // world.
+            .onChange(of: model.charts.hasChart) { _, _ in frameChart(step) }
+            .onChange(of: model.charts.isOpening) { _, _ in frameChart(step) }
     }
 
     @ViewBuilder private var frame: some View {
@@ -45,6 +63,9 @@ struct FirstRunFlow: View {
                     .padding(Chrome.margin)
             }
             .frame(width: geo.size.width, height: geo.size.height)
+            // One layer, so the depth step removes its window from the dim
+            // and the card together, with a blend mode and no measuring.
+            .compositingGroup()
         }
         #else
         // No window to float over, so the step IS the screen.
@@ -54,6 +75,14 @@ struct FirstRunFlow: View {
         }
         .background(Chrome.surface.ignoresSafeArea())
         #endif
+    }
+
+    /// Frame the charts for the depth step, which shows the live chart. An
+    /// import leaves the view over open ocean, where one shade covers the
+    /// window.
+    private func frameChart(_ step: FirstRunModel.Step) {
+        guard step == .depths, model.charts.hasChart, !model.charts.isOpening else { return }
+        model.controller?.showDefaultView(atLeast: 12)
     }
 
     /// Roughly what the footer and its rule occupy. Only the sheet's scrolling
@@ -90,6 +119,7 @@ struct FirstRunFlow: View {
         case .coverage: CoverageStep(model: model, noaa: model.noaa)
         case .onlineChart: OnlineChartStep(model: model, flow: flow)
         case .importing: ImportingStep(model: model, flow: flow)
+        case .depths: DepthStep(m: mariner)
         }
     }
 
@@ -150,10 +180,12 @@ struct FirstRunFlow: View {
                         .monospacedDigit()
                 }
                 Spacer(minLength: 12)
-                if step == .importing {
+                // Stop applies while the transfer or the bake runs. After
+                // that it stood beside Continue with no job to stop.
+                if step == .importing && !importFinished {
                     Button("Stop") { stopImport() }
                         .accessibilityIdentifier("first-run-stop")
-                } else {
+                } else if flow.canGoBack {
                     Button("Back") { flow.back() }
                         .accessibilityIdentifier("first-run-back")
                 }
@@ -228,6 +260,7 @@ struct FirstRunFlow: View {
         // ChartBake opens the library once the import finishes, so there is
         // nothing to continue to until it has.
         case .importing: return importFinished
+        case .depths: return true
         }
     }
 
@@ -250,7 +283,9 @@ struct FirstRunFlow: View {
             guard n.cells > 0 else { return "Pick at least one region." }
             return "\(n.cells) charts, \(NoaaModel.sizeText(n.bytes))"
         case .importing:
-            return importFinished ? nil : "You can leave this running and come back."
+            return nil
+        case .depths:
+            return "Change any of this later in Mariner settings, in Depths."
         case .onlineChart:
             return model.chartLinks.attribution
         }
@@ -292,6 +327,7 @@ private extension FirstRunModel.Step {
         case .source: return 760
         case .coverage: return 1040
         case .importing: return 940
+        case .depths: return 920
         case .onlineChart: return 980
         }
     }
@@ -302,6 +338,7 @@ private extension FirstRunModel.Step {
         case .source: return "Add charts"
         case .coverage: return "Coverage"
         case .importing: return "Preparing"
+        case .depths: return "Depths"
         case .onlineChart: return "Online chart"
         }
     }

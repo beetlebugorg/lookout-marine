@@ -542,6 +542,19 @@ final class ChartController: NSObject {
         kick(); pushReadouts()
     }
 
+    /// Move to the engine's opening view, the middle of the smallest cell in
+    /// the library. `atLeast` raises the zoom: lookout_default_view fixes it
+    /// at 5, where the chart draws no depth areas.
+    func showDefaultView(atLeast zoom: Double = 0) {
+        guard let h = handle else { return }
+        var v = lookout_view()
+        lookout_default_view(h, &v)
+        if v.zoom < zoom { v.zoom = zoom }
+        lookout_set_view(h, &v)
+        retireChartChrome()
+        kick(); pushReadouts()
+    }
+
     func fitChart() {
         guard let h = handle else { return }
         var v = lookout_view()

@@ -30,6 +30,7 @@
 		1B22314AFE7D6AAAC8DF2B03 /* AdvancedSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = E261A2F97520F9A46F0F43E5 /* AdvancedSection.swift */; };
 		1B5DA1469C3464A92586C7AC /* ScaleEntryPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA903A3F5328FE7634B5B1C4 /* ScaleEntryPanel.swift */; };
 		1B66B5D3EC47042E2E462BBF /* ViewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D36819F503E24F82BD18F6B /* ViewState.swift */; };
+		1BA16DD78E72276306468AAF /* DepthStep.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3328E106480C671EAA411B76 /* DepthStep.swift */; };
 		1BF3259967105BE75AEBE75F /* LicensesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FAE0C61602607D05CF24596 /* LicensesTests.swift */; };
 		1CC2EEC8A6FA6384EAD7A66B /* PluginAlertTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28D24F09A3F5CB1D1A2E3E49 /* PluginAlertTests.swift */; };
 		1CD5B1869FFFB378BD8DC35B /* ChartGallery.swift in Sources */ = {isa = PBXBuildFile; fileRef = F430F5A314DA26FBA1E5FDF5 /* ChartGallery.swift */; };
@@ -112,6 +113,7 @@
 		70234ACBA8908A01CFC606DE /* CoverageMap.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3171D7FE76E08E0699495D45 /* CoverageMap.swift */; };
 		70D6C5CA580CC7F7CC18DEC8 /* SettingsRows.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CED6DE8C50508326D0E097C /* SettingsRows.swift */; };
 		72D9550C5378015409B5C674 /* ChartController+Markers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3679C3C6EF257BD3E89496F0 /* ChartController+Markers.swift */; };
+		762B68E44214C16DB6661709 /* DepthStep.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3328E106480C671EAA411B76 /* DepthStep.swift */; };
 		77E3B55244A0DF4C771232F6 /* CoverageMap.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3171D7FE76E08E0699495D45 /* CoverageMap.swift */; };
 		784566F54334706217860CD0 /* ZoomControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0FF81FD7BD06CE338EF4E09 /* ZoomControls.swift */; };
 		795E2C8B01CCC740FBFD9B6E /* EmptyChartState.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDC82FE85405E2169A271617 /* EmptyChartState.swift */; };
@@ -346,6 +348,7 @@
 		3171D7FE76E08E0699495D45 /* CoverageMap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoverageMap.swift; sourceTree = "<group>"; };
 		31BAF7C2A01938C845440AE8 /* PluginTableWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginTableWindow.swift; sourceTree = "<group>"; };
 		3257A1088AC4BCC3FBBFB97E /* DisplaySection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplaySection.swift; sourceTree = "<group>"; };
+		3328E106480C671EAA411B76 /* DepthStep.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DepthStep.swift; sourceTree = "<group>"; };
 		35D97963E69370785A4AF0A7 /* PluginsModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginsModelTests.swift; sourceTree = "<group>"; };
 		362582E4EA060B062BAF11EB /* ChartWorkPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartWorkPanel.swift; sourceTree = "<group>"; };
 		3679C3C6EF257BD3E89496F0 /* ChartController+Markers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChartController+Markers.swift"; sourceTree = "<group>"; };
@@ -559,6 +562,7 @@
 				74514DA3CB4855F686DF7AB0 /* Coastline.bin */,
 				5363B36E741F4F10A43B9CBE /* Coastline.swift */,
 				76764861EF306D902A212929 /* CoverageStep.swift */,
+				3328E106480C671EAA411B76 /* DepthStep.swift */,
 				7F069A044A2B7DB415DA8A02 /* FirstRun.xcassets */,
 				FE36262A44201EEF33B87681 /* FirstRunFlow.swift */,
 				C47A753C575320AC1BB4A44C /* FirstRunModel.swift */,
@@ -1088,6 +1092,7 @@
 				E554375935120FD341B56223 /* CoordinateParser.swift in Sources */,
 				70234ACBA8908A01CFC606DE /* CoverageMap.swift in Sources */,
 				D1978DBCE8359975EF6D506E /* CoverageStep.swift in Sources */,
+				762B68E44214C16DB6661709 /* DepthStep.swift in Sources */,
 				8B917DF12F37BE7C9E5DA943 /* DepthsSection.swift in Sources */,
 				31BCCB75B9AB2C81B34A46EF /* DevHooks.swift in Sources */,
 				689E24910C8ECF894D1FA847 /* Discovery.swift in Sources */,
@@ -1226,6 +1231,7 @@
 				377B308C3F481575E1DD5FEC /* CoordinateParser.swift in Sources */,
 				77E3B55244A0DF4C771232F6 /* CoverageMap.swift in Sources */,
 				33056ED37EA0D428BA6C6D0C /* CoverageStep.swift in Sources */,
+				1BA16DD78E72276306468AAF /* DepthStep.swift in Sources */,
 				C8DB6AB03B480179545E3BC9 /* DepthsSection.swift in Sources */,
 				A479486780F2F040A5E24E0F /* DevHooks.swift in Sources */,
 				0BFBE84D0B1DE20C265E75D1 /* Discovery.swift in Sources */,

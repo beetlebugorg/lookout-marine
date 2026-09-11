@@ -62,6 +62,8 @@ final class FirstRunModel {
         /// Charts arriving and converting. Setup stays open through it,
         /// because the chart opens when the import finishes.
         case importing
+        /// The safety contour, asked once there is a chart to draw it on.
+        case depths
     }
 
     var step: Step = .welcome
@@ -122,6 +124,7 @@ final class FirstRunModel {
         case "coverage": return .coverage
         case "online": return .onlineChart
         case "importing": return .importing
+        case "depths": return .depths
         default: return .welcome
         }
     }
@@ -166,16 +169,26 @@ final class FirstRunModel {
             step = .importing
             return .noaa
         case .onlineChart:
-            finish()
+            step = .depths
             return .online
         case .importing:
+            step = .depths
+            return nil
+        case .depths:
             finish()
             return nil
         }
     }
 
-    /// Whether Back applies. The first step offers Set Up Later instead.
-    var canGoBack: Bool { step != .welcome }
+    /// Whether Back applies. The first step offers Set Up Later instead. The
+    /// import and the depth steps have no step to return to, because the
+    /// charts are already arriving.
+    var canGoBack: Bool {
+        switch step {
+        case .welcome, .importing, .depths: return false
+        case .source, .coverage, .onlineChart: return true
+        }
+    }
 
     func back() {
         switch step {
@@ -183,6 +196,8 @@ final class FirstRunModel {
         case .source: step = .welcome
         case .coverage, .onlineChart: step = .source
         case .importing: break
+        // The charts are in. Back offers a second import of them.
+        case .depths: break
         }
     }
 
@@ -203,6 +218,7 @@ final class FirstRunModel {
         case .welcome, .source: return "Continue"
         case .coverage: return "Download"
         case .importing: return "Continue"
+        case .depths: return "Start Sailing"
         case .onlineChart: return chosenChartName.map { "Use \($0)" } ?? "Continue"
         }
     }
