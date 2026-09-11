@@ -31,16 +31,7 @@ struct FirstRunFlow: View {
     var body: some View {
         frame
             // The engine's own values, and every change written back to it.
-            .onAppear {
-                mariner.bind(to: model.controller)
-                frameChart(step)
-            }
-            .onChange(of: step) { _, now in frameChart(now) }
-            // The core can still be opening the charts when setup reaches
-            // this step. Until it has them, its opening view is the whole
-            // world.
-            .onChange(of: model.charts.hasChart) { _, _ in frameChart(step) }
-            .onChange(of: model.charts.isOpening) { _, _ in frameChart(step) }
+            .onAppear { mariner.bind(to: model.controller) }
     }
 
     @ViewBuilder private var frame: some View {
@@ -63,9 +54,6 @@ struct FirstRunFlow: View {
                     .padding(Chrome.margin)
             }
             .frame(width: geo.size.width, height: geo.size.height)
-            // One layer, so the depth step removes its window from the dim
-            // and the card together, with a blend mode and no measuring.
-            .compositingGroup()
         }
         #else
         // No window to float over, so the step IS the screen.
@@ -75,14 +63,6 @@ struct FirstRunFlow: View {
         }
         .background(Chrome.surface.ignoresSafeArea())
         #endif
-    }
-
-    /// Frame the charts for the depth step, which shows the live chart. An
-    /// import leaves the view over open ocean, where one shade covers the
-    /// window.
-    private func frameChart(_ step: FirstRunModel.Step) {
-        guard step == .depths, model.charts.hasChart, !model.charts.isOpening else { return }
-        model.controller?.showDefaultView(atLeast: 12)
     }
 
     /// Roughly what the footer and its rule occupy. Only the sheet's scrolling

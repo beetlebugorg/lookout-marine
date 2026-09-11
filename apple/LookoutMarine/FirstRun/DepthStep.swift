@@ -218,15 +218,16 @@ struct DepthStep: View {
 
     // MARK: The water
 
-    /// The shades the answers produce, on the chart itself.
+    /// What the two answers do to a chart, drawn from the numbers.
     ///
-    /// On the Mac this panel is a window. Setup stands over the running
-    /// chart, so the flow lifts its scrim and its own surface out of this
-    /// rectangle and the chart underneath shows through, shaded to the
-    /// numbers on the left.
+    /// A seabed shoaling to a shore, shaded at the derived contours, with
+    /// spot depths on it. The depth range follows the deep contour, so all
+    /// four shades are in frame whatever the boat draws. A window onto the
+    /// live chart went here first, and the view the engine opens on is wide
+    /// enough to hold one shade and no soundings.
     private var water: some View {
         VStack(spacing: 0) {
-            chartWindow
+            seabed
                 .frame(height: 210)
                 .overlay(alignment: .topLeading) {
                     Text("Your water at \(measure(safetyDepth))")
@@ -237,9 +238,8 @@ struct DepthStep: View {
                         .background(Chrome.surface.opacity(0.92),
                                     in: RoundedRectangle(cornerRadius: 6))
                         .padding(12)
-                        .allowsHitTesting(false)
                 }
-            Divider()
+                .overlay(alignment: .bottom) { Divider() }
             HStack(spacing: 0) {
                 key(Self.unsafeShade, "Unsafe", "0 – \(measure(safetyDepth))")
                 key(Self.shallowShade, "Shallow", "\(measure(safetyDepth)) – \(measure(safetyContour))")
@@ -253,20 +253,6 @@ struct DepthStep: View {
             .strokeBorder(Color.primary.opacity(0.14)))
     }
 
-    @ViewBuilder private var chartWindow: some View {
-        #if os(macOS)
-        // The flow draws setup as one layer. This removes the dim and the
-        // card from the rectangle it occupies, leaving the chart.
-        Rectangle()
-            .fill(.black)
-            .blendMode(.destinationOut)
-            .overlay(alignment: .bottom) { Divider() }
-        #else
-        // A phone has no chart behind setup. It is the whole screen there.
-        bands
-        #endif
-    }
-
     /// The four shades, approximating the day palette. A legend, and not the
     /// palette the engine draws with.
     private static let unsafeShade = Color(red: 0.38, green: 0.72, blue: 1.0)
@@ -275,23 +261,113 @@ struct DepthStep: View {
     private static let deepShade = Color(red: 0.79, green: 0.93, blue: 1.0)
     private static let shore = Color(red: 0.84, green: 0.82, blue: 0.66)
 
-    /// Water shoaling toward a shore, in the order a chart shades it.
-    private var bands: some View {
+    /// Where each contour falls across the panel. Fixed, so every band has
+    /// room. On a depth scale the water a small boat draws measures a few
+    /// pixels against a 20 m contour.
+    private static let shoreAt: CGFloat = 0.14
+    private static let depthAt: CGFloat = 0.36
+    private static let contourAt: CGFloat = 0.58
+    private static let deepAt: CGFloat = 0.80
+
+    /// The deepest water drawn, so the deep band has water past its contour.
+    private var floor: Double { deepContour * 1.6 }
+
+    /// How far out a depth lies, as a fraction of the panel.
+    private func reach(_ depth: Double) -> CGFloat {
+        let stops: [(Double, CGFloat)] = [
+            (0, Self.shoreAt), (safetyDepth, Self.depthAt),
+            (safetyContour, Self.contourAt), (deepContour, Self.deepAt), (floor, 1),
+        ]
+        for i in 1..<stops.count {
+            let (d0, r0) = stops[i - 1]
+            let (d1, r1) = stops[i]
+            if depth <= d1 {
+                let span = d1 - d0
+                let f = span > 0 ? CGFloat((depth - d0) / span) : 0
+                return r0 + (r1 - r0) * min(max(f, 0), 1)
+            }
+        }
+        return 1
+    }
+
+    /// The depth at a point on the panel: `reach` read backwards, so a spot
+    /// depth goes where it is legible and still reports its own water.
+    private func depth(atReach r: CGFloat) -> Double {
+        let stops: [(Double, CGFloat)] = [
+            (0, Self.shoreAt), (safetyDepth, Self.depthAt),
+            (safetyContour, Self.contourAt), (deepContour, Self.deepAt), (floor, 1),
+        ]
+        for i in 1..<stops.count {
+            let (d0, r0) = stops[i - 1]
+            let (d1, r1) = stops[i]
+            if r <= r1 {
+                let span = r1 - r0
+                let f = span > 0 ? Double((r - r0) / span) : 0
+                return d0 + (d1 - d0) * min(max(f, 0), 1)
+            }
+        }
+        return floor
+    }
+
+    private var seabed: some View {
         GeometryReader { geo in
             let w = geo.size.width
             let h = geo.size.height
-            ZStack(alignment: .bottomLeading) {
+            ZStack {
                 Self.deepShade
-                shoal(w: w, h: h, at: 0.95).fill(Self.mediumShade)
-                shoal(w: w, h: h, at: 0.70).fill(Self.shallowShade)
-                shoal(w: w, h: h, at: 0.46).fill(Self.unsafeShade)
-                shoal(w: w, h: h, at: 0.22).fill(Self.shore)
+                shoal(w: w, h: h, at: reach(deepContour)).fill(Self.mediumShade)
+                shoal(w: w, h: h, at: reach(safetyContour)).fill(Self.shallowShade)
+                shoal(w: w, h: h, at: reach(safetyDepth)).fill(Self.unsafeShade)
+                // The safety contour, drawn bold the way S-52 draws the
+                // contour the boat is measured against.
+                shoal(w: w, h: h, at: reach(safetyContour))
+                    .stroke(Color.black.opacity(0.45), lineWidth: 1.8)
+                shoal(w: w, h: h, at: reach(deepContour))
+                    .stroke(Color.black.opacity(0.18), lineWidth: 0.8)
+                shoal(w: w, h: h, at: Self.shoreAt).fill(Self.shore)
+                shoal(w: w, h: h, at: Self.shoreAt)
+                    .stroke(Color.black.opacity(0.45), lineWidth: 1)
+                soundings(w: w, h: h)
             }
         }
     }
 
-    /// One band of water, from the bottom left corner. The same shape at
-    /// every depth, offset from the shore.
+    /// Spot depths across the seabed, each reporting the water it stands in.
+    ///
+    /// Bold at or shallower than the safety depth. That is what the safety
+    /// depth does to a chart, and the only way to watch the number move.
+    private func soundings(w: CGFloat, h: CGFloat) -> some View {
+        ForEach(Self.spots, id: \.0) { spot in
+            let depth = depth(atReach: spot.1)
+            let at = curvePoint(w: w, h: h, t: spot.1, u: spot.2)
+            Text(sounding(depth))
+                .font(.system(size: 10.5,
+                              weight: depth <= safetyDepth ? .bold : .regular))
+                .monospacedDigit()
+                .foregroundStyle(Color.black.opacity(depth <= safetyDepth ? 0.8 : 0.55))
+                .position(x: at.x, y: at.y)
+        }
+    }
+
+    /// Each spot depth: an id, how far out across the panel, and how far
+    /// along that line. Spread over the four bands, so the bold ones the
+    /// safety depth makes are always among them.
+    private static let spots: [(Int, CGFloat, CGFloat)] = [
+        (0, 0.21, 0.30), (1, 0.26, 0.70), (2, 0.31, 0.14), (3, 0.33, 0.52),
+        (4, 0.42, 0.36), (5, 0.46, 0.84), (6, 0.51, 0.22), (7, 0.54, 0.62),
+        (8, 0.63, 0.44), (9, 0.67, 0.16), (10, 0.71, 0.78), (11, 0.76, 0.36),
+        (12, 0.85, 0.58), (13, 0.90, 0.44), (14, 0.94, 0.88),
+    ]
+
+    /// A sounding as a chart prints it, in the unit on screen: tenths in the
+    /// shallows, whole numbers once the boat has water under it.
+    private func sounding(_ v: Double) -> String {
+        if feet || v >= 10 { return "\(Int(v.rounded()))" }
+        return String(format: "%.1f", (v * 10).rounded() / 10)
+    }
+
+    /// One depth line, from the shore out. The same shape at every depth,
+    /// moved further out as the water deepens.
     private func shoal(w: CGFloat, h: CGFloat, at t: CGFloat) -> Path {
         Path { p in
             p.move(to: CGPoint(x: 0, y: h))
@@ -302,6 +378,18 @@ struct DepthStep: View {
             p.addLine(to: CGPoint(x: w, y: h))
             p.closeSubpath()
         }
+    }
+
+    /// A point on one depth line, `u` of the way along it.
+    private func curvePoint(w: CGFloat, h: CGFloat, t: CGFloat, u: CGFloat) -> CGPoint {
+        let p0 = CGPoint(x: 0, y: h - h * t)
+        let c1 = CGPoint(x: w * 0.34, y: h - h * t * 1.18)
+        let c2 = CGPoint(x: w * 0.62, y: h - h * t * 0.22)
+        let p3 = CGPoint(x: w, y: h - h * t * 0.42)
+        let v = 1 - u
+        let x = v * v * v * p0.x + 3 * v * v * u * c1.x + 3 * v * u * u * c2.x + u * u * u * p3.x
+        let y = v * v * v * p0.y + 3 * v * v * u * c1.y + 3 * v * u * u * c2.y + u * u * u * p3.y
+        return CGPoint(x: x, y: y)
     }
 
     private func key(_ color: Color, _ name: String, _ range: String) -> some View {
