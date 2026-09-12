@@ -777,6 +777,8 @@ pub const Lookout = struct {
     /// the current alt style: setAltStyle clears them, and the host re-sends
     /// the new style's packs after.
     alt_packs: std.ArrayListUnmanaged(AltPack) = .empty,
+    /// Sheets being decoded, in the order they were asked for.
+    sheets: std.ArrayListUnmanaged(*SheetDecode) = .empty,
     /// Charts by link: the whole feature, from the mariner's typed link to the
     /// tiles the style names. The shell keeps one job, fetching bytes for a
     /// url. See src/chartlinks.zig.
@@ -2108,6 +2110,8 @@ pub const Lookout = struct {
         if (self.alt_style) |s| self.alloc.free(s);
         self.clearAltPacks();
         self.alt_packs.deinit(self.alloc);
+        self.dropSheets();
+        self.sheets.deinit(self.alloc);
         if (self.scamin.len != 0) self.alloc.free(self.scamin);
         self.freeLanguages();
         if (self.compose) |c| cc.tile57_compose_close(c); // BEFORE the charts
@@ -2729,6 +2733,43 @@ pub const Lookout = struct {
         png: []u8,
     };
 
+    /// A sprite sheet being decoded on a thread of its own.
+    ///
+    /// Folding a pack is a PNG decode, an index parse and a copy of every
+    /// cell into the atlas. For one shipped chart that is 4096 by 4096 and
+    /// 5,354 cells: 274 ms of decode and 185 ms of copying, measured, and
+    /// all of it on whichever thread the shell draws from. The decode needs
+    /// nothing but the bytes, so it runs here and the fold takes the pixels.
+    const SheetDecode = struct {
+        prefix: []u8,
+        json: []u8,
+        png: []u8,
+        img: ?ctpng.Image = null,
+        done: std.atomic.Value(bool) = .init(false),
+        thread: ?std.Thread = null,
+        /// Frames this has stood aside for a build. A scene that never goes
+        /// quiet must not hold the cells out forever.
+        waits: u16 = 0,
+
+        /// The decoded sheet is tens of megabytes and lives for one fold, so
+        /// it comes off the pages rather than the core's allocator.
+        const sheet_alloc = std.heap.page_allocator;
+
+        fn work(self: *SheetDecode) void {
+            self.img = cthost.Host.decodeSheet(sheet_alloc, self.png) catch null;
+            self.done.store(true, .release);
+        }
+
+        fn deinit(self: *SheetDecode, alloc: std.mem.Allocator) void {
+            if (self.thread) |t| t.join();
+            if (self.img) |i| sheet_alloc.free(i.rgba);
+            alloc.free(self.prefix);
+            alloc.free(self.json);
+            alloc.free(self.png);
+            alloc.destroy(self);
+        }
+    };
+
     /// Draw a host-supplied style instead of the engine's portrayal, or null
     /// for lookout's own chart. The bytes are copied. Any sprite packs
     /// belong to the style they came with, so they go here — the host sends
@@ -2744,6 +2785,8 @@ pub const Lookout = struct {
     }
 
     fn clearAltPacks(self: *Lookout) void {
+        // The sheets on their way in belong to the style going away.
+        self.dropSheets();
         for (self.alt_packs.items) |p| {
             self.alloc.free(p.prefix);
             self.alloc.free(p.json);
@@ -2790,16 +2833,99 @@ pub const Lookout = struct {
             self.alloc.free(b);
             return 0;
         };
-        const added = self.ct.addSpritePack(prefix, index_json, png_bytes);
-        if (added > 0) self.markDirty();
-        return added;
+        self.startSheet(prefix, index_json, png_bytes);
+        // Nothing has landed yet: the count is what the fold answers, and the
+        // fold happens once the sheet is decoded. A caller that needs the
+        // cells now (a snapshot) flushes first.
+        return 0;
+    }
+
+    /// Read a pack's sheet on a thread, to be folded when it lands.
+    fn startSheet(self: *Lookout, prefix: []const u8, index_json: []const u8, png_bytes: []const u8) void {
+        const job = self.alloc.create(SheetDecode) catch return;
+        job.* = .{
+            .prefix = self.alloc.dupe(u8, prefix) catch {
+                self.alloc.destroy(job);
+                return;
+            },
+            .json = self.alloc.dupe(u8, index_json) catch {
+                self.alloc.free(job.prefix);
+                self.alloc.destroy(job);
+                return;
+            },
+            .png = self.alloc.dupe(u8, png_bytes) catch {
+                self.alloc.free(job.prefix);
+                self.alloc.free(job.json);
+                self.alloc.destroy(job);
+                return;
+            },
+        };
+        self.sheets.append(self.alloc, job) catch {
+            job.deinit(self.alloc);
+            return;
+        };
+        job.thread = std.Thread.spawn(.{}, SheetDecode.work, .{job}) catch blk: {
+            // No thread to be had: decode here. Slower to answer, never wrong.
+            job.work();
+            break :blk null;
+        };
+        self.markDirty();
+    }
+
+    /// Fold the sheets that have finished decoding.
+    ///
+    /// One per call: the copy into the atlas is the other half of the cost,
+    /// and two of them in one frame is a stall the mariner feels. A fold also
+    /// waits for the build worker, which reads the atlas, so this stands
+    /// aside while one is running.
+    /// How many frames a decoded sheet waits for the build worker before it
+    /// folds anyway. Half a second at 60 Hz.
+    const SHEET_WAIT_MAX: u16 = 30;
+
+    fn pumpSheets(self: *Lookout) void {
+        if (self.sheets.items.len == 0) return;
+
+        const job = self.sheets.items[0];
+        if (!job.done.load(.acquire)) return;
+        if (self.ct.buildingScene() and job.waits < SHEET_WAIT_MAX) {
+            job.waits += 1;
+            return;
+        }
+        if (job.thread) |t| {
+            t.join();
+            job.thread = null;
+        }
+        _ = self.sheets.orderedRemove(0);
+        if (job.img) |img| {
+            if (self.ct.addSpriteCells(job.prefix, job.json, img) > 0) self.markDirty();
+        }
+        job.deinit(self.alloc);
+    }
+
+    /// Fold every sheet, waiting for each. For the offscreen snapshot, which
+    /// has to have the picture before it reads the pixels.
+    fn flushSheets(self: *Lookout) void {
+        while (self.sheets.items.len != 0) {
+            const job = self.sheets.items[0];
+            if (job.thread) |t| {
+                t.join();
+                job.thread = null;
+            }
+            _ = self.sheets.orderedRemove(0);
+            if (job.img) |img| _ = self.ct.addSpriteCells(job.prefix, job.json, img);
+            job.deinit(self.alloc);
+        }
+    }
+
+    fn dropSheets(self: *Lookout) void {
+        for (self.sheets.items) |job| job.deinit(self.alloc);
+        self.sheets.clearRetainingCapacity();
     }
 
     /// Fold the active alt style's packs back into a freshly (re)loaded
     /// sheet — a scheme change replaces the atlas out from under them.
     fn reapplyAltSprites(self: *Lookout) void {
-        for (self.alt_packs.items) |p|
-            _ = self.ct.addSpritePack(p.prefix, p.json, p.png);
+        for (self.alt_packs.items) |p| self.startSheet(p.prefix, p.json, p.png);
     }
 
     pub fn altStyleActive(self: *const Lookout) bool {
@@ -2968,6 +3094,7 @@ pub const Lookout = struct {
     pub fn build(self: *Lookout) !void {
         self.ensureAtlases();
         self.ensureStyle();
+        self.flushSheets();
         self.ct.update();
         const t0 = clock.ticksMs();
         var spins: u32 = 0;
@@ -3041,6 +3168,9 @@ pub const Lookout = struct {
         const ts = if (self.frame_prof != null) clock.ticksUs() else 0;
         self.ensureStyle();
         self.prof_style_us = if (self.frame_prof != null) clock.ticksUs() - ts else 0;
+        // AFTER the style: the cells belong to the style that named them, and
+        // a fold waits for the build worker that the style just started.
+        self.pumpSheets();
     }
 
     /// How far the SCAMIN latitude may drift before the style is stale.
@@ -3202,6 +3332,10 @@ pub const Lookout = struct {
         // first answer.
         if (self.links.pending()) return true;
         if (self.noaa.pending()) return true;
+        // A sheet still decoding, or decoded and waiting for the build worker
+        // to let go of the atlas. A shell that draws on demand has to come
+        // back for it, or the icons never land.
+        if (self.sheets.items.len != 0) return true;
         if (self.ct.needsRedraw()) return true;
         // What the BOAT did. Own ship's display position walks between fixes,
         // a plugin can post geometry from its own thread, and under follow the
