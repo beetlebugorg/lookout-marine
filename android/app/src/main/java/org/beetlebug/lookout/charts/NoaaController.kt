@@ -265,10 +265,16 @@ class NoaaController(private val access: EngineAccess) {
     }
 
     companion object {
-        /** A size a mariner reads before agreeing to download it. */
+        /**
+         * A size a mariner reads before agreeing to download it.
+         *
+         * A thousand to the megabyte, not 1024. It is what the Apple shells
+         * print for the same download, and naming one region two sizes on two
+         * devices reads as two different downloads.
+         */
         fun sizeText(bytes: Long): String {
-            val mb = bytes.toDouble() / (1024.0 * 1024.0)
-            return if (mb >= 1024) String.format("%.1f GB", mb / 1024.0)
+            val mb = bytes.toDouble() / 1_000_000.0
+            return if (mb >= 1000) String.format("%.1f GB", mb / 1000.0)
                    else String.format("%.1f MB", mb)
         }
     }

@@ -54,6 +54,7 @@ fun FirstRunSetup(
         when (flow.step) {
             FirstRunModel.Step.WELCOME -> WelcomeStep()
             FirstRunModel.Step.SOURCE -> SourceStep(flow)
+            FirstRunModel.Step.COVERAGE -> CoverageStep(noaa)
             else -> Text("", Modifier.padding(20.dp))
         }
     }
