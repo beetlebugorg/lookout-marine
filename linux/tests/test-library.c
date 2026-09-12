@@ -89,6 +89,85 @@ test_nothing_to_draw (void)
   g_assert_true (lk_app_model_get_nothing_to_draw (model));
 }
 
+/* The cell names NOAA is told about, off a set the scan has read.
+ *
+ * This is what stops a mariner paying twice for water they already hold, so
+ * what counts and what does not is the whole point: a cell counts once
+ * however many folders hold it, and a picture is not a cell at all.
+ *
+ * Real cells. The scan reads the surveys themselves, so a dataset name on an
+ * empty file reports no chart, which is right and proves nothing.
+ */
+static void
+noop_changed (GObject *owner)
+{
+}
+
+/* Copy one of the repository's test cells into `dir`. */
+static void
+place_cell (const char *dir, const char *name)
+{
+  g_autofree char *from = g_build_filename (LK_TEST_CELLS, name, NULL);
+  g_autofree char *to = g_build_filename (dir, name, NULL);
+  g_autofree char *bytes = NULL;
+  gsize len = 0;
+
+  g_assert_cmpint (g_mkdir_with_parents (dir, 0700), ==, 0);
+  g_assert_true (g_file_get_contents (from, &bytes, &len, NULL));
+  g_assert_cmpuint (len, >, 0);
+  g_assert_true (g_file_set_contents (to, bytes, (gssize) len, NULL));
+}
+
+/* The names off one set, once the scan has landed. Bounded: the scan runs on
+ * the core's own thread. */
+static char **
+wait_for_names (LkChartSets *sets)
+{
+  char **names = NULL;
+
+  for (int i = 0; i < 400; i++)
+    {
+      g_strfreev (names);
+      names = lk_chart_sets_cell_names (sets);
+      if (g_strv_length (names) > 0)
+        return names;
+      g_main_context_iteration (NULL, FALSE);
+      g_usleep (5000);
+    }
+  return names;
+}
+
+static void
+test_installed_cell_names (void)
+{
+  g_autoptr (GObject) owner = g_object_new (G_TYPE_OBJECT, NULL);
+  LkChartSets *sets = lk_chart_sets_new (noop_changed, owner);
+  g_autofree char *dir = g_build_filename (home, "enc", "ENC_ROOT", NULL);
+  g_autofree char *nested = g_build_filename (dir, "US3CU1EF", NULL);
+
+  place_cell (dir, "US3CU1EF.000");
+  place_cell (dir, "US4TE3W0.000");
+  /* The same cell again, one directory down. A library that holds a cell
+   * twice holds it once. */
+  place_cell (nested, "US3CU1EF.000");
+
+  /* Not cells: a picture and a readme. NOAA publishes neither. */
+  g_autofree char *picture = g_build_filename (dir, "imagery.mbtiles", NULL);
+  g_autofree char *readme = g_build_filename (dir, "README.TXT", NULL);
+  g_assert_true (g_file_set_contents (picture, "", 0, NULL));
+  g_assert_true (g_file_set_contents (readme, "not a chart", -1, NULL));
+
+  g_assert_true (lk_chart_sets_note (sets, dir));
+
+  g_auto (GStrv) names = wait_for_names (sets);
+
+  g_assert_cmpuint (g_strv_length (names), ==, 2);
+  g_assert_true (g_strv_contains ((const char *const *) names, "US3CU1EF"));
+  g_assert_true (g_strv_contains ((const char *const *) names, "US4TE3W0"));
+
+  lk_chart_sets_free (sets);
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -108,6 +187,7 @@ main (int argc, char *argv[])
                    test_nothing_installed_opens_nothing);
   g_test_add_func ("/library/env-open-wins", test_env_open_wins);
   g_test_add_func ("/library/nothing-to-draw", test_nothing_to_draw);
+  g_test_add_func ("/library/installed-cell-names", test_installed_cell_names);
 
   return g_test_run ();
 }

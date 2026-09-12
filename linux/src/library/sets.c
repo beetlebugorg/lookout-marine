@@ -261,6 +261,43 @@ lk_chart_sets_compose (LkChartSets *self)
   return out;
 }
 
+char **
+lk_chart_sets_cell_names (LkChartSets *self)
+{
+  size_t n_sets = 0;
+  const lookout_chart_set *const *sets = lookout_chart_sets_all (self->sets, &n_sets);
+  g_autoptr (GHashTable) seen = g_hash_table_new (g_str_hash, g_str_equal);
+  GPtrArray *names = g_ptr_array_new ();
+
+  for (size_t s = 0; s < n_sets; s++)
+    {
+      size_t n_files = 0;
+      const lookout_chart_file *const *files =
+          lookout_chart_set_files (self->sets, sets[s]->path, &n_files);
+
+      for (size_t f = 0; f < n_files; f++)
+        {
+          const lookout_chart_file *file = files[f];
+
+          if (file->name == NULL || file->name[0] == '\0')
+            continue;
+          /* An update carries its base cell's name, so it dedups into it. */
+          if (file->kind != LOOKOUT_FILE_BAKED && file->kind != LOOKOUT_FILE_SOURCE &&
+              file->kind != LOOKOUT_FILE_UPDATE)
+            continue;
+
+          char *upper = g_ascii_strup (file->name, -1);
+          if (g_hash_table_add (seen, upper))
+            g_ptr_array_add (names, upper);
+          else
+            g_free (upper);
+        }
+    }
+
+  g_ptr_array_add (names, NULL);
+  return (char **) g_ptr_array_free (names, FALSE);
+}
+
 /* ---- watching for a scan to land ------------------------------------------ */
 
 static gboolean

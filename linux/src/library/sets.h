@@ -74,6 +74,18 @@ gboolean lk_chart_sets_remove (LkChartSets *self, const char *path);
  * Transfer full strv. */
 char **lk_chart_sets_compose (LkChartSets *self);
 
+/* Every survey cell this device holds, by dataset name (US5MD1MC), upper
+ * cased, with no duplicates. Transfer full strv.
+ *
+ * What NOAA's cost and download are told, so a mariner who picks water they
+ * have already downloaded fetches what is missing from it rather than all of
+ * it again. Across EVERY set, on or off, and whether or not it is prepared
+ * yet: the cell is on the device either way. A set added by hand therefore
+ * counts the same as one this app downloaded.
+ *
+ * Pictures are left out. They are not cells and NOAA does not publish them. */
+char **lk_chart_sets_cell_names (LkChartSets *self);
+
 /* Every baked cell under a directory, sorted. Transfer full strv. */
 char **lk_chart_paths_in_dir (const char *dir);
 

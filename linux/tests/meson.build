@@ -8,6 +8,14 @@
 # Every test links the same objects the app links, so what a test proves is
 # what the app runs.
 
+# Three real S-57 cells, the ones the core's bake gate uses. A scan of a
+# folder reads the cells themselves, so a name on an empty file proves
+# nothing: the engine reports no chart for it, which is correct and useless to
+# test with.
+test_c_args = shell_c_args + [
+  '-DLK_TEST_CELLS="' + meson.project_source_root() / '..' / 'test' / 'cells' + '"',
+]
+
 unit_tests = ['format', 'import', 'json', 'library', 'noaa', 'store', 'pick']
 
 foreach name : unit_tests
@@ -16,7 +24,7 @@ foreach name : unit_tests
     core_headers,
     link_with: [lkshell] + core_archives,
     include_directories: include_directories('../src'),
-    c_args: shell_c_args,
+    c_args: test_c_args,
     dependencies: deps,
   )
   test(name, exe, suite: 'unit', timeout: 60)
@@ -31,7 +39,7 @@ foreach name : widget_tests
     core_headers,
     link_with: [lkshell] + core_archives,
     include_directories: include_directories('../src'),
-    c_args: shell_c_args,
+    c_args: test_c_args,
     dependencies: deps,
   )
   # Serial: each widget test spawns its own Xvfb through `xvfb-run -a`, and two

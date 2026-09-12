@@ -182,6 +182,23 @@ LkNoaa *lk_app_model_get_noaa (LkAppModel *self);
  * replay and the chart-link reapply, for the same reason. */
 void lk_app_model_noaa_chart_did_open (LkAppModel *self);
 
+/* Download the regions the mariner picked, then prepare what arrives.
+ *
+ * The core unpacks each cell's exchange set into one staging directory, so the
+ * whole download is one folder of source cells and bakes as a single set. This
+ * follows the transfer to its end and starts that bake. `again` fetches the
+ * cells already installed as well, which is how a mariner repairs a set.
+ *
+ * A download that failed every cell bakes nothing: an empty directory would
+ * join the library as a set that never fills. */
+void lk_app_model_start_noaa_download (LkAppModel *self, gboolean again);
+
+/* Every survey cell this device holds, by dataset name. Transfer full strv.
+ *
+ * What NOAA is told before it prices a pick, so water already downloaded is
+ * not paid for twice. See lk_chart_sets_cell_names. */
+char **lk_app_model_installed_cell_names (LkAppModel *self);
+
 /* What the pill is built from. The sets are borrowed. */
 GPtrArray  *lk_app_model_get_raster_sets (LkAppModel *self);
 int         lk_app_model_get_raster_active (LkAppModel *self);

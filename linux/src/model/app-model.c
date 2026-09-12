@@ -14,6 +14,10 @@ struct _LkAppModel {
   LkChartController *controller;
   LkChartLinks      *chart_links;
   LkNoaa            *noaa;
+  /* The directory a NOAA download is filling, and whether this model is still
+   * following that download to its end. */
+  char              *noaa_dest;
+  gboolean           noaa_watching;
 
   gboolean has_chart;
   char    *chart_path;
@@ -176,6 +180,7 @@ lk_app_model_dispose (GObject *object)
   g_clear_pointer (&self->open_error, g_free);
   g_clear_pointer (&self->pending_open_source, g_free);
   g_clear_pointer (&self->bake_name, g_free);
+  g_clear_pointer (&self->noaa_dest, g_free);
   g_clear_pointer (&self->recents, g_strfreev);
   g_clear_pointer (&self->overlay_pin, g_free);
   g_clear_pointer (&self->pick_results, g_ptr_array_unref);
@@ -294,6 +299,34 @@ lk_app_model_recompose_library (LkAppModel *self)
     }
 }
 
+/* A NOAA download has ended. Prepare what landed.
+ *
+ * ::changed carries every move the service makes, so this watches for the
+ * phase leaving the transfer rather than running a timer of its own. The
+ * service's own poll is what raises it, and that poll stops with the
+ * download.
+ *
+ * The counters are the transfer's: they hold their final values once it ends,
+ * so `done` is how many cells arrived. */
+static void
+lk_app_model_noaa_changed (LkNoaa *noaa, gpointer user_data)
+{
+  LkAppModel *self = user_data;
+  const LkNoaaState *state = lk_noaa_state (noaa);
+
+  if (!self->noaa_watching || state->phase == LK_NOAA_DOWNLOADING)
+    return;
+  self->noaa_watching = FALSE;
+
+  /* Nothing arrived. A download that failed every cell leaves an empty
+   * directory, and adding that to the library makes a set that never fills.
+   * The service carries its own error. */
+  if (state->done == 0 || self->noaa_dest == NULL)
+    return;
+
+  lk_app_model_open_chart_directory (self, self->noaa_dest);
+}
+
 /* NOAA asked for its catalog with no chart open. Open one of no charts: the
  * read runs through a handle, and a mariner with an empty library is exactly
  * who has to read that catalog. */
@@ -327,6 +360,7 @@ lk_app_model_init (LkAppModel *self)
    * for one. */
   self->noaa = lk_noaa_new (self->controller);
   lk_noaa_set_need_chart (self->noaa, lk_app_model_noaa_needs_chart, self);
+  g_signal_connect (self->noaa, "changed", G_CALLBACK (lk_app_model_noaa_changed), self);
 }
 
 LkAppModel *
@@ -377,6 +411,38 @@ lk_app_model_noaa_chart_did_open (LkAppModel *self)
 {
   g_return_if_fail (LK_IS_APP_MODEL (self));
   lk_noaa_chart_did_open (self->noaa);
+}
+
+char **
+lk_app_model_installed_cell_names (LkAppModel *self)
+{
+  g_return_val_if_fail (LK_IS_APP_MODEL (self), g_new0 (char *, 1));
+  return lk_chart_sets_cell_names (self->chart_sets);
+}
+
+void
+lk_app_model_start_noaa_download (LkAppModel *self, gboolean again)
+{
+  g_autofree char *dest = NULL;
+
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+
+  dest = lk_noaa_download_dir ();
+  if (g_mkdir_with_parents (dest, 0700) != 0)
+    {
+      lk_app_model_set_open_error (self, "Couldn't make a place to download charts to.");
+      return;
+    }
+
+  /* Price against what is already here first. A mariner who picks water they
+   * partly hold fetches the rest of it. */
+  g_auto (GStrv) have = lk_app_model_installed_cell_names (self);
+  lk_noaa_note_installed (self->noaa, (const char *const *) have);
+
+  g_free (self->noaa_dest);
+  self->noaa_dest = g_strdup (dest);
+  self->noaa_watching = TRUE;
+  lk_noaa_download (self->noaa, dest, again);
 }
 
 /* ---- opening charts ----------------------------------------------------- */
