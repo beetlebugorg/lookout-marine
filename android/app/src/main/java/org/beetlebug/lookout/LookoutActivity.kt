@@ -87,14 +87,11 @@ class LookoutActivity : ComponentActivity() {
             requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), REQ_NOTIFY)
         }
 
-        // The bundled cell is the last resort, extracted once; the model prefers
-        // the installed sets, then anything pushed into our external files dir.
-        charts = ChartsModel(applicationContext, extractAsset(CHART_ASSET, CHART_NAME))
-        if (charts.chartPaths.isEmpty()) {
-            Log.e(TAG, "no charts: none chosen, none pushed, asset extraction failed")
-            finish()
-            return
-        }
+        // No chart ships in the APK. A device with nothing installed opens the
+        // engine empty, draws the basemap and runs setup over it, which is
+        // what a mariner with no charts needs rather than one cell of somebody
+        // else's water.
+        charts = ChartsModel(applicationContext, null)
         controller = ChartController(applicationContext)
         // The set scans run on the core's own worker; this is what tells the
         // panel a folder's counts have arrived.
@@ -241,23 +238,6 @@ class LookoutActivity : ComponentActivity() {
     override fun onGenericMotionEvent(e: MotionEvent): Boolean =
         chartView?.handleScroll(e) == true || super.onGenericMotionEvent(e)
 
-    /** Copy an APK asset to internal storage (skipped when already current). */
-    private fun extractAsset(asset: String, outName: String): String? {
-        val out = File(filesDir, outName)
-        return try {
-            val assetLen = assets.open(asset).use { it.available().toLong() }
-            if (out.length() != assetLen || assetLen == 0L) {
-                assets.open(asset).use { input ->
-                    FileOutputStream(out).use { output -> input.copyTo(output) }
-                }
-                Log.i(TAG, "chart extracted -> $out (${out.length()} bytes)")
-            }
-            out.absolutePath
-        } catch (e: Exception) {
-            Log.e(TAG, "asset extract: $e")
-            null
-        }
-    }
 
     /**
      * Extract assets/plugins into filesDir/plugins and answer its path, or null
@@ -306,8 +286,6 @@ class LookoutActivity : ComponentActivity() {
 
     private companion object {
         const val TAG = "lookout"
-        const val CHART_ASSET = "charts/US5MD1MC.pmtiles"
-        const val CHART_NAME = "US5MD1MC.pmtiles"
         const val PLUGIN_ASSET_DIR = "plugins"
         const val PLUGIN_DIR_NAME = "plugins"
         const val REQ_READ = 1

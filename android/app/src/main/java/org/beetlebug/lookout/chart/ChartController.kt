@@ -9,6 +9,7 @@ import org.beetlebug.lookout.Lookout
 import org.beetlebug.lookout.LookoutActivity
 import org.beetlebug.lookout.charts.ChartLinkController
 import org.beetlebug.lookout.charts.NoaaController
+import org.beetlebug.lookout.firstrun.FirstRunModel
 import org.beetlebug.lookout.charts.ChartSets
 import org.beetlebug.lookout.charts.RasterController
 import org.beetlebug.lookout.charts.RasterCharts
@@ -185,6 +186,8 @@ class ChartController(private val appContext: Context) {
     val chartLinkController = ChartLinkController(appContext, access)
     /** NOAA's catalog and downloads. Setup drives it; so does the Charts pane. */
     val noaaController = NoaaController(access)
+    /** Setup, over an app with nothing to draw. */
+    val firstRun = FirstRunModel()
 
     val rasterCharts get() = rasterController.charts
 

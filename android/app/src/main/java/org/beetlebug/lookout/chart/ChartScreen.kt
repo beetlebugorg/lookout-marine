@@ -21,6 +21,7 @@ import org.beetlebug.lookout.pick.pickReportWidth
 import org.beetlebug.lookout.plugins.AlertBanner
 import org.beetlebug.lookout.plugins.PluginTableDialog
 import org.beetlebug.lookout.plugins.PluginInstallDialogs
+import org.beetlebug.lookout.firstrun.FirstRunSetup
 import org.beetlebug.lookout.settings.SettingsSheet
 
 import androidx.compose.foundation.layout.Arrangement
@@ -365,6 +366,31 @@ fun ChartScreen(
                     centreX,
                     centreY,
                 )
+            },
+        )
+    }
+
+    // Setup, over the running chart. It comes up on any launch that settles on
+    // nothing to draw, and a published style counts as something: somebody
+    // sailing on one has no empty library to fill.
+    val nothingToDraw = charts.chartPaths.isEmpty() && !charts.scanning
+    val linked = controller.chartLinkController.activeChartLink != null
+    LaunchedEffect(nothingToDraw, linked) {
+        if (!controller.firstRun.showing &&
+            controller.firstRun.shouldRun(nothingToDraw, linked)
+        ) {
+            controller.firstRun.begin()
+        }
+    }
+    if (controller.firstRun.showing) {
+        FirstRunSetup(
+            flow = controller.firstRun,
+            charts = charts,
+            controller = controller,
+            onOpenCharts = {
+                onRequestFileAccess()
+                settingsSection = "charts"
+                showSettings = true
             },
         )
     }
