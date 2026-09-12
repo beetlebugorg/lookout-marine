@@ -317,6 +317,11 @@ lk_first_run_app_moved (GtkWidget *page)
 
   if (lk_app_model_get_baking (self->model))
     lk_first_run_note_bake (self->flow);
+
+  /* The import step reads the bake several times a second. It updates the
+   * step on the card rather than building a new one. */
+  if (lk_first_run_step (self->flow) == LK_FIRST_RUN_IMPORTING)
+    lk_first_run_importing_sync (gtk_widget_get_first_child (self->body));
   lk_first_run_refresh_footer (self);
 }
 

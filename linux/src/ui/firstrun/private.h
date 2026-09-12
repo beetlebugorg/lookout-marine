@@ -141,6 +141,11 @@ GtkWidget *lk_first_run_source_new (LkFirstRunFlow *flow);
 GtkWidget *lk_first_run_coverage_new (LkFirstRunFlow *flow);
 GtkWidget *lk_first_run_online_new (LkFirstRunFlow *flow);
 GtkWidget *lk_first_run_importing_new (LkFirstRunFlow *flow);
+
+/* Read the import again, into the step already on the card. The bake reports
+ * several times a second, and a rebuild per report restarted the spinner. Does
+ * nothing for a step built by another unit. */
+void lk_first_run_importing_sync (GtkWidget *step);
 GtkWidget *lk_first_run_depths_new (LkFirstRunFlow *flow);
 
 /* Read the footer again: the primary action's words, whether it can act, and
