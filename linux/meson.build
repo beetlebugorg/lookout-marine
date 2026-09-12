@@ -130,6 +130,7 @@ sources = files(
   'src/library/bake.c',
   'src/library/links.c',
   'src/library/noaa.c',
+  'src/library/preview.c',
   'src/library/raster.c',
   'src/library/scan.c',
   'src/library/sets.c',

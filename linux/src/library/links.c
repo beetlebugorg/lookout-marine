@@ -1,18 +1,13 @@
 /* library/links.c — charts by link. See library/links.h. */
 #include "library/links.h"
 
+#include "library/agent.h"
 #include "model/store.h"
 
 #include <json-glib/json-glib.h>
 #include <libsoup/soup.h>
 #include <string.h>
 
-/* A unique, identifiable agent with a way to reach the developer: public tile
- * hosts (openstreetmap.org's tile usage policy, osm.wiki/Blocked_tiles) serve
- * "access blocked" placeholder tiles to anonymous or platform-default agents. */
-#define LK_LINKS_USER_AGENT \
-  "LookoutMarine/1.0 (Linux; org.beetlebug.lookout; contact jeremy.collins@beetlebug.org)"
-#define LK_LINKS_REFERER "https://beetlebug.org/"
 
 static void
 lk_chart_link_free (gpointer data)
@@ -202,7 +197,7 @@ lk_links_http_get (void *user, uint64_t req_id, const char *url, int allow_file)
       return;
     }
   soup_message_headers_append (soup_message_get_request_headers (msg),
-                               "Referer", LK_LINKS_REFERER);
+                               "Referer", LK_REFERER);
   fetch->msg = msg;
   soup_session_send_and_read_async (self->session, msg, G_PRIORITY_DEFAULT, cancel,
                                     lk_links_fetch_done, fetch);
@@ -512,7 +507,7 @@ lk_chart_links_init (LkChartLinks *self)
    * holding a worker. soup pools per host, and nothing here reasons about
    * which source a url belongs to, so no source can hold a lane another
    * source's tiles are waiting on. */
-  self->session = soup_session_new_with_options ("user-agent", LK_LINKS_USER_AGENT,
+  self->session = soup_session_new_with_options ("user-agent", LK_USER_AGENT,
                                                  "timeout", 8,
                                                  "idle-timeout", 10,
                                                  "max-conns", 16,

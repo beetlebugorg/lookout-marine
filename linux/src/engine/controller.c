@@ -1032,6 +1032,83 @@ lk_chart_controller_chart_links_read (LkChartController *self)
   return lookout_links_read (self->handle);
 }
 
+/* ---- pictures of charts -------------------------------------------------- */
+
+GdkTexture *
+lk_chart_controller_snapshot (LkChartController *self)
+{
+  int width = 0, height = 0, scale = 1;
+  gsize len;
+
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), NULL);
+
+  if (self->handle == NULL || self->view == NULL)
+    return NULL;
+
+  lk_chart_view_get_point_size (LK_CHART_VIEW (self->view), &width, &height);
+  scale = gtk_widget_get_scale_factor (self->view);
+  width *= scale;
+  height *= scale;
+  if (width <= 0 || height <= 0)
+    return NULL;
+
+  len = (gsize) width * height * 4;
+  g_autofree guint8 *pixels = g_malloc0 (len);
+  /* 0 is success here, unlike the rest of this ABI. */
+  if (lookout_snapshot_rgba (self->handle, pixels, len) != 0)
+    return NULL;
+
+  g_autoptr (GBytes) bytes = g_bytes_new_take (g_steal_pointer (&pixels), len);
+  return gdk_memory_texture_new (width, height, GDK_MEMORY_R8G8B8A8,
+                                 bytes, (gsize) width * 4);
+}
+
+void
+lk_chart_controller_chart_links_preview (LkChartController *self)
+{
+  g_return_if_fail (LK_IS_CHART_CONTROLLER (self));
+
+  if (self->handle == NULL)
+    return;
+  lookout_chart_links_preview (self->handle);
+  /* The style reads go out through the fetcher, and the core adopts each
+   * answer at the top of a frame. */
+  lk_chart_controller_kick (self);
+}
+
+char *
+lk_chart_controller_chart_link_preview_url (LkChartController *self, const char *link,
+                                            double lon, double lat, int zoom)
+{
+  char url[2048];
+
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), NULL);
+
+  if (self->handle == NULL || link == NULL)
+    return NULL;
+  if (!lookout_chart_link_preview_url (self->handle, link, lon, lat, zoom,
+                                       url, sizeof url))
+    return NULL;
+  return g_strdup (url);
+}
+
+gboolean
+lk_chart_controller_view_centre (LkChartController *self, double *out_lon, double *out_lat)
+{
+  lookout_view view;
+
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), FALSE);
+
+  if (self->handle == NULL)
+    return FALSE;
+  lookout_get_view (self->handle, &view);
+  if (out_lon != NULL)
+    *out_lon = view.lon;
+  if (out_lat != NULL)
+    *out_lat = view.lat;
+  return TRUE;
+}
+
 /* ---- NOAA charts --------------------------------------------------------- */
 
 gboolean

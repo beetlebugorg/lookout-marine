@@ -1,6 +1,7 @@
 /* ui/charts/gallery.c — see ui/charts/gallery.h. */
 #include "ui/charts/gallery.h"
 
+#include "library/preview.h"
 #include "ui/charts/catalog.h"
 
 /* The design's tile. A picture narrower than this cannot be told from another
@@ -11,10 +12,17 @@
 #define LK_TILE_GAP   10
 
 typedef struct {
-  LkAppModel        *model; /* not owned */
-  GtkWidget         *row;   /* the box the tiles are built into */
+  LkAppModel        *model;    /* not owned */
+  LkChartPreviews   *previews; /* owned: the pictures for this row */
+  GtkWidget         *row;      /* the box the tiles are built into */
   LkChartGalleryAdd  on_add;
   gpointer           on_add_data;
+
+  /* The chart that was drawing when this row was last built. A change means a
+   * new chart to watch as it settles. `known` guards the first pass, where
+   * NULL is a real answer rather than "not asked yet". */
+  char              *drawing;
+  gboolean           known;
 } LkGallery;
 
 static void lk_gallery_fill (LkGallery *self);
@@ -22,7 +30,15 @@ static void lk_gallery_fill (LkGallery *self);
 static void
 lk_gallery_free (gpointer data)
 {
-  g_free (data);
+  LkGallery *self = data;
+
+  /* The row is going. Nothing is left to draw a picture that lands after
+   * this, and a fetch in flight holds the controller. */
+  if (self->previews != NULL)
+    lk_chart_previews_shutdown (self->previews);
+  g_clear_object (&self->previews);
+  g_free (self->drawing);
+  g_free (self);
 }
 
 /* ---- what a tile does ---------------------------------------------------- */
@@ -295,6 +311,46 @@ lk_gallery_name_of (GPtrArray *links, const char *url, const char *fallback)
   return fallback;
 }
 
+/* Ask for a picture of every chart on the row.
+ *
+ * The chart being drawn is captured off the engine, which is the only true
+ * picture of a publisher's portrayal. Everything else is a shipped picture or
+ * one tile fetched at the mariner's own water. */
+static void
+lk_gallery_ask_for_pictures (LkGallery *self, GPtrArray *mine,
+                             const LkChartCatalogEntry *catalog, guint n_catalog)
+{
+  LkChartLinks *links = lk_app_model_get_chart_links (self->model);
+  g_autoptr (GPtrArray) urls = g_ptr_array_new ();
+
+  /* Lookout's own chart is first, under the empty url. */
+  g_ptr_array_add (urls, (gpointer) "");
+  for (guint i = 0; i < n_catalog; i++)
+    g_ptr_array_add (urls, (gpointer) catalog[i].url);
+  for (guint i = 0; i < mine->len; i++)
+    {
+      const LkChartLink *link = g_ptr_array_index (mine, i);
+
+      if (lk_chart_catalog_entry (link->url) == NULL)
+        g_ptr_array_add (urls, link->url);
+    }
+  g_ptr_array_add (urls, NULL);
+
+  lk_chart_previews_want (self->previews, (const char *const *) urls->pdata);
+
+  /* And the chart on the screen, as the engine draws it. Only when the chart
+   * has CHANGED: a capture keeps a picture, which rebuilds this row, and
+   * capturing from here on every rebuild would never stop. */
+  const char *active = lk_chart_links_active (links);
+  if (!self->known || g_strcmp0 (self->drawing, active) != 0)
+    {
+      self->known = TRUE;
+      g_free (self->drawing);
+      self->drawing = g_strdup (active);
+      lk_chart_previews_watch (self->previews, active);
+    }
+}
+
 static void
 lk_gallery_fill (LkGallery *self)
 {
@@ -313,7 +369,8 @@ lk_gallery_fill (LkGallery *self)
   g_autofree char *own = lk_gallery_own_detail (self);
   gtk_box_append (GTK_BOX (self->row),
                   lk_tile_new (self, NULL, "Lookout chart", own,
-                               lk_chart_welcome_picture (), active == NULL, FALSE));
+                               lk_chart_previews_get (self->previews, NULL),
+                               active == NULL, FALSE));
 
   /* Then the charts the app ships, in their own order, so picking one does not
    * move the cards. */
@@ -324,7 +381,8 @@ lk_gallery_fill (LkGallery *self)
       gtk_box_append (GTK_BOX (self->row),
                       lk_tile_new (self, entry->url,
                                    lk_gallery_name_of (mine, entry->url, entry->name),
-                                   entry->url, lk_chart_catalog_art (entry->url),
+                                   entry->url,
+                                   lk_chart_previews_get (self->previews, entry->url),
                                    g_strcmp0 (active, entry->url) == 0,
                                    lk_gallery_is_mine (mine, entry->url)));
     }
@@ -338,11 +396,13 @@ lk_gallery_fill (LkGallery *self)
         continue; /* already drawn above, under the publisher's name */
       gtk_box_append (GTK_BOX (self->row),
                       lk_tile_new (self, link->url, link->name, link->url,
-                                   lk_chart_catalog_art (link->url),
+                                   lk_chart_previews_get (self->previews, link->url),
                                    g_strcmp0 (active, link->url) == 0, TRUE));
     }
 
   gtk_box_append (GTK_BOX (self->row), lk_add_tile_new (self));
+
+  lk_gallery_ask_for_pictures (self, mine, catalog, n_catalog);
 }
 
 static void
@@ -369,6 +429,7 @@ lk_chart_gallery_new (LkAppModel *model, LkChartGalleryAdd on_add, gpointer user
   self->on_add = on_add;
   self->on_add_data = user_data;
   self->row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, LK_TILE_GAP);
+  self->previews = lk_chart_previews_new (lk_app_model_get_controller (model));
 
   gtk_widget_set_margin_top (self->row, 2);
   gtk_widget_set_margin_bottom (self->row, 2);
@@ -384,6 +445,9 @@ lk_chart_gallery_new (LkAppModel *model, LkChartGalleryAdd on_add, gpointer user
   g_signal_connect_object (lk_app_model_get_chart_links (model), "changed",
                            G_CALLBACK (lk_gallery_changed), self->row, 0);
   g_signal_connect_object (model, "chart-sets-changed",
+                           G_CALLBACK (lk_gallery_changed), self->row, 0);
+  /* A picture landing is a tile to redraw. */
+  g_signal_connect_object (self->previews, "changed",
                            G_CALLBACK (lk_gallery_changed), self->row, 0);
 
   lk_gallery_fill (self);

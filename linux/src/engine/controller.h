@@ -172,6 +172,35 @@ void  lk_chart_controller_chart_links_import (LkChartController *self, const cha
  * polls clears the flag. */
 lookout_links *lk_chart_controller_chart_links_read (LkChartController *self);
 
+/* ---- pictures of charts -------------------------------------------------- */
+
+/* The chart as it is drawing, as a picture, or NULL with no chart open.
+ *
+ * The engine draws ONE chart at a time, so this is the only true picture of a
+ * publisher's portrayal: their own style, rendered by the engine, at the water
+ * the mariner is on. A style that layers its own work over somebody else's
+ * raster base otherwise previews as that base, which is another map under this
+ * publisher's name. */
+GdkTexture *lk_chart_controller_snapshot (LkChartController *self);
+
+/* Read the style of every link whose tile template is not known yet, and keep
+ * the template with the link. Nothing here touches the chart being drawn.
+ * Call it when a list of charts goes on screen. */
+void lk_chart_controller_chart_links_preview (LkChartController *self);
+
+/* The url of the tile that pictures `link` at a point, or NULL when the style
+ * names no raster tiles. A vector style draws no single-tile picture, and one
+ * whose style has not been read yet has no template to ask about. Free with
+ * g_free. */
+char *lk_chart_controller_chart_link_preview_url (LkChartController *self,
+                                                  const char *link,
+                                                  double lon, double lat, int zoom);
+
+/* Where the camera is looking, for a picture of every chart at one point.
+ * FALSE with no chart open. */
+gboolean lk_chart_controller_view_centre (LkChartController *self,
+                                          double *out_lon, double *out_lat);
+
 /* ---- NOAA charts --------------------------------------------------------- */
 /*
  * The core reads NOAA's product catalog, works out which cells a region needs
