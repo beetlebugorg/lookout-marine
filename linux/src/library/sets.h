@@ -54,6 +54,11 @@ const char *const *lk_chart_sets_paths (LkChartSets *self);
 /* Is this set switched on? A set that is not listed reads as on. */
 gboolean lk_chart_sets_is_on (LkChartSets *self, const char *path);
 
+/* TRUE when a set is switched on that has something to draw: charts, pictures,
+ * or a scan still to land. A set the scan has not read yet counts, so the
+ * first-run page never covers a library that is still being read. */
+gboolean lk_chart_sets_any_on_drawable (LkChartSets *self);
+
 /* Put a source on the list, switched on. Opening a source is also selecting
  * it. TRUE when the list or the switch changed. */
 gboolean lk_chart_sets_note (LkChartSets *self, const char *path);

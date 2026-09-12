@@ -207,6 +207,26 @@ lk_chart_sets_is_on (LkChartSets *self, const char *path)
   return lookout_chart_sets_is_on (self->sets, path) != 0;
 }
 
+gboolean
+lk_chart_sets_any_on_drawable (LkChartSets *self)
+{
+  size_t count = 0;
+  const lookout_chart_set *const *all = lookout_chart_sets_all (self->sets, &count);
+
+  for (size_t i = 0; i < count; i++)
+    {
+      const lookout_chart_set *set = all[i];
+
+      if (set->on == 0)
+        continue;
+      /* Unread counts as drawable. The counts arrive with the scan, and a set
+       * read as empty in the meantime is a set the mariner watches vanish. */
+      if (!set->scanned || set->charts > 0 || set->pictures > 0)
+        return TRUE;
+    }
+  return FALSE;
+}
+
 /* Put a source on the list, switched on. Opening a source is also
  * selecting it. */
 gboolean

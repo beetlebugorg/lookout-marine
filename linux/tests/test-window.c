@@ -87,6 +87,56 @@ test_empty_state_visible (void)
   g_assert_false (lk_test_shown (capsule, window));
 }
 
+/* The page answers to whether anything is DRAWN, not to whether a chart is
+ * open. A chart of no charts is open and draws the basemap, so has-chart says
+ * yes while the mariner has nothing.
+ *
+ * The four states, in the order a launch meets them. The engine has no handle
+ * here, so a chart reported open reads as one holding no charts, which is
+ * exactly the state under test. */
+static void
+test_page_follows_nothing_to_draw (void)
+{
+  GtkWidget *page = lk_test_find_css (window, "lk-page");
+  GtkWidget *first_run = lk_test_find_label (window, "No charts yet");
+  GtkWidget *loader = lk_test_find_label (window, "Opening the chart");
+
+  g_assert_nonnull (page);
+  g_assert_nonnull (first_run);
+  g_assert_nonnull (loader);
+
+  /* Nothing open, nothing installed. */
+  g_assert_true (lk_app_model_get_nothing_to_draw (model));
+  g_assert_true (lk_test_shown (page, window));
+  g_assert_true (lk_test_shown (first_run, window));
+
+  /* An open in flight. Something is on its way, so the first-run page must
+     not claim the library is empty. */
+  lk_app_model_set_opening (model, TRUE, FALSE);
+  lk_test_drain ();
+  g_assert_false (lk_app_model_get_nothing_to_draw (model));
+  g_assert_true (lk_test_shown (loader, window));
+  g_assert_false (lk_test_shown (first_run, window));
+
+  /* Open, and holding no charts. The loader has done its job and the page
+     comes back: the basemap is not a library. */
+  lk_app_model_set_opening (model, FALSE, FALSE);
+  lk_app_model_set_chart_open (model, TRUE, NULL);
+  lk_app_model_set_first_build_done (model, TRUE);
+  lk_test_drain ();
+  g_assert_true (lk_app_model_get_has_chart (model));
+  g_assert_true (lk_app_model_get_chart_is_empty (model));
+  g_assert_true (lk_app_model_get_nothing_to_draw (model));
+  g_assert_true (lk_test_shown (first_run, window));
+
+  /* The chrome that reports on a chart stays down with the page up. */
+  g_assert_false (lk_test_shown (lk_test_find_css (window, "lk-capsule"), window));
+  g_assert_false (g_action_get_enabled (action ("zoom-in")));
+
+  lk_app_model_set_chart_open (model, FALSE, NULL);
+  lk_test_drain ();
+}
+
 /* A pick raises the report into the overlay; close-pick clears the set, and the
  * report leaves with it. */
 static void
@@ -154,6 +204,7 @@ main (int argc, char *argv[])
   g_test_add_func ("/window/chart-only-disabled", test_chart_only_disabled);
   g_test_add_func ("/window/activate-no-chart-safe", test_activate_no_chart_safe);
   g_test_add_func ("/window/empty-state-visible", test_empty_state_visible);
+  g_test_add_func ("/window/page-follows-nothing-to-draw", test_page_follows_nothing_to_draw);
   g_test_add_func ("/window/close-pick-clears-report", test_close_pick_clears_report);
   g_test_add_func ("/window/scheme-action-follows", test_scheme_action_follows);
 

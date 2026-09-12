@@ -29,7 +29,12 @@ void lk_chart_controller_set_model (LkChartController *self, LkAppModel *model);
 /* ---- lifecycle ---------------------------------------------------------- */
 
 /* Open baked charts into `view`, composing multiple into one library.
- * Recreates the handle if one exists. `paths` is a NULL-terminated strv. */
+ * Recreates the handle if one exists. `paths` is a NULL-terminated strv.
+ *
+ * An EMPTY `paths` opens a chart of no charts, which draws the basemap. Every
+ * NOAA call and every chart-link call runs through a lookout handle, so a
+ * mariner with nothing installed still needs one: without it the catalog
+ * cannot be read and a published style cannot be picked. */
 gboolean lk_chart_controller_open (LkChartController *self,
                                    const char *const *paths,
                                    GtkWidget         *view);
@@ -43,6 +48,11 @@ void lk_chart_controller_attach_view (LkChartController *self, GtkWidget *view);
 void     lk_chart_controller_close    (LkChartController *self);
 gboolean lk_chart_controller_is_open  (LkChartController *self);
 const char *lk_chart_controller_chart_path (LkChartController *self);
+
+/* How many vector charts the open library holds. 0 for a chart opened with
+ * none, which draws the basemap. Pictures are counted separately: a library of
+ * raster charts alone also answers 0 here and still draws. */
+guint lk_chart_controller_charts_count (LkChartController *self);
 
 /* ---- view --------------------------------------------------------------- */
 

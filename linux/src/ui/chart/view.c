@@ -204,7 +204,10 @@ lk_chart_view_maybe_auto_open (LkChartView *self)
   g_auto (GStrv) paths = lk_app_model_initial_chart_paths (self->model);
   /* Nothing baked is not nothing to do: the path may be an exchange set of raw
      cells, which the open below scans and bakes. Only a path with neither
-     stops here. */
+     stops here.
+
+     Nothing at all opens NOTHING. A chart of no charts is opened on demand, by
+     whatever needs a handle to run through: see lk_app_model_open_empty. */
   g_autofree char *source = lk_app_model_initial_source (self->model);
   if ((paths == NULL || g_strv_length (paths) == 0) && source == NULL)
     return;

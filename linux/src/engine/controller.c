@@ -74,6 +74,16 @@ lk_chart_controller_chart_path (LkChartController *self)
   return self->chart_path;
 }
 
+guint
+lk_chart_controller_charts_count (LkChartController *self)
+{
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), 0);
+
+  if (self->handle == NULL)
+    return 0;
+  return lookout_charts_count (self->handle);
+}
+
 /* ---- readouts ----------------------------------------------------------- */
 
 static void
@@ -744,14 +754,18 @@ lk_chart_controller_attach_view (LkChartController *self, GtkWidget *view)
     self->view = view;
 }
 
-/* One open call, given the native surface kind + handle. */
+/* One open call, given the native surface kind + handle. `n` may be 0, which
+ * opens a chart of no charts. */
 static lookout *
 lk_chart_controller_open_handle (const char *const *paths, guint n,
                                  int kind, void *native, int width, int height)
 {
+  static const char *const none[] = { NULL };
+
   if (n == 1)
     return lookout_open_in_window (kind, native, paths[0], width, height, 1);
-  return lookout_open_charts_in_window (kind, native, paths, n, width, height, 1);
+  return lookout_open_charts_in_window (kind, native, n == 0 ? none : paths, n,
+                                        width, height, 1);
 }
 
 gboolean
@@ -763,8 +777,6 @@ lk_chart_controller_open (LkChartController *self,
   g_return_val_if_fail (LK_IS_CHART_VIEW (view), FALSE);
 
   guint n = paths == NULL ? 0 : g_strv_length ((char **) paths);
-  if (n == 0)
-    return FALSE;
 
   lk_chart_controller_close (self);
   self->view = view;
@@ -787,7 +799,8 @@ lk_chart_controller_open (LkChartController *self,
 
   LkNativeSurface *surface = lk_chart_view_get_native_surface (LK_CHART_VIEW (view));
   g_message ("opening %u chart(s) into a %d×%d pt %s surface: %s",
-             n, width, height, lk_native_surface_backend (surface), paths[0]);
+             n, width, height, lk_native_surface_backend (surface),
+             n == 0 ? "the basemap" : paths[0]);
   lookout *handle = lk_chart_controller_open_handle (paths, n,
                                                      lk_native_surface_kind (surface),
                                                      lk_native_surface_handle (surface),
@@ -808,7 +821,9 @@ lk_chart_controller_open (LkChartController *self,
     lk_app_model_set_open_error (self->model, NULL);
 
   g_free (self->chart_path);
-  self->chart_path = n == 1 ? g_strdup (paths[0]) : g_path_get_dirname (paths[0]);
+  self->chart_path = n == 0   ? NULL
+                     : n == 1 ? g_strdup (paths[0])
+                              : g_path_get_dirname (paths[0]);
 
   /* Re-install the mariner's raster charts. A raster chart belongs to a lookout
    * handle, and the close above destroyed the old one, so every open replays

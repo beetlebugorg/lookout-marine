@@ -421,16 +421,10 @@ lk_app_model_initial_chart_paths (LkAppModel *self)
       g_strfreev (cells);
     }
 
-  /* The Zig demo's built-in default, if present. */
-  g_autofree char *demo = g_build_filename (g_get_home_dir (), ".cache", "chartplotter",
-                                            "NOAA", "tiles", "d5", "US5MD1MC.pmtiles", NULL);
-  if (g_file_test (demo, G_FILE_TEST_EXISTS))
-    {
-      char **one = g_new0 (char *, 2);
-      one[0] = g_steal_pointer (&demo);
-      return one;
-    }
-
+  /* Nothing installed. The app opens a chart of no charts and setup runs over
+   * it. It must NOT reach for a cell left in a cache by another program: a
+   * chart the mariner never installed is one they cannot account for, and it
+   * keeps setup down on the one run that needs it. */
   return g_new0 (char *, 1);
 }
 
@@ -441,6 +435,21 @@ lk_app_model_request_open (LkAppModel *self, char **paths)
     return;
 
   lk_chart_controller_reopen (self->controller, (const char *const *) paths);
+}
+
+void
+lk_app_model_open_empty (LkAppModel *self)
+{
+  static const char *const none[] = { NULL };
+
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+
+  /* A chart already open is already a handle. Reopening would throw away the
+   * one the caller is about to use, along with whatever it is holding. */
+  if (self->has_chart || self->is_opening)
+    return;
+
+  lk_chart_controller_reopen (self->controller, none);
 }
 
 void
@@ -1386,6 +1395,32 @@ double      lk_app_model_get_scale_denominator (LkAppModel *self) { return self-
 int         lk_app_model_get_scheme (LkAppModel *self)            { return self->scheme; }
 gboolean    lk_app_model_get_building (LkAppModel *self)          { return self->building; }
 gboolean    lk_app_model_get_baking (LkAppModel *self)            { return self->baking; }
+
+gboolean
+lk_app_model_get_chart_is_empty (LkAppModel *self)
+{
+  g_return_val_if_fail (LK_IS_APP_MODEL (self), FALSE);
+
+  return self->has_chart && lk_chart_controller_charts_count (self->controller) == 0;
+}
+
+gboolean
+lk_app_model_get_nothing_to_draw (LkAppModel *self)
+{
+  g_return_val_if_fail (LK_IS_APP_MODEL (self), FALSE);
+
+  if (self->has_chart && !lk_app_model_get_chart_is_empty (self))
+    return FALSE;
+  /* Something is on its way. An open, a folder scan and a bake all end with
+   * charts on the screen, so none of them is an empty library. */
+  if (self->is_opening || self->scanning || self->bake != NULL)
+    return FALSE;
+  /* A picture is a chart. A library of imagery alone holds no vector chart and
+   * draws perfectly well. */
+  if (lk_raster_charts_count (self->raster_charts) > 0)
+    return FALSE;
+  return !lk_chart_sets_any_on_drawable (self->chart_sets);
+}
 
 const LkBakeProgress *
 lk_app_model_get_bake_progress (LkAppModel *self)
