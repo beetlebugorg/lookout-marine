@@ -152,15 +152,20 @@ fun ReadoutsCapsule(
         tonalElevation = 2.dp,
         shadowElevation = 4.dp,
     ) {
+      // Two lines only when there is a position to put on the second one.
+      // Padding the column for a line that is not there left the row short of
+      // the capsule's own height, and the minimum stretched the surface with
+      // all the slack falling under the text.
+      val twoLine = compact && readouts.fixState == Lookout.FIX_LIVE
       Column(
           horizontalAlignment = Alignment.CenterHorizontally,
           modifier = Modifier.padding(
               horizontal = if (compact) 14.dp else 18.dp,
-              vertical = if (compact) 6.dp else 0.dp,
+              vertical = if (twoLine) 6.dp else 0.dp,
           ),
       ) {
         Row(
-            modifier = if (compact) Modifier else Modifier.height(Chrome.capsule),
+            modifier = if (twoLine) Modifier else Modifier.height(Chrome.capsule),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(if (compact) 10.dp else 12.dp),
         ) {
@@ -236,7 +241,7 @@ fun ReadoutsCapsule(
         // away from the boat it read as a position, beside a "GPS" badge, and
         // a mariner could write it in a log or pass it over the radio. Own
         // ship's reported fix or no numbers at all.
-        if (compact && readouts.fixState == Lookout.FIX_LIVE) {
+        if (twoLine) {
             Text(
                 text = coordString(readouts.shipLat, readouts.shipLon),
                 style = MaterialTheme.typography.bodyMedium,
