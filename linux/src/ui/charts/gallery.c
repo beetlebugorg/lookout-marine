@@ -29,6 +29,14 @@ typedef struct {
   GtkWidget         *scroller; /* not owned */
   char              *signature;
   double             restore_to;
+
+  /* The chart just picked, while the core has yet to be told. Reading a
+   * publisher's style is the core's work and it runs inside a frame: a 389
+   * layer style with a 5,354 cell sprite pack holds the main thread for over
+   * a second on this machine. The tile says so before that starts. */
+  char              *pending;
+  gboolean           pending_mine;
+  guint              act_id;
 } LkGallery;
 
 static void lk_gallery_fill (LkGallery *self);
@@ -45,26 +53,58 @@ lk_gallery_free (gpointer data)
   g_clear_object (&self->previews);
   g_free (self->drawing);
   g_free (self->signature);
+  g_clear_handle_id (&self->act_id, g_source_remove);
+  g_free (self->pending);
   g_free (self);
 }
 
 /* ---- what a tile does ---------------------------------------------------- */
 
-/* Draw this chart. A shipped entry the mariner has not taken yet is added
+/* Draw the chart the mariner picked.
+ *
+ * A frame goes out between the pick and the call, so the tile is already
+ * marked as being read when the core takes the main thread to read it. */
+static gboolean
+lk_gallery_act (gpointer user_data)
+{
+  GtkWidget *row = user_data;
+  LkGallery *self = g_object_get_data (G_OBJECT (row), "lk-gallery");
+  g_autofree char *url = NULL;
+
+  if (self == NULL || gtk_widget_in_destruction (row))
+    return G_SOURCE_REMOVE;
+
+  self->act_id = 0;
+  url = g_steal_pointer (&self->pending);
+
+  /* NULL is how the links object spells "lookout's own chart". */
+  if (url[0] == '\0' || self->pending_mine)
+    lk_chart_links_select (lk_app_model_get_chart_links (self->model),
+                           url[0] != '\0' ? url : NULL);
+  else
+    lk_chart_links_add (lk_app_model_get_chart_links (self->model), url);
+  return G_SOURCE_REMOVE;
+}
+
+/* Pick this chart. A shipped entry the mariner has not taken yet is added
  * first, which the core reads and then picks. */
 static void
 lk_tile_clicked (GtkButton *button, gpointer user_data)
 {
   LkGallery *self = user_data;
-  LkChartLinks *links = lk_app_model_get_chart_links (self->model);
   const char *url = g_object_get_data (G_OBJECT (button), "lk-url");
-  gboolean mine = g_object_get_data (G_OBJECT (button), "lk-mine") != NULL;
 
-  /* NULL is how the links object spells "lookout's own chart". */
-  if (url == NULL || mine)
-    lk_chart_links_select (links, url);
-  else
-    lk_chart_links_add (links, url);
+  if (self->act_id != 0)
+    return; /* one pick at a time: the last one has yet to be made */
+
+  g_free (self->pending);
+  self->pending = g_strdup (url != NULL ? url : "");
+  self->pending_mine = g_object_get_data (G_OBJECT (button), "lk-mine") != NULL;
+
+  /* The row first, then the frame that draws it, then the core. A plain idle
+   * can run before the frame clock's own paint, so this waits a frame. */
+  lk_gallery_fill (self);
+  self->act_id = g_timeout_add (25, lk_gallery_act, self->row);
 }
 
 static void
@@ -413,12 +453,20 @@ lk_gallery_fill (LkGallery *self)
   guint n_catalog = 0;
   const LkChartCatalogEntry *catalog = lk_chart_catalog_entries (&n_catalog);
 
+  /* A chart being read is the one the mariner picked, whatever the core still
+   * reports as active, and its line says what is happening. */
+  gboolean busy = lk_chart_links_busy (links);
+  const char *picked = self->pending != NULL ? self->pending
+                       : busy                ? (active != NULL ? active : "")
+                                             : NULL;
+
   /* Lookout's own chart first. It is built from the sets below and cannot be
    * removed, so it has no menu. */
   g_autofree char *own = lk_gallery_own_detail (self);
-  LkTilePlan first = { NULL, "Lookout chart", own,
-                       lk_chart_previews_get (self->previews, NULL), active == NULL,
-                       FALSE };
+  gboolean own_picked = picked != NULL && picked[0] == '\0';
+  LkTilePlan first = { NULL, "Lookout chart", own_picked ? "Reading this chart…" : own,
+                       lk_chart_previews_get (self->previews, NULL),
+                       own_picked || (picked == NULL && active == NULL), FALSE };
   g_array_append_val (plan, first);
 
   /* Then the charts the app ships, in their own order, so picking one does not
@@ -426,11 +474,12 @@ lk_gallery_fill (LkGallery *self)
   for (guint i = 0; i < n_catalog; i++)
     {
       const LkChartCatalogEntry *entry = &catalog[i];
+      gboolean reading = g_strcmp0 (picked, entry->url) == 0;
       LkTilePlan tile = { entry->url,
                           lk_gallery_name_of (mine, entry->url, entry->name),
-                          entry->url,
+                          reading ? "Reading this chart…" : entry->url,
                           lk_chart_previews_get (self->previews, entry->url),
-                          g_strcmp0 (active, entry->url) == 0,
+                          reading || (picked == NULL && g_strcmp0 (active, entry->url) == 0),
                           lk_gallery_is_mine (mine, entry->url) };
 
       g_array_append_val (plan, tile);
@@ -440,9 +489,12 @@ lk_gallery_fill (LkGallery *self)
   for (guint i = 0; i < mine->len; i++)
     {
       const LkChartLink *link = g_ptr_array_index (mine, i);
-      LkTilePlan tile = { link->url, link->name, link->url,
+      gboolean reading = g_strcmp0 (picked, link->url) == 0;
+      LkTilePlan tile = { link->url, link->name,
+                          reading ? "Reading this chart…" : link->url,
                           lk_chart_previews_get (self->previews, link->url),
-                          g_strcmp0 (active, link->url) == 0, TRUE };
+                          reading || (picked == NULL && g_strcmp0 (active, link->url) == 0),
+                          TRUE };
 
       if (lk_chart_catalog_entry (link->url) != NULL)
         continue; /* already planned above, under the publisher's name */

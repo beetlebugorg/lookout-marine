@@ -246,6 +246,30 @@ test_empty_library (void)
   lk_test_drain ();
 }
 
+/* A pick says so before the core is told.
+ *
+ * Reading a publisher's style is the core's work and it runs inside a frame:
+ * a 389 layer style with a 5,354 cell sprite pack holds the main thread for
+ * over a second. The row is rebuilt in the click itself, so the tile carries
+ * the line while that happens; the call to the core waits for the frame that
+ * draws it. */
+static void
+test_a_pick_says_it_is_reading (void)
+{
+  GtkWidget *pane = charts_pane ();
+  GtkWidget *tile = lk_test_find_button (pane, "Open Waters Seascape");
+
+  g_assert_nonnull (tile);
+  g_assert_null (lk_test_find_label (pane, "Reading this chart…"));
+
+  /* No drain: the line has to be there the moment the click returns. */
+  g_signal_emit_by_name (tile, "clicked");
+  g_assert_nonnull (lk_test_find_label (pane, "Reading this chart…"));
+
+  gtk_window_destroy (GTK_WINDOW (pane));
+  lk_test_drain ();
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -263,6 +287,7 @@ main (int argc, char *argv[])
   g_test_add_func ("/charts/add-tile-asks", test_add_tile_asks);
   g_test_add_func ("/charts/pane-order", test_pane_order);
   g_test_add_func ("/charts/add-rows", test_add_rows);
+  g_test_add_func ("/charts/a-pick-says-it-is-reading", test_a_pick_says_it_is_reading);
   g_test_add_func ("/charts/empty-library", test_empty_library);
 
   return g_test_run ();
