@@ -142,6 +142,7 @@ sources = files(
   'src/ui/chart/overlay.c',
   'src/ui/chart/pick-report.c',
   'src/ui/chart/view.c',
+  'src/ui/charts/coastline.c',
   'src/ui/chrome/about.c',
   'src/ui/chrome/alerts.c',
   'src/ui/chrome/licenses.c',
@@ -182,6 +183,7 @@ resources = gnome.compile_resources(
   source_dir: [
     'data' / 'icons' / 'scalable' / 'actions',
     'data' / 'icons' / 'hicolor' / 'scalable' / 'apps',
+    'data' / 'firstrun',
   ],
   c_name: 'lk',
   # No constructor. The resource object lives in the shell's static library,

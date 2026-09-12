@@ -13,6 +13,11 @@
   The app's own icon travels the same way. It is installed into hicolor as
   well, for the desktop and the task bar, but a build tree has installed
   nothing: without this the About window has no icon to draw.
+
+  The first-run pictures travel the same way, and for the first of the same
+  reasons: a build tree has installed nothing, and setup is the first thing a
+  mariner sees. Compressed, because a coastline of 1,538 rings and a chart
+  photograph are not small.
 -->
 <gresources>
   <gresource prefix="/org/beetlebug/LookoutMarine/icons/scalable/apps">
@@ -26,5 +31,8 @@
     <file preprocess="xml-stripblanks">lk-alarms-symbolic.svg</file>
     <file preprocess="xml-stripblanks">lk-alarm-symbolic.svg</file>
     <file preprocess="xml-stripblanks">lk-advanced-symbolic.svg</file>
+  </gresource>
+  <gresource prefix="/org/beetlebug/LookoutMarine/firstrun">
+    <file compressed="true">coastline.bin</file>
   </gresource>
 </gresources>
