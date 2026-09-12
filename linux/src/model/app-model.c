@@ -541,6 +541,22 @@ lk_app_model_request_open (LkAppModel *self, char **paths)
   lk_chart_controller_reopen (self->controller, (const char *const *) paths);
 }
 
+gboolean
+lk_app_model_all_sets_off (LkAppModel *self)
+{
+  g_autoptr (GPtrArray) rows = NULL;
+
+  g_return_val_if_fail (LK_IS_APP_MODEL (self), FALSE);
+
+  rows = lk_app_model_get_chart_sets (self);
+  if (rows->len == 0)
+    return FALSE;
+  for (guint i = 0; i < rows->len; i++)
+    if (((const LkChartSetRow *) g_ptr_array_index (rows, i))->on)
+      return FALSE;
+  return TRUE;
+}
+
 void
 lk_app_model_open_empty (LkAppModel *self)
 {

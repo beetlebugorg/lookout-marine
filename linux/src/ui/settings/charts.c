@@ -733,7 +733,7 @@ lk_settings_fill_work_list (LkSettings *settings)
                             noaa->phase == LK_NOAA_DOWNLOADING || bake != NULL);
 }
 
-/* The NOAA service moving, and the bake moving. */
+/* The NOAA service moving. */
 void
 lk_settings_work_changed (gpointer subject, gpointer user_data)
 {
@@ -741,6 +741,14 @@ lk_settings_work_changed (gpointer subject, gpointer user_data)
 
   if (settings != NULL)
     lk_deferred_list_schedule (&settings->work);
+}
+
+/* The bake starting or stopping. A ::notify carries the property between the
+ * subject and the data, so it cannot share the handler above. */
+void
+lk_settings_baking_changed (GObject *object, GParamSpec *pspec, gpointer user_data)
+{
+  lk_settings_work_changed (object, user_data);
 }
 
 /* ---- the page ------------------------------------------------------------ */

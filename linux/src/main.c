@@ -364,6 +364,53 @@ static const char *LK_CSS =
     "  border-radius: 11px;"
     "  box-shadow: none;"
     "}"
+    /* ---- setup -------------------------------------------------------------
+     *
+     * A card raised over the running chart. The picture on the welcome step
+     * bleeds to the top edge, so the card clips to its own corners. */
+    ".lk-first-run-card {"
+    "  background: @theme_base_color;"
+    "  border: 1px solid alpha(@borders, 0.8);"
+    "  border-radius: 12px;"
+    "  box-shadow: 0 6px 24px alpha(black, 0.30);"
+    "}"
+    ".lk-first-run-footer {"
+    "  padding: 14px 24px;"
+    "  border-top: 1px solid alpha(@borders, 0.6);"
+    "}"
+    /* A pick-one card. The chosen one takes the accent, so the row says which
+     * it is at a glance and not by reading. */
+    ".lk-step-card {"
+    "  padding: 21px 17px;"
+    "  background: @theme_base_color;"
+    "  border: 1px solid alpha(@borders, 0.7);"
+    "  border-radius: 12px;"
+    "  box-shadow: none;"
+    "}"
+    ".lk-step-card:hover { background: mix(@theme_base_color, @theme_fg_color, 0.04); }"
+    ".lk-step-card-picked {"
+    "  border: 2px solid @accent_color;"
+    "  background: alpha(@accent_color, 0.05);"
+    "}"
+    /* The icon tile at the top of a card. */
+    ".lk-card-tile {"
+    "  padding: 16px;"
+    "  background: alpha(@accent_color, 0.10);"
+    "  border-radius: 14px;"
+    "}"
+    /* A publisher's warning. Amber, and shaped differently from an ordinary
+     * note, so it separates from the page at a glance. */
+    ".lk-step-warning {"
+    "  padding: 13px 14px;"
+    "  background: alpha(#e5a50a, 0.12);"
+    "  border-radius: 9px;"
+    "}"
+    ".lk-amber { color: #b5820a; }"
+    /* One derived number on the depth step, with a rule above it. */
+    ".lk-depth-row {"
+    "  padding: 11px 0;"
+    "  border-top: 1px solid alpha(@borders, 0.5);"
+    "}"
     ".lk-not-nav {"
     "  background: alpha(#f59e0b, 0.14);"
     "  border: 1px solid alpha(#f59e0b, 0.55);"

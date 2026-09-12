@@ -67,6 +67,13 @@ void lk_app_model_set_chart_set_on (LkAppModel *self, const char *path, gboolean
  * be made again — and the mariner's own folder is never touched. */
 void lk_app_model_remove_chart_set (LkAppModel *self, const char *path);
 
+/* TRUE when sets ARE installed and every one of them is switched off.
+ *
+ * The one case where the library is not empty and the chart is still blank. A
+ * mariner there does not need setup: they need the switch they turned off, so
+ * the window offers that instead. */
+gboolean lk_app_model_all_sets_off (LkAppModel *self);
+
 /* ---- commands (headerbar / menu) ---------------------------------------- */
 
 void lk_app_model_zoom_in (LkAppModel *self);

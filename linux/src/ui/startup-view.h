@@ -12,7 +12,7 @@ G_BEGIN_DECLS
 GtkWidget *lk_window_build_loader (void);
 
 /* The first-run page: where charts come from, and how to install one. */
-GtkWidget *lk_window_build_empty_state (void);
+GtkWidget *lk_window_build_switched_off_page (void);
 
 /* One step row, appended to `box`. The opening page and the import panel both
  * show their work as steps, and they show it the same way. */

@@ -20,6 +20,12 @@ struct _LkChartController {
   /* The one-shot the core asked for with LOOKOUT_FRAME_WAIT. */
   guint    wake_id;
 
+  /* An empty open asked for before a view existed. Every lookout call runs
+   * through a handle, and the first thing to want one can be a page built
+   * before the chart view has realized: setup reads NOAA's catalog as its
+   * coverage step is built. The ask is kept and run when the view arrives. */
+  gboolean pending_empty_open;
+
   gint64 last_readouts_us;
 };
 
@@ -752,6 +758,15 @@ lk_chart_controller_attach_view (LkChartController *self, GtkWidget *view)
 
   if (self->view == NULL)
     self->view = view;
+
+  /* Whatever wanted a handle before this view existed gets one now. */
+  if (self->pending_empty_open && self->handle == NULL)
+    {
+      static const char *const none[] = { NULL };
+
+      self->pending_empty_open = FALSE;
+      lk_chart_controller_open (self, none, view);
+    }
 }
 
 /* One open call, given the native surface kind + handle. `n` may be 0, which
@@ -914,7 +929,13 @@ lk_chart_controller_reopen (LkChartController *self, const char *const *paths)
   g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), FALSE);
 
   if (self->view == NULL)
-    return FALSE;
+    {
+      /* No view yet. An empty open is worth keeping, because the caller wants
+       * a handle rather than a chart and nothing else will ask again. */
+      if (paths == NULL || g_strv_length ((char **) paths) == 0)
+        self->pending_empty_open = TRUE;
+      return FALSE;
+    }
   return lk_chart_controller_open (self, paths, self->view);
 }
 

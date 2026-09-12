@@ -71,20 +71,84 @@ test_activate_no_chart_safe (void)
   lk_test_drain ();
 }
 
-/* The empty state stands when nothing is open, and the readouts stay out of
- * sight until a chart is. */
+/* With nothing installed the mariner gets SETUP, not a page: there is a
+ * decision to make, and the flow is what asks it.
+ *
+ * The switched-off page stands for the one other case, where charts ARE
+ * installed and every set is off, and it stays down here. */
 static void
-test_empty_state_visible (void)
+test_setup_runs_over_an_empty_library (void)
 {
-  /* The empty state's own title; the loader carries the same card class, so a
-     label is what tells the two apart. */
-  GtkWidget *empty = lk_test_find_label (window, "No charts yet");
+  GtkWidget *setup = lk_test_find_label (window, "Welcome to Lookout Marine");
+  GtkWidget *switched_off = lk_test_find_label (window, "Every chart set is switched off");
   GtkWidget *capsule = lk_test_find_css (window, "lk-capsule");
 
-  g_assert_nonnull (empty);
-  g_assert_true (lk_test_shown (empty, window));
+  g_assert_nonnull (setup);
+  g_assert_true (lk_test_shown (setup, window));
+
+  g_assert_nonnull (switched_off);
+  g_assert_false (lk_test_shown (switched_off, window));
+
+  /* No chart, no readouts: a capsule reading 1:— over an empty view is chrome
+   * with nothing to report. */
   g_assert_nonnull (capsule);
   g_assert_false (lk_test_shown (capsule, window));
+}
+
+/* Setup asks the three sources, with NOAA the one it recommends. */
+static void
+test_setup_steps (void)
+{
+  GtkWidget *later = lk_test_find_button (window, "Set Up Later");
+  GtkWidget *primary = lk_test_find_button (window, "Continue");
+
+  g_assert_nonnull (later);
+  g_assert_true (lk_test_shown (later, window));
+  g_assert_nonnull (primary);
+
+  /* Continue moves to the source step, which offers the three sources. */
+  g_signal_emit_by_name (primary, "clicked");
+  lk_test_drain ();
+  g_assert_nonnull (lk_test_find_label (window, "How would you like to add charts?"));
+  g_assert_nonnull (lk_test_find_label (window, "NOAA charts"));
+  g_assert_nonnull (lk_test_find_label (window, "Online chart"));
+  g_assert_nonnull (lk_test_find_label (window, "Files on this computer"));
+  g_assert_nonnull (lk_test_find_label (window, "Recommended"));
+
+  /* Set Up Later belongs to the welcome step alone. Past it the mariner is
+     choosing a chart, and Back is what returns them. */
+  g_assert_false (lk_test_shown (lk_test_find_button (window, "Set Up Later"), window));
+  GtkWidget *back = lk_test_find_button (window, "Back");
+  g_assert_nonnull (back);
+  g_assert_true (lk_test_shown (back, window));
+
+  g_signal_emit_by_name (back, "clicked");
+  lk_test_drain ();
+  g_assert_nonnull (lk_test_find_label (window, "Welcome to Lookout Marine"));
+}
+
+/* Set Up Later is "not now", and it leaves a working app behind it. */
+static void
+test_setup_later_puts_it_away (void)
+{
+  GtkWidget *later = lk_test_find_button (window, "Set Up Later");
+
+  g_assert_nonnull (later);
+  g_signal_emit_by_name (later, "clicked");
+  lk_test_drain ();
+
+  /* Setup is down, and the page under it is not raised in its place: the
+     mariner asked for the app, not for another page. */
+  g_assert_null (lk_test_find_label (window, "Welcome to Lookout Marine"));
+  g_assert_false (lk_test_shown (lk_test_find_label (window,
+                                                     "Every chart set is switched off"),
+                                 window));
+
+  /* And it stays down for the rest of the launch, however often the window
+     reconsiders. */
+  lk_app_model_set_chart_open (model, FALSE, NULL);
+  lk_test_drain ();
+  g_assert_null (lk_test_find_label (window, "Welcome to Lookout Marine"));
 }
 
 /* The page answers to whether anything is DRAWN, not to whether a chart is
@@ -98,7 +162,7 @@ static void
 test_page_follows_nothing_to_draw (void)
 {
   GtkWidget *page = lk_test_find_css (window, "lk-page");
-  GtkWidget *first_run = lk_test_find_label (window, "No charts yet");
+  GtkWidget *first_run = lk_test_find_label (window, "Welcome to Lookout Marine");
   GtkWidget *loader = lk_test_find_label (window, "Opening the chart");
 
   g_assert_nonnull (page);
@@ -110,13 +174,13 @@ test_page_follows_nothing_to_draw (void)
   g_assert_true (lk_test_shown (page, window));
   g_assert_true (lk_test_shown (first_run, window));
 
-  /* An open in flight. Something is on its way, so the first-run page must
-     not claim the library is empty. */
+  /* An open in flight. The loader says which of the three waits this is.
+     Setup STAYS up: it is a card over a running app, and its import step is
+     the page that watches the charts arrive. */
   lk_app_model_set_opening (model, TRUE, FALSE);
   lk_test_drain ();
   g_assert_false (lk_app_model_get_nothing_to_draw (model));
   g_assert_true (lk_test_shown (loader, window));
-  g_assert_false (lk_test_shown (first_run, window));
 
   /* Open, and holding no charts. The loader has done its job and the page
      comes back: the basemap is not a library. */
@@ -129,7 +193,7 @@ test_page_follows_nothing_to_draw (void)
   g_assert_true (lk_app_model_get_nothing_to_draw (model));
   g_assert_true (lk_test_shown (first_run, window));
 
-  /* The chrome that reports on a chart stays down with the page up. */
+  /* The chrome that reports on a chart stays down with setup up. */
   g_assert_false (lk_test_shown (lk_test_find_css (window, "lk-capsule"), window));
   g_assert_false (g_action_get_enabled (action ("zoom-in")));
 
@@ -203,10 +267,14 @@ main (int argc, char *argv[])
   g_test_add_func ("/window/actions-exist", test_actions_exist);
   g_test_add_func ("/window/chart-only-disabled", test_chart_only_disabled);
   g_test_add_func ("/window/activate-no-chart-safe", test_activate_no_chart_safe);
-  g_test_add_func ("/window/empty-state-visible", test_empty_state_visible);
+  g_test_add_func ("/window/setup-runs-over-an-empty-library",
+                   test_setup_runs_over_an_empty_library);
+  g_test_add_func ("/window/setup-steps", test_setup_steps);
   g_test_add_func ("/window/page-follows-nothing-to-draw", test_page_follows_nothing_to_draw);
   g_test_add_func ("/window/close-pick-clears-report", test_close_pick_clears_report);
   g_test_add_func ("/window/scheme-action-follows", test_scheme_action_follows);
+  /* Last: it puts setup away for the rest of the run. */
+  g_test_add_func ("/window/setup-later-puts-it-away", test_setup_later_puts_it_away);
 
   return g_test_run ();
 }
