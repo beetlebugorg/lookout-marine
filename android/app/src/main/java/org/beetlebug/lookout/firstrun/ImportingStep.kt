@@ -25,6 +25,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -49,8 +53,21 @@ fun ImportingStep(
     val order = flow.order
     val downloading = noaa.phase == NoaaController.Phase.DOWNLOADING
     val baking = work?.running == true
-    val fetched = if (order != null && noaa.total > 0) noaa.done else 0
-    val expected = if (order != null && noaa.total > 0) noaa.total else order?.charts ?: 0
+
+    // The counts as they last stood, not as they stand.
+    //
+    // Both services reset when their work ends: the transfer's counters go
+    // back to zero and the bake's last state carries no total and no bands.
+    // Read live, the page emptied itself at the very moment it finished, so
+    // it holds the last figures each of them reported.
+    var lastFetch by remember { mutableStateOf(0 to 0) }
+    if (noaa.total > 0) lastFetch = noaa.done to noaa.total
+    var lastWork by remember { mutableStateOf<ChartImport.State?>(null) }
+    if (work != null && work.total > 0) lastWork = work
+    val shown = if (work?.running == true) work else lastWork
+
+    val fetched = lastFetch.first
+    val expected = if (lastFetch.second > 0) lastFetch.second else order?.charts ?: 0
 
     Column(
         Modifier.fillMaxWidth().padding(stepInset).padding(top = 20.dp),
@@ -77,7 +94,7 @@ fun ImportingStep(
         // One bar for the whole job. A bar per phase reads as three jobs.
         val fraction = when {
             downloading && expected > 0 -> fetched.toFloat() / expected * 0.35f
-            baking && (work?.total ?: 0) > 0 -> 0.35f + work!!.done.toFloat() / work.total * 0.65f
+            baking && (shown?.total ?: 0) > 0 -> 0.35f + shown!!.done.toFloat() / shown.total * 0.65f
             work?.running == false && flow.sawBake -> 1f
             else -> 0f
         }
@@ -100,13 +117,13 @@ fun ImportingStep(
         )
         phase(
             "Finding charts",
-            if ((work?.total ?: 0) > 0) "${work!!.total} found" else "",
+            if ((shown?.total ?: 0) > 0) "${shown!!.total} found" else "",
             running = work != null && work.running && work.total == 0,
-            done = (work?.total ?: 0) > 0,
+            done = (shown?.total ?: 0) > 0,
         )
         phase(
             "Importing charts",
-            if ((work?.total ?: 0) > 0) "${work!!.done} of ${work.total}" else "",
+            if ((shown?.total ?: 0) > 0) "${shown!!.done} of ${shown.total}" else "",
             running = baking,
             done = flow.sawBake && work?.running == false,
         )
@@ -117,7 +134,7 @@ fun ImportingStep(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
-        bandPanel(work)
+        bandPanel(shown)
 
         if (downloading || baking) {
             TextButton(onClick = onStop) { Text("Stop") }

@@ -137,9 +137,12 @@ private fun footer(
         Button(
             onClick = onPrimary,
             enabled = canContinue,
+            // The cap goes outside the fill. Filling first pins the width to
+            // the screen, and a cap cannot then shrink what is already fixed:
+            // the button ran the whole way across a tablet.
             modifier = Modifier
-                .fillMaxWidth()
                 .widthIn(max = COLUMN)
+                .fillMaxWidth()
                 .semantics { contentDescription = "first-run-continue" },
         ) { Text(flow.primaryTitle(chartName)) }
         if (flow.step == FirstRunModel.Step.WELCOME) {
