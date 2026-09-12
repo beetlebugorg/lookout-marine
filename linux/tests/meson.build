@@ -16,7 +16,7 @@ test_c_args = shell_c_args + [
   '-DLK_TEST_CELLS="' + meson.project_source_root() / '..' / 'test' / 'cells' + '"',
 ]
 
-unit_tests = ['coastline', 'format', 'import', 'json', 'library', 'noaa', 'store', 'pick']
+unit_tests = ['bands', 'coastline', 'format', 'import', 'json', 'library', 'noaa', 'store', 'pick']
 
 foreach name : unit_tests
   exe = executable('test-' + name,

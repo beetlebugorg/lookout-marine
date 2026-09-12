@@ -142,6 +142,7 @@ sources = files(
   'src/ui/chart/overlay.c',
   'src/ui/chart/pick-report.c',
   'src/ui/chart/view.c',
+  'src/ui/charts/band-ramp.c',
   'src/ui/charts/coastline.c',
   'src/ui/charts/coverage-map.c',
   'src/ui/charts/noaa-window.c',

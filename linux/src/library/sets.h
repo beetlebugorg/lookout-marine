@@ -24,11 +24,26 @@ typedef struct _LkChartSets LkChartSets;
 typedef struct {
   char    *path;
   char    *title;  /* the agency when the charts agree on one, else the folder name */
+  char    *name;   /* the folder's own name, so two sets from one office differ */
   char    *detail; /* "512 charts · 3 pictures · Coastal to Harbor · 1.2 GB";
                     * "" until the background scan lands */
-  guint    charts; /* prepared cells, 0 until the scan lands */
+  guint    charts;     /* prepared cells, 0 until the scan lands */
+  guint    unprepared; /* cells that bake before they draw */
+  guint    pictures;
+  gint64   bytes;
+  gboolean scanned;    /* the background scan has read this folder */
+  /* TRUE when this app prepared the charts. Removing one of those deletes
+   * work that has to be done again, which is worth asking about first. */
+  gboolean derived;
   gboolean on;
+  /* Cells per usage band, 1 to 6. Index 0 holds the cells whose name states no
+   * band, which is every S-101 dataset: those have no place on a scale ramp
+   * and the ramp leaves them out. */
+  guint    bands[7];
 } LkChartSetRow;
+
+/* A usage band in the words the readouts use. "Unknown" outside 1 to 6. */
+const char *lk_chart_band_name (int band);
 
 void lk_chart_set_row_free (LkChartSetRow *row);
 
