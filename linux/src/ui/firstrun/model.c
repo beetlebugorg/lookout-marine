@@ -277,7 +277,9 @@ lk_first_run_sheet_width (LkFirstRunStep step)
     case LK_FIRST_RUN_WELCOME:   return 640;
     case LK_FIRST_RUN_SOURCE:    return 760;
     case LK_FIRST_RUN_COVERAGE:  return 1040;
-    case LK_FIRST_RUN_ONLINE:    return 980;
+    /* Wide enough for the whole gallery: the charts the app ships, plus the
+     * tile that adds one. */
+    case LK_FIRST_RUN_ONLINE:    return 1060;
     case LK_FIRST_RUN_IMPORTING: return 940;
     case LK_FIRST_RUN_DEPTHS:    return 920;
     default:                     return 760;

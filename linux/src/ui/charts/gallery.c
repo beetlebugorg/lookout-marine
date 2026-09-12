@@ -89,39 +89,49 @@ lk_add_tile_clicked (GtkButton *button, gpointer user_data)
 
 /* ---- one tile ------------------------------------------------------------ */
 
-/* The picture at the top of a tile, or the room one will take.
- *
- * A style with no picture yet draws its kind. A publisher's own portrayal
- * needs the style resolved and its tiles fetched, so a chart the app ships no
- * render of has nothing to show until one arrives. */
+/* The picture at the top of a tile, or the room one will take. */
 static GtkWidget *
 lk_tile_art (GdkTexture *picture)
 {
+  GtkWidget *art = gtk_overlay_new ();
   GtkWidget *frame = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
-  GtkWidget *content;
+
+  /* The frame requests the tile size, and the picture goes over it.
+   *
+   * GtkPicture requests the size and shape of its texture, so a 960 by 720
+   * render made its tile 720 points tall, and a window-shaped snapshot made
+   * a shorter one beside it. GtkOverlay does not measure overlay children,
+   * so the frame fixes the size and the cover fit crops the picture. */
+  gtk_widget_set_size_request (frame, LK_TILE_WIDTH, LK_TILE_ART);
+  gtk_widget_add_css_class (frame, "lk-chart-art");
+  gtk_overlay_set_child (GTK_OVERLAY (art), frame);
+  gtk_widget_set_overflow (art, GTK_OVERFLOW_HIDDEN);
 
   if (picture != NULL)
     {
-      content = gtk_picture_new_for_paintable (GDK_PAINTABLE (picture));
-      gtk_picture_set_content_fit (GTK_PICTURE (content), GTK_CONTENT_FIT_COVER);
-      gtk_picture_set_can_shrink (GTK_PICTURE (content), TRUE);
+      GtkWidget *shot = gtk_picture_new_for_paintable (GDK_PAINTABLE (picture));
+
+      gtk_picture_set_content_fit (GTK_PICTURE (shot), GTK_CONTENT_FIT_COVER);
+      gtk_picture_set_can_shrink (GTK_PICTURE (shot), TRUE);
+      gtk_overlay_add_overlay (GTK_OVERLAY (art), shot);
     }
   else
     {
-      content = gtk_image_new_from_icon_name ("network-workgroup-symbolic");
-      gtk_image_set_pixel_size (GTK_IMAGE (content), 26);
-      gtk_widget_add_css_class (content, "lk-accent");
-      gtk_widget_set_valign (content, GTK_ALIGN_CENTER);
-      gtk_widget_set_halign (content, GTK_ALIGN_CENTER);
+      /* A style with no picture yet draws its kind. A publisher's own
+       * portrayal needs the style resolved and its tiles fetched, so the
+       * icon stands in until the first render arrives. */
+      GtkWidget *icon = gtk_image_new_from_icon_name ("network-workgroup-symbolic");
+
+      gtk_image_set_pixel_size (GTK_IMAGE (icon), 26);
+      gtk_widget_add_css_class (icon, "lk-accent");
+      gtk_widget_set_valign (icon, GTK_ALIGN_CENTER);
+      gtk_widget_set_halign (icon, GTK_ALIGN_CENTER);
       gtk_widget_add_css_class (frame, "lk-chart-art-empty");
+      /* An overlay child as well, so the frame alone sets the height. */
+      gtk_overlay_add_overlay (GTK_OVERLAY (art), icon);
     }
 
-  gtk_widget_set_size_request (frame, LK_TILE_WIDTH, LK_TILE_ART);
-  gtk_widget_set_overflow (frame, GTK_OVERFLOW_HIDDEN);
-  gtk_widget_set_vexpand (content, TRUE);
-  gtk_box_append (GTK_BOX (frame), content);
-  gtk_widget_add_css_class (frame, "lk-chart-art");
-  return frame;
+  return art;
 }
 
 /* Read this chart again, or take it off the list. Lookout's own chart has
@@ -219,7 +229,6 @@ lk_tile_new (LkGallery *self, const char *url, const char *name, const char *det
   gtk_widget_add_css_class (button, "lk-chart-tile");
   if (active)
     gtk_widget_add_css_class (button, "lk-chart-tile-active");
-  gtk_widget_set_valign (button, GTK_ALIGN_START);
 
   if (url != NULL)
     {
@@ -433,9 +442,17 @@ lk_chart_gallery_new (LkAppModel *model, LkChartGalleryAdd on_add, gpointer user
 
   gtk_widget_set_margin_top (self->row, 2);
   gtk_widget_set_margin_bottom (self->row, 2);
+  /* The row keeps its own height, and every tile fills it. The tile that
+   * adds a chart has a line of words and no picture, so its own height is
+   * less than the height of the tiles beside it. */
+  gtk_widget_set_valign (self->row, GTK_ALIGN_START);
   gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scroller), self->row);
   gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scroller),
                                   GTK_POLICY_AUTOMATIC, GTK_POLICY_NEVER);
+  /* gtk_widget_compute_expand reads the children, so the gallery sets the
+   * flag itself: a picture inside a tile must not claim the spare height of
+   * the page the gallery is on. */
+  gtk_widget_set_vexpand (scroller, FALSE);
   /* The row is as tall as its tiles and no taller. */
   gtk_scrolled_window_set_propagate_natural_height (GTK_SCROLLED_WINDOW (scroller), TRUE);
   g_object_set_data_full (G_OBJECT (self->row), "lk-gallery", self, lk_gallery_free);
