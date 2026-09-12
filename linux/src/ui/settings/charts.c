@@ -50,23 +50,27 @@ lk_charts_open_clicked (GtkButton *button, gpointer user_data)
 }
 
 static void
-lk_charts_archive_clicked (GtkButton *button, gpointer user_data)
+lk_charts_file_clicked (GtkButton *button, gpointer user_data)
 {
   LkSettings *settings = user_data;
   GtkRoot *root = gtk_widget_get_root (GTK_WIDGET (button));
+  GtkWidget *popover = gtk_widget_get_ancestor (GTK_WIDGET (button), GTK_TYPE_POPOVER);
 
-  lk_present_open_archive_dialog (GTK_IS_WINDOW (root) ? GTK_WINDOW (root) : NULL,
-                                  settings->model);
+  if (popover != NULL)
+    gtk_popover_popdown (GTK_POPOVER (popover));
+  lk_present_open_chart_file_dialog (GTK_IS_WINDOW (root) ? GTK_WINDOW (root) : NULL,
+                                     settings->model);
 }
 
 static void
-lk_charts_pictures_clicked (GtkButton *button, gpointer user_data)
+lk_charts_folder_clicked (GtkButton *button, gpointer user_data)
 {
   LkSettings *settings = user_data;
-  GtkRoot *root = gtk_widget_get_root (GTK_WIDGET (button));
+  GtkWidget *popover = gtk_widget_get_ancestor (GTK_WIDGET (button), GTK_TYPE_POPOVER);
 
-  lk_present_add_raster_dialog (GTK_IS_WINDOW (root) ? GTK_WINDOW (root) : NULL,
-                                settings->model);
+  if (popover != NULL)
+    gtk_popover_popdown (GTK_POPOVER (popover));
+  lk_charts_open_clicked (button, settings);
 }
 
 /* ---- the active chart ---------------------------------------------------- */
@@ -786,11 +790,9 @@ lk_noaa_checked_text (LkNoaa *noaa)
  * folder they already have is choosing between free official cover and their
  * own files, and this row is where that choice is made. */
 static GtkWidget *
-lk_add_chart_row (GtkWidget *section, const char *icon_name, const char *title,
-                  const char *detail, const char *trailing,
-                  GCallback clicked, LkSettings *settings)
+lk_add_chart_face (const char *icon_name, const char *title, const char *detail,
+                   const char *trailing, GtkWidget *holder)
 {
-  GtkWidget *button = gtk_button_new ();
   GtkWidget *row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 13);
   GtkWidget *icon = gtk_image_new_from_icon_name (icon_name);
   GtkWidget *column = gtk_box_new (GTK_ORIENTATION_VERTICAL, 3);
@@ -824,19 +826,64 @@ lk_add_chart_row (GtkWidget *section, const char *icon_name, const char *title,
       gtk_widget_set_valign (when, GTK_ALIGN_CENTER);
       gtk_widget_set_visible (when, trailing[0] != '\0');
       gtk_box_append (GTK_BOX (row), when);
-      g_object_set_data (G_OBJECT (button), "lk-trailing", when);
+      g_object_set_data (G_OBJECT (holder), "lk-trailing", when);
     }
 
   gtk_image_set_pixel_size (GTK_IMAGE (chevron), 12);
   gtk_widget_add_css_class (chevron, "dim-label");
   gtk_widget_set_valign (chevron, GTK_ALIGN_CENTER);
   gtk_box_append (GTK_BOX (row), chevron);
+  return row;
+}
 
-  gtk_button_set_child (GTK_BUTTON (button), row);
+static GtkWidget *
+lk_add_chart_row (GtkWidget *section, const char *icon_name, const char *title,
+                  const char *detail, const char *trailing,
+                  GCallback clicked, LkSettings *settings)
+{
+  GtkWidget *button = gtk_button_new ();
+
+  gtk_button_set_child (GTK_BUTTON (button),
+                        lk_add_chart_face (icon_name, title, detail, trailing, button));
   gtk_widget_add_css_class (button, "flat");
   g_signal_connect (button, "clicked", clicked, settings);
   gtk_box_append (GTK_BOX (section), button);
   return button;
+}
+
+/* The same row, opening a popover of its own.
+ *
+ * ONE GtkFileDialog PICKS FILES OR FOLDERS AND NEVER BOTH, and the mariner's
+ * charts arrive as either: a folder of cells, an archive an agency published,
+ * a prepared chart, a picture. macOS asks for all of them in one panel. Here
+ * the row is one entry that offers the two pickers. */
+static GtkWidget *
+lk_add_chart_menu_row (GtkWidget *section, const char *icon_name, const char *title,
+                       const char *detail, LkSettings *settings)
+{
+  GtkWidget *menu = gtk_menu_button_new ();
+  GtkWidget *popover = gtk_popover_new ();
+  GtkWidget *box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 2);
+  GtkWidget *folder = gtk_button_new_with_label ("Choose a Folder…");
+  GtkWidget *file = gtk_button_new_with_label ("Choose a File…");
+
+  gtk_widget_add_css_class (folder, "flat");
+  gtk_widget_add_css_class (file, "flat");
+  gtk_widget_set_halign (gtk_button_get_child (GTK_BUTTON (folder)), GTK_ALIGN_START);
+  gtk_widget_set_halign (gtk_button_get_child (GTK_BUTTON (file)), GTK_ALIGN_START);
+  g_signal_connect (folder, "clicked", G_CALLBACK (lk_charts_folder_clicked), settings);
+  g_signal_connect (file, "clicked", G_CALLBACK (lk_charts_file_clicked), settings);
+
+  gtk_box_append (GTK_BOX (box), folder);
+  gtk_box_append (GTK_BOX (box), file);
+  gtk_popover_set_child (GTK_POPOVER (popover), box);
+
+  gtk_menu_button_set_child (GTK_MENU_BUTTON (menu),
+                             lk_add_chart_face (icon_name, title, detail, NULL, menu));
+  gtk_menu_button_set_popover (GTK_MENU_BUTTON (menu), popover);
+  gtk_widget_add_css_class (menu, "flat");
+  gtk_box_append (GTK_BOX (section), menu);
+  return menu;
 }
 
 void
@@ -913,18 +960,14 @@ lk_build_charts_page (LkSettings *settings)
                         "Pick the waters you sail. Lookout downloads the cells and "
                         "prepares them. Free.",
                         checked, G_CALLBACK (lk_charts_noaa_clicked), settings);
-  lk_add_chart_row (add, "folder-open-symbolic", "Add charts from this computer…",
-                    "A folder of cells, of prepared charts, or of pictures. Or drop "
-                    "one anywhere in the chart window.",
-                    NULL, G_CALLBACK (lk_charts_open_clicked), settings);
-  lk_add_chart_row (add, "package-x-generic-symbolic", "Add an archive…",
-                    "The .zip a chart agency publishes, read where it lies: nothing "
-                    "is unpacked.",
-                    NULL, G_CALLBACK (lk_charts_archive_clicked), settings);
-  lk_add_chart_row (add, "image-x-generic-symbolic", "Add pictures…",
-                    "MBTiles of imagery or another vendor's charts, and BSB/KAP raster "
-                    "sheets.",
-                    NULL, G_CALLBACK (lk_charts_pictures_clicked), settings);
+  /* ONE ROW FOR EVERYTHING ON THE DISK. A folder of cells, the .zip an agency
+   * publishes, a chart already prepared, and a picture are all the mariner's
+   * own files, added the same way and switched on the same way. Three rows
+   * made them remember which row a file had gone in by. */
+  lk_add_chart_menu_row (add, "folder-open-symbolic", "Add charts from this computer…",
+                         "A folder of cells, an archive, a prepared chart, or "
+                         "pictures. Or drop any of them anywhere in the chart window.",
+                         settings);
 
   lk_footer (add,
              "S-57 and S-101 cells (.000 with their updates) · charts Lookout has "

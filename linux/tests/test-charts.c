@@ -193,7 +193,11 @@ test_pane_order (void)
 
 /* Every way to add charts, each saying what it does. A mariner choosing
  * between NOAA and their own folder is choosing between free official cover
- * and files they already hold. */
+ * and files they already hold.
+ *
+ * TWO ROWS, and the second covers everything on the disk: a folder of cells,
+ * an archive, a prepared chart, a picture. One GtkFileDialog picks files or
+ * folders and never both, so that row offers the two pickers. */
 static void
 test_add_rows (void)
 {
@@ -201,17 +205,23 @@ test_add_rows (void)
   static const char *rows[] = {
     "Get charts from NOAA…",
     "Add charts from this computer…",
-    "Add an archive…",
-    "Add pictures…",
   };
 
   for (gsize i = 0; i < G_N_ELEMENTS (rows); i++)
     {
-      GtkWidget *row = lk_test_find_button (pane, rows[i]);
+      GtkWidget *row = lk_test_find_label (pane, rows[i]);
 
       g_assert_nonnull (row);
       g_assert_true (lk_test_shown (row, pane));
     }
+
+  g_assert_nonnull (lk_test_find_button (pane, "Choose a Folder…"));
+  g_assert_nonnull (lk_test_find_button (pane, "Choose a File…"));
+
+  /* The rows the merge replaced. A second way in to the same files is what
+   * made a mariner remember which row a file had gone in by. */
+  g_assert_null (lk_test_find_label (pane, "Add an archive…"));
+  g_assert_null (lk_test_find_label (pane, "Add pictures…"));
 
   /* The kinds a file can be, in one place. A mariner with a .kap sheet has to
    * be able to find out that it works. */

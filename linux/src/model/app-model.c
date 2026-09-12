@@ -604,9 +604,12 @@ lk_app_model_open_chart (LkAppModel *self, const char *path)
       return;
     }
 
-  /* A single cell is a set of one. It joins the library like a folder does,
-   * so it survives a restart and composes with what is already installed. */
-  lk_app_model_open_prepared (self, path, FALSE);
+  /* A single file is a set of one, and it goes through the scan the way a
+   * folder does: the core reads what the file IS, so one cell bakes, a
+   * prepared chart opens, and a picture goes to the raster chart list.
+   * Reaching open_prepared straight from here reported that a picture held
+   * no charts this app can draw. */
+  lk_app_model_open_chart_directory (self, path);
 }
 
 /* Open the LIBRARY with `source` added: the source goes on the set list,
