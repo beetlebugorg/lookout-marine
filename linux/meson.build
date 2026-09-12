@@ -143,6 +143,7 @@ sources = files(
   'src/ui/chart/pick-report.c',
   'src/ui/chart/view.c',
   'src/ui/charts/coastline.c',
+  'src/ui/charts/coverage-map.c',
   'src/ui/chrome/about.c',
   'src/ui/chrome/alerts.c',
   'src/ui/chrome/licenses.c',
