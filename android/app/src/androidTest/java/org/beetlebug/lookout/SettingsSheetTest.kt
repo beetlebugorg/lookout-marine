@@ -308,6 +308,13 @@ class SettingsSheetTest {
      * rather than showing an empty browser.
      */
     @Test fun theChartsSectionAsksForAccessBeforeShowingALibrary() {
+        // The claim is about a device that has not granted All files access.
+        // One that has is answering a different question, so it says so and
+        // stands down rather than failing.
+        org.junit.Assume.assumeFalse(
+            "this device has already granted All files access",
+            android.os.Environment.isExternalStorageManager(),
+        )
         openSection("Charts", "charts")
         compose.onNode(hasText("Grant file access")).assertExists()
         compose.onNode(hasText("nothing is copied", substring = true)).assertExists()
