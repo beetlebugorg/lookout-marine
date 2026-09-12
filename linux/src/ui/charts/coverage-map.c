@@ -354,10 +354,12 @@ lk_coverage_map_new (LkNoaa *noaa)
 
   g_return_val_if_fail (LK_IS_NOAA (noaa), NULL);
 
-  /* The map keeps its own shape at whatever width it is given, so the coast
-   * is never stretched. */
-  gtk_aspect_frame_set_child (GTK_ASPECT_FRAME (frame), main_area);
-  gtk_overlay_set_child (GTK_OVERLAY (overlay), frame);
+  /* The map keeps its own shape at whatever width it is given, so the coast is
+   * never stretched, and the insets sit INSIDE that shape. The aspect frame
+   * centres the map in whatever width it is given, so insets placed outside it
+   * align to the empty margin and hang off the map's own edge. */
+  gtk_overlay_set_child (GTK_OVERLAY (overlay), main_area);
+  gtk_aspect_frame_set_child (GTK_ASPECT_FRAME (frame), overlay);
 
   /* Alaska and Hawaii sit in the Pacific, in the corner of the map. */
   gtk_box_append (GTK_BOX (corners), lk_inset_new (noaa, &lk_panel_alaska, LK_INSET_WIDTH));
@@ -369,8 +371,8 @@ lk_coverage_map_new (LkNoaa *noaa)
   gtk_widget_set_margin_bottom (corners, 8);
   gtk_overlay_add_overlay (GTK_OVERLAY (overlay), corners);
 
-  gtk_widget_set_hexpand (overlay, TRUE);
-  return overlay;
+  gtk_widget_set_hexpand (frame, TRUE);
+  return frame;
 }
 
 /* ---- the pills ----------------------------------------------------------- */

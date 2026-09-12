@@ -8,7 +8,20 @@
 #include "ui/settings/charts.h"
 #include "ui/settings/widgets.h"
 
+#include "ui/charts/noaa-window.h"
 #include "ui/open-dialogs.h"
+
+/* NOAA's own charts, in the picker's own window. The map wants 1040 points and
+ * this pane is about 550, so it opens beside the form. */
+static void
+lk_charts_noaa_clicked (GtkButton *button, gpointer user_data)
+{
+  LkSettings *settings = user_data;
+  GtkRoot *root = gtk_widget_get_root (GTK_WIDGET (button));
+
+  lk_noaa_window_present (GTK_IS_WINDOW (root) ? GTK_WINDOW (root) : NULL,
+                          settings->model);
+}
 
 static void
 lk_charts_archive_clicked (GtkButton *button, gpointer user_data)
@@ -632,9 +645,12 @@ lk_build_charts_page (LkSettings *settings)
 
   GtkWidget *add = lk_section (page, NULL);
   GtkWidget *add_buttons = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
+  GtkWidget *noaa = gtk_button_new_with_label ("Get Charts from NOAA…");
   GtkWidget *button = gtk_button_new_with_label ("Add Folder…");
   GtkWidget *archive = gtk_button_new_with_label ("Add Archive…");
 
+  g_signal_connect (noaa, "clicked", G_CALLBACK (lk_charts_noaa_clicked), settings);
+  gtk_box_append (GTK_BOX (add_buttons), noaa);
   g_signal_connect (button, "clicked", G_CALLBACK (lk_charts_open_clicked), settings);
   g_signal_connect (archive, "clicked", G_CALLBACK (lk_charts_archive_clicked), settings);
   gtk_box_append (GTK_BOX (add_buttons), button);

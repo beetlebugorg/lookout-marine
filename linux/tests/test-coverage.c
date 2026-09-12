@@ -13,6 +13,7 @@
 
 #include "model/app-model.h"
 #include "ui/charts/coverage-map.h"
+#include "ui/charts/noaa-window.h"
 
 static LkAppModel *model;
 static LkNoaa     *noaa;
@@ -196,6 +197,70 @@ test_click_needs_a_catalog (void)
   g_assert_cmpuint (lk_noaa_picked_count (noaa), ==, 0);
 }
 
+/* The window the picker opens in, found by its title. It is not a child of
+ * anything this suite holds, so the toplevel list is what answers. */
+static GtkWidget *
+picker_window (void)
+{
+  GListModel *tops = gtk_window_get_toplevels ();
+  guint n = g_list_model_get_n_items (tops);
+
+  for (guint i = 0; i < n; i++)
+    {
+      g_autoptr (GtkWindow) top = g_list_model_get_item (tops, i);
+
+      if (g_strcmp0 (gtk_window_get_title (top), "NOAA Charts") == 0)
+        return GTK_WIDGET (top);
+    }
+  return NULL;
+}
+
+/* The picker opens in a window of its own, at the width the map was drawn for,
+ * and Download waits for a catalog and a pick. */
+static void
+test_picker_window (void)
+{
+  GtkWidget *picker;
+  GtkWidget *download;
+  int width = 0, height = 0;
+
+  g_assert_null (picker_window ());
+
+  lk_noaa_window_present (GTK_WINDOW (window), model);
+  lk_test_drain ();
+
+  picker = picker_window ();
+  g_assert_nonnull (picker);
+  gtk_window_get_default_size (GTK_WINDOW (picker), &width, &height);
+  g_assert_cmpint (width, >=, 1040);
+  g_assert_cmpint (height, >=, 760);
+
+  /* The map, its regions, and the two answers. */
+  g_assert_cmpuint (count (picker, match_drawing_area), ==, 3);
+  g_assert_nonnull (lk_test_find_button (picker, "Cancel"));
+  download = lk_test_find_button (picker, "Download");
+  g_assert_nonnull (download);
+
+  /* No catalog and no pick: nothing to download. */
+  g_assert_false (gtk_widget_get_sensitive (download));
+
+  /* A pick alone is not enough. The catalog is what prices it, and a download
+   * with no price is a download a mariner did not agree to. */
+  lk_noaa_toggle (noaa, "d5");
+  lk_test_drain ();
+  g_assert_false (gtk_widget_get_sensitive (download));
+  lk_noaa_clear_picks (noaa);
+
+  /* A second ask raises the window that is up rather than stacking another. */
+  lk_noaa_window_present (GTK_WINDOW (window), model);
+  lk_test_drain ();
+  g_assert_true (picker_window () == picker);
+
+  gtk_window_destroy (GTK_WINDOW (picker));
+  lk_test_drain ();
+  g_assert_null (picker_window ());
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -213,6 +278,7 @@ main (int argc, char *argv[])
   g_test_add_func ("/coverage/catalog-line-quiet", test_catalog_line_quiet_when_idle);
   g_test_add_func ("/coverage/region-hit", test_region_hit);
   g_test_add_func ("/coverage/click-needs-a-catalog", test_click_needs_a_catalog);
+  g_test_add_func ("/coverage/picker-window", test_picker_window);
 
   return g_test_run ();
 }
