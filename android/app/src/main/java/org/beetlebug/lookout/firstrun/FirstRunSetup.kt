@@ -55,6 +55,7 @@ fun FirstRunSetup(
             FirstRunModel.Step.WELCOME -> WelcomeStep()
             FirstRunModel.Step.SOURCE -> SourceStep(flow)
             FirstRunModel.Step.COVERAGE -> CoverageStep(noaa)
+            FirstRunModel.Step.DEPTHS -> DepthStep(controller.mariner)
             else -> Text("", Modifier.padding(20.dp))
         }
     }
