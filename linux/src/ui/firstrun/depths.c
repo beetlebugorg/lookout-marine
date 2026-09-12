@@ -15,6 +15,10 @@
 
 #define LK_FEET_PER_METRE 3.28084
 
+/* The left column, in the reference's proportion: the boat beside the water
+ * rather than above it. */
+#define LK_DEPTH_COLUMN 334
+
 /* The contours an S-57 survey draws. The safety contour is the first of these
  * at or past the safety depth, because the chart shades on a contour the
  * survey HAS. */
@@ -101,10 +105,16 @@ typedef struct {
   double          clearance;
 
   GtkWidget *entry;
-  GtkWidget *units;
+  GtkWidget *metres;   /* the two unit toggles, one group */
+  GtkWidget *feet;
   GtkWidget *pills;
   GtkWidget *derived;
   GtkWidget *water;
+
+  /* TRUE while the step writes its own widgets. The draft field and the unit
+   * toggles both report a change the step has just made, and reading it back
+   * converted the boat a second time. */
+  gboolean   busy;
 } LkDepthStep;
 
 static void
@@ -155,6 +165,23 @@ lk_depth_apply (LkDepthStep *step)
 
 static void lk_depth_rebuild (LkDepthStep *step);
 
+/* The draft alone, for the field, with no unit on it. */
+static void
+lk_depth_show_draft (LkDepthStep *step)
+{
+  double rounded = round (step->draft * 10) / 10;
+  g_autofree char *text = rounded == round (rounded)
+                              ? g_strdup_printf ("%d", (int) rounded)
+                              : g_strdup_printf ("%.1f", rounded);
+
+  if (g_strcmp0 (gtk_editable_get_text (GTK_EDITABLE (step->entry)), text) == 0)
+    return;
+
+  step->busy = TRUE;
+  gtk_editable_set_text (GTK_EDITABLE (step->entry), text);
+  step->busy = FALSE;
+}
+
 static void
 lk_depth_entry_changed (GtkEntry *entry, gpointer user_data)
 {
@@ -163,29 +190,35 @@ lk_depth_entry_changed (GtkEntry *entry, gpointer user_data)
   double value = g_ascii_strtod (text, NULL);
   double cap = lk_depth_feet (step) ? 100 : 30;
 
-  if (value > 0)
-    step->draft = MIN (value, cap);
+  /* An empty field is a number half typed. The step holds the last draft it
+   * read and waits. */
+  if (step->busy || value <= 0)
+    return;
+
+  step->draft = MIN (value, cap);
   lk_depth_apply (step);
   lk_depth_rebuild (step);
 }
 
 static void
-lk_depth_unit_changed (GtkDropDown *drop, GParamSpec *pspec, gpointer user_data)
+lk_depth_unit_toggled (GtkToggleButton *button, gpointer user_data)
 {
   LkDepthStep *step = user_data;
   tile57_mariner *mariner = lk_mariner_raw (step->flow->mariner);
-  gboolean to_feet = gtk_drop_down_get_selected (drop) == 1;
+  gboolean to_feet = gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (step->feet));
   double factor;
 
-  if ((mariner->depth_unit == 1) == to_feet)
+  if (step->busy || (mariner->depth_unit == 1) == to_feet)
     return;
 
-  /* Convert the boat, and snap the clearance to one the new unit offers. */
+  /* Convert the boat, and snap the clearance to one the new unit offers. A
+   * draft the mariner typed in one unit is the same boat in the other. */
   factor = to_feet ? LK_FEET_PER_METRE : 1.0 / LK_FEET_PER_METRE;
   mariner->depth_unit = to_feet ? 1 : 0;
   step->draft = round (step->draft * factor * 2) / 2;
   step->clearance = lk_depth_nearest_clearance (step->clearance * factor, to_feet);
 
+  lk_depth_show_draft (step);
   lk_depth_apply (step);
   lk_depth_rebuild (step);
 }
@@ -293,6 +326,13 @@ lk_depth_rebuild (LkDepthStep *step)
   double safety = lk_depth_safety (step->draft, step->clearance);
   double contour = lk_depth_contour (safety, feet);
 
+  /* The toggles, and NOT the draft field: writing the field from here fought
+   * the mariner's own typing. Clearing it put the old number back mid-edit,
+   * and the digits that followed landed on the end of that. The unit change
+   * writes the field itself, because there the number is the step's. */
+  step->busy = TRUE;
+  gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (feet ? step->feet : step->metres), TRUE);
+  step->busy = FALSE;
   lk_depth_fill_pills (step);
   lk_depth_fill_derived (step);
   if (step->water != NULL)
@@ -306,12 +346,23 @@ GtkWidget *
 lk_first_run_depths_new (LkFirstRunFlow *flow)
 {
   GtkWidget *body = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+  GtkWidget *columns = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 26);
+  GtkWidget *boat = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
   LkDepthStep *step = g_new0 (LkDepthStep, 1);
+  tile57_mariner *mariner = lk_mariner_raw (flow->mariner);
   gboolean feet;
-  static const char *const units[] = { "Metres", "Feet", NULL };
 
   step->flow = flow;
   g_object_set_data_full (G_OBJECT (body), "lk-depth-step", step, lk_depth_step_free);
+
+  /* Setup asks in feet. The engine's own default is metres, and these charts
+   * are sailed where a boat is measured in feet. The unit is the mariner's
+   * from the second time the step is built, so switching it holds. */
+  if (!lk_first_run_asked_depths (flow->flow) && mariner->depth_unit != 1)
+    {
+      mariner->depth_unit = 1;
+      lk_mariner_touch (flow->mariner);
+    }
 
   /* Start at a small keelboat. The stored safety depth is no help: it starts
    * at the engine's 10 m, and a draft read back out of that gives 9.7 m. */
@@ -326,30 +377,52 @@ lk_first_run_depths_new (LkFirstRunFlow *flow)
   gtk_widget_set_margin_top (heading, 34);
   gtk_box_append (GTK_BOX (body), heading);
 
-  /* The draft, and the unit it is read in. */
+  /* ---- the left column: the boat ---- */
+
   GtkWidget *draft_row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 14);
   GtkWidget *draft_label = gtk_label_new ("Draft");
-  g_autofree char *draft_text = g_strdup_printf ("%.1f", step->draft);
 
   step->entry = gtk_entry_new ();
-  gtk_editable_set_text (GTK_EDITABLE (step->entry), draft_text);
   gtk_entry_set_input_purpose (GTK_ENTRY (step->entry), GTK_INPUT_PURPOSE_NUMBER);
+  gtk_entry_set_alignment (GTK_ENTRY (step->entry), 1.0);
   gtk_editable_set_width_chars (GTK_EDITABLE (step->entry), 7);
   g_signal_connect (step->entry, "changed", G_CALLBACK (lk_depth_entry_changed), step);
-
-  step->units = gtk_drop_down_new_from_strings (units);
-  gtk_drop_down_set_selected (GTK_DROP_DOWN (step->units), feet ? 1 : 0);
-  g_signal_connect (step->units, "notify::selected",
-                    G_CALLBACK (lk_depth_unit_changed), step);
 
   gtk_widget_add_css_class (draft_label, "heading");
   gtk_widget_set_size_request (draft_label, 62, -1);
   gtk_label_set_xalign (GTK_LABEL (draft_label), 0.0);
   gtk_box_append (GTK_BOX (draft_row), draft_label);
   gtk_box_append (GTK_BOX (draft_row), step->entry);
-  gtk_box_append (GTK_BOX (draft_row), step->units);
-  gtk_widget_set_margin_top (draft_row, 24);
-  gtk_box_append (GTK_BOX (body), draft_row);
+  gtk_box_append (GTK_BOX (boat), draft_row);
+
+  /* The unit, under the field it reads. Two linked toggles, which is the
+   * shape a segmented picker has. */
+  GtkWidget *unit_row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 14);
+  GtkWidget *unit_label = gtk_label_new ("Units");
+  GtkWidget *unit_group = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+
+  step->metres = gtk_toggle_button_new_with_label ("Metres");
+  step->feet = gtk_toggle_button_new_with_label ("Feet");
+  gtk_toggle_button_set_group (GTK_TOGGLE_BUTTON (step->feet),
+                               GTK_TOGGLE_BUTTON (step->metres));
+  gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (feet ? step->feet : step->metres),
+                                TRUE);
+  g_signal_connect (step->metres, "toggled", G_CALLBACK (lk_depth_unit_toggled), step);
+  g_signal_connect (step->feet, "toggled", G_CALLBACK (lk_depth_unit_toggled), step);
+
+  gtk_widget_add_css_class (unit_group, "linked");
+  gtk_box_append (GTK_BOX (unit_group), step->metres);
+  gtk_box_append (GTK_BOX (unit_group), step->feet);
+  gtk_widget_set_halign (unit_group, GTK_ALIGN_START);
+
+  gtk_widget_add_css_class (unit_label, "dim-label");
+  gtk_widget_set_size_request (unit_label, 62, -1);
+  gtk_label_set_xalign (GTK_LABEL (unit_label), 0.0);
+  gtk_widget_set_valign (unit_label, GTK_ALIGN_CENTER);
+  gtk_box_append (GTK_BOX (unit_row), unit_label);
+  gtk_box_append (GTK_BOX (unit_row), unit_group);
+  gtk_widget_set_margin_top (unit_row, 9);
+  gtk_box_append (GTK_BOX (boat), unit_row);
 
   GtkWidget *draft_why = gtk_label_new ("Deepest point of the hull below the "
                                         "waterline, keel included.");
@@ -358,18 +431,18 @@ lk_first_run_depths_new (LkFirstRunFlow *flow)
   gtk_label_set_xalign (GTK_LABEL (draft_why), 0.0);
   gtk_label_set_wrap (GTK_LABEL (draft_why), TRUE);
   gtk_widget_set_margin_top (draft_why, 8);
-  gtk_box_append (GTK_BOX (body), draft_why);
+  gtk_box_append (GTK_BOX (boat), draft_why);
 
   /* The clearance. */
   GtkWidget *clearance_label = gtk_label_new ("Clearance under the keel");
   gtk_widget_add_css_class (clearance_label, "heading");
   gtk_label_set_xalign (GTK_LABEL (clearance_label), 0.0);
   gtk_widget_set_margin_top (clearance_label, 18);
-  gtk_box_append (GTK_BOX (body), clearance_label);
+  gtk_box_append (GTK_BOX (boat), clearance_label);
 
   step->pills = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
   gtk_widget_set_margin_top (step->pills, 9);
-  gtk_box_append (GTK_BOX (body), step->pills);
+  gtk_box_append (GTK_BOX (boat), step->pills);
 
   GtkWidget *clearance_why =
       gtk_label_new ("How much water you want left under the keel at the shallowest "
@@ -379,17 +452,25 @@ lk_first_run_depths_new (LkFirstRunFlow *flow)
   gtk_label_set_xalign (GTK_LABEL (clearance_why), 0.0);
   gtk_label_set_wrap (GTK_LABEL (clearance_why), TRUE);
   gtk_widget_set_margin_top (clearance_why, 9);
-  gtk_box_append (GTK_BOX (body), clearance_why);
+  gtk_box_append (GTK_BOX (boat), clearance_why);
 
   /* What it comes to. */
   step->derived = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
   gtk_widget_set_margin_top (step->derived, 16);
-  gtk_box_append (GTK_BOX (body), step->derived);
+  gtk_box_append (GTK_BOX (boat), step->derived);
 
-  /* And what it does to a chart. */
+  gtk_widget_set_size_request (boat, LK_DEPTH_COLUMN, -1);
+  gtk_box_append (GTK_BOX (columns), boat);
+
+  /* ---- the right column: what it does to a chart ---- */
+
   step->water = lk_depth_water_new ();
-  gtk_widget_set_margin_top (step->water, 18);
-  gtk_box_append (GTK_BOX (body), step->water);
+  gtk_widget_set_hexpand (step->water, TRUE);
+  gtk_widget_set_valign (step->water, GTK_ALIGN_START);
+  gtk_box_append (GTK_BOX (columns), step->water);
+
+  gtk_widget_set_margin_top (columns, 24);
+  gtk_box_append (GTK_BOX (body), columns);
 
   GtkWidget *warning = lk_step_warning (
       "Shading is not a depth sounder.",
@@ -402,6 +483,7 @@ lk_first_run_depths_new (LkFirstRunFlow *flow)
   gtk_widget_set_margin_end (body, 48);
   gtk_widget_set_margin_bottom (body, 22);
 
+  lk_depth_show_draft (step);
   lk_depth_apply (step);
   lk_depth_rebuild (step);
   return body;

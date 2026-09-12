@@ -269,6 +269,35 @@ lk_first_run_step_body (LkFirstRunFlow *self)
     }
 }
 
+/* Which footer shape this step takes. The primary action stands in one of the
+ * two containers, so it moves between them. */
+static void
+lk_first_run_footer_shape (LkFirstRunFlow *self, gboolean centered)
+{
+  if (self->centered == centered)
+    return;
+  self->centered = centered;
+
+  /* The container holds the only reference while the button is parented. */
+  g_object_ref (self->primary);
+  if (centered)
+    {
+      gtk_box_remove (GTK_BOX (self->actions), self->primary);
+      gtk_box_prepend (GTK_BOX (self->column), self->primary);
+      gtk_widget_set_size_request (self->primary, 300, -1);
+    }
+  else
+    {
+      gtk_box_remove (GTK_BOX (self->column), self->primary);
+      gtk_box_append (GTK_BOX (self->actions), self->primary);
+      gtk_widget_set_size_request (self->primary, -1, -1);
+    }
+  g_object_unref (self->primary);
+
+  gtk_widget_set_visible (self->bar, !centered);
+  gtk_widget_set_visible (self->column, centered);
+}
+
 /* Put the step on the card, size the card to it, and read the footer again. */
 static void
 lk_first_run_rebuild (LkFirstRunFlow *self)
@@ -289,6 +318,7 @@ lk_first_run_rebuild (LkFirstRunFlow *self)
   gtk_box_append (GTK_BOX (self->body), lk_first_run_step_body (self));
 
   gtk_widget_set_size_request (self->card, lk_first_run_sheet_width (step), -1);
+  lk_first_run_footer_shape (self, step == LK_FIRST_RUN_WELCOME);
   lk_first_run_refresh_footer (self);
 }
 
@@ -367,8 +397,9 @@ lk_first_run_page_new (LkAppModel *model)
   self->body = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
   gtk_box_append (GTK_BOX (card), self->body);
 
-  footer = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 12);
-  gtk_widget_add_css_class (footer, "lk-first-run-footer");
+  footer = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+  self->bar = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 12);
+  gtk_widget_add_css_class (self->bar, "lk-first-run-footer");
 
   self->footnote = gtk_label_new ("");
   gtk_widget_add_css_class (self->footnote, "dim-label");
@@ -376,7 +407,7 @@ lk_first_run_page_new (LkAppModel *model)
   gtk_label_set_xalign (GTK_LABEL (self->footnote), 0.0);
   gtk_label_set_wrap (GTK_LABEL (self->footnote), TRUE);
   gtk_widget_set_hexpand (self->footnote, TRUE);
-  gtk_box_append (GTK_BOX (footer), self->footnote);
+  gtk_box_append (GTK_BOX (self->bar), self->footnote);
 
   actions = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
   self->later = gtk_button_new_with_label ("Set Up Later");
@@ -397,11 +428,24 @@ lk_first_run_page_new (LkAppModel *model)
   g_signal_connect (self->primary, "clicked",
                     G_CALLBACK (lk_first_run_primary_clicked), self);
 
-  gtk_box_append (GTK_BOX (actions), self->later);
   gtk_box_append (GTK_BOX (actions), self->back);
   gtk_box_append (GTK_BOX (actions), self->stop);
   gtk_box_append (GTK_BOX (actions), self->primary);
-  gtk_box_append (GTK_BOX (footer), actions);
+  /* The actions hold the right end of the bar, with or without a footnote
+   * beside them. A hidden footnote takes no width and no expansion, which
+   * left Back and Continue at the left edge of the card. */
+  gtk_widget_set_hexpand (actions, TRUE);
+  gtk_widget_set_halign (actions, GTK_ALIGN_END);
+  self->actions = actions;
+  gtk_box_append (GTK_BOX (self->bar), actions);
+  gtk_box_append (GTK_BOX (footer), self->bar);
+
+  self->column = gtk_box_new (GTK_ORIENTATION_VERTICAL, 14);
+  gtk_widget_add_css_class (self->column, "lk-first-run-choice");
+  gtk_widget_set_halign (self->column, GTK_ALIGN_CENTER);
+  gtk_box_append (GTK_BOX (self->column), self->later);
+  gtk_widget_set_visible (self->column, FALSE);
+  gtk_box_append (GTK_BOX (footer), self->column);
   gtk_box_append (GTK_BOX (card), footer);
 
   /* A step taller than the window must still be reachable, so the card
@@ -461,8 +505,11 @@ lk_first_run_consider (GtkWidget *page)
                                lk_chart_links_active (links) != NULL))
     return;
 
-  lk_first_run_begin (self->flow);
+  /* Read the chart's mariner BEFORE the flow starts. Beginning it builds the
+   * first step, and the depth step writes the unit it asks in; a reload after
+   * that put the engine's own value back under the step. */
   lk_mariner_reload (self->mariner);
+  lk_first_run_begin (self->flow);
   lk_first_run_frame_country (self);
 }
 

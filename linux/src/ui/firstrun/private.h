@@ -117,6 +117,11 @@ gboolean lk_first_run_order (LkFirstRun *self, const char **out_regions,
 gboolean lk_first_run_saw_bake (LkFirstRun *self);
 void     lk_first_run_note_bake (LkFirstRun *self);
 
+/* Whether the depth step has been shown in this run. FALSE the first time it
+ * is asked, and TRUE from then on, so the step seeds the boat and the unit
+ * once and leaves the mariner's own answers alone after that. */
+gboolean lk_first_run_asked_depths (LkFirstRun *self);
+
 /* ---- the flow ------------------------------------------------------------ */
 
 typedef struct {
@@ -132,6 +137,16 @@ typedef struct {
   GtkWidget *stop;
   GtkWidget *later;
   GtkWidget *primary;
+
+  /* The footer has two shapes. Every step but the first puts its actions in
+   * a row at the right of a bar. The welcome step centers the primary action
+   * under the prose with Set Up Later below it, because it has no previous
+   * step and a lone Continue in the corner of a 640 point sheet reads as a
+   * half filled form. `centered` is the shape on screen now. */
+  GtkWidget *bar;
+  GtkWidget *actions;
+  GtkWidget *column;
+  gboolean   centered;
 } LkFirstRunFlow;
 
 /* The step's content. Each unit builds one, and the flow puts it in the

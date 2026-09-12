@@ -15,6 +15,7 @@ struct _LkFirstRun {
 
   /* A bake has been seen running. */
   gboolean saw_bake;
+  gboolean asked_depths;
 
   /* The NOAA download as it was ordered. */
   char    *order_regions;
@@ -323,6 +324,17 @@ lk_first_run_saw_bake (LkFirstRun *self)
 {
   g_return_val_if_fail (LK_IS_FIRST_RUN (self), FALSE);
   return self->saw_bake;
+}
+
+gboolean
+lk_first_run_asked_depths (LkFirstRun *self)
+{
+  g_return_val_if_fail (LK_IS_FIRST_RUN (self), TRUE);
+
+  if (self->asked_depths)
+    return TRUE;
+  self->asked_depths = TRUE;
+  return FALSE;
 }
 
 void

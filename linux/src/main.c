@@ -378,6 +378,11 @@ static const char *LK_CSS =
     "  padding: 14px 24px;"
     "  border-top: 1px solid alpha(@borders, 0.6);"
     "}"
+    /* The welcome step's own footer: the action under the prose, and the way
+     * out under it. No rule above it, because there is no bar. */
+    ".lk-first-run-choice {"
+    "  padding: 4px 24px 30px 24px;"
+    "}"
     /* A pick-one card. The chosen one takes the accent, so the row says which
      * it is at a glance and not by reading. */
     ".lk-step-card {"
