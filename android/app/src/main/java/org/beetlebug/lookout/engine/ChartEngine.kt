@@ -177,6 +177,12 @@ class ChartEngine private constructor() {
                     libraryAdd = Thread({
                         val n = engine.chartsAdd(chartPaths)
                         Log.i(TAG, "library installed behind the chart link: $n cells")
+                        // Ask for a frame. The cells land on this worker, and
+                        // a mariner who picked Lookout's own chart while they
+                        // were still arriving switched to an empty library:
+                        // nothing then asked the loop to build the scene, and
+                        // the chart stayed blank until a set was toggled.
+                        if (n > 0) kick()
                     }, "lookout-library-add").also { it.start() }
                 }
             }
