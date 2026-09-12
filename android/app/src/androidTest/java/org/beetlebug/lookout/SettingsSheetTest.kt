@@ -3,6 +3,7 @@ package org.beetlebug.lookout
 import org.beetlebug.lookout.charts.ChartLinkController
 import org.beetlebug.lookout.charts.ChartsModel
 import org.beetlebug.lookout.charts.RasterCharts
+import org.beetlebug.lookout.charts.NoaaController
 import org.beetlebug.lookout.charts.RasterController
 import org.beetlebug.lookout.engine.EngineAccess
 import org.beetlebug.lookout.hud.LookoutTheme
@@ -72,6 +73,7 @@ class SettingsSheetTest {
                     tables = TableController(access) { _, _ -> },
                     links = ChartLinkController(ctx, access),
                     raster = RasterController(access, RasterCharts(ctx)),
+                    noaa = NoaaController(access),
                     onRequestAccess = {},
                     onDismiss = {},
                     initialSection = section,
