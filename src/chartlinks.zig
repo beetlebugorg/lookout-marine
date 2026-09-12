@@ -270,6 +270,13 @@ pub const Links = struct {
     entries: std.ArrayList(Entry) = .empty,
     /// The selected link's url, or null for lookout's own chart.
     active: ?[]u8 = null,
+    /// The url whose style the renderer holds now. Owned.
+    ///
+    /// Picking the chart already drawn is a no-op, and worth telling apart:
+    /// a resolve re-reads the style, re-fetches its sprite packs and re-lays
+    /// out the scene, which for a 389 layer style with 5,354 sprite cells is
+    /// over a second of the calling thread.
+    applied: ?[]u8 = null,
     /// The credit line the active style's sources ask for. Owned; "" for none.
     attribution: []u8 = &.{},
     /// What went wrong with the last operation. Owned; "" for none.
@@ -320,6 +327,7 @@ pub const Links = struct {
         for (self.entries.items) |*e| self.freeEntry(e);
         self.entries.deinit(self.alloc);
         if (self.active) |a| self.alloc.free(a);
+        if (self.applied) |a| self.alloc.free(a);
         self.freeStr(&self.attribution);
         self.freeStr(&self.err);
         self.clearSources();
@@ -570,6 +578,18 @@ pub const Links = struct {
             return;
         };
         const e = self.find(want) orelse return;
+        // Already drawn. The pick still gets written down, because a list
+        // that has just been loaded may not have it yet.
+        if (self.applied) |a| {
+            if (std.mem.eql(u8, a, want)) {
+                if (self.active == null or !std.mem.eql(u8, self.active.?, want)) {
+                    self.setActive(want);
+                    self.save();
+                }
+                self.changed = true;
+                return;
+            }
+        }
         // The pick is the mariner's and stands whatever the network does: an
         // offline resolve leaves it selected so the next open retries.
         self.setActive(want);
@@ -633,12 +653,19 @@ pub const Links = struct {
         self.active = copy;
     }
 
+    fn setApplied(self: *Links, url: ?[]const u8) void {
+        const copy: ?[]u8 = if (url) |u| (self.alloc.dupe(u8, u) catch return) else null;
+        if (self.applied) |a| self.alloc.free(a);
+        self.applied = copy;
+    }
+
     /// Back to lookout's own chart.
     fn clearSelection(self: *Links) void {
         self.dropResolve();
         self.cancelResolves();
         self.clearSources();
         self.setActive(null);
+        self.setApplied(null);
         self.freeStr(&self.attribution);
         self.freeStr(&self.err);
         _ = self.sink.setStyle(self.sink.ctx, null);
@@ -983,6 +1010,7 @@ pub const Links = struct {
             self.cancelResolves();
             self.clearSources();
             self.setActive(null);
+            self.setApplied(null);
             self.freeStr(&self.attribution);
             self.fail("That chart style could not be drawn.");
             self.save();
@@ -1008,6 +1036,7 @@ pub const Links = struct {
             const b = p.png orelse continue;
             _ = self.sink.spritePack(self.sink.ctx, p.prefix, j, b);
         }
+        self.setApplied(rs.url);
         self.setStr(&self.attribution, creditLine(rs.arena.allocator(), style) catch "");
         self.keepEntry(rs);
         // After the entry exists: an add creates it here.
@@ -2559,6 +2588,33 @@ test "chartlinks: an offline resolve keeps the mariner's selection" {
     try testing.expect(f.style == null);
     try testing.expectEqual(@as(usize, 0), f.links.attribution.len);
     try testing.expect(f.links.err.len != 0);
+}
+
+test "chartlinks: picking the chart already drawn hands the renderer nothing" {
+    const f = try Fake.open(testing.allocator);
+    defer f.close();
+
+    f.links.add("https://h/style.json");
+    try f.answer("style.json", "{\"version\":8,\"sources\":{},\"layers\":[]}", 200);
+    try testing.expect(f.style != null);
+
+    const styles = f.style_calls;
+    const sent = f.sent.items.len;
+
+    // The same pick again. A resolve would read the style once more and set
+    // a style the renderer is already drawing: for a publisher's chart of
+    // 389 layers and 5,354 sprite cells that is over a second of the
+    // calling thread.
+    f.links.select("https://h/style.json");
+    try testing.expectEqual(styles, f.style_calls);
+    try testing.expectEqual(sent, f.sent.items.len);
+    try testing.expectEqualStrings("https://h/style.json", f.links.active.?);
+
+    // Lookout's own chart takes the renderer back, and the next pick of the
+    // link has work to do again.
+    f.links.select(null);
+    try testing.expect(f.style == null);
+    try testing.expect(f.links.applied == null);
 }
 
 test "chartlinks: a style the core refuses drops the pick and the credit" {

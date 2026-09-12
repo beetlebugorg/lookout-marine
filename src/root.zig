@@ -763,6 +763,14 @@ pub const Lookout = struct {
     /// Null means the chart is lookout's own. While one is set, the mariner's
     /// display settings do not shape the chart: it is the publisher's.
     alt_style: ?[]u8 = null,
+    /// Whether `alt_style` is the style charttable holds now.
+    ///
+    /// A publisher's style is fixed: the mariner's settings do not reach
+    /// inside it and neither does the SCAMIN latitude. Re-setting it costs a
+    /// parse of every layer it declares and a re-fold of its sprite packs —
+    /// over a second of the calling thread for a 389 layer style with 5,354
+    /// sprite cells — so a dirty style leaves it alone while this is true.
+    alt_applied: bool = false,
     /// The alt style's sprite packs (index JSON + sheet PNG, bytes as the
     /// host fetched them), kept so a scheme change — which rebakes the S-52
     /// sheet and REPLACES the atlas — can fold them back in. They belong to
@@ -2728,6 +2736,7 @@ pub const Lookout = struct {
     pub fn setAltStyle(self: *Lookout, json: ?[]const u8) !void {
         if (self.alt_style) |old| self.alloc.free(old);
         self.alt_style = null;
+        self.alt_applied = false;
         self.clearAltPacks();
         if (json) |j| self.alt_style = try self.alloc.dupe(u8, j);
         self.style_dirty = true;
@@ -2824,6 +2833,7 @@ pub const Lookout = struct {
             std.debug.print("chart link style: {s}\n", .{@errorName(e)});
             return false;
         };
+        self.alt_applied = true;
         return true;
     }
 
@@ -2874,9 +2884,15 @@ pub const Lookout = struct {
         // pushed through the same flag.
         self.style_lat = self.scaminLat();
         if (self.alt_style) |j| {
+            // Already in the renderer: a mariner change and a latitude move
+            // are both nothing to a publisher's style, and the parse and the
+            // sprite re-fold are what a mariner feels as the window stopping.
+            if (self.alt_applied) return;
             self.ct.setStyleJson(j) catch |e| {
                 std.debug.print("alt style: {s}\n", .{@errorName(e)});
+                return;
             };
+            self.alt_applied = true;
             return;
         }
         var m = buildMarinerFrom(self.mariner, self.mariner.scheme);
@@ -2902,6 +2918,9 @@ pub const Lookout = struct {
             std.debug.print("style: {s}\n", .{@errorName(e)});
             return;
         };
+        // The engine's own style is what the renderer holds now, so an alt
+        // style kept from before has to be set again to come back.
+        self.alt_applied = false;
         self.ct.setSizeScale(self.render_size_scale);
     }
 
