@@ -45,12 +45,21 @@ struct _LkSettings {
   GtkWidget *sidebar;
   GtkWidget *stack;
 
-  /* The three lists on the Charts page: the installed raster charts, the
-   * charts by link, and the library of installed sets. All three answer a signal
-   * their own controls raise, so all three defer their rebuild. */
-  LkDeferredList raster;
+  /* The three lists on the Charts page: what the active chart cannot say for
+   * itself, the library of installed sets with its pictures, and the work
+   * arriving now. All three answer a signal their own controls raise, so all
+   * three defer their rebuild. */
   LkDeferredList links;
   LkDeferredList sets;
+  LkDeferredList work;
+
+  /* The summary beside the set list's heading, re-lettered as the scans land,
+   * and the section that holds the work in flight, hidden when there is
+   * none. */
+  GtkWidget *sets_summary;
+  GtkWidget *work_section;
+  /* The NOAA row, which carries when the catalog was last read. */
+  GtkWidget *noaa_row;
 
   /* The link field on the Charts page. The gallery's Add tile puts the cursor
    * in it rather than raising a second way to type a link. */

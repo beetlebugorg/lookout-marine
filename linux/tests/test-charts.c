@@ -15,6 +15,7 @@
 #include "model/app-model.h"
 #include "ui/charts/catalog.h"
 #include "ui/charts/gallery.h"
+#include "ui/settings/window.h"
 
 static LkAppModel *model;
 static GtkWidget  *window;
@@ -148,6 +149,93 @@ test_add_tile_asks (void)
   g_assert_cmpuint (add_asked, ==, 1);
 }
 
+/* The pane itself, as the settings window builds it. */
+static GtkWidget *
+charts_pane (void)
+{
+  GtkWidget *settings = lk_settings_window_new (model, NULL, "charts");
+
+  g_assert_nonnull (settings);
+  lk_test_drain ();
+  return settings;
+}
+
+/* The sections, in the order a mariner asks: which chart is DRAWN, what it is
+ * built from, what is arriving, and where to get more. */
+static void
+test_pane_order (void)
+{
+  GtkWidget *pane = charts_pane ();
+  GtkWidget *active = lk_test_find_label (pane, "Active chart");
+  GtkWidget *sets = lk_test_find_label (pane, "Your chart sets");
+  GtkWidget *arriving = lk_test_find_label (pane, "Arriving now");
+  GtkWidget *add = lk_test_find_label (pane, "Add charts");
+
+  g_assert_nonnull (active);
+  g_assert_nonnull (sets);
+  g_assert_nonnull (arriving);
+  g_assert_nonnull (add);
+
+  /* Nothing is arriving, so that section is not a heading over empty space. */
+  g_assert_false (lk_test_shown (arriving, pane));
+
+  /* ONE list of what is installed. The separate picture list is gone: a
+   * mariner had to remember which panel a file went into. */
+  g_assert_null (lk_test_find_label (pane, "Raster charts"));
+  /* And the gallery says which chart is drawn, so nothing reports the open
+   * file a second time. */
+  g_assert_null (lk_test_find_label (pane, "Open"));
+  g_assert_null (lk_test_find_label (pane, "No chart open"));
+
+  gtk_window_destroy (GTK_WINDOW (pane));
+  lk_test_drain ();
+}
+
+/* Every way to add charts, each saying what it does. A mariner choosing
+ * between NOAA and their own folder is choosing between free official cover
+ * and files they already hold. */
+static void
+test_add_rows (void)
+{
+  GtkWidget *pane = charts_pane ();
+  static const char *rows[] = {
+    "Get charts from NOAA…",
+    "Add charts from this computer…",
+    "Add an archive…",
+    "Add pictures…",
+  };
+
+  for (gsize i = 0; i < G_N_ELEMENTS (rows); i++)
+    {
+      GtkWidget *row = lk_test_find_button (pane, rows[i]);
+
+      g_assert_nonnull (row);
+      g_assert_true (lk_test_shown (row, pane));
+    }
+
+  /* The kinds a file can be, in one place. A mariner with a .kap sheet has to
+   * be able to find out that it works. */
+  g_assert_nonnull (lk_test_find (pane, lk_test_match_css_class, "dim-label"));
+
+  gtk_window_destroy (GTK_WINDOW (pane));
+  lk_test_drain ();
+}
+
+/* With nothing installed the library says so, and the gallery still offers the
+ * charts the app ships. */
+static void
+test_empty_library (void)
+{
+  GtkWidget *pane = charts_pane ();
+
+  g_assert_nonnull (lk_test_find_label (pane, "No chart sets yet"));
+  g_assert_nonnull (lk_test_find_label (pane, "Lookout chart"));
+  g_assert_nonnull (lk_test_find_label (pane, "Add a chart"));
+
+  gtk_window_destroy (GTK_WINDOW (pane));
+  lk_test_drain ();
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -163,6 +251,9 @@ main (int argc, char *argv[])
   g_test_add_func ("/charts/own-chart-is-active", test_own_chart_is_active);
   g_test_add_func ("/charts/shipped-tiles", test_shipped_tiles);
   g_test_add_func ("/charts/add-tile-asks", test_add_tile_asks);
+  g_test_add_func ("/charts/pane-order", test_pane_order);
+  g_test_add_func ("/charts/add-rows", test_add_rows);
+  g_test_add_func ("/charts/empty-library", test_empty_library);
 
   return g_test_run ();
 }

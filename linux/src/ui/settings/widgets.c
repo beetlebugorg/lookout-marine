@@ -231,7 +231,8 @@ lk_size_row (GtkWidget *section, LkSettings *settings, const char *title, double
 
 /* A section header with a right-aligned shortcut hint, as the reference's has. */
 GtkWidget *
-lk_section_hinted (GtkWidget *page, const char *title, const char *hint)
+lk_section_hinted (GtkWidget *page, const char *title, const char *hint,
+                   GtkWidget **out_hint)
 {
   GtkWidget *box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 6);
   GtkWidget *header = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
@@ -248,6 +249,8 @@ lk_section_hinted (GtkWidget *page, const char *title, const char *hint)
   gtk_box_append (GTK_BOX (box), header);
   gtk_widget_set_margin_top (box, 6);
   gtk_box_append (GTK_BOX (page), box);
+  if (out_hint != NULL)
+    *out_hint = tip;
   return box;
 }
 

@@ -17,10 +17,12 @@ GtkWidget *lk_page_new (LkSettings *settings, const char *id, const char *title,
 
 /* A titled group of rows on a page. The `titled` form hands back the title
  * label, for a page that re-letters it; the `hinted` form puts a shortcut hint
- * at the right of the header. */
+ * or a summary at the right of the header, and hands that label back for a
+ * page that re-letters it as the numbers land. */
 GtkWidget *lk_section (GtkWidget *page, const char *title);
 GtkWidget *lk_section_titled (GtkWidget *page, const char *title, GtkWidget **out_title);
-GtkWidget *lk_section_hinted (GtkWidget *page, const char *title, const char *hint);
+GtkWidget *lk_section_hinted (GtkWidget *page, const char *title, const char *hint,
+                              GtkWidget **out_hint);
 
 /* A caption under a section, for what a control cannot say on its own. */
 GtkWidget *lk_footer (GtkWidget *section, const char *text);

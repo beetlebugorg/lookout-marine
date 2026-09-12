@@ -23,9 +23,9 @@ lk_settings_free (gpointer data)
 {
   LkSettings *settings = data;
 
-  lk_deferred_list_clear (&settings->raster);
   lk_deferred_list_clear (&settings->links);
   lk_deferred_list_clear (&settings->sets);
+  lk_deferred_list_clear (&settings->work);
   g_clear_handle_id (&settings->status_poll_id, g_source_remove);
   g_clear_handle_id (&settings->list_refill_id, g_source_remove);
   g_clear_pointer (&settings->discovery, lk_discovery_free);
@@ -214,9 +214,9 @@ lk_settings_window_destroyed (GtkWidget *window, gpointer user_data)
   g_clear_handle_id (&settings->list_refill_id, g_source_remove);
   /* Every queued refill too: a toggle or an edit queues one, and a window
      destroyed before the idle runs would have it write into freed rows. */
-  lk_deferred_list_clear (&settings->raster);
   lk_deferred_list_clear (&settings->links);
   lk_deferred_list_clear (&settings->sets);
+  lk_deferred_list_clear (&settings->work);
   g_clear_pointer (&settings->discovery, lk_discovery_free);
   g_ptr_array_set_size (settings->discover_lists, 0);
   g_ptr_array_set_size (settings->status_labels, 0);
@@ -327,6 +327,12 @@ lk_settings_window_new (LkAppModel *model, GtkWindow *parent, const char *tab)
   /* And the library, whose titles fill in as the background scans land. */
   g_signal_connect_object (model, "chart-sets-changed",
                            G_CALLBACK (lk_settings_sets_changed), window, 0);
+  /* The work arriving now. This window stands over the chart, so a download
+   * begun here otherwise runs behind it with nothing to say where it got to. */
+  g_signal_connect_object (lk_app_model_get_noaa (model), "changed",
+                           G_CALLBACK (lk_settings_work_changed), window, 0);
+  g_signal_connect_object (model, "notify::baking",
+                           G_CALLBACK (lk_settings_work_changed), window, 0);
 
   /* A SIDEBAR OF SECTIONS beside the pane it chooses, as on the Mac. It is a
    * slot list, not a fixed menu: the four core sections, Plugins and Advanced
