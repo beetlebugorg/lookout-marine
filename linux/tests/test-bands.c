@@ -8,6 +8,7 @@
  * No display.
  */
 
+#include "library/bake.h"
 #include "library/sets.h"
 #include "ui/charts/band-ramp.h"
 
@@ -171,6 +172,56 @@ test_band_names (void)
   g_assert_cmpstr (lk_chart_band_name (7), ==, "Unknown");
 }
 
+/* A bake's done count, split across the bands it works.
+ *
+ * lookout_bake_order runs the coarse band first, so one counter from the core
+ * is enough to say which band is being worked and how much of it is left. That
+ * is what tells a mariner who stops part way that their passage is covered.
+ */
+static void
+test_bake_bands_advance (void)
+{
+  /* Coarse first, as the bake orders them: overview, coastal, harbour. */
+  LkBakeBand bands[3] = {
+    { .band = 1, .total = 2 },
+    { .band = 3, .total = 5 },
+    { .band = 5, .total = 10 },
+  };
+
+  /* Nothing done yet. */
+  lk_bake_bands_advance (bands, 3, 0);
+  g_assert_cmpuint (bands[0].done, ==, 0);
+  g_assert_cmpuint (bands[1].done, ==, 0);
+  g_assert_cmpuint (bands[2].done, ==, 0);
+
+  /* Part way through the first band. */
+  lk_bake_bands_advance (bands, 3, 1);
+  g_assert_cmpuint (bands[0].done, ==, 1);
+  g_assert_cmpuint (bands[1].done, ==, 0);
+
+  /* The first band finished, and the second started. */
+  lk_bake_bands_advance (bands, 3, 4);
+  g_assert_cmpuint (bands[0].done, ==, 2);
+  g_assert_cmpuint (bands[1].done, ==, 2);
+  g_assert_cmpuint (bands[2].done, ==, 0);
+
+  /* Everything. */
+  lk_bake_bands_advance (bands, 3, 17);
+  g_assert_cmpuint (bands[0].done, ==, 2);
+  g_assert_cmpuint (bands[1].done, ==, 5);
+  g_assert_cmpuint (bands[2].done, ==, 10);
+
+  /* A count past the total cannot overfill a band: a cancelled bake reports
+   * what it did, and a refused chart still counts as done. */
+  lk_bake_bands_advance (bands, 3, 99);
+  g_assert_cmpuint (bands[0].done, ==, 2);
+  g_assert_cmpuint (bands[1].done, ==, 5);
+  g_assert_cmpuint (bands[2].done, ==, 10);
+
+  /* No bands is no work. */
+  lk_bake_bands_advance (bands, 0, 5);
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -183,6 +234,7 @@ main (int argc, char *argv[])
   g_test_add_func ("/bands/narrow-bar", test_narrow_bar);
   g_test_add_func ("/bands/ramp-colours", test_ramp_colours);
   g_test_add_func ("/bands/band-names", test_band_names);
+  g_test_add_func ("/bands/bake-bands-advance", test_bake_bands_advance);
 
   return g_test_run ();
 }

@@ -18,12 +18,31 @@ struct _LkChartBake {
   guint poll_id;
   int   posted_done; /* the last count handed to on_progress */
 
+  /* The bands, in the order the bake works them, with a running total so a
+   * done count can be split across them. */
+  LkBakeBand bands[7];
+  guint      n_bands;
+
   LkBakeProgressFunc on_progress;
   LkBakeDoneFunc on_done;
   gpointer user_data;
 };
 
 /* ---- progress ------------------------------------------------------------ */
+
+void
+lk_bake_bands_advance (LkBakeBand *bands, guint n, guint done)
+{
+  guint reached = done;
+
+  g_return_if_fail (bands != NULL || n == 0);
+
+  for (guint i = 0; i < n; i++)
+    {
+      bands[i].done = MIN (reached, bands[i].total);
+      reached -= bands[i].done;
+    }
+}
 
 double
 lk_bake_progress_fraction (const LkBakeProgress *p)
@@ -256,6 +275,10 @@ lk_chart_bake_poll (gpointer data)
         .elapsed = (double) (now - bake->started_us) / G_USEC_PER_SEC,
       };
 
+      lk_bake_bands_advance (bake->bands, bake->n_bands, got.done);
+      progress.bands = bake->bands;
+      progress.n_bands = bake->n_bands;
+
       bake->posted_done = (int) got.done;
       bake->on_progress (&progress, bake->user_data);
     }
@@ -308,6 +331,28 @@ lk_chart_bake_start (const char        *source,
   g_autofree char *out_dir = lk_chart_bake_output_dir (source);
   if (out_dir == NULL)
     return NULL;
+
+  /* The bands, in the order above. A band appears once, where its first chart
+   * falls. */
+  LkBakeBand bands[7] = { 0 };
+  guint n_bands = 0;
+  for (guint i = 0; i < items->len; i++)
+    {
+      const lookout_bake_item *item = &g_array_index (items, lookout_bake_item, i);
+      int band = item->band >= 1 && item->band <= 6 ? item->band : 0;
+      gboolean seen = FALSE;
+
+      for (guint b = 0; b < n_bands; b++)
+        {
+          if (bands[b].band != band)
+            continue;
+          bands[b].total++;
+          seen = TRUE;
+          break;
+        }
+      if (!seen && n_bands < G_N_ELEMENTS (bands))
+        bands[n_bands++] = (LkBakeBand) { .band = band, .total = 1, .done = 0 };
+    }
 
   gboolean archive = lk_chart_scan_is_archive (source);
   g_autoptr (GPtrArray) ins = g_ptr_array_new_with_free_func (g_free);
@@ -364,6 +409,8 @@ lk_chart_bake_start (const char        *source,
   bake->on_progress = on_progress;
   bake->on_done = on_done;
   bake->user_data = user_data;
+  memcpy (bake->bands, bands, sizeof bands);
+  bake->n_bands = n_bands;
   bake->job = lookout_bake_start (source, (const char *const *) ins->pdata,
                                   (const char *const *) outs->pdata,
                                   cells, sheets, lifts, archive ? 1 : 0);

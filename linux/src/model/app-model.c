@@ -29,9 +29,10 @@ struct _LkAppModel {
   LkChartBake   *bake;
   char          *pending_open_source;
   LkBakeProgress bake_progress;
-  /* The set name the progress borrows. Owned here, for the pill to keep
-   * reading between posts. */
+  /* The set name and the band table the progress borrows. Owned here, for the
+   * pill and the import step to keep reading between posts. */
   char          *bake_name;
+  LkBakeBand     bake_bands[7];
   gboolean       baking;
   GStrv    recents;
 
@@ -663,6 +664,16 @@ lk_app_model_bake_progress (const LkBakeProgress *progress, gpointer user_data)
   self->bake_name = g_strdup (progress->name);
   self->bake_progress = *progress;
   self->bake_progress.name = self->bake_name;
+  /* The band table is borrowed for the call, and the import step reads it
+   * between posts. */
+  if (progress->bands != NULL && progress->n_bands > 0)
+    {
+      guint n = MIN (progress->n_bands, G_N_ELEMENTS (self->bake_bands));
+
+      memcpy (self->bake_bands, progress->bands, n * sizeof (LkBakeBand));
+      self->bake_progress.bands = self->bake_bands;
+      self->bake_progress.n_bands = n;
+    }
   g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_BAKING]);
 }
 

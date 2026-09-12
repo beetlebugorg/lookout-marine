@@ -35,4 +35,9 @@ double lk_band_ramp_width (const guint bands[7], int band, double room);
 /* How many bands the bar draws: those with at least one cell. */
 guint lk_band_ramp_count (const guint bands[7]);
 
+/* One band's colour as a swatch, for a legend or a list of bands. The band
+ * comes off the widget as "lk-band". */
+void lk_band_swatch_draw (GtkDrawingArea *area, cairo_t *cr, int width, int height,
+                          gpointer user_data);
+
 G_END_DECLS

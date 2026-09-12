@@ -21,11 +21,34 @@
 
 #include <glib.h>
 
+/* One usage band in a bake, and how far the bake has reached into it.
+ *
+ * lookout_bake_order runs the bake COARSE BAND FIRST, so the done count says
+ * which band is being worked and how much of it is left. A mariner who stops
+ * part way keeps charts that cover the whole passage. */
+typedef struct {
+  int   band;  /* 1 to 6, or 0 for a cell whose name states no band */
+  guint total; /* charts of this band the bake will prepare */
+  guint done;  /* how many of them it has prepared */
+} LkBakeBand;
+
+/* Split a done count across the bands, in the order the bake works them: the
+ * first band takes as many as it holds, then the next. Writes each band's
+ * `done`.
+ *
+ * This is the whole of what the order buys: one counter from the core, and a
+ * mariner who can see that the coarse charts are already in. */
+void lk_bake_bands_advance (LkBakeBand *bands, guint n, guint done);
+
 typedef struct {
   int         done;
   int         total;
   const char *name;   /* the set being worked on; borrowed for the call */
   double      elapsed; /* seconds since the work started */
+  /* The bands the bake holds, in the order it works them. Borrowed for the
+   * call; empty when nothing in the set states a band. */
+  const LkBakeBand *bands;
+  guint             n_bands;
 } LkBakeProgress;
 
 /* The fraction done, 0 when nothing is known yet. */

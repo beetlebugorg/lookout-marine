@@ -142,7 +142,7 @@ lk_band_bar_draw (GtkDrawingArea *area, cairo_t *cr, int width, int height,
 
 /* ---- the legend ---------------------------------------------------------- */
 
-static void
+void
 lk_band_swatch_draw (GtkDrawingArea *area, cairo_t *cr, int width, int height,
                      gpointer user_data)
 {

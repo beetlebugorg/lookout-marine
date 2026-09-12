@@ -407,6 +407,14 @@ static const char *LK_CSS =
     "}"
     ".lk-amber { color: #b5820a; }"
     /* One derived number on the depth step, with a rule above it. */
+    /* The band panel on the import step: a shelf of its own, so the bands
+     * read as one list rather than as more of the page. */
+    ".lk-band-panel {"
+    "  padding: 13px 16px;"
+    "  background: alpha(@theme_fg_color, 0.03);"
+    "  border: 1px solid alpha(@borders, 0.7);"
+    "  border-radius: 12px;"
+    "}"
     ".lk-depth-row {"
     "  padding: 11px 0;"
     "  border-top: 1px solid alpha(@borders, 0.5);"
