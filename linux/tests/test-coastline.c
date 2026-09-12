@@ -1,13 +1,15 @@
-/* test-coastline.c — the coastline the coverage picker draws.
+/* test-coastline.c — the first-run data the binary carries, and the
+ * projection the coverage picker draws through.
  *
  * The picker has to draw on its first frame, with no camera and no tiles, so
- * the data it draws from is a resource in the binary and the projection is its
- * own. Both are checked here: the table the resource parses to, and the
- * numbers a panel places its points with.
+ * everything it draws from is a resource in the binary: the coastline, and the
+ * pictures the welcome step and the chart shelf show. All of it is checked
+ * here, along with the numbers a panel places its points with.
  *
- * No display. The resource is compiled in, so nothing here reads a file.
+ * No display. The resources are compiled in, so nothing here reads a file.
  */
 
+#include "ui/charts/catalog.h"
 #include "ui/charts/coastline.h"
 
 #include <math.h>
@@ -167,6 +169,50 @@ test_mercator_clamp (void)
   g_assert_true (isfinite (lk_mercator_y (-90)));
 }
 
+/* Every picture the app ships decodes out of the binary.
+ *
+ * A missing one draws a grey box in front of a mariner on the first screen
+ * they ever see, so it fails a test instead. */
+static void
+test_shipped_pictures (void)
+{
+  guint n = 0;
+  const LkChartCatalogEntry *entries = lk_chart_catalog_entries (&n);
+  GdkTexture *hero = lk_chart_welcome_picture ();
+
+  g_assert_nonnull (hero);
+  g_assert_cmpint (gdk_texture_get_width (hero), >, 600);
+  g_assert_cmpint (gdk_texture_get_height (hero), >, 200);
+
+  g_assert_cmpuint (n, >, 0);
+  for (guint i = 0; i < n; i++)
+    {
+      GdkTexture *art;
+
+      g_assert_nonnull (entries[i].name);
+      g_assert_nonnull (entries[i].url);
+      g_assert_true (g_str_has_prefix (entries[i].url, "https://"));
+      g_assert_nonnull (entries[i].art);
+
+      art = lk_chart_catalog_art (entries[i].url);
+      g_assert_nonnull (art);
+      g_assert_cmpint (gdk_texture_get_width (art), >, 400);
+      g_assert_cmpint (gdk_texture_get_height (art), >, 300);
+
+      /* Decoded once and kept: a shelf redraws whenever the list moves. */
+      g_assert_true (lk_chart_catalog_art (entries[i].url) == art);
+
+      /* By url, and by the entry's own url. */
+      g_assert_true (lk_chart_catalog_entry (entries[i].url) == &entries[i]);
+    }
+
+  /* A link the mariner added has no shipped picture, and neither has nothing. */
+  g_assert_null (lk_chart_catalog_entry ("https://example.org/style.json"));
+  g_assert_null (lk_chart_catalog_art ("https://example.org/style.json"));
+  g_assert_null (lk_chart_catalog_entry (NULL));
+  g_assert_null (lk_chart_catalog_art (NULL));
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -178,6 +224,7 @@ main (int argc, char *argv[])
   g_test_add_func ("/coastline/window-point", test_window_point);
   g_test_add_func ("/coastline/window-intersects", test_window_intersects);
   g_test_add_func ("/coastline/mercator-clamp", test_mercator_clamp);
+  g_test_add_func ("/coastline/shipped-pictures", test_shipped_pictures);
 
   return g_test_run ();
 }

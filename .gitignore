@@ -15,6 +15,10 @@ zig-pkg/
 !apple/LookoutMarine/Assets.xcassets/**/*.png
 !apple/LookoutMarine-iOS/Assets.xcassets/**/*.png
 !linux/data/icons/**/*.png
+# And the first-run pictures: the chart the welcome step shows, and one render
+# of each online chart the app offers. Sources for the build, not build
+# output — a clone without them cannot show a mariner what it draws.
+!linux/data/firstrun/*.png
 !android/app/src/main/res/mipmap-*/*.png
 .DS_Store
 # Xcode / xcodegen derived data — never tracked. build-mac holds every product

@@ -34,5 +34,8 @@
   </gresource>
   <gresource prefix="/org/beetlebug/LookoutMarine/firstrun">
     <file compressed="true">coastline.bin</file>
+    <file>welcome-chart.png</file>
+    <file>seascape-preview.png</file>
+    <file>seamap-preview.png</file>
   </gresource>
 </gresources>
