@@ -5,6 +5,9 @@ import org.beetlebug.lookout.ui.Footer
 import org.beetlebug.lookout.ui.SectionHeader
 
 import androidx.compose.foundation.clickable
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
@@ -28,11 +31,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.CreateNewFolder
 import androidx.compose.material.icons.outlined.CloudDownload
+import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Sd
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
@@ -49,6 +54,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -77,100 +83,36 @@ fun ChartsSection(
     noaa: NoaaController,
     onRequestAccess: () -> Unit,
 ) {
-    // Which chart DRAWS is the tab's headline decision, so the picker leads;
-    // the library plumbing lives behind a row below it. The picker also
-    // works without storage access — links come off the network.
+    // Which chart DRAWS is the pane's headline decision, so the gallery leads.
+    // The library plumbing follows it, and the ways to add charts come last:
+    // the order the other shells use, because it is the order the questions
+    // are asked in.
     ChartLinksSection(links, charts.chartPaths.size)
 
-    SectionHeader("Charts")
-
-    // NOAA, above the permission gate. The download goes to the app's own
-    // folder, which needs no permission, so a mariner with no file access can
-    // still fill an empty library from here.
     var pickingNoaa by remember { mutableStateOf(false) }
-    AddChartRow(
-        icon = Icons.Outlined.CloudDownload,
-        title = "Get charts from NOAA…",
-        detail = "Pick the waters you sail. Lookout downloads the cells and prepares them. Free.",
-        enabled = charts.importer.state?.running != true &&
-            noaa.phase != NoaaController.Phase.DOWNLOADING,
-        tag = "get-charts-noaa",
-        onClick = { pickingNoaa = true },
-    )
-
-    if (pickingNoaa) {
-        NoaaPickerDialog(charts, noaa) { pickingNoaa = false }
-    }
-
-    // The transfer, where the mariner started it. The bake that follows has
-    // its own report below, the one every import shows.
-    if (noaa.phase == NoaaController.Phase.DOWNLOADING) {
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            if (noaa.total > 0) {
-                LinearProgressIndicator(
-                    progress = { noaa.done.toFloat() / noaa.total },
-                    modifier = Modifier.weight(1f),
-                )
-            } else {
-                LinearProgressIndicator(Modifier.weight(1f))
-            }
-            Text(
-                "${noaa.done} of ${noaa.total}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            TextButton(onClick = { noaa.cancel() }) { Text("Stop") }
-        }
-    }
-
-
-    if (!charts.storageAccess) {
-        Footer(
-            "Charts are read where they lie — nothing is copied — so the app " +
-                "needs permission to read files outside its own folder. " +
-                "Grant “All files access”, then come back.",
-        )
-        Button(
-            onClick = onRequestAccess,
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
-        ) { Text("Grant file access") }
-        Footer(
-            "Without it, only charts pushed into the app's own folder are " +
-                "visible (adb push …/Android/data/org.beetlebug.lookout/files/charts).",
-        )
-        return
-    }
-
-    // The browser opens as its own dialog: a directory tree embedded in the
-    // page pushed every other setting off screen.
     var browsing by remember { mutableStateOf(false) }
-    AddChartRow(
-        icon = Icons.Outlined.CreateNewFolder,
-        title = "Add charts from this device…",
-        detail = "A folder of cells, a chart archive, or a chart already prepared.",
-        enabled = charts.importer.state?.running != true,
-        tag = "add-charts-files",
-        onClick = { browsing = true },
-    )
-    Footer(
-        "S-57 and S-101 cells (.000 with their updates) · charts Lookout has " +
-            "already prepared (.pmtiles) · imagery and vendor charts (.mbtiles) · " +
-            "BSB/KAP raster sheets (.kap, .bsb). Cells and raster sheets are " +
-            "converted once on the way in. Encrypted S-63 cells are not supported.",
-    )
+
     // The installed sets. A switch off keeps the set and takes it out of the
     // chart, so an entry is never lost by turning it off.
     SetsHeader(charts)
-    if (charts.sets.isEmpty()) {
+    val pictures = raster.charts
+    if (charts.sets.isEmpty() && pictures.paths.isEmpty()) {
         Footer(if (charts.scanning) "Finding charts…" else "No chart sets")
     } else {
         for (set in charts.sets) ChartSetRow(set, charts)
+        // The pictures, in the same list. A picture and a survey are different
+        // kinds of chart, and the row says which, but they arrive in the same
+        // folders and switch on the same way. Two lists made the mariner
+        // remember which panel a file had gone into.
+        //
+        // Where they differ is what a switch MEANS. Surveys compose, so a set
+        // is on or off. Only one picture can cover a piece of water, so the
+        // pictures get a switch each, by whoever made them.
+        PictureRows(raster)
     }
-    Footer(charts.activeLabel)
+    // What is drawing, unless that is what the empty line above just said. A
+    // library with nothing in it does not need telling twice.
+    if (charts.chartPaths.isNotEmpty()) Footer(charts.activeLabel)
 
     charts.lastEmptyPick?.let {
         Footer(
@@ -195,6 +137,84 @@ fun ChartsSection(
         }
     }
 
+    // A transfer, where the mariner started it. This pane stands over the
+    // chart, so a download begun here otherwise runs behind it.
+    if (noaa.phase == NoaaController.Phase.DOWNLOADING) {
+        SectionHeader("Downloading from NOAA")
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            if (noaa.total > 0) {
+                LinearProgressIndicator(
+                    progress = { noaa.done.toFloat() / noaa.total },
+                    modifier = Modifier.weight(1f),
+                )
+            } else {
+                LinearProgressIndicator(Modifier.weight(1f))
+            }
+            Text(
+                "${noaa.done} of ${noaa.total}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            TextButton(onClick = { noaa.cancel() }) { Text("Stop") }
+        }
+    }
+
+    SectionHeader("Add charts")
+    // NOAA first, and it stands whether or not files have been granted: the
+    // download goes to the app's own folder, so a mariner with no file access
+    // can still fill an empty library from here.
+    AddChartRow(
+        icon = Icons.Outlined.CloudDownload,
+        title = "Get charts from NOAA…",
+        detail = "Pick the waters you sail. Lookout downloads the cells and prepares them. Free.",
+        enabled = charts.importer.state?.running != true &&
+            noaa.phase != NoaaController.Phase.DOWNLOADING,
+        tag = "get-charts-noaa",
+        onClick = { pickingNoaa = true },
+    )
+
+    if (charts.storageAccess) {
+        AddChartRow(
+            icon = Icons.Outlined.FolderOpen,
+            title = "Add from Files…",
+            detail = "A folder of cells, or a chart already prepared.",
+            enabled = charts.importer.state?.running != true,
+            tag = "add-charts-files",
+            onClick = { browsing = true },
+        )
+        Footer(
+            "S-57 and S-101 cells (.000 with their updates) · charts Lookout has " +
+                "already prepared (.pmtiles) · imagery and vendor charts (.mbtiles) · " +
+                "BSB/KAP raster sheets (.kap, .bsb). Cells and raster sheets are " +
+                "converted once on the way in. Encrypted S-63 cells are not supported.",
+        )
+    } else {
+        // The grant stands where the browser would. Charts are read where they
+        // lie and never copied, which is why the app wants to read outside its
+        // own folder at all.
+        Footer(
+            "Charts are read where they lie — nothing is copied — so the app " +
+                "needs permission to read files outside its own folder. " +
+                "Grant “All files access”, then come back.",
+        )
+        Button(
+            onClick = onRequestAccess,
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+        ) { Text("Grant file access") }
+        Footer(
+            "Without it, only charts pushed into the app's own folder are " +
+                "visible (adb push …/Android/data/org.beetlebug.lookout/files/charts).",
+        )
+    }
+
+    if (pickingNoaa) {
+        NoaaPickerDialog(charts, noaa) { pickingNoaa = false }
+    }
+
     if (browsing) {
         AlertDialog(
             onDismissRequest = { browsing = false },
@@ -214,7 +234,6 @@ fun ChartsSection(
         )
     }
 
-    RasterChartsSection(raster)
 }
 
 /**
@@ -259,6 +278,17 @@ private fun AddChartDialog(controller: ChartLinkController, onDismiss: () -> Uni
             onDismiss()
         }
     }
+    // A style the mariner already holds. The picker hands back a content uri
+    // rather than a path, and the controller copies the bytes somewhere the
+    // core can open.
+    val pick = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) {
+            controller.addStyleFile(uri)
+            onDismiss()
+        }
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Add a chart") },
@@ -273,10 +303,24 @@ private fun AddChartDialog(controller: ChartLinkController, onDismiss: () -> Uni
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
                     keyboardActions = KeyboardActions(onGo = { submit() }),
                 )
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(4.dp))
+                TextButton(
+                    onClick = { pick.launch(arrayOf("application/json", "*/*")) },
+                    contentPadding = PaddingValues(0.dp),
+                ) {
+                    Icon(
+                        Icons.Outlined.FolderOpen,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text("Add a style file from this device")
+                }
+                Spacer(Modifier.height(4.dp))
                 Text(
-                    "A MapLibre style link or a TileJSON tile source; also a " +
-                        "style.json on this device, by path.",
+                    "A style draws exactly what its publisher styled; bare tiles " +
+                        "get a plain generated look. Either way the content comes " +
+                        "from whoever made it, depths, symbols and warnings included.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -292,11 +336,24 @@ private fun AddChartDialog(controller: ChartLinkController, onDismiss: () -> Uni
 /** The sets, and what they hold together, on one line with the heading. */
 @Composable
 private fun SetsHeader(charts: ChartsModel) {
+    // The rule and the spacing above the label are SectionHeader's, laid out
+    // here rather than nested inside it: a Row that centres its children
+    // against the summary swallowed the label's own top padding, and this
+    // heading sat tighter under its rule than every other one.
+    HorizontalDivider(Modifier.padding(top = 12.dp))
     Row(
-        Modifier.fillMaxWidth().padding(end = 20.dp),
+        Modifier
+            .fillMaxWidth()
+            .padding(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.weight(1f)) { SectionHeader("Your chart sets") }
+        Text(
+            "YOUR CHART SETS",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.weight(1f),
+        )
         val total = setsSummary(charts)
         if (total != null) {
             Text(
@@ -367,129 +424,38 @@ private fun AddChartRow(
     }
 }
 
-@Composable
-private fun RasterChartsSection(controller: RasterController) {
-    val installed = controller.charts
-    var browsing by remember { mutableStateOf(false) }
-
-    SectionHeader("Raster charts")
-    Footer(
-        "Charts made of pictures: MBTiles of satellite imagery or another " +
-            "vendor's charts. The ENC draws over them and drops its depth and " +
-            "land shading only where they cover. Switch one off to keep it " +
-            "installed without drawing it.",
-    )
-
-    if (installed.paths.isEmpty()) {
-        Footer("No raster charts.")
-    } else {
-        installed.groups.forEach { (provider, paths) ->
-            // The provider switch: these files draw as one picture, so they go
-            // on and off together.
-            val groupOn = paths.any { installed.isEnabled(it) }
-            SwitchRow(
-                label = provider,
-                checked = groupOn,
-                onCheckedChange = { controller.setRasterGroupEnabled(paths, it) },
-            )
-            paths.forEach { p ->
-                SwitchRow(
-                    label = File(p).name,
-                    checked = installed.isEnabled(p),
-                    indent = true,
-                    onCheckedChange = { controller.setRasterEnabled(p, it) },
-                    onRemove = { controller.removeRasterChart(p) },
-                )
-            }
-        }
-    }
-
-    TextButton(
-        onClick = { browsing = !browsing },
-        modifier = Modifier.padding(horizontal = 12.dp),
-    ) { Text(if (browsing) "Done adding" else "Add raster charts…") }
-
-    if (browsing) {
-        RasterBrowser(controller)
-    }
-}
-
 /**
- * Browse to a folder of raster charts and add every one under it. The same
- * approach the library browser takes, and for the same reason: the engine opens
- * these BY PATH and mmaps them, and a copy of a half-gigabyte download into app
- * storage would spend the space twice.
- */
-@Composable
-private fun RasterBrowser(controller: RasterController) {
-    val roots = storageRootsRemembered()
-    var cur by remember { mutableStateOf(roots.firstOrNull()) }
-    var kids by remember { mutableStateOf<List<File>>(emptyList()) }
-    var found by remember { mutableStateOf<List<String>>(emptyList()) }
-
-    LaunchedEffect(cur) {
-        val dir = cur
-        if (dir == null) {
-            kids = emptyList(); found = emptyList()
-            return@LaunchedEffect
-        }
-        val listed = withContext(Dispatchers.IO) {
-            dir.listFiles()?.filter { it.isDirectory && it.canRead() }
-                ?.sortedBy { it.name.lowercase() } ?: emptyList()
-        }
-        // Only this directory's own charts, not the whole subtree: the walk is
-        // what the Add button does, and a browser that scans everything below
-        // every folder it lists would crawl a storage volume on each tap.
-        val here = withContext(Dispatchers.IO) {
-            dir.listFiles()?.filter {
-                it.isFile && it.extension.equals("mbtiles", ignoreCase = true)
-            }?.map { it.absolutePath }?.sorted() ?: emptyList()
-        }
-        kids = listed
-        found = here
-    }
-
-    Text(
-        text = cur?.absolutePath ?: "Storage",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        maxLines = 2,
-        overflow = TextOverflow.Ellipsis,
-        modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
-    )
-
-    val parent = cur?.parentFile
-    if (cur != null && parent != null && parent.canRead() && roots.none { it.path == cur?.path }) {
-        BrowseRow(Icons.Default.ArrowUpward, parent.name.ifEmpty { "/" }) { cur = parent }
-    }
-    kids.forEach { d ->
-        BrowseRow(Icons.Default.Folder, d.name) { cur = d }
-    }
-
-    if (found.isNotEmpty()) {
-        Button(
-            onClick = { controller.addRasterCharts(found) },
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
-        ) { Text("Add ${found.size} here") }
-    } else {
-        Footer("No .mbtiles in this folder.")
-    }
-}
-
-@Composable
-private fun storageRootsRemembered(): List<File> {
-    val ctx = androidx.compose.ui.platform.LocalContext.current
-    return remember { storageRoots(ctx) }
-}
-
-/**
- * One installed set: the switch, what it holds, and the way to remove it.
+ * The pictures installed, under the sets they came in with.
  *
- * A set switched off stays installed and leaves the chart, so nothing here
- * loses a folder. Removing takes it off the list; what a bake produced under
- * the app's own directory goes with it, and the mariner's own files are never
- * touched.
+ * Charts made of pictures: MBTiles of satellite imagery or another vendor's
+ * charts. The ENC draws over them and drops its depth and land shading only
+ * where they cover. Switch one off to keep it installed without drawing it.
  */
+@Composable
+private fun PictureRows(controller: RasterController) {
+    val installed = controller.charts
+    if (installed.paths.isEmpty()) return
+    installed.groups.forEach { (provider, paths) ->
+        // The provider switch: these files draw as one picture, so they go on
+        // and off together.
+        val groupOn = paths.any { installed.isEnabled(it) }
+        SwitchRow(
+            label = provider,
+            checked = groupOn,
+            onCheckedChange = { controller.setRasterGroupEnabled(paths, it) },
+        )
+        paths.forEach { p ->
+            SwitchRow(
+                label = File(p).name,
+                checked = installed.isEnabled(p),
+                indent = true,
+                onCheckedChange = { controller.setRasterEnabled(p, it) },
+                onRemove = { controller.removeRasterChart(p) },
+            )
+        }
+    }
+}
+
 @Composable
 private fun ChartSetRow(set: ChartSets.Set, charts: ChartsModel) {
     var confirming by remember(set.path) { mutableStateOf(false) }

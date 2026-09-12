@@ -182,6 +182,9 @@ class ChartsModel(private val appContext: Context) {
             ChartSets.add(dir.absolutePath)
             lastEmptyPick = null
             pullSets()
+            picturesOf(dir.absolutePath).takeIf { it.isNotEmpty() }?.let {
+                onPictures?.invoke(it, emptyList())
+            }
             Log.i(TAG, "set added: ${dir.absolutePath} ($charts charts)")
             return true
         } finally {
@@ -200,10 +203,30 @@ class ChartsModel(private val appContext: Context) {
      * not make.
      */
     fun remove(path: String) {
+        // Read before the set goes: the index is what knows which pictures
+        // came in with it.
+        val pictures = picturesOf(path)
         if (!ChartSets.remove(path)) return
         ChartBake.deletePrepared(appContext, File(path))
         pullSets()
+        if (pictures.isNotEmpty()) onPictures?.invoke(emptyList(), pictures)
     }
+
+    /**
+     * Install the pictures a set carries, and take them out again with it.
+     *
+     * A picture and a survey are different kinds of chart, but they arrive in
+     * the same folders, so adding a folder installs both. One direction only:
+     * the raster model knows nothing about sets. Set by the Activity, which is
+     * where both models are to hand.
+     */
+    var onPictures: ((add: List<String>, remove: List<String>) -> Unit)? = null
+
+    /** The picture files a set holds, as the index reports them. */
+    private fun picturesOf(path: String): List<String> =
+        ChartSets.files(path)
+            .filter { it.kind == ChartScanRead.RASTER || it.kind == ChartScanRead.RASTER_SOURCE }
+            .map { it.path }
 
     /**
      * Re-read the list and the union. Called after every change the shell made,

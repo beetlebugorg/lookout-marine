@@ -60,6 +60,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import org.beetlebug.lookout.charts.ChartsModel
 import org.beetlebug.lookout.charts.ChartsSection
@@ -131,7 +132,14 @@ fun SettingsSheet(
     // so a stale selection falls back rather than showing a blank pane.
     val current = open?.takeIf { id -> sections.any { it.id == id } }
 
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+    // As wide as the screen. Material caps a bottom sheet at 640dp, which on a
+    // tablet left the two-pane form in a column down the middle with the chart
+    // showing either side of it, and a settings form is not a dialog.
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        sheetMaxWidth = Dp.Unspecified,
+    ) {
         // INSIDE the sheet's content, not beside it: ModalBottomSheet registers
         // its own back callback to dismiss itself, and the dispatcher gives the
         // most deeply composed enabled callback priority. Registered outside,

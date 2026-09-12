@@ -93,6 +93,12 @@ class LookoutActivity : ComponentActivity() {
         // else's water.
         charts = ChartsModel(applicationContext)
         controller = ChartController(applicationContext)
+        // A folder holds surveys and pictures together, so adding one installs
+        // both. One direction: the raster model knows nothing about sets.
+        charts.onPictures = { add, remove ->
+            if (add.isNotEmpty()) controller.rasterController.addRasterCharts(add)
+            for (p in remove) controller.rasterController.removeRasterChart(p)
+        }
         // The set scans run on the core's own worker; this is what tells the
         // panel a folder's counts have arrived.
         controller.onSetsScanned = { charts.pullSets() }

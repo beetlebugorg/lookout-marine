@@ -41,6 +41,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
@@ -85,19 +89,42 @@ fun ChartGallery(
             art = R.drawable.welcome_chart,
             onSelect = { links.selectChartLink(null) },
         )
-        for (link in links.chartLinks) {
+        // The charts the app knows about before the mariner adds anything,
+        // then the mariner's own. Holding the shipped ones in their own order
+        // keeps the tiles where they were when one is taken.
+        for ((url, name, mine) in shelf(links)) {
             ChartTile(
-                name = link.name,
-                detail = link.url,
-                active = links.activeChartLink == link.url,
-                art = ChartCatalog.art(link.url),
-                onSelect = { links.selectChartLink(link.url) },
-                onRefresh = { links.refreshChartLink(link.url) },
-                onRemove = { links.removeChartLink(link.url) },
+                name = name,
+                detail = url,
+                active = links.activeChartLink == url,
+                art = ChartCatalog.art(url),
+                // A shipped chart the mariner has not taken yet is added,
+                // which the core reads and then picks.
+                onSelect = {
+                    if (mine) links.selectChartLink(url) else links.addChartLink(url)
+                },
+                onRefresh = if (mine) ({ links.refreshChartLink(url) }) else null,
+                onRemove = if (mine) ({ links.removeChartLink(url) }) else null,
             )
         }
         AddChartTile(onAdd)
     }
+}
+
+/**
+ * What the row lists: the shipped charts in their order under the publisher's
+ * own name once the core has read one, then whatever the mariner linked
+ * themselves.
+ */
+private fun shelf(links: ChartLinkController): List<Triple<String, String, Boolean>> {
+    val shipped = ChartCatalog.entries.map { entry ->
+        val own = links.chartLinks.firstOrNull { it.url == entry.url }
+        Triple(entry.url, own?.name ?: entry.name, own != null)
+    }
+    val shippedUrls = ChartCatalog.entries.map { it.url }.toSet()
+    val added = links.chartLinks.filterNot { shippedUrls.contains(it.url) }
+        .map { Triple(it.url, it.name, true) }
+    return shipped + added
 }
 
 private val TILE = 196.dp
@@ -235,15 +262,28 @@ private fun tileMenu(
 
 @Composable
 private fun AddChartTile(onAdd: () -> Unit) {
+    // A dashed edge, so the tile reads as a place for a chart rather than as a
+    // chart. The shape is drawn rather than set as a border: Compose has no
+    // dashed BorderStroke.
+    val edge = MaterialTheme.colorScheme.outlineVariant
+    val dash = remember(edge) {
+        Stroke(width = 3f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(15f, 12f)))
+    }
     Surface(
         modifier = Modifier
             .width(ADD)
             .heightIn(min = ART + 60.dp)
             .clickable(onClick = onAdd)
+            .drawBehind {
+                drawRoundRect(
+                    color = edge,
+                    cornerRadius = CornerRadius(11.dp.toPx()),
+                    style = dash,
+                )
+            }
             .semantics { contentDescription = "add-chart-tile" },
         shape = RoundedCornerShape(11.dp),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Column(
             Modifier.fillMaxSize().padding(12.dp),
@@ -263,7 +303,7 @@ private fun AddChartTile(onAdd: () -> Unit) {
                 fontWeight = FontWeight.Medium,
             )
             Text(
-                "Style link or TileJSON",
+                "Style link, TileJSON, or a file",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
