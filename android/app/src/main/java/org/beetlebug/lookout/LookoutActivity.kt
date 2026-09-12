@@ -34,11 +34,11 @@ import java.io.FileOutputStream
  * the HUD, the controls and the settings sheet — the analogue of HUDOverlay
  * and SettingsView sitting over the Metal layer.
  *
- * Charts come from a library chosen in the Charts tab, else anything pushed into
- * the app's external files dir, else the cell baked into the APK assets — see
- * [ChartsModel]. Chosen libraries are opened IN PLACE (by path, mmap'd), never
- * copied; the bundled asset is the one exception, since an APK asset has no path
- * of its own.
+ * Charts come from a library chosen in the Charts tab, else anything pushed
+ * into the app's external files dir — see [ChartsModel]. No chart ships in the
+ * APK: a device with nothing installed opens the engine empty, draws the
+ * basemap and runs setup over it. Libraries are opened IN PLACE (by path,
+ * mmap'd) and never copied.
  */
 class LookoutActivity : ComponentActivity() {
     private var chartView: LookoutView? = null
@@ -91,7 +91,7 @@ class LookoutActivity : ComponentActivity() {
         // engine empty, draws the basemap and runs setup over it, which is
         // what a mariner with no charts needs rather than one cell of somebody
         // else's water.
-        charts = ChartsModel(applicationContext, null)
+        charts = ChartsModel(applicationContext)
         controller = ChartController(applicationContext)
         // The set scans run on the core's own worker; this is what tells the
         // panel a folder's counts have arrived.

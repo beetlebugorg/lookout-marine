@@ -68,7 +68,7 @@ class SettingsSheetTest {
                 val access = EngineAccess()
                 SettingsSheet(
                     m = mariner,
-                    charts = ChartsModel(ctx, null),
+                    charts = ChartsModel(ctx),
                     plugins = PluginSettingsController(ctx, access) {},
                     tables = TableController(access) { _, _ -> },
                     links = ChartLinkController(ctx, access),

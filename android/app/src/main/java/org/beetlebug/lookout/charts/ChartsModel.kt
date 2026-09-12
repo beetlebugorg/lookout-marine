@@ -41,10 +41,11 @@ data class Library(val dir: File, val cells: List<String>) {
  *
  * [chartPaths] is what [LookoutView] opens, and it falls back — the union,
  * then anything pushed into the app's own external files dir (no permission
- * needed, see the adb recipe in [LookoutActivity]), then the cell bundled in
- * the APK — so the app always has something to draw.
+ * needed, see the adb recipe in [LookoutActivity]). No chart ships in the APK,
+ * so an empty list is a real answer: the engine opens on the basemap and setup
+ * runs over it.
  */
-class ChartsModel(private val appContext: Context, private val bundled: String?) {
+class ChartsModel(private val appContext: Context) {
 
     /** The installed sets, in the order added. Re-read when the core's
      *  background scan lands. */
@@ -128,7 +129,7 @@ class ChartsModel(private val appContext: Context, private val bundled: String?)
         get() {
             val want = composed.takeIf { it.isNotEmpty() }
                 ?: pushed
-                ?: return bundled?.let { arrayOf(it) } ?: emptyArray()
+                ?: return emptyArray()
             // Held, not rebuilt. This is read from composition, and a real
             // library is seven thousand cells: returning a fresh Array on
             // every read copied all of them each time the loader recomposed.
@@ -155,7 +156,9 @@ class ChartsModel(private val appContext: Context, private val bundled: String?)
                 return if (on.size == 1) "${on[0].title} ($cells)" else "${on.size} sets ($cells)"
             }
             pushed?.let { return "pushed (${cells(it.size)})" }
-            return "bundled demo cell"
+            // Nothing installed. No chart ships in the app, so this is the
+            // basemap with setup over it rather than a demo cell.
+            return "no charts installed"
         }
 
     /**

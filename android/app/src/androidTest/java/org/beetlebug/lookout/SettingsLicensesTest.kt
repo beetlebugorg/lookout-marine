@@ -64,7 +64,7 @@ class SettingsLicensesTest {
                 val access = EngineAccess()
                 SettingsSheet(
                     m = MarinerState(),
-                    charts = ChartsModel(ctx, null),
+                    charts = ChartsModel(ctx),
                     plugins = PluginSettingsController(ctx, access) {},
                     tables = TableController(access) { _, _ -> },
                     links = ChartLinkController(ctx, access),
