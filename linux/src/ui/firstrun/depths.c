@@ -9,6 +9,8 @@
  */
 #include "ui/firstrun/depths.h"
 
+#include "ui/firstrun/water.h"
+
 #include <math.h>
 
 #define LK_FEET_PER_METRE 3.28084
@@ -102,6 +104,7 @@ typedef struct {
   GtkWidget *units;
   GtkWidget *pills;
   GtkWidget *derived;
+  GtkWidget *water;
 } LkDepthStep;
 
 static void
@@ -286,8 +289,16 @@ lk_depth_fill_pills (LkDepthStep *step)
 static void
 lk_depth_rebuild (LkDepthStep *step)
 {
+  gboolean feet = lk_depth_feet (step);
+  double safety = lk_depth_safety (step->draft, step->clearance);
+  double contour = lk_depth_contour (safety, feet);
+
   lk_depth_fill_pills (step);
   lk_depth_fill_derived (step);
+  if (step->water != NULL)
+    lk_depth_water_set (step->water, safety, contour,
+                        lk_depth_deep_contour (contour, feet), feet,
+                        lk_mariner_raw (step->flow->mariner)->scheme);
   lk_first_run_refresh_footer (step->flow);
 }
 
@@ -375,6 +386,11 @@ lk_first_run_depths_new (LkFirstRunFlow *flow)
   gtk_widget_set_margin_top (step->derived, 16);
   gtk_box_append (GTK_BOX (body), step->derived);
 
+  /* And what it does to a chart. */
+  step->water = lk_depth_water_new ();
+  gtk_widget_set_margin_top (step->water, 18);
+  gtk_box_append (GTK_BOX (body), step->water);
+
   GtkWidget *warning = lk_step_warning (
       "Shading is not a depth sounder.",
       "Soundings are not corrected for tide, surge or squat, and a survey can be "
@@ -386,8 +402,7 @@ lk_first_run_depths_new (LkFirstRunFlow *flow)
   gtk_widget_set_margin_end (body, 48);
   gtk_widget_set_margin_bottom (body, 22);
 
-  lk_depth_fill_pills (step);
-  lk_depth_fill_derived (step);
   lk_depth_apply (step);
+  lk_depth_rebuild (step);
   return body;
 }

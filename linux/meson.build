@@ -175,6 +175,7 @@ sources = files(
   'src/ui/firstrun/online.c',
   'src/ui/firstrun/parts.c',
   'src/ui/firstrun/source.c',
+  'src/ui/firstrun/water.c',
   'src/ui/firstrun/welcome.c',
   'src/ui/dev-hooks.c',
   'src/ui/open-dialogs.c',
