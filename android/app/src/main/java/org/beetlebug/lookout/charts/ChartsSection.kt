@@ -44,6 +44,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -67,6 +69,7 @@ fun ChartsSection(
     charts: ChartsModel,
     links: ChartLinkController,
     raster: RasterController,
+    noaa: NoaaController,
     onRequestAccess: () -> Unit,
 ) {
     // Which chart DRAWS is the tab's headline decision, so the picker leads;
@@ -75,6 +78,53 @@ fun ChartsSection(
     ChartLinksSection(links)
 
     SectionHeader("Charts")
+
+    // NOAA, above the permission gate. The download goes to the app's own
+    // folder, which needs no permission, so a mariner with no file access can
+    // still fill an empty library from here.
+    var pickingNoaa by remember { mutableStateOf(false) }
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        TextButton(
+            onClick = { pickingNoaa = true },
+            enabled = charts.importer.state?.running != true &&
+                noaa.phase != NoaaController.Phase.DOWNLOADING,
+            modifier = Modifier.semantics { contentDescription = "get-charts-noaa" },
+        ) { Text("Get charts from NOAA…") }
+    }
+    Footer("Official ENC for every U.S. waterway, free. Downloaded to this device and prepared here.")
+
+    if (pickingNoaa) {
+        NoaaPickerDialog(charts, noaa) { pickingNoaa = false }
+    }
+
+    // The transfer, where the mariner started it. The bake that follows has
+    // its own report below, the one every import shows.
+    if (noaa.phase == NoaaController.Phase.DOWNLOADING) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            if (noaa.total > 0) {
+                LinearProgressIndicator(
+                    progress = { noaa.done.toFloat() / noaa.total },
+                    modifier = Modifier.weight(1f),
+                )
+            } else {
+                LinearProgressIndicator(Modifier.weight(1f))
+            }
+            Text(
+                "${noaa.done} of ${noaa.total}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            TextButton(onClick = { noaa.cancel() }) { Text("Stop") }
+        }
+    }
+
 
     if (!charts.storageAccess) {
         Footer(
@@ -105,7 +155,6 @@ fun ChartsSection(
     ) {
         TextButton(onClick = { browsing = true }) { Text("Add charts…") }
     }
-
     // The installed sets. A switch off keeps the set and takes it out of the
     // chart, so an entry is never lost by turning it off.
     if (charts.sets.isEmpty()) {

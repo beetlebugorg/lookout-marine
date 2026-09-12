@@ -6,15 +6,8 @@ import org.beetlebug.lookout.charts.NoaaController
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.rememberCoroutineScope
-import kotlinx.coroutines.launch
 import org.beetlebug.lookout.charts.ChartSets
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.platform.LocalContext
-import java.io.File
+import org.beetlebug.lookout.charts.costLine
 
 /**
  * Setup, bound to the app it is setting up.
@@ -34,8 +27,6 @@ fun FirstRunSetup(
 ) {
     val noaa = controller.noaaController
     val links = controller.chartLinkController
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
 
     // The catalog, once the coverage step is the one on screen. It is a
     // network read, so nothing asks for it until something needs it.
@@ -47,24 +38,6 @@ fun FirstRunSetup(
     // water rather than all of it.
     LaunchedEffect(flow.step, charts.sets) {
         if (flow.step == FirstRunModel.Step.COVERAGE) noaa.noteInstalled(installedCells(charts))
-    }
-
-    // The download, then the bake on what it left. The core writes one zip per
-    // cell into a single directory, so the whole directory bakes as one set.
-    val dest = remember { File(context.getExternalFilesDir(null), "NOAA") }
-    var fetching by remember { mutableStateOf(false) }
-    LaunchedEffect(noaa.phase, fetching) {
-        if (noaa.phase == NoaaController.Phase.DOWNLOADING) {
-            fetching = true
-            return@LaunchedEffect
-        }
-        if (!fetching) return@LaunchedEffect
-        fetching = false
-        if (noaa.done == 0) return@LaunchedEffect
-        flow.sawBake = true
-        charts.importer.start(dest) { out ->
-            if (out != null) scope.launch { charts.add(out) }
-        }
     }
 
     FirstRunFlow(
@@ -87,8 +60,8 @@ fun FirstRunSetup(
                 FirstRunModel.Source.FILES -> onOpenCharts()
                 FirstRunModel.Source.NOAA -> {
                     flow.order = ordered
-                    dest.mkdirs()
-                    noaa.download(dest.absolutePath, noaa.allInstalled)
+                    charts.noaaDir.mkdirs()
+                    noaa.download(charts.noaaDir.absolutePath, noaa.allInstalled)
                 }
                 FirstRunModel.Source.ONLINE -> Unit
                 null -> Unit
@@ -141,20 +114,6 @@ private fun footnote(flow: FirstRunModel, noaa: NoaaController): String? = when 
     FirstRunModel.Step.DEPTHS -> "Change any of this later in Mariner settings, in Depths."
     else -> null
 }
-
-/**
- * What the pick costs, and what of it is already here. Water wholly installed
- * prices as that rather than reading as an empty pick.
- */
-private fun costLine(noaa: NoaaController): String {
-    val charts = if (noaa.cells == 1) "1 chart" else "${noaa.cells} charts"
-    return when {
-        noaa.cells == 0 -> "${noaa.held} charts, all installed"
-        noaa.held > 0 -> "$charts, ${NoaaController.sizeText(noaa.bytes)} · ${noaa.held} already installed"
-        else -> "$charts, ${NoaaController.sizeText(noaa.bytes)}"
-    }
-}
-
 
 /**
  * The NOAA cells already installed, as dataset names without an extension.

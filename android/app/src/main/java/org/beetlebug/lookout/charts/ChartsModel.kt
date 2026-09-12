@@ -73,6 +73,13 @@ class ChartsModel(private val appContext: Context, private val bundled: String?)
     /** The import pipeline: scan, bake what is raw, open the result. */
     val importer = ChartImport(appContext)
 
+    /**
+     * Where NOAA's downloads land. The app's own external files dir, which
+     * needs no permission, and one directory for the lot: the core writes one
+     * zip per cell there, so the whole directory bakes as one set.
+     */
+    val noaaDir: File get() = File(appContext.getExternalFilesDir(null), "NOAA")
+
     /** Volume roots a folder browser starts from (computed once). */
     val roots: List<File> by lazy { storageRoots(appContext) }
 

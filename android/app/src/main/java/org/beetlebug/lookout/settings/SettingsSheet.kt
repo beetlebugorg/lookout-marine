@@ -3,6 +3,7 @@ package org.beetlebug.lookout.settings
 import org.beetlebug.lookout.plugins.PluginSettingsController
 
 import org.beetlebug.lookout.charts.ChartLinkController
+import org.beetlebug.lookout.charts.NoaaController
 import org.beetlebug.lookout.charts.RasterController
 import org.beetlebug.lookout.plugins.TableController
 
@@ -109,6 +110,7 @@ fun SettingsSheet(
     tables: TableController,
     links: ChartLinkController,
     raster: RasterController,
+    noaa: NoaaController,
     onRequestAccess: () -> Unit,
     onDismiss: () -> Unit,
     initialSection: String? = null,
@@ -162,14 +164,14 @@ fun SettingsSheet(
                     VerticalDivider()
                     Box(Modifier.weight(1f)) {
                         current?.let {
-                            SectionPane(it, m, charts, plugins, tables, links, raster, registry, onRequestAccess, null, onDismiss)
+                            SectionPane(it, m, charts, plugins, tables, links, raster, noaa, registry, onRequestAccess, null, onDismiss)
                         }
                     }
                 }
             } else if (current == null) {
                 SectionList(sections = sections, selected = null, onOpen = { open = it })
             } else {
-                SectionPane(current, m, charts, plugins, tables, links, raster, registry, onRequestAccess, { open = null }, onDismiss)
+                SectionPane(current, m, charts, plugins, tables, links, raster, noaa, registry, onRequestAccess, { open = null }, onDismiss)
             }
         }
     }
@@ -274,6 +276,7 @@ private fun SectionPane(
     tables: TableController,
     links: ChartLinkController,
     raster: RasterController,
+    noaa: NoaaController,
     registry: PluginRegistry,
     onRequestAccess: () -> Unit,
     onBack: (() -> Unit)?,
@@ -341,7 +344,7 @@ private fun SectionPane(
                 "display" -> DisplaySection(m)
                 "depths" -> DepthsSection(m)
                 "text" -> SymbolsSection(m)
-                "charts" -> ChartsSection(charts, links, raster, onRequestAccess)
+                "charts" -> ChartsSection(charts, links, raster, noaa, onRequestAccess)
                 "plugins" -> PluginsManageSection(registry, plugins)
                 "advanced" -> AdvancedSection(m, onOpenLicenses = { licenses = true })
             }
