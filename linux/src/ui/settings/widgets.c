@@ -49,6 +49,9 @@ lk_footer (GtkWidget *section, const char *text)
   gtk_widget_add_css_class (label, "caption");
   gtk_label_set_wrap (GTK_LABEL (label), TRUE);
   gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+  /* Clear of the last row above it. A footer that runs straight on from a
+   * row's own second line reads as part of that row. */
+  gtk_widget_set_margin_top (label, 6);
   gtk_widget_set_margin_bottom (label, 4);
   gtk_box_append (GTK_BOX (section), label);
   return label;

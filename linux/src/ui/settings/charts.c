@@ -810,6 +810,10 @@ lk_add_chart_face (const char *icon_name, const char *title, const char *detail,
   gtk_widget_add_css_class (blurb, "caption");
   gtk_label_set_xalign (GTK_LABEL (blurb), 0.0);
   gtk_label_set_wrap (GTK_LABEL (blurb), TRUE);
+  /* A GtkMenuButton measures its child at no width, so a line that wraps
+   * reports one line's height and the second line is clipped. A cap on the
+   * natural width makes the label report the wrapped height. */
+  gtk_label_set_max_width_chars (GTK_LABEL (blurb), 64);
   gtk_box_append (GTK_BOX (column), name);
   gtk_box_append (GTK_BOX (column), blurb);
   gtk_widget_set_hexpand (column, TRUE);
@@ -881,7 +885,7 @@ lk_add_chart_menu_row (GtkWidget *section, const char *icon_name, const char *ti
   gtk_menu_button_set_child (GTK_MENU_BUTTON (menu),
                              lk_add_chart_face (icon_name, title, detail, NULL, menu));
   gtk_menu_button_set_popover (GTK_MENU_BUTTON (menu), popover);
-  gtk_widget_add_css_class (menu, "flat");
+  gtk_menu_button_set_has_frame (GTK_MENU_BUTTON (menu), FALSE);
   gtk_box_append (GTK_BOX (section), menu);
   return menu;
 }

@@ -23,6 +23,12 @@ typedef struct {
    * NULL is a real answer rather than "not asked yet". */
   char              *drawing;
   gboolean           known;
+
+  /* The row as it stands: the tiles it holds, and where the mariner had it
+   * scrolled to before the last rebuild. */
+  GtkWidget         *scroller; /* not owned */
+  char              *signature;
+  double             restore_to;
 } LkGallery;
 
 static void lk_gallery_fill (LkGallery *self);
@@ -38,6 +44,7 @@ lk_gallery_free (gpointer data)
     lk_chart_previews_shutdown (self->previews);
   g_clear_object (&self->previews);
   g_free (self->drawing);
+  g_free (self->signature);
   g_free (self);
 }
 
@@ -360,53 +367,125 @@ lk_gallery_ask_for_pictures (LkGallery *self, GPtrArray *mine,
     }
 }
 
+/* One tile to draw. The row is planned before it is built, so a rebuild that
+ * would draw the same tiles can be dropped. */
+typedef struct {
+  const char *url;    /* NULL for Lookout's own chart */
+  const char *name;
+  const char *detail;
+  GdkTexture *art;    /* borrowed from the picture store */
+  gboolean    active;
+  gboolean    mine;
+} LkTilePlan;
+
+/* Put the row back where the mariner had it.
+ *
+ * A tile off the left edge cannot be picked if the row jumps home under the
+ * pointer, and the row is rebuilt whenever a picture lands. The offset can
+ * only be restored once the new tiles are measured, which is what the
+ * adjustment's upper says. */
+static void
+lk_gallery_upper_changed (GtkAdjustment *adjustment, GParamSpec *pspec,
+                          gpointer user_data)
+{
+  GtkWidget *row = user_data;
+  LkGallery *self = g_object_get_data (G_OBJECT (row), "lk-gallery");
+  double room;
+
+  if (self == NULL || self->restore_to <= 0)
+    return;
+  room = gtk_adjustment_get_upper (adjustment) - gtk_adjustment_get_page_size (adjustment);
+  if (room <= 0)
+    return;
+  gtk_adjustment_set_value (adjustment, MIN (self->restore_to, room));
+  self->restore_to = 0;
+}
+
 static void
 lk_gallery_fill (LkGallery *self)
 {
   LkChartLinks *links = lk_app_model_get_chart_links (self->model);
   const char *active = lk_chart_links_active (links);
   GPtrArray *mine = lk_chart_links_list (links);
+  g_autoptr (GArray) plan = g_array_new (FALSE, TRUE, sizeof (LkTilePlan));
+  g_autoptr (GString) signature = g_string_new (NULL);
   GtkWidget *child;
   guint n_catalog = 0;
   const LkChartCatalogEntry *catalog = lk_chart_catalog_entries (&n_catalog);
 
-  while ((child = gtk_widget_get_first_child (self->row)) != NULL)
-    gtk_box_remove (GTK_BOX (self->row), child);
-
   /* Lookout's own chart first. It is built from the sets below and cannot be
-   * removed, so it carries no menu. */
+   * removed, so it has no menu. */
   g_autofree char *own = lk_gallery_own_detail (self);
-  gtk_box_append (GTK_BOX (self->row),
-                  lk_tile_new (self, NULL, "Lookout chart", own,
-                               lk_chart_previews_get (self->previews, NULL),
-                               active == NULL, FALSE));
+  LkTilePlan first = { NULL, "Lookout chart", own,
+                       lk_chart_previews_get (self->previews, NULL), active == NULL,
+                       FALSE };
+  g_array_append_val (plan, first);
 
   /* Then the charts the app ships, in their own order, so picking one does not
    * move the cards. */
   for (guint i = 0; i < n_catalog; i++)
     {
       const LkChartCatalogEntry *entry = &catalog[i];
+      LkTilePlan tile = { entry->url,
+                          lk_gallery_name_of (mine, entry->url, entry->name),
+                          entry->url,
+                          lk_chart_previews_get (self->previews, entry->url),
+                          g_strcmp0 (active, entry->url) == 0,
+                          lk_gallery_is_mine (mine, entry->url) };
 
-      gtk_box_append (GTK_BOX (self->row),
-                      lk_tile_new (self, entry->url,
-                                   lk_gallery_name_of (mine, entry->url, entry->name),
-                                   entry->url,
-                                   lk_chart_previews_get (self->previews, entry->url),
-                                   g_strcmp0 (active, entry->url) == 0,
-                                   lk_gallery_is_mine (mine, entry->url)));
+      g_array_append_val (plan, tile);
     }
 
   /* Then the links the mariner added themselves. */
   for (guint i = 0; i < mine->len; i++)
     {
       const LkChartLink *link = g_ptr_array_index (mine, i);
+      LkTilePlan tile = { link->url, link->name, link->url,
+                          lk_chart_previews_get (self->previews, link->url),
+                          g_strcmp0 (active, link->url) == 0, TRUE };
 
       if (lk_chart_catalog_entry (link->url) != NULL)
-        continue; /* already drawn above, under the publisher's name */
+        continue; /* already planned above, under the publisher's name */
+      g_array_append_val (plan, tile);
+    }
+
+  for (guint i = 0; i < plan->len; i++)
+    {
+      const LkTilePlan *tile = &g_array_index (plan, LkTilePlan, i);
+
+      g_string_append_printf (signature, "%s\x1f%s\x1f%s\x1f%p\x1f%d%d\x1e",
+                              tile->url != NULL ? tile->url : "", tile->name,
+                              tile->detail, tile->art, tile->active, tile->mine);
+    }
+
+  /* The links poll several times a second while a style resolves, and each
+   * report rebuilt this row. Nothing about the tiles changed, and the row
+   * jumped home each time. */
+  if (g_strcmp0 (signature->str, self->signature) == 0)
+    return;
+  g_free (self->signature);
+  self->signature = g_strdup (signature->str);
+
+  if (self->scroller != NULL)
+    {
+      GtkAdjustment *adjustment =
+          gtk_scrolled_window_get_hadjustment (GTK_SCROLLED_WINDOW (self->scroller));
+      double at = gtk_adjustment_get_value (adjustment);
+
+      if (at > 0)
+        self->restore_to = at;
+    }
+
+  while ((child = gtk_widget_get_first_child (self->row)) != NULL)
+    gtk_box_remove (GTK_BOX (self->row), child);
+
+  for (guint i = 0; i < plan->len; i++)
+    {
+      const LkTilePlan *tile = &g_array_index (plan, LkTilePlan, i);
+
       gtk_box_append (GTK_BOX (self->row),
-                      lk_tile_new (self, link->url, link->name, link->url,
-                                   lk_chart_previews_get (self->previews, link->url),
-                                   g_strcmp0 (active, link->url) == 0, TRUE));
+                      lk_tile_new (self, tile->url, tile->name, tile->detail,
+                                   tile->art, tile->active, tile->mine));
     }
 
   gtk_box_append (GTK_BOX (self->row), lk_add_tile_new (self));
@@ -446,6 +525,12 @@ lk_chart_gallery_new (LkAppModel *model, LkChartGalleryAdd on_add, gpointer user
    * adds a chart has a line of words and no picture, so its own height is
    * less than the height of the tiles beside it. */
   gtk_widget_set_valign (self->row, GTK_ALIGN_START);
+  self->scroller = scroller;
+  /* Bound to the row: the adjustment belongs to the scroller, which outlives
+   * the row that holds `self`. */
+  g_signal_connect_object (gtk_scrolled_window_get_hadjustment (GTK_SCROLLED_WINDOW (scroller)),
+                           "notify::upper", G_CALLBACK (lk_gallery_upper_changed),
+                           self->row, 0);
   gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scroller), self->row);
   gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scroller),
                                   GTK_POLICY_AUTOMATIC, GTK_POLICY_NEVER);
