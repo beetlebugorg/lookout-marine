@@ -164,14 +164,20 @@ export fn lookout_set_http_provider(h: ?*lookout, get: ?lk.Lookout.HttpGetFn, ca
 /// call this from inside its own http_get callback, which runs with the api
 /// lock already held.
 export fn lookout_http_respond(h: ?*lookout, req_id: u64, bytes: ?[*]const u8, len: usize, status: c_int) void {
+    lookout_http_respond_chunk(h, req_id, bytes, len, status, 1);
+}
+
+/// Answer one GET a piece at a time. See lookout.h.
+export fn lookout_http_respond_chunk(h: ?*lookout, req_id: u64, bytes: ?[*]const u8, len: usize, status: c_int, done: c_int) void {
     if (h == null) return;
     const slice: []const u8 = if (bytes != null and len != 0) bytes.?[0..len] else &.{};
+    if (slice.len == 0 and done == 0) return;
     // NOAA sets bit 63 on the ids it issues, so the two services share one
     // fetcher without sharing an id space.
     if (noaajob.ownsId(req_id)) {
-        cast(h).noaa.respond(req_id, slice, status);
+        cast(h).noaa.respondChunk(req_id, slice, status, done != 0);
     } else {
-        cast(h).links.respond(req_id, slice, status);
+        cast(h).links.respondChunk(req_id, slice, status, done != 0);
     }
 }
 

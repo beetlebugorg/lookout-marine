@@ -582,6 +582,7 @@ pub fn build(b: *std.Build) void {
         "src/chartlinks.zig",
         "src/noaa.zig",
         "src/noaajob.zig",
+        "src/httpgather.zig",
         "src/library.zig",
         "src/plugin_dev_replay.zig",
         "plugins/nmea0183/parser.zig",

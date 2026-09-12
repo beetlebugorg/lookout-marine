@@ -651,6 +651,26 @@ void lookout_set_http_provider(lookout *h, lookout_http_get get,
 void lookout_http_respond(lookout *h, uint64_t req_id, const void *bytes,
                           size_t len, int status);
 
+/* Answer one GET a piece at a time. Same rules as lookout_http_respond, with
+ * one addition: deliver the pieces of one request in order on one thread, and
+ * set `done` on the last of them. `status` is the same final status on every
+ * piece. A shell that already holds the whole body calls lookout_http_respond
+ * instead: the same call with a single piece and `done` set.
+ *
+ * Use this when the body may be large. A NOAA district downloads as one zip of
+ * up to a couple of hundred megabytes, and a shell that reads it into one
+ * buffer needs that much again for the copy this call makes: on a phone the
+ * whole-body path runs out of heap. Pieces of a chart download are written to
+ * disk as they land, so the archive is never held whole. A style, a
+ * TileJSON, a sprite sheet and a tile are read whole either way, and their
+ * pieces are joined here.
+ *
+ * A piece with len 0 and `done` clear is ignored, so a shell may call this for
+ * a short read without checking. Answering a piece of a request that has
+ * already finished, or one nobody issued, is ignored the same way. */
+void lookout_http_respond_chunk(lookout *h, uint64_t req_id, const void *bytes,
+                                size_t len, int status, int done);
+
 /* Add a chart by link. lookout resolves it and, on success, adds it to the
  * persisted list and selects it. Non-blocking; progress and result surface
  * through the poll below. A link already carried is selected, not added

@@ -42,6 +42,7 @@
 const std = @import("std");
 const owned = @import("owned");
 const Lock = @import("lock.zig").Lock;
+const httpgather = @import("httpgather.zig");
 
 /// Fetch the bytes at `url`. Called with the api lock held: the shell must not
 /// block and must not call back into the core except `respond` — start the
@@ -302,11 +303,19 @@ pub const Links = struct {
     /// demand wakes for an answer that landed.
     inbox_len: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
 
+    /// Bodies that arrive a piece at a time, held until they are whole.
+    gather: httpgather.Gather = undefined,
+
     pub fn init(alloc: std.mem.Allocator, sink: Sink) Links {
-        return .{ .alloc = alloc, .sink = sink };
+        return .{
+            .alloc = alloc,
+            .sink = sink,
+            .gather = httpgather.Gather.init(alloc, MAX_DOC_BYTES),
+        };
     }
 
     pub fn deinit(self: *Links) void {
+        self.gather.deinit();
         self.dropResolve();
         for (self.entries.items) |*e| self.freeEntry(e);
         self.entries.deinit(self.alloc);
@@ -451,16 +460,21 @@ pub const Links = struct {
     /// adopts it. `status` is the final HTTP status after redirects, or 0 for
     /// a transport failure. Bytes are copied.
     pub fn respond(self: *Links, req_id: u64, bytes: []const u8, status: c_int) void {
-        const keep: []u8 = if (bytes.len == 0 or bytes.len > MAX_DOC_BYTES)
-            &.{}
-        else
-            self.alloc.dupe(u8, bytes) catch &.{};
+        self.respondChunk(req_id, bytes, status, true);
+    }
+
+    /// Take one piece of an answer. A style, a TileJSON, a sprite sheet and a
+    /// tile are all read whole, so the pieces are joined before the machine
+    /// sees them.
+    pub fn respondChunk(self: *Links, req_id: u64, bytes: []const u8, status: c_int, done: bool) void {
+        const whole = self.gather.take(req_id, bytes, status, done) orelse return;
+        const keep = whole.bytes;
         self.inbox_mu.lock();
         defer self.inbox_mu.unlock();
         self.inbox.append(self.alloc, .{
             .id = req_id,
             .bytes = keep,
-            .status = if (bytes.len > MAX_DOC_BYTES) 0 else status,
+            .status = whole.status,
         }) catch {
             if (keep.len != 0) self.alloc.free(keep);
             return;

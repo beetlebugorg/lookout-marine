@@ -209,6 +209,121 @@ pub const Cost = struct {
     held_bytes: u64 = 0,
 };
 
+/// One transfer in a download plan: a whole district's bundle, or one cell.
+///
+/// NOAA publishes a zip per Coast Guard district beside the per-cell zips its
+/// catalog names, and one for the whole country. A region needs the cells NOAA
+/// files under it AND every cell that reaches into the same water, so a
+/// district's bundle is most of a region and never quite all of it: the rest
+/// come one at a time.
+///
+/// Neither bundle url is in the catalog. The catalog states each cell's own
+/// zip; the bundles are a convention of NOAA's download site. One that has
+/// moved answers 404, and the service falls back to the cells it stood for.
+pub const Transfer = struct {
+    /// The cell this brings, as an index into the catalog. Null for a bundle.
+    cell: ?u32 = null,
+    /// The district a bundle covers, or `all_districts` for the country.
+    /// Zero for a single cell.
+    district: u8 = 0,
+    /// How many of the picked cells this transfer brings, for the count a
+    /// mariner watches.
+    cells: u32 = 1,
+    /// What it weighs. A bundle is measured by the cells it holds, because
+    /// the catalog does not state a bundle's size: it is within a tenth of
+    /// the sum, and a figure that moves when the plan changes shape reads as
+    /// a different download.
+    bytes: u64 = 0,
+};
+
+/// The district number that stands for every district at once.
+pub const all_districts: u8 = 255;
+
+/// Where the bundles live.
+pub const bundle_base = "https://www.charts.noaa.gov/ENCs/";
+
+/// The url of a district's bundle, or of the whole country's, into `buf`.
+pub fn bundleUrl(buf: []u8, district: u8) ![]const u8 {
+    if (district == all_districts) {
+        return std.fmt.bufPrint(buf, "{s}All_ENCs.zip", .{bundle_base});
+    }
+    return std.fmt.bufPrint(buf, "{s}{d:0>2}CGD_ENCs.zip", .{ bundle_base, district });
+}
+
+/// The most cells worth asking for one at a time before a district's bundle is
+/// the lighter request.
+///
+/// NOAA serves a public archive. A region holds hundreds of cells, and asking
+/// for each one is hundreds of requests against their servers for water one
+/// bundle already answers. Only a mariner who is missing a handful is better
+/// served cell by cell, and this is where a handful ends.
+pub const bundle_at: u32 = 25;
+
+/// How to fetch a selection with the fewest requests.
+///
+/// A district's bundle stands in for every cell NOAA files under it, in one
+/// request. That is the point: the alternative is hundreds of requests for
+/// water a single zip already holds. A region is a superset of its district,
+/// so the cells that reach in from next door still come one at a time, and
+/// there are a couple of dozen of those rather than a couple of hundred.
+///
+/// The exception is a mariner missing only a few cells of a district they
+/// already hold. Fewer than `bundle_at` requests is a lighter ask than a
+/// hundred megabytes they would mostly throw away.
+///
+/// `again` fetches held cells too, the way a set is repaired, and then
+/// the bundle is always the lighter ask.
+pub fn planFetches(
+    alloc: std.mem.Allocator,
+    cat: *const Catalog,
+    districts: []const u8,
+    held: []const []const u8,
+    again: bool,
+) ![]Transfer {
+    const picked = try selectRegions(alloc, cat, districts);
+    defer alloc.free(picked);
+
+    // How many cells each picked district still owes. The count decides, not
+    // the bytes: the cost being managed here is requests against NOAA.
+    var bundled = [_]bool{false} ** 256;
+    for (districts) |d| {
+        if (d == 0) continue;
+        var missing: u32 = 0;
+        for (cat.cells) |c| {
+            if (c.district != d or c.zip_url.len == 0) continue;
+            if (again or !isHeld(held, c.name)) missing += 1;
+        }
+        if (missing >= bundle_at) bundled[d] = true;
+    }
+
+    var out: std.ArrayList(Transfer) = .empty;
+    errdefer out.deinit(alloc);
+
+    for (0..256) |d| {
+        if (!bundled[d]) continue;
+        var cells: u32 = 0;
+        var bytes: u64 = 0;
+        for (cat.cells) |c| {
+            if (c.district != d or c.zip_url.len == 0) continue;
+            cells += 1;
+            bytes += c.zip_bytes;
+        }
+        try out.append(alloc, .{ .district = @intCast(d), .cells = cells, .bytes = bytes });
+    }
+
+    // Everything the bundles do not carry: the cells of an unbundled district,
+    // and the cells of a neighbouring one that reach into this water.
+    for (picked) |i| {
+        const c = cat.cells[i];
+        if (c.zip_url.len == 0) continue;
+        if (c.district != 0 and bundled[c.district]) continue;
+        if (!again and isHeld(held, c.name)) continue;
+        try out.append(alloc, .{ .cell = i, .cells = 1, .bytes = c.zip_bytes });
+    }
+
+    return out.toOwnedSlice(alloc);
+}
+
 /// A cell already on this device.
 pub const Installed = struct {
     name: []const u8,
@@ -727,4 +842,234 @@ test "cost leaves out the cells the device already holds" {
     try testing.expectEqual(@as(u32, 1), rest.held);
     try testing.expect(rest.bytes < whole.bytes);
     try testing.expect(isHeld(&held, cat.cells[picked[0]].name));
+}
+
+// ---- the download plan --------------------------------------------------
+
+/// A catalog with `per` cells in every shipped district, plus one cell that
+/// straddles the line between the first two: the case a district's own bundle
+/// cannot answer.
+///
+/// Built rather than pasted, because the point of these tests is that every
+/// region is covered and there are nine of them.
+fn manyDistricts(alloc: std.mem.Allocator, per: u32) !Catalog {
+    var xml: std.ArrayList(u8) = .empty;
+    defer xml.deinit(alloc);
+    try xml.appendSlice(alloc, "<ENC_Product_Catalog><date_valid>20250903</date_valid>");
+    for (regions) |r| {
+        for (0..per) |k| {
+            // Each district gets its own strip of water, so nothing overlaps
+            // by accident. The straddler below is the only cell that does.
+            const lat: f64 = @as(f64, @floatFromInt(r.district)) * 2.0;
+            const lon: f64 = @as(f64, @floatFromInt(k)) * 0.5 - 80.0;
+            const row = try std.fmt.allocPrint(alloc,
+                "<cell><name>US5{d:0>2}{d:0>3}</name><lname>Cell</lname>" ++
+                    "<cscale>20000</cscale><edtn>1</edtn><updn>0</updn>" ++
+                    "<zipfile_location>https://charts.noaa.gov/ENCs/US5{d:0>2}{d:0>3}.zip</zipfile_location>" ++
+                    "<zipfile_size>1000</zipfile_size>" ++
+                    "<coast_guard_district>{d}</coast_guard_district>" ++
+                    "<panel><vertex><lat>{d:.2}</lat><long>{d:.2}</long></vertex>" ++
+                    "<vertex><lat>{d:.2}</lat><long>{d:.2}</long></vertex></panel></cell>",
+                .{
+                    r.district, k, r.district, k, r.district,
+                    lat,        lon, lat + 0.4, lon + 0.4,
+                },
+            );
+            defer alloc.free(row);
+            try xml.appendSlice(alloc, row);
+        }
+    }
+    // One cell filed under the second district whose water reaches into the
+    // first. A bundle for the first district does not carry it.
+    const a = regions[0].district;
+    const b = regions[1].district;
+    const strad = try std.fmt.allocPrint(alloc,
+        "<cell><name>US5STRAD1</name><lname>Straddler</lname>" ++
+            "<cscale>20000</cscale><edtn>1</edtn><updn>0</updn>" ++
+            "<zipfile_location>https://charts.noaa.gov/ENCs/US5STRAD1.zip</zipfile_location>" ++
+            "<zipfile_size>1000</zipfile_size>" ++
+            "<coast_guard_district>{d}</coast_guard_district>" ++
+            "<panel><vertex><lat>{d:.2}</lat><long>-80.00</long></vertex>" ++
+            "<vertex><lat>{d:.2}</lat><long>-79.60</long></vertex></panel></cell>",
+        .{ b, @as(f64, @floatFromInt(a)) * 2.0, @as(f64, @floatFromInt(a)) * 2.0 + 0.4 },
+    );
+    defer alloc.free(strad);
+    try xml.appendSlice(alloc, strad);
+    try xml.appendSlice(alloc, "</ENC_Product_Catalog>");
+    return parse(alloc, xml.items);
+}
+
+/// Every cell a plan brings, by catalog index: a bundle brings its district,
+/// a cell brings itself. Fails the test when one arrives twice.
+fn planCovers(
+    alloc: std.mem.Allocator,
+    cat: *const Catalog,
+    plan: []const Transfer,
+) ![]bool {
+    const seen = try alloc.alloc(bool, cat.cells.len);
+    @memset(seen, false);
+    for (plan) |t| {
+        if (t.cell) |i| {
+            try testing.expect(!seen[i]);
+            seen[i] = true;
+            continue;
+        }
+        for (cat.cells, 0..) |c, i| {
+            if (c.district != t.district or c.zip_url.len == 0) continue;
+            try testing.expect(!seen[i]);
+            seen[i] = true;
+        }
+    }
+    return seen;
+}
+
+test "every region's plan brings every cell the region selects" {
+    var cat = try manyDistricts(testing.allocator, 40);
+    defer cat.deinit();
+
+    for (regions) |r| {
+        const picked = try selectRegions(testing.allocator, &cat, &.{r.district});
+        defer testing.allocator.free(picked);
+        try testing.expect(picked.len > 0);
+
+        const plan = try planFetches(testing.allocator, &cat, &.{r.district}, &.{}, false);
+        defer testing.allocator.free(plan);
+
+        const seen = try planCovers(testing.allocator, &cat, plan);
+        defer testing.allocator.free(seen);
+        for (picked) |i| {
+            if (!seen[i]) {
+                std.debug.print("region {s} misses {s}\n", .{ r.id, cat.cells[i].name });
+                return error.RegionNotCovered;
+            }
+        }
+    }
+}
+
+test "a region needs one bundle and the strays around it" {
+    var cat = try manyDistricts(testing.allocator, 40);
+    defer cat.deinit();
+
+    // The first district is the one the straddler reaches into.
+    const d = regions[0].district;
+    const plan = try planFetches(testing.allocator, &cat, &.{d}, &.{}, false);
+    defer testing.allocator.free(plan);
+
+    var bundles: u32 = 0;
+    var singles: u32 = 0;
+    for (plan) |t| {
+        if (t.cell == null) {
+            bundles += 1;
+            try testing.expectEqual(d, t.district);
+        } else singles += 1;
+    }
+    try testing.expectEqual(@as(u32, 1), bundles);
+    // Forty cells in the district, and one neighbour that reaches in.
+    try testing.expectEqual(@as(u32, 1), singles);
+    try testing.expectEqual(@as(usize, 2), plan.len);
+}
+
+test "a district mostly held comes cell by cell instead of whole" {
+    var cat = try manyDistricts(testing.allocator, 40);
+    defer cat.deinit();
+    const d = regions[0].district;
+
+    // All but two, sorted the way setHeld hands them over.
+    var names: std.ArrayList([]const u8) = .empty;
+    defer names.deinit(testing.allocator);
+    for (cat.cells) |c| {
+        if (c.district == d and names.items.len < 38) try names.append(testing.allocator, c.name);
+    }
+    std.mem.sort([]const u8, names.items, {}, struct {
+        fn lt(_: void, a: []const u8, b: []const u8) bool {
+            return std.mem.order(u8, a, b) == .lt;
+        }
+    }.lt);
+
+    const plan = try planFetches(testing.allocator, &cat, &.{d}, names.items, false);
+    defer testing.allocator.free(plan);
+    for (plan) |t| try testing.expect(t.cell != null);
+    // The two that are missing, and the straddler next door.
+    try testing.expectEqual(@as(usize, 3), plan.len);
+}
+
+test "repairing a held district fetches the bundle again" {
+    var cat = try manyDistricts(testing.allocator, 40);
+    defer cat.deinit();
+    const d = regions[0].district;
+
+    var names: std.ArrayList([]const u8) = .empty;
+    defer names.deinit(testing.allocator);
+    for (cat.cells) |c| if (c.district == d) try names.append(testing.allocator, c.name);
+    std.mem.sort([]const u8, names.items, {}, struct {
+        fn lt(_: void, a: []const u8, b: []const u8) bool {
+            return std.mem.order(u8, a, b) == .lt;
+        }
+    }.lt);
+
+    const held = try planFetches(testing.allocator, &cat, &.{d}, names.items, false);
+    defer testing.allocator.free(held);
+    for (held) |t| try testing.expect(t.cell != null);
+
+    const again = try planFetches(testing.allocator, &cat, &.{d}, names.items, true);
+    defer testing.allocator.free(again);
+    var bundles: u32 = 0;
+    for (again) |t| {
+        if (t.cell == null) bundles += 1;
+    }
+    try testing.expectEqual(@as(u32, 1), bundles);
+}
+
+test "picking every region plans one bundle each and covers them all" {
+    var cat = try manyDistricts(testing.allocator, 40);
+    defer cat.deinit();
+
+    var all: [regions.len]u8 = undefined;
+    for (regions, 0..) |r, i| all[i] = r.district;
+
+    const picked = try selectRegions(testing.allocator, &cat, &all);
+    defer testing.allocator.free(picked);
+    const plan = try planFetches(testing.allocator, &cat, &all, &.{}, false);
+    defer testing.allocator.free(plan);
+
+    const seen = try planCovers(testing.allocator, &cat, plan);
+    defer testing.allocator.free(seen);
+    for (picked) |i| try testing.expect(seen[i]);
+
+    var bundles: u32 = 0;
+    for (plan) |t| {
+        if (t.cell == null) bundles += 1;
+    }
+    try testing.expectEqual(@as(u32, regions.len), bundles);
+    // One request per district instead of one per cell.
+    try testing.expect(plan.len < picked.len);
+}
+
+test "a bundle url names the district, padded the way NOAA writes it" {
+    var buf: [128]u8 = undefined;
+    try testing.expectEqualStrings(
+        "https://www.charts.noaa.gov/ENCs/01CGD_ENCs.zip",
+        try bundleUrl(&buf, 1),
+    );
+    try testing.expectEqualStrings(
+        "https://www.charts.noaa.gov/ENCs/17CGD_ENCs.zip",
+        try bundleUrl(&buf, 17),
+    );
+    try testing.expectEqualStrings(
+        "https://www.charts.noaa.gov/ENCs/All_ENCs.zip",
+        try bundleUrl(&buf, all_districts),
+    );
+}
+
+test "the plan never asks for a chart twice" {
+    var cat = try manyDistricts(testing.allocator, 40);
+    defer cat.deinit();
+    var all: [regions.len]u8 = undefined;
+    for (regions, 0..) |r, i| all[i] = r.district;
+
+    const plan = try planFetches(testing.allocator, &cat, &all, &.{}, false);
+    defer testing.allocator.free(plan);
+    // planCovers fails the test on any cell brought by two transfers.
+    const seen = try planCovers(testing.allocator, &cat, plan);
+    defer testing.allocator.free(seen);
 }

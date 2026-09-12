@@ -900,6 +900,13 @@ public final class Lookout implements AutoCloseable {
     public void httpRespond(long id, byte[] bytes, int status) {
         if (h != 0) nHttpRespond(h, id, bytes, status);
     }
+    /** Answer one ask a piece at a time, reading buf up to len. Pieces of one
+     *  ask go in order from one thread, with done set on the last. A NOAA
+     *  district downloads as one zip of a couple of hundred megabytes, which
+     *  does not fit a phone heap as a byte[]. */
+    public void httpRespondChunk(long id, byte[] buf, int len, int status, boolean done) {
+        if (h != 0) nHttpRespondChunk(h, id, buf, len, status, done);
+    }
     public void chartLinkAdd(String link)        { if (h != 0) nChartLinkAdd(h, link); }
     /** null draws lookout's own chart. */
     public void chartLinkSelect(String url)      { if (h != 0) nChartLinkSelect(h, url); }
@@ -991,6 +998,7 @@ public final class Lookout implements AutoCloseable {
     private static native int nHttpPoll(long h, long[] ids, int[] allow, String[] urls);
     private static native int nHttpCancelPoll(long h, long[] ids);
     private static native void nHttpRespond(long h, long id, byte[] bytes, int status);
+    private static native void nHttpRespondChunk(long h, long id, byte[] buf, int len, int status, boolean done);
     private static native void nChartLinkAdd(long h, String link);
     private static native void nChartLinkSelect(long h, String url);
     private static native void nChartLinkRemove(long h, String url);

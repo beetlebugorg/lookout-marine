@@ -6,6 +6,11 @@
 //! here, for the reason chart links give: one fetcher serves the whole app,
 //! and the shell owns it.
 //!
+//! A district arrives as one zip where NOAA publishes one, so a region costs a
+//! handful of requests rather than a thousand. Those zips run to a couple of
+//! hundred megabytes, so a body is written to its part file as it arrives
+//! (lookout_http_respond_chunk) and never held whole.
+//!
 //! Request ids have bit 63 set so lookout_http_respond can route an answer to
 //! this service or to chartlinks without the two sharing an id space.
 
@@ -15,6 +20,7 @@ const clinks = @import("chartlinks.zig");
 const lock = @import("lock.zig");
 const Lock = lock.Lock;
 const clock = @import("clock.zig");
+const httpgather = @import("httpgather.zig");
 
 /// Set on every request id this service issues.
 pub const id_mark: u64 = @as(u64, 1) << 63;
@@ -29,8 +35,12 @@ pub fn ownsId(id: u64) bool {
 pub const MAX_INFLIGHT = 4;
 
 
-/// A cell zip larger than this is not the file we asked for.
-pub const MAX_ZIP_BYTES: usize = 64 << 20;
+/// A cell zip, or the catalog, larger than this is not the file we asked for.
+pub const MAX_ZIP_BYTES: u64 = 64 << 20;
+
+/// The same guard for a district bundle. NOAA's largest is Alaska, measured at
+/// 222.7 MB on 2026-09-12; the room above that is for the districts growing.
+pub const MAX_BUNDLE_BYTES: u64 = 512 << 20;
 
 /// What the service is doing.
 pub const Phase = enum(u8) {
@@ -44,9 +54,19 @@ pub const Phase = enum(u8) {
 
 /// One cell to fetch. The slices point into the catalog arena.
 const Job = struct {
+    /// What the answer is written as while it is unpacked. Owned, because a
+    /// bundle's name is built rather than read out of the catalog.
     name: []const u8,
+    /// Owned, for the same reason.
     url: []const u8,
     bytes: u64,
+    /// How many of the picked cells this transfer brings. One for a cell, a
+    /// district's worth for a bundle, so the count a mariner watches stays a
+    /// count of charts.
+    cells: u32 = 1,
+    /// The district a bundle covers, 0 for a single cell. A bundle NOAA has
+    /// moved answers 404, and the cells it stood for are asked for instead.
+    district: u8 = 0,
 };
 
 const Kind = enum { catalog, cell };
@@ -71,19 +91,32 @@ const Answer = struct {
     write_failed: bool = false,
 };
 
-/// One outstanding cell. The fetch thread reads the name to unpack the bytes
-/// it receives.
+/// One outstanding transfer, written to disk as it arrives.
+///
+/// A district bundle runs to a couple of hundred megabytes, which no phone can
+/// hold in memory alongside the copy the shell made and the copy the core
+/// would make. So the body goes to `<dest>/<name>.zip.part` a piece at a time
+/// and the file is what gets unpacked.
 const Stage = struct {
     id: u64,
     name: []u8,
+    /// Opened on the first piece of the body, closed on the last.
+    file: ?std.Io.File = null,
+    /// What has been written so far.
+    size: u64 = 0,
+    /// What the transfer may reach before it is not the file we asked for.
+    limit: u64 = MAX_ZIP_BYTES,
+    /// Set when a piece would not write or the body ran past the limit. The
+    /// rest is dropped and the answer reports a failure.
+    broken: bool = false,
 };
 
-/// One fetched cell, waiting to be written. Owned by the unpack thread once
-/// it is queued.
+/// One transfer on disk, waiting to be unpacked. The unpack thread owns the
+/// name once it is queued.
 const Pending = struct {
     id: u64,
     name: []u8,
-    bytes: []u8,
+    size: u64,
     status: c_int,
 };
 
@@ -172,16 +205,28 @@ pub const Service = struct {
     pub_mu: Lock = .{},
     pub_state: State = .{},
 
+    /// Whether this download was asked to fetch water already held. Kept for
+    /// the bundle fallback, which plans the same cells a second time.
+    again: bool = false,
+
     /// Answers from the shell's fetch threads, guarded by inbox_mu alone.
     inbox_mu: Lock = .{},
     inbox: std.ArrayList(Answer) = .empty,
     inbox_len: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
 
+    /// The catalog, held until it is whole. Everything else this service
+    /// fetches goes to disk as it arrives.
+    gather: httpgather.Gather = undefined,
+
     pub fn init(alloc: std.mem.Allocator) Service {
-        return .{ .alloc = alloc };
+        return .{
+            .alloc = alloc,
+            .gather = httpgather.Gather.init(alloc, MAX_ZIP_BYTES),
+        };
     }
 
     pub fn deinit(self: *Service) void {
+        self.gather.deinit();
         for (self.held.items) |n| self.alloc.free(n);
         self.held.deinit(self.alloc);
         self.cancelAll();
@@ -194,6 +239,7 @@ pub const Service = struct {
         self.freeStr(&self.err);
         if (self.dest.len != 0) self.alloc.free(self.dest);
         self.dest = &.{};
+        self.freePlan();
         self.plan.deinit(self.alloc);
         self.reqs.deinit(self.alloc);
         for (self.inbox.items) |a| self.alloc.free(a.bytes);
@@ -228,20 +274,78 @@ pub const Service = struct {
     /// fetcher is set or the request could not be recorded.
     /// Record which cell an outstanding request fetches, for the fetch
     /// thread.
-    fn stageCell(self: *Service, id: u64, name: []const u8) void {
+    fn stageCell(self: *Service, id: u64, name: []const u8, limit: u64) void {
         const own = self.alloc.dupe(u8, name) catch return;
         self.stage_mu.lock();
         defer self.stage_mu.unlock();
-        self.stage.append(self.alloc, .{ .id = id, .name = own }) catch self.alloc.free(own);
+        self.stage.append(self.alloc, .{
+            .id = id,
+            .name = own,
+            .limit = limit,
+        }) catch self.alloc.free(own);
     }
 
-    /// Take an outstanding cell's name, or null for a request that is not one.
-    /// The caller owns the name and frees it.
-    fn takeStaged(self: *Service, id: u64) ?[]u8 {
+    /// Write one piece of a transfer to its part file. Returns false for a
+    /// request that is not a staged transfer.
+    ///
+    /// Under stage_mu for the write: four fetch threads run at once, the disk
+    /// serializes them anyway, and holding the lock keeps the entry from
+    /// moving under a thread mid-write.
+    fn appendStaged(self: *Service, id: u64, bytes: []const u8, status: c_int) bool {
+        self.stage_mu.lock();
+        defer self.stage_mu.unlock();
+        var at: ?usize = null;
+        for (self.stage.items, 0..) |st, i| {
+            if (st.id == id) at = i;
+        }
+        const st = &self.stage.items[at orelse return false];
+        if (st.broken) return true;
+        if (status < 200 or status >= 300) {
+            st.broken = true;
+            return true;
+        }
+        if (bytes.len == 0) return true;
+        if (st.size + bytes.len > st.limit) {
+            st.broken = true;
+            return true;
+        }
+        const io = std.Io.Threaded.global_single_threaded.io();
+        if (st.file == null) {
+            if (self.stage_dest.len == 0) {
+                st.broken = true;
+                return true;
+            }
+            var buf: [512]u8 = undefined;
+            const path = std.fmt.bufPrint(&buf, "{s}/{s}.zip.part", .{ self.stage_dest, st.name }) catch {
+                st.broken = true;
+                return true;
+            };
+            st.file = std.Io.Dir.cwd().createFile(io, path, .{}) catch {
+                st.broken = true;
+                return true;
+            };
+        }
+        st.file.?.writeStreamingAll(io, bytes) catch {
+            st.broken = true;
+            return true;
+        };
+        st.size += bytes.len;
+        return true;
+    }
+
+    /// Close a finished transfer and take what it came to. The caller owns the
+    /// name and frees it.
+    fn takeStaged(self: *Service, id: u64) ?Stage {
         self.stage_mu.lock();
         defer self.stage_mu.unlock();
         for (self.stage.items, 0..) |st, i| {
-            if (st.id == id) return self.stage.swapRemove(i).name;
+            if (st.id != id) continue;
+            var taken = self.stage.swapRemove(i);
+            if (taken.file) |f| {
+                f.close(std.Io.Threaded.global_single_threaded.io());
+                taken.file = null;
+            }
+            return taken;
         }
         return null;
     }
@@ -257,9 +361,13 @@ pub const Service = struct {
     }
 
     fn clearStage(self: *Service) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
         self.stage_mu.lock();
         defer self.stage_mu.unlock();
-        for (self.stage.items) |st| self.alloc.free(st.name);
+        for (self.stage.items) |st| {
+            if (st.file) |f| f.close(io);
+            self.alloc.free(st.name);
+        }
         self.stage.clearRetainingCapacity();
     }
 
@@ -270,7 +378,10 @@ pub const Service = struct {
         const id = self.next_req | id_mark;
         self.next_req += 1;
         self.reqs.append(self.alloc, .{ .id = id, .kind = kind, .job = job }) catch return 0;
-        if (kind == .cell) self.stageCell(id, self.plan.items[job].name);
+        if (kind == .cell) {
+            const t = self.plan.items[job];
+            self.stageCell(id, t.name, if (t.district == 0) MAX_ZIP_BYTES else MAX_BUNDLE_BYTES);
+        }
         // The api lock is held. The shell starts the fetch and returns. It may
         // respond before this call ends, and respond only enqueues, so that
         // ordering is safe.
@@ -360,6 +471,44 @@ pub const Service = struct {
     /// bake as one directory.
     /// `again` fetches the cells this device already holds as well, so a
     /// mariner can repair or refresh water they have.
+    /// How many charts the plan brings. That is what a mariner counts, and a
+    /// bundle is one transfer and a district's worth of charts.
+    fn planCells(self: *const Service) u32 {
+        var n: u32 = 0;
+        for (self.plan.items) |j| n += j.cells;
+        return n;
+    }
+
+    /// Free the strings a plan owns. The catalog may go before the plan does.
+    fn freePlan(self: *Service) void {
+        for (self.plan.items) |j| {
+            self.alloc.free(j.name);
+            self.alloc.free(j.url);
+        }
+        self.plan.clearRetainingCapacity();
+    }
+
+    /// Take one transfer onto the plan, copying the strings it needs.
+    fn planAppend(self: *Service, name: []const u8, url: []const u8, bytes: u64, cells: u32, district: u8) void {
+        const n = self.alloc.dupe(u8, name) catch return;
+        const u = self.alloc.dupe(u8, url) catch {
+            self.alloc.free(n);
+            return;
+        };
+        self.plan.append(self.alloc, .{
+            .name = n,
+            .url = u,
+            .bytes = bytes,
+            .cells = cells,
+            .district = district,
+        }) catch {
+            self.alloc.free(n);
+            self.alloc.free(u);
+            return;
+        };
+        self.bytes_total += bytes;
+    }
+
     pub fn start(self: *Service, districts: []const u8, dest: []const u8, again: bool) void {
         const cat = &(self.cat orelse {
             self.setErr("no catalog yet");
@@ -371,7 +520,8 @@ pub const Service = struct {
         }
 
         self.cancelAll();
-        self.plan.clearRetainingCapacity();
+        self.freePlan();
+        self.again = again;
         self.next_job = 0;
         self.done = 0;
         self.failed = 0;
@@ -379,24 +529,26 @@ pub const Service = struct {
         self.bytes_total = 0;
         self.freeStr(&self.err);
 
-        const picked = noaa.selectRegions(self.alloc, cat, districts) catch {
-            self.setErr("out of memory selecting cells");
+        // A district arrives as one zip where it can. NOAA serves a public
+        // archive, and a region holds hundreds of cells: asking for each one
+        // is hundreds of requests for water a single bundle already answers.
+        const fetches = noaa.planFetches(self.alloc, cat, districts, self.held.items, again) catch {
+            self.setErr("out of memory planning the download");
             return;
         };
-        defer self.alloc.free(picked);
+        defer self.alloc.free(fetches);
 
-        for (picked) |i| {
-            const c = cat.cells[i];
-            if (c.zip_url.len == 0) continue;
-            // Already on the device. A mariner picking water they have adds
-            // what is missing from it, unless they asked for the rest again.
-            if (!again and noaa.isHeld(self.held.items, c.name)) continue;
-            self.plan.append(self.alloc, .{
-                .name = c.name,
-                .url = c.zip_url,
-                .bytes = c.zip_bytes,
-            }) catch break;
-            self.bytes_total += c.zip_bytes;
+        var url_buf: [256]u8 = undefined;
+        var name_buf: [64]u8 = undefined;
+        for (fetches) |t| {
+            if (t.cell) |i| {
+                const c = cat.cells[i];
+                self.planAppend(c.name, c.zip_url, c.zip_bytes, 1, 0);
+                continue;
+            }
+            const url = noaa.bundleUrl(&url_buf, t.district) catch continue;
+            const name = std.fmt.bufPrint(&name_buf, "{d:0>2}CGD_ENCs", .{t.district}) catch continue;
+            self.planAppend(name, url, t.bytes, t.cells, t.district);
         }
         if (self.plan.items.len == 0) {
             self.setErr("every chart for those regions is already installed");
@@ -433,7 +585,7 @@ pub const Service = struct {
         defer self.alloc.free(stale);
 
         self.cancelAll();
-        self.plan.clearRetainingCapacity();
+        self.freePlan();
         self.next_job = 0;
         self.done = 0;
         self.failed = 0;
@@ -441,15 +593,12 @@ pub const Service = struct {
         self.bytes_total = 0;
         self.freeStr(&self.err);
 
+        // Cell by cell, whatever the count. A reissue is a handful of cells
+        // scattered across the country, and no bundle is the shape of that.
         for (stale) |i| {
             const c = cat.find(installed[i].name) orelse continue;
             if (c.zip_url.len == 0) continue;
-            self.plan.append(self.alloc, .{
-                .name = c.name,
-                .url = c.zip_url,
-                .bytes = c.zip_bytes,
-            }) catch break;
-            self.bytes_total += c.zip_bytes;
+            self.planAppend(c.name, c.zip_url, c.zip_bytes, 1, 0);
         }
         if (self.plan.items.len == 0) {
             self.phase = .ready;
@@ -500,30 +649,50 @@ pub const Service = struct {
 
     /// Take one answer from a fetch thread. Does not hold the api lock.
     pub fn respond(self: *Service, req_id: u64, bytes: []const u8, status: c_int) void {
-        const too_big = bytes.len > MAX_ZIP_BYTES;
-        var answer: Answer = .{
-            .id = req_id,
-            .bytes = &.{},
-            .status = if (too_big) 0 else status,
-        };
+        self.respondChunk(req_id, bytes, status, true);
+    }
 
-        // Unpack a cell on the thread that fetched it. adopt runs under the
-        // api lock, and this file work there blocked the shell's poll for the
-        // length of the download.
-        if (self.takeStaged(req_id)) |name| {
-            const ok = !too_big and bytes.len != 0 and status >= 200 and status < 300;
-            if (ok and self.queueUnpack(req_id, name, bytes, status)) return;
-            self.alloc.free(name);
-            self.post(answer);
+    /// Take one piece of an answer. Pieces for one request arrive on one
+    /// thread in order, with `done` set on the last; a shell holding the whole
+    /// body calls this once.
+    ///
+    /// A transfer goes straight to its part file as it arrives, so a district
+    /// bundle never sits in memory. The catalog is parsed whole, under the api
+    /// lock, so its pieces are gathered instead.
+    pub fn respondChunk(self: *Service, req_id: u64, bytes: []const u8, status: c_int, done: bool) void {
+        if (self.appendStaged(req_id, bytes, status)) {
+            if (!done) return;
+            self.finishStaged(req_id, status);
             return;
         }
 
-        // The catalog is parsed once, under the api lock, so its bytes go
-        // through the inbox.
-        if (!too_big and bytes.len != 0) {
-            answer.bytes = self.alloc.dupe(u8, bytes) catch &.{};
-        }
-        self.post(answer);
+        const whole = self.gather.take(req_id, bytes, status, done) orelse return;
+        self.post(.{ .id = req_id, .bytes = whole.bytes, .status = whole.status });
+    }
+
+    /// Close a finished transfer and hand it to the unpack thread.
+    ///
+    /// Unpacking runs off the api lock: adopt holds it, and file work there
+    /// blocked the shell's poll for the length of the download.
+    fn finishStaged(self: *Service, req_id: u64, status: c_int) void {
+        const st = self.takeStaged(req_id) orelse return;
+        const ok = !st.broken and st.size != 0 and status >= 200 and status < 300;
+        if (ok and self.queueUnpack(req_id, st.name, st.size, status)) return;
+        if (st.size != 0) self.dropPart(st.name);
+        self.alloc.free(st.name);
+        self.post(.{ .id = req_id, .bytes = &.{}, .status = if (st.broken) 0 else status });
+    }
+
+    /// Remove the part file of a transfer that will not be unpacked.
+    fn dropPart(self: *Service, name: []const u8) void {
+        self.stage_mu.lock();
+        const dest = self.alloc.dupe(u8, self.stage_dest) catch &.{};
+        self.stage_mu.unlock();
+        defer if (dest.len != 0) self.alloc.free(dest);
+        if (dest.len == 0) return;
+        var buf: [512]u8 = undefined;
+        const path = std.fmt.bufPrint(&buf, "{s}/{s}.zip.part", .{ dest, name }) catch return;
+        std.Io.Dir.cwd().deleteFile(std.Io.Threaded.global_single_threaded.io(), path) catch {};
     }
 
     /// Queue one answer for the next adopt.
@@ -537,22 +706,18 @@ pub const Service = struct {
         self.inbox_len.store(self.inbox.items.len, .release);
     }
 
-    /// Hand a fetched cell to the unpack thread. Owns `name` on success.
+    /// Hand a written transfer to the unpack thread. Owns `name` on success.
     /// Returns false when the queue could not be grown, and the caller then
     /// posts the answer itself.
-    fn queueUnpack(self: *Service, id: u64, name: []u8, bytes: []const u8, status: c_int) bool {
-        const own = self.alloc.dupe(u8, bytes) catch return false;
+    fn queueUnpack(self: *Service, id: u64, name: []u8, size: u64, status: c_int) bool {
         self.unpack_mu.lock();
         defer self.unpack_mu.unlock();
         self.unpack_q.append(self.alloc, .{
             .id = id,
             .name = name,
-            .bytes = own,
+            .size = size,
             .status = status,
-        }) catch {
-            self.alloc.free(own);
-            return false;
-        };
+        }) catch return false;
         return true;
     }
 
@@ -572,7 +737,6 @@ pub const Service = struct {
                     job = self.unpack_q.orderedRemove(0);
                 }
                 defer self.alloc.free(job.name);
-                defer self.alloc.free(job.bytes);
 
                 self.stage_mu.lock();
                 const dest = self.alloc.dupe(u8, self.stage_dest) catch &.{};
@@ -582,9 +746,9 @@ pub const Service = struct {
                 var a: Answer = .{ .id = job.id, .bytes = &.{}, .status = job.status };
                 if (dest.len == 0) {
                     a.write_failed = true;
-                } else if (self.write(dest, job.name, job.bytes)) {
+                } else if (self.unpack(dest, job.name)) {
                     a.stored = true;
-                    a.size = job.bytes.len;
+                    a.size = @intCast(job.size);
                 } else |_| {
                     a.write_failed = true;
                 }
@@ -610,10 +774,7 @@ pub const Service = struct {
         self.unpack_thread = null;
         self.unpack_mu.lock();
         defer self.unpack_mu.unlock();
-        for (self.unpack_q.items) |j| {
-            self.alloc.free(j.name);
-            self.alloc.free(j.bytes);
-        }
+        for (self.unpack_q.items) |j| self.alloc.free(j.name);
         self.unpack_q.clearRetainingCapacity();
     }
 
@@ -683,28 +844,58 @@ pub const Service = struct {
     fn tookCell(self: *Service, job: usize, a: Answer) void {
         if (job >= self.plan.items.len) return;
         if (!a.stored) {
+            if (!a.write_failed and self.expandBundle(job)) return;
             self.failed += 1;
             if (a.write_failed) self.setErr("could not write a downloaded chart");
             self.changed = true;
             return;
         }
-        self.done += 1;
+        self.done += self.plan.items[job].cells;
         self.bytes_done += a.size;
         self.changed = true;
     }
 
-    /// Unpack one cell's exchange set into the staging directory.
+    /// A bundle NOAA did not serve, asked for cell by cell instead.
     ///
-    /// The zip is written to a scratch file, extracted, and removed. Leaving
-    /// the zips in place gave the shell a directory of 829 archives, and it
-    /// bakes a folder of cells or a single archive, so it refused the pick.
-    /// Extracting turns the directory into an ordinary ENC_ROOT.
-    fn write(self: *Service, dest: []const u8, name: []const u8, bytes: []const u8) !void {
+    /// The bundle url is a convention of the download site rather than
+    /// something the catalog states, so a district NOAA renames or retires
+    /// answers 404. Every cell it stood for is still published under its own
+    /// url, and the download goes on with the requests the bundle was there to
+    /// save. Returns false for anything that is not a bundle, and for a
+    /// district whose cells are all in hand.
+    fn expandBundle(self: *Service, job: usize) bool {
+        const district = self.plan.items[job].district;
+        if (district == 0) return false;
+        const cat = &(self.cat orelse return false);
+        const before = self.plan.items.len;
+        for (cat.cells) |c| {
+            if (c.district != district or c.zip_url.len == 0) continue;
+            if (!self.again and noaa.isHeld(self.held.items, c.name)) continue;
+            self.planAppend(c.name, c.zip_url, c.zip_bytes, 1, 0);
+        }
+        if (self.plan.items.len == before) return false;
+        // The bundle's share of the counters goes with it, or the cells it
+        // stood for are counted twice.
+        const t = &self.plan.items[job];
+        self.bytes_total -= @min(self.bytes_total, t.bytes);
+        t.cells = 0;
+        t.district = 0;
+        self.changed = true;
+        return true;
+    }
+
+    /// Unpack one transfer's exchange set into the staging directory.
+    ///
+    /// The body was written to a scratch file as it arrived. It is extracted
+    /// and removed. Leaving the zips in place gave the shell a directory of
+    /// 829 archives, and it bakes a folder of cells or a single archive, so it
+    /// refused the pick. Extracting turns the directory into an ordinary
+    /// ENC_ROOT, and a district bundle unpacks the same way a cell does.
+    fn unpack(self: *Service, dest: []const u8, name: []const u8) !void {
         _ = self;
         const io = std.Io.Threaded.global_single_threaded.io();
         var buf: [512]u8 = undefined;
         const tmp = try std.fmt.bufPrint(&buf, "{s}/{s}.zip.part", .{ dest, name });
-        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = tmp, .data = bytes });
         defer std.Io.Dir.cwd().deleteFile(io, tmp) catch {};
 
         var dir = try std.Io.Dir.cwd().openDir(io, dest, .{});
@@ -752,7 +943,7 @@ pub const Service = struct {
             .phase = @intFromEnum(self.phase),
             .have_catalog = if (self.cat != null) 1 else 0,
             .checked_at = self.checked_at,
-            .total = @intCast(self.plan.items.len),
+            .total = self.planCells(),
             .done = self.done,
             .failed = self.failed,
             .bytes_total = self.bytes_total,
@@ -834,4 +1025,87 @@ test "copyZ terminates a value that fits and one that does not" {
     try testing.expectEqualStrings("abc", std.mem.sliceTo(&buf, 0));
     copyZ(&buf, "abcdefghijkl");
     try testing.expectEqualStrings("abcdefg", std.mem.sliceTo(&buf, 0));
+}
+
+/// A catalog holding `cells` charts in one district, each with a zip url.
+fn oneDistrict(alloc: std.mem.Allocator, district: u8, cells: u32) !noaa.Catalog {
+    var xml: std.ArrayList(u8) = .empty;
+    defer xml.deinit(alloc);
+    try xml.appendSlice(alloc, "<ENC_Product_Catalog><date_valid>20250903</date_valid>");
+    for (0..cells) |k| {
+        const row = try std.fmt.allocPrint(alloc,
+            "<cell><name>US5{d:0>2}{d:0>3}</name><lname>Cell</lname>" ++
+                "<cscale>20000</cscale><edtn>1</edtn><updn>0</updn>" ++
+                "<zipfile_location>https://charts.noaa.gov/ENCs/US5{d:0>2}{d:0>3}.zip</zipfile_location>" ++
+                "<zipfile_size>1000</zipfile_size>" ++
+                "<coast_guard_district>{d}</coast_guard_district>" ++
+                "<panel><vertex><lat>1.00</lat><long>-70.00</long></vertex>" ++
+                "<vertex><lat>1.40</lat><long>-69.60</long></vertex></panel></cell>",
+            .{ district, k, district, k, district },
+        );
+        defer alloc.free(row);
+        try xml.appendSlice(alloc, row);
+    }
+    try xml.appendSlice(alloc, "</ENC_Product_Catalog>");
+    return noaa.parse(alloc, xml.items);
+}
+
+/// A fetcher that records what it was asked for and answers nothing.
+const Recorder = struct {
+    ids: std.ArrayList(u64) = .empty,
+    urls: std.ArrayList([]u8) = .empty,
+    alloc: std.mem.Allocator,
+
+    fn deinit(self: *Recorder) void {
+        for (self.urls.items) |u| self.alloc.free(u);
+        self.urls.deinit(self.alloc);
+        self.ids.deinit(self.alloc);
+    }
+
+    fn get(user: ?*anyopaque, req_id: u64, url: [*:0]const u8, allow_file: c_int) callconv(.c) void {
+        _ = allow_file;
+        const self: *Recorder = @ptrCast(@alignCast(user orelse return));
+        self.ids.append(self.alloc, req_id) catch return;
+        const own = self.alloc.dupe(u8, std.mem.span(url)) catch return;
+        self.urls.append(self.alloc, own) catch self.alloc.free(own);
+    }
+};
+
+test "a bundle NOAA does not serve is asked for cell by cell" {
+    const alloc = testing.allocator;
+    const dest = "/tmp/lookout-noaa-bundle-404";
+    std.Io.Dir.cwd().deleteTree(std.Io.Threaded.global_single_threaded.io(), dest) catch {};
+
+    var rec = Recorder{ .alloc = alloc };
+    defer rec.deinit();
+
+    var s = Service.init(alloc);
+    defer s.deinit();
+    s.cat = try oneDistrict(alloc, 5, 30);
+    s.phase = .ready;
+    s.setProvider(Recorder.get, null, &rec);
+
+    // Thirty cells is past bundle_at, so the district goes as one zip.
+    s.start(&.{5}, dest, false);
+    try testing.expectEqual(Phase.downloading, s.phase);
+    try testing.expectEqual(@as(usize, 1), s.plan.items.len);
+    try testing.expectEqual(@as(u32, 30), s.planCells());
+    try testing.expectEqual(@as(usize, 1), rec.ids.items.len);
+    try testing.expect(std.mem.endsWith(u8, rec.urls.items[0], "05CGD_ENCs.zip"));
+
+    // NOAA answers 404. The download goes on with a request for each cell,
+    // and the bundle stops counting toward the total.
+    s.respondChunk(rec.ids.items[0], "", 404, true);
+    s.adopt();
+    try testing.expectEqual(@as(usize, 31), s.plan.items.len);
+    try testing.expectEqual(@as(u32, 30), s.planCells());
+    try testing.expectEqual(@as(u32, 0), s.failed);
+    try testing.expectEqual(@as(u32, 0), s.done);
+    // Four go out at once, and the rest follow as those land.
+    try testing.expectEqual(@as(usize, 1 + MAX_INFLIGHT), rec.ids.items.len);
+    try testing.expect(std.mem.endsWith(u8, rec.urls.items[1], ".zip"));
+    try testing.expect(!std.mem.endsWith(u8, rec.urls.items[1], "CGD_ENCs.zip"));
+
+    s.cancelAll();
+    std.Io.Dir.cwd().deleteTree(std.Io.Threaded.global_single_threaded.io(), dest) catch {};
 }

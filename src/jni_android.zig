@@ -1665,6 +1665,7 @@ const HttpGetFn = *const fn (user: ?*anyopaque, req_id: u64, url: [*:0]const u8,
 const HttpCancelFn = *const fn (user: ?*anyopaque, req_id: u64) callconv(.c) void;
 extern fn lookout_set_http_provider(h: ?*anyopaque, get: ?HttpGetFn, cancel: ?HttpCancelFn, user: ?*anyopaque) void;
 extern fn lookout_http_respond(h: ?*anyopaque, req_id: u64, bytes: ?*const anyopaque, len: usize, status: c_int) void;
+extern fn lookout_http_respond_chunk(h: ?*anyopaque, req_id: u64, bytes: ?*const anyopaque, len: usize, status: c_int, done: c_int) void;
 extern fn lookout_chart_link_add(h: ?*anyopaque, link: [*:0]const u8) void;
 extern fn lookout_chart_link_select(h: ?*anyopaque, url: ?[*:0]const u8) void;
 extern fn lookout_chart_link_remove(h: ?*anyopaque, url: [*:0]const u8) void;
@@ -1823,19 +1824,41 @@ export fn Java_org_beetlebug_lookout_Lookout_nHttpCancelPoll(env: [*c]j.JNIEnv, 
 /// failure; only 2xx carries a body the core reads.
 export fn Java_org_beetlebug_lookout_Lookout_nHttpRespond(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, id: j.jlong, bytes: j.jbyteArray, status: j.jint) void {
     _ = cls;
+    respondPiece(env, hl, id, bytes, -1, status, 1);
+}
+
+/// void nHttpRespondChunk(long h, long id, byte[] buf, int len, int status,
+/// boolean done) -- answer one ask a piece at a time. `buf` is read up to
+/// `len`, so the shell reuses one read buffer for the whole body. Pieces of
+/// one request go in order from one thread, with `done` set on the last.
+export fn Java_org_beetlebug_lookout_Lookout_nHttpRespondChunk(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, id: j.jlong, buf: j.jbyteArray, len: j.jint, status: j.jint, done: j.jboolean) void {
+    _ = cls;
+    respondPiece(env, hl, id, buf, len, status, done);
+}
+
+/// `want` is how much of `bytes` to read, or -1 for all of it. A piece states
+/// its length because the shell reads into one buffer for the whole body, and
+/// the last read fills less of it than the one before.
+fn respondPiece(env: [*c]j.JNIEnv, hl: j.jlong, id: j.jlong, bytes: j.jbyteArray, want: j.jint, status: j.jint, done: j.jboolean) void {
     const h = fromLong(hl) orelse return;
     const req: u64 = @bitCast(id);
+    const fin: c_int = if (done != 0) 1 else 0;
     if (bytes == null) {
-        lookout_http_respond(h.l, req, null, 0, status);
+        lookout_http_respond_chunk(h.l, req, null, 0, status, fin);
         return;
     }
-    const len: usize = @intCast(env_(env).GetArrayLength.?(env, bytes));
+    var len: usize = @intCast(env_(env).GetArrayLength.?(env, bytes));
+    if (want >= 0) len = @min(len, @as(usize, @intCast(want)));
+    if (len == 0) {
+        lookout_http_respond_chunk(h.l, req, null, 0, status, fin);
+        return;
+    }
     const p = env_(env).GetByteArrayElements.?(env, bytes, null) orelse {
-        lookout_http_respond(h.l, req, null, 0, 0);
+        lookout_http_respond_chunk(h.l, req, null, 0, 0, 1);
         return;
     };
     defer env_(env).ReleaseByteArrayElements.?(env, bytes, p, j.JNI_ABORT);
-    lookout_http_respond(h.l, req, p, len, status);
+    lookout_http_respond_chunk(h.l, req, p, len, status, fin);
 }
 
 /// void nChartLinkAdd(long h, String link)
