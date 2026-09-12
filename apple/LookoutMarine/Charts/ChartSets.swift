@@ -155,7 +155,16 @@ struct ChartSet: Identifiable, Hashable {
     var isDerived: Bool { preparedPath != nil }
     var bytes: Int64 { (cells + rasters).reduce(0) { $0 + $1.bytes } }
     /// Everything in this set that must be prepared before it draws.
-    var toPrepare: [ScannedCell] { (cells + rasters).filter(\.needsPrepare) }
+    ///
+    /// A cell that has already been prepared is done, and what was made from
+    /// it sits in the same set under the same stem. Reading only the kind of
+    /// each file counted every source cell in the folder on every import, so
+    /// downloading one region reported the whole library.
+    var toPrepare: [ScannedCell] {
+        let all = cells + rasters
+        let ready = Set(all.filter { !$0.needsPrepare }.map(\.stem))
+        return all.filter { $0.needsPrepare && !ready.contains($0.stem) }
+    }
     var needsBake: Int { toPrepare.count }
     /// What is left over after a prepare has already run for this set: files
     /// the engine would not read. Offering to prepare them again says the work

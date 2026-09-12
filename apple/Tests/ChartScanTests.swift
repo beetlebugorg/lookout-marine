@@ -204,4 +204,29 @@ final class ChartSetTests: XCTestCase {
         XCTAssertTrue(s.rasterPaths.isEmpty)
         XCTAssertTrue(s.rasterGroups(label: RasterModel.providerLabel).isEmpty)
     }
+
+    /// The count the import page shows. A cell that has already been prepared
+    /// is done, and what was made from it sits in the set under the same stem.
+    /// Reading only the kind of each file counted every source cell in the
+    /// folder, so downloading one region reported the whole library.
+    func testPreparedCellsAreNotPreparedAgain() {
+        let s = set(cells: [
+            cell("US5MD1MC", kind: .baked),
+            cell("US5MD1MC", kind: .source),
+            cell("US5VA22M", kind: .source),
+        ], prepared: "/prepared/ENC_ROOT")
+        XCTAssertEqual(s.toPrepare.map(\.name), ["US5VA22M"])
+        XCTAssertEqual(s.needsBake, 1)
+        XCTAssertTrue(s.hasSomethingToDraw)
+    }
+
+    /// A set with nothing prepared yet still counts every cell in it.
+    func testUnpreparedSetCountsEveryCell() {
+        let s = set(cells: [
+            cell("US5MD1MC", kind: .source),
+            cell("US5VA22M", kind: .source),
+        ])
+        XCTAssertEqual(s.needsBake, 2)
+        XCTAssertFalse(s.hasSomethingToDraw)
+    }
 }
