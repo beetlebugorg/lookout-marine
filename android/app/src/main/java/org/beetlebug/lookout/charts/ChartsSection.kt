@@ -7,6 +7,7 @@ import org.beetlebug.lookout.ui.SectionHeader
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -17,12 +18,16 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.outlined.CreateNewFolder
+import androidx.compose.material.icons.outlined.CloudDownload
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Sd
@@ -75,7 +80,7 @@ fun ChartsSection(
     // Which chart DRAWS is the tab's headline decision, so the picker leads;
     // the library plumbing lives behind a row below it. The picker also
     // works without storage access — links come off the network.
-    ChartLinksSection(links)
+    ChartLinksSection(links, charts.chartPaths.size)
 
     SectionHeader("Charts")
 
@@ -83,18 +88,15 @@ fun ChartsSection(
     // folder, which needs no permission, so a mariner with no file access can
     // still fill an empty library from here.
     var pickingNoaa by remember { mutableStateOf(false) }
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        TextButton(
-            onClick = { pickingNoaa = true },
-            enabled = charts.importer.state?.running != true &&
-                noaa.phase != NoaaController.Phase.DOWNLOADING,
-            modifier = Modifier.semantics { contentDescription = "get-charts-noaa" },
-        ) { Text("Get charts from NOAA…") }
-    }
-    Footer("Official ENC for every U.S. waterway, free. Downloaded to this device and prepared here.")
+    AddChartRow(
+        icon = Icons.Outlined.CloudDownload,
+        title = "Get charts from NOAA…",
+        detail = "Pick the waters you sail. Lookout downloads the cells and prepares them. Free.",
+        enabled = charts.importer.state?.running != true &&
+            noaa.phase != NoaaController.Phase.DOWNLOADING,
+        tag = "get-charts-noaa",
+        onClick = { pickingNoaa = true },
+    )
 
     if (pickingNoaa) {
         NoaaPickerDialog(charts, noaa) { pickingNoaa = false }
@@ -146,23 +148,29 @@ fun ChartsSection(
     // The browser opens as its own dialog: a directory tree embedded in the
     // page pushed every other setting off screen.
     var browsing by remember { mutableStateOf(false) }
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        TextButton(onClick = { browsing = true }) { Text("Add charts…") }
-    }
+    AddChartRow(
+        icon = Icons.Outlined.CreateNewFolder,
+        title = "Add charts from this device…",
+        detail = "A folder of cells, a chart archive, or a chart already prepared.",
+        enabled = charts.importer.state?.running != true,
+        tag = "add-charts-files",
+        onClick = { browsing = true },
+    )
+    Footer(
+        "S-57 and S-101 cells (.000 with their updates) · charts Lookout has " +
+            "already prepared (.pmtiles) · imagery and vendor charts (.mbtiles) · " +
+            "BSB/KAP raster sheets (.kap, .bsb). Cells and raster sheets are " +
+            "converted once on the way in. Encrypted S-63 cells are not supported.",
+    )
     // The installed sets. A switch off keeps the set and takes it out of the
     // chart, so an entry is never lost by turning it off.
+    SetsHeader(charts)
     if (charts.sets.isEmpty()) {
-        Footer(charts.activeLabel)
+        Footer(if (charts.scanning) "Finding charts…" else "No chart sets")
     } else {
         for (set in charts.sets) ChartSetRow(set, charts)
-        Footer(charts.activeLabel)
     }
+    Footer(charts.activeLabel)
 
     charts.lastEmptyPick?.let {
         Footer(
@@ -216,93 +224,149 @@ fun ChartsSection(
  * Chart list, row for row).
  */
 @Composable
-private fun ChartLinksSection(controller: ChartLinkController) {
-    SectionHeader("Chart", first = true)
-    Footer("Pick the chart to draw. A linked chart replaces Lookout's own.")
-    LinkChoiceRow(
-        title = "Lookout chart",
-        desc = "The built-in portrayal of your opened cells.",
-        selected = controller.activeChartLink == null,
-    ) { controller.selectChartLink(null) }
-    for (link in controller.chartLinks) {
-        Row(
-            Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                LinkChoiceRow(
-                    title = link.name.ifEmpty { link.url },
-                    desc = link.url,
-                    selected = controller.activeChartLink == link.url,
-                ) { controller.selectChartLink(link.url) }
-            }
-            TextButton(onClick = { controller.refreshChartLink(link.url) }) { Text("Refresh") }
-            TextButton(onClick = { controller.removeChartLink(link.url) }) {
-                Text("Remove", color = MaterialTheme.colorScheme.error)
-            }
-        }
-    }
-    var newLink by remember { mutableStateOf("") }
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 20.dp, vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        val submit = {
-            if (newLink.isNotBlank()) {
-                controller.addChartLink(newLink)
-                newLink = ""
-            }
-        }
-        OutlinedTextField(
-            value = newLink,
-            onValueChange = { newLink = it },
-            label = { Text("https://…/style.json") },
-            singleLine = true,
-            modifier = Modifier.weight(1f),
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
-            keyboardActions = KeyboardActions(onGo = { submit() }),
+private fun ChartLinksSection(controller: ChartLinkController, cells: Int) {
+    SectionHeader("Active chart", first = true)
+    // A row of tiles rather than a list of names: two styles with similar
+    // names are told apart by looking. One draws at a time, because two whole
+    // charts cannot share the water.
+    var adding by remember { mutableStateOf(false) }
+    ChartGallery(controller, cells) { adding = true }
+
+    // Only while a link draws, because that is when the rest of this pane
+    // stops shaping the chart and the mariner is owed a reason. That a tile
+    // draws when it is picked needs no saying.
+    if (controller.activeChartLink != null) {
+        Footer(
+            "While a linked chart draws, the display, depth and symbol settings " +
+                "do not shape it. You are seeing its publisher's own portrayal.",
         )
-        TextButton(onClick = submit, enabled = newLink.isNotBlank()) { Text("Add") }
     }
     if (controller.chartLinkBusy) {
         LinearProgressIndicator(Modifier.padding(horizontal = 20.dp))
     }
     controller.chartLinkError?.let { Footer(it) }
-    Footer("A style link or a TileJSON tile source; also a style.json on the device by path.")
+
+    if (adding) AddChartDialog(controller) { adding = false }
 }
 
-/** The radio row of the Chart list; the whole row is the touch target. */
+/** Adding a chart by link, from the tile that offers it. */
 @Composable
-private fun LinkChoiceRow(title: String, desc: String, selected: Boolean, onSelect: () -> Unit) {
+private fun AddChartDialog(controller: ChartLinkController, onDismiss: () -> Unit) {
+    var link by remember { mutableStateOf("") }
+    val submit = {
+        if (link.isNotBlank()) {
+            controller.addChartLink(link)
+            onDismiss()
+        }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Add a chart") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = link,
+                    onValueChange = { link = it },
+                    label = { Text("https://…/style.json") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                    keyboardActions = KeyboardActions(onGo = { submit() }),
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "A MapLibre style link or a TileJSON tile source; also a " +
+                        "style.json on this device, by path.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = submit, enabled = link.isNotBlank()) { Text("Add") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+/** The sets, and what they hold together, on one line with the heading. */
+@Composable
+private fun SetsHeader(charts: ChartsModel) {
     Row(
-        Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onSelect)
-            .padding(start = 16.dp, end = 20.dp, top = 8.dp, bottom = 8.dp),
+        Modifier.fillMaxWidth().padding(end = 20.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        RadioButton(selected = selected, onClick = null)
-        Spacer(Modifier.width(8.dp))
-        Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Box(Modifier.weight(1f)) { SectionHeader("Your chart sets") }
+        val total = setsSummary(charts)
+        if (total != null) {
             Text(
-                desc,
-                style = MaterialTheme.typography.bodySmall,
+                total,
+                style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
             )
         }
     }
 }
 
+/** Every set together: how many charts, and what they weigh. */
+private fun setsSummary(charts: ChartsModel): String? {
+    if (charts.sets.isEmpty()) return null
+    val n = charts.sets.sumOf { it.charts + it.pictures }
+    if (n == 0) return null
+    val bytes = charts.sets.sumOf { it.bytes }
+    return "$n charts · ${bytes(bytes)}"
+}
+
 /**
- * The mariner's own picture charts. A different KIND of chart from the ENC, so
- * it gets its own section rather than a row in the library browser.
+ * One way to add charts: what it is, what it gets you, and where it leads.
+ *
+ * The detail line is not decoration. A mariner choosing between NOAA and their
+ * own files is choosing between free official cover and a folder they already
+ * have, and the row is where that choice is made.
  */
+@Composable
+private fun AddChartRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    detail: String,
+    enabled: Boolean,
+    tag: String,
+    onClick: () -> Unit,
+) {
+    val ink = if (enabled) MaterialTheme.colorScheme.onSurface
+              else MaterialTheme.colorScheme.onSurfaceVariant
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(enabled = enabled, onClick = onClick)
+            .semantics { contentDescription = tag }
+            .padding(horizontal = 20.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = if (enabled) MaterialTheme.colorScheme.primary
+                   else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(22.dp),
+        )
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge, color = ink)
+            Text(
+                detail,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Icon(
+            Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
 @Composable
 private fun RasterChartsSection(controller: RasterController) {
     val installed = controller.charts
@@ -442,6 +506,16 @@ private fun ChartSetRow(set: ChartSets.Set, charts: ChartsModel) {
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.padding(start = 40.dp, end = 20.dp, bottom = 4.dp),
     )
+    // What scales the set holds. A set that stops at Coastal does not draw the
+    // harbour a passage ends in, and one line says so at a glance.
+    val bands = remember(set.path, set.scanned, set.charts) { bandCounts(set) }
+    if (bands.isNotEmpty()) {
+        BandRamp(
+            counts = bands,
+            dimmed = !set.on,
+            modifier = Modifier.padding(start = 40.dp, end = 20.dp, bottom = 10.dp),
+        )
+    }
 
     if (confirming) {
         AlertDialog(
@@ -493,6 +567,19 @@ private fun summary(set: ChartSets.Set): String {
 }
 
 private fun plural(n: Int, one: String): String = if (n == 1) "$n $one" else "$n ${one}s"
+
+/**
+ * How many charts sit in each band. Read off the set's own file list, which
+ * the index already holds, so nothing new crosses the boundary for it.
+ */
+private fun bandCounts(set: ChartSets.Set): List<Pair<Int, Int>> {
+    if (!set.scanned || set.bandLo == 0) return emptyList()
+    val byBand = HashMap<Int, Int>()
+    for (f in ChartSets.files(set.path)) {
+        if (f.band in 1..6) byBand[f.band] = (byBand[f.band] ?: 0) + 1
+    }
+    return byBand.entries.sortedBy { it.key }.map { it.key to it.value }
+}
 
 /** The bands present, in the words the readouts use. */
 private fun bandRange(lo: Int, hi: Int): String =
