@@ -4,12 +4,17 @@ import org.beetlebug.lookout.chart.ChartController
 import org.beetlebug.lookout.charts.ChartsModel
 import org.beetlebug.lookout.charts.NoaaController
 
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.layout.padding
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
+import org.beetlebug.lookout.charts.ChartSets
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
+import java.io.File
 
 /**
  * Setup, bound to the app it is setting up.
@@ -29,6 +34,8 @@ fun FirstRunSetup(
 ) {
     val noaa = controller.noaaController
     val links = controller.chartLinkController
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
     // The catalog, once the coverage step is the one on screen. It is a
     // network read, so nothing asks for it until something needs it.
@@ -36,15 +43,53 @@ fun FirstRunSetup(
         if (flow.step == FirstRunModel.Step.COVERAGE && !noaa.haveCatalog) noaa.refresh()
     }
 
+    // The cells this device holds, so a pick prices what is missing from the
+    // water rather than all of it.
+    LaunchedEffect(flow.step, charts.sets) {
+        if (flow.step == FirstRunModel.Step.COVERAGE) noaa.noteInstalled(installedCells(charts))
+    }
+
+    // The download, then the bake on what it left. The core writes one zip per
+    // cell into a single directory, so the whole directory bakes as one set.
+    val dest = remember { File(context.getExternalFilesDir(null), "NOAA") }
+    var fetching by remember { mutableStateOf(false) }
+    LaunchedEffect(noaa.phase, fetching) {
+        if (noaa.phase == NoaaController.Phase.DOWNLOADING) {
+            fetching = true
+            return@LaunchedEffect
+        }
+        if (!fetching) return@LaunchedEffect
+        fetching = false
+        if (noaa.done == 0) return@LaunchedEffect
+        flow.sawBake = true
+        charts.importer.start(dest) { out ->
+            if (out != null) scope.launch { charts.add(out) }
+        }
+    }
+
     FirstRunFlow(
         flow = flow,
-        canContinue = canContinue(flow, noaa, links.activeChartLink),
+        canContinue = canContinue(flow, noaa, charts, links.activeChartLink),
         chartName = links.chartLinks.firstOrNull { it.url == links.activeChartLink }?.name,
         footnote = footnote(flow, noaa),
         onPrimary = {
+            // The order is kept from the moment it is made: the service's own
+            // counters are for the transfer, and the page outlives it.
+            val ordered = if (flow.step == FirstRunModel.Step.COVERAGE) {
+                FirstRunModel.Order(
+                    regions = noaa.regions.filter { noaa.picked.contains(it.id) }
+                        .joinToString(", ") { it.name },
+                    charts = if (noaa.cells > 0) noaa.cells else noaa.held,
+                    bytes = if (noaa.cells > 0) noaa.bytes else noaa.heldBytes,
+                )
+            } else null
             when (flow.advance()) {
                 FirstRunModel.Source.FILES -> onOpenCharts()
-                FirstRunModel.Source.NOAA -> Unit
+                FirstRunModel.Source.NOAA -> {
+                    flow.order = ordered
+                    dest.mkdirs()
+                    noaa.download(dest.absolutePath, noaa.allInstalled)
+                }
                 FirstRunModel.Source.ONLINE -> Unit
                 null -> Unit
             }
@@ -55,8 +100,17 @@ fun FirstRunSetup(
             FirstRunModel.Step.WELCOME -> WelcomeStep()
             FirstRunModel.Step.SOURCE -> SourceStep(flow)
             FirstRunModel.Step.COVERAGE -> CoverageStep(noaa)
+            FirstRunModel.Step.IMPORTING -> ImportingStep(
+                flow = flow,
+                noaa = noaa,
+                work = charts.importer.state,
+                onStop = {
+                    noaa.cancel()
+                    charts.importer.cancel()
+                },
+            )
+            FirstRunModel.Step.ONLINE_CHART -> OnlineChartStep(links)
             FirstRunModel.Step.DEPTHS -> DepthStep(controller.mariner)
-            else -> Text("", Modifier.padding(20.dp))
         }
     }
 }
@@ -65,12 +119,15 @@ fun FirstRunSetup(
 private fun canContinue(
     flow: FirstRunModel,
     noaa: NoaaController,
+    charts: ChartsModel,
     activeLink: String?,
 ): Boolean = when (flow.step) {
     FirstRunModel.Step.WELCOME, FirstRunModel.Step.SOURCE -> true
     FirstRunModel.Step.COVERAGE -> noaa.haveCatalog && noaa.picked.isNotEmpty()
     FirstRunModel.Step.ONLINE_CHART -> true
-    FirstRunModel.Step.IMPORTING -> false
+    // The bake opens the library when it finishes, so there is nothing to
+    // continue to until a chart is drawing.
+    FirstRunModel.Step.IMPORTING -> flow.sawBake && charts.importer.state?.running == false
     FirstRunModel.Step.DEPTHS -> true
 }
 
@@ -97,3 +154,16 @@ private fun costLine(noaa: NoaaController): String {
         else -> "$charts, ${NoaaController.sizeText(noaa.bytes)}"
     }
 }
+
+
+/**
+ * The NOAA cells already installed, as dataset names without an extension.
+ *
+ * By name, which is all the core wants: a pick then prices what is missing
+ * from the water rather than all of it.
+ */
+private fun installedCells(charts: ChartsModel): List<String> =
+    charts.sets.flatMap { set -> ChartSets.files(set.path).map { it.name } }
+        .map { it.substringBefore('.') }
+        .filter { it.startsWith("US") }
+        .distinct()
