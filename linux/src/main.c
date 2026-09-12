@@ -320,6 +320,50 @@ static const char *LK_CSS =
     ".lk-night .lk-capsule .dim-label { color: #7f8894; }"
     /* The NOT FOR NAVIGATION block of the first-run page: amber, bordered,
      * set apart from everything about getting started. */
+    /* ---- the chart gallery ------------------------------------------------
+     *
+     * One tile per chart, in a row. A tile is a card: the picture at the top
+     * bleeds to its edges, so the button keeps no padding of its own and the
+     * corners clip what is drawn into them. */
+    ".lk-chart-tile {"
+    "  padding: 0;"
+    "  background: @theme_base_color;"
+    "  border: 1px solid alpha(@borders, 0.7);"
+    "  border-radius: 11px;"
+    "  box-shadow: none;"
+    "}"
+    ".lk-chart-tile:hover { background: mix(@theme_base_color, @theme_fg_color, 0.04); }"
+    /* The chart being drawn. Two points of accent, so the row says which one
+     * is on at a glance and not by reading. */
+    ".lk-chart-tile-active {"
+    "  border: 2px solid @accent_color;"
+    "  background: alpha(@accent_color, 0.05);"
+    "}"
+    ".lk-chart-art { border-bottom: 1px solid alpha(@borders, 0.5); }"
+    ".lk-chart-art-empty { background: alpha(@theme_fg_color, 0.06); }"
+    ".lk-chart-badge {"
+    "  color: @accent_fg_color;"
+    "  background: @accent_color;"
+    "  border-radius: 5px;"
+    "  padding: 2px 6px;"
+    "  font-size: 80%;"
+    "  font-weight: bold;"
+    "}"
+    ".lk-chart-more > button {"
+    "  min-height: 22px;"
+    "  min-width: 22px;"
+    "  padding: 0;"
+    "  border-radius: 999px;"
+    "  background: alpha(@theme_base_color, 0.92);"
+    "  border: 1px solid alpha(@borders, 0.6);"
+    "}"
+    /* The way in to adding one. Dashed, because it holds no chart. */
+    ".lk-add-tile {"
+    "  background: alpha(@theme_fg_color, 0.02);"
+    "  border: 1.5px dashed alpha(@borders, 0.9);"
+    "  border-radius: 11px;"
+    "  box-shadow: none;"
+    "}"
     ".lk-not-nav {"
     "  background: alpha(#f59e0b, 0.14);"
     "  border: 1px solid alpha(#f59e0b, 0.55);"

@@ -52,6 +52,10 @@ struct _LkSettings {
   LkDeferredList links;
   LkDeferredList sets;
 
+  /* The link field on the Charts page. The gallery's Add tile puts the cursor
+   * in it rather than raising a second way to type a link. */
+  GtkWidget *link_entry;
+
   /* The Display tab's three scheme swatches, so the ring can move to the pick. */
   GtkWidget *scheme_swatches[3];
 

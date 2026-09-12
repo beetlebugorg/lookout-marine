@@ -146,6 +146,7 @@ sources = files(
   'src/ui/charts/catalog.c',
   'src/ui/charts/coastline.c',
   'src/ui/charts/coverage-map.c',
+  'src/ui/charts/gallery.c',
   'src/ui/charts/noaa-window.c',
   'src/ui/chrome/about.c',
   'src/ui/chrome/alerts.c',

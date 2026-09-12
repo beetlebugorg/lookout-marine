@@ -8,8 +8,20 @@
 #include "ui/settings/charts.h"
 #include "ui/settings/widgets.h"
 
+#include "ui/charts/gallery.h"
 #include "ui/charts/noaa-window.h"
 #include "ui/open-dialogs.h"
+
+/* The gallery's last tile. Adding a chart by link is what this page already
+ * offers below, so the tile takes the mariner to it. */
+static void
+lk_charts_add_link_asked (gpointer user_data)
+{
+  LkSettings *settings = user_data;
+
+  if (settings->link_entry != NULL)
+    gtk_widget_grab_focus (settings->link_entry);
+}
 
 /* NOAA's own charts, in the picker's own window. The map wants 1040 points and
  * this pane is about 550, so it opens beside the form. */
@@ -235,37 +247,6 @@ lk_settings_raster_changed (LkAppModel *model, gpointer user_data)
 /* ---- charts by link ------------------------------------------------------ */
 
 static void
-lk_link_radio_toggled (GtkCheckButton *button, gpointer user_data)
-{
-  LkSettings *settings = user_data;
-  /* NULL data is the "Lookout chart" radio, and NULL is how the links object
-   * spells "lookout's own chart". */
-  const char *url = g_object_get_data (G_OBJECT (button), "lk-url");
-
-  if (settings->updating || !gtk_check_button_get_active (button))
-    return;
-  lk_chart_links_select (lk_app_model_get_chart_links (settings->model), url);
-}
-
-static void
-lk_link_refresh_clicked (GtkButton *button, gpointer user_data)
-{
-  LkSettings *settings = user_data;
-  const char *url = g_object_get_data (G_OBJECT (button), "lk-url");
-
-  lk_chart_links_refresh (lk_app_model_get_chart_links (settings->model), url);
-}
-
-static void
-lk_link_remove_clicked (GtkButton *button, gpointer user_data)
-{
-  LkSettings *settings = user_data;
-  const char *url = g_object_get_data (G_OBJECT (button), "lk-url");
-
-  lk_chart_links_remove (lk_app_model_get_chart_links (settings->model), url);
-}
-
-static void
 lk_link_add_from (LkSettings *settings, GtkEntry *entry)
 {
   const char *text = gtk_editable_get_text (GTK_EDITABLE (entry));
@@ -288,89 +269,49 @@ lk_link_add_clicked (GtkButton *button, gpointer user_data)
   lk_link_add_from (user_data, g_object_get_data (G_OBJECT (button), "lk-entry"));
 }
 
-/* The chart election: lookout's own chart, or one of the added links. One
- * radio group — a linked chart is an entire separate chart, not an overlay,
- * so exactly one of these is ever drawn. */
+/* What the chart list cannot say for itself: that a resolve is in flight, and
+ * why the last one failed.
+ *
+ * The gallery above is the election. A resolve is several fetches deep, so it
+ * has to be said rather than leaving the row looking as though the click did
+ * nothing. */
 static void
 lk_settings_fill_links_list (LkSettings *settings)
 {
   GtkWidget *list = settings->links.box;
-  GtkWidget *child;
   LkChartLinks *links = lk_app_model_get_chart_links (settings->model);
-  const char *active = lk_chart_links_active (links);
   const char *error = lk_chart_links_error (links);
-
-  /* Programming a radio must not read back as a mariner picking it. */
-  settings->updating = TRUE;
+  GtkWidget *child;
 
   while ((child = gtk_widget_get_first_child (list)) != NULL)
     gtk_box_remove (GTK_BOX (list), child);
 
-  GtkWidget *own = gtk_check_button_new_with_label ("Lookout chart");
-  gtk_check_button_set_active (GTK_CHECK_BUTTON (own), active == NULL);
-  g_signal_connect (own, "toggled", G_CALLBACK (lk_link_radio_toggled), settings);
-  gtk_box_append (GTK_BOX (list), own);
-
-  GPtrArray *all = lk_chart_links_list (links);
-  for (guint i = 0; i < all->len; i++)
-    {
-      const LkChartLink *link = g_ptr_array_index (all, i);
-      GtkWidget *row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 4);
-      GtkWidget *radio = gtk_check_button_new_with_label (link->name);
-      GtkWidget *refresh = gtk_button_new_from_icon_name ("view-refresh-symbolic");
-      GtkWidget *remove = gtk_button_new_from_icon_name ("list-remove-symbolic");
-
-      gtk_check_button_set_group (GTK_CHECK_BUTTON (radio), GTK_CHECK_BUTTON (own));
-      gtk_check_button_set_active (GTK_CHECK_BUTTON (radio),
-                                   g_strcmp0 (active, link->url) == 0);
-      gtk_widget_set_hexpand (radio, TRUE);
-      gtk_widget_set_tooltip_text (radio, link->url);
-      g_object_set_data_full (G_OBJECT (radio), "lk-url", g_strdup (link->url), g_free);
-      g_signal_connect (radio, "toggled", G_CALLBACK (lk_link_radio_toggled), settings);
-
-      gtk_button_set_has_frame (GTK_BUTTON (refresh), FALSE);
-      gtk_widget_set_valign (refresh, GTK_ALIGN_CENTER);
-      gtk_widget_set_tooltip_text (refresh,
-                                   "Re-read the link. A link that doesn't answer "
-                                   "leaves the chart as it is.");
-      g_object_set_data_full (G_OBJECT (refresh), "lk-url", g_strdup (link->url), g_free);
-      g_signal_connect (refresh, "clicked", G_CALLBACK (lk_link_refresh_clicked), settings);
-
-      gtk_button_set_has_frame (GTK_BUTTON (remove), FALSE);
-      gtk_widget_set_valign (remove, GTK_ALIGN_CENTER);
-      gtk_widget_set_tooltip_text (remove, "Forget this link");
-      gtk_accessible_update_property (GTK_ACCESSIBLE (remove),
-                                      GTK_ACCESSIBLE_PROPERTY_LABEL, "Forget this link", -1);
-      g_object_set_data_full (G_OBJECT (remove), "lk-url", g_strdup (link->url), g_free);
-      g_signal_connect (remove, "clicked", G_CALLBACK (lk_link_remove_clicked), settings);
-
-      gtk_box_append (GTK_BOX (row), radio);
-      gtk_box_append (GTK_BOX (row), refresh);
-      gtk_box_append (GTK_BOX (row), remove);
-      gtk_box_append (GTK_BOX (list), row);
-    }
-
-  /* A resolve is several fetches deep, so say so rather than leave the list
-   * looking as though the click did nothing. */
   if (lk_chart_links_busy (links))
     {
+      GtkWidget *row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
+      GtkWidget *spinner = gtk_spinner_new ();
       GtkWidget *label = gtk_label_new ("Reading the chart…");
+
+      gtk_spinner_set_spinning (GTK_SPINNER (spinner), TRUE);
+      gtk_widget_set_valign (spinner, GTK_ALIGN_CENTER);
       gtk_widget_add_css_class (label, "dim-label");
       gtk_widget_add_css_class (label, "caption");
       gtk_label_set_xalign (GTK_LABEL (label), 0.0);
-      gtk_box_append (GTK_BOX (list), label);
+      gtk_box_append (GTK_BOX (row), spinner);
+      gtk_box_append (GTK_BOX (row), label);
+      gtk_box_append (GTK_BOX (list), row);
     }
 
   if (error[0] != '\0')
     {
       GtkWidget *label = gtk_label_new (error);
+
       gtk_widget_add_css_class (label, "error");
       gtk_widget_add_css_class (label, "caption");
       gtk_label_set_wrap (GTK_LABEL (label), TRUE);
       gtk_label_set_xalign (GTK_LABEL (label), 0.0);
       gtk_box_append (GTK_BOX (list), label);
     }
-  settings->updating = FALSE;
 }
 
 /* A chart link resolving, failing, or being picked. */
@@ -584,7 +525,10 @@ lk_build_charts_page (LkSettings *settings)
    * is a different kind again — a publisher's live map drawn AS the chart —
    * and picking one replaces the whole portrayal, so the election stands
    * first, as it does on the other shells. */
-  GtkWidget *chart = lk_section (page, "Chart");
+  GtkWidget *chart = lk_section (page, "Active chart");
+  gtk_box_append (GTK_BOX (chart),
+                  lk_chart_gallery_new (settings->model, lk_charts_add_link_asked,
+                                        settings));
   lk_deferred_list_bind (&settings->links, settings,
                          gtk_box_new (GTK_ORIENTATION_VERTICAL, 4),
                          lk_settings_fill_links_list);
@@ -601,6 +545,9 @@ lk_build_charts_page (LkSettings *settings)
   g_signal_connect (link_entry, "activate", G_CALLBACK (lk_link_entry_activated), settings);
   g_object_set_data (G_OBJECT (link_add), "lk-entry", link_entry);
   g_signal_connect (link_add, "clicked", G_CALLBACK (lk_link_add_clicked), settings);
+  /* The Add tile in the gallery asks for the same thing this row does, so it
+   * puts the cursor here rather than raising a second way to type a link. */
+  settings->link_entry = link_entry;
   gtk_widget_set_margin_top (link_row, 6);
   gtk_box_append (GTK_BOX (link_row), link_entry);
   gtk_box_append (GTK_BOX (link_row), link_add);
