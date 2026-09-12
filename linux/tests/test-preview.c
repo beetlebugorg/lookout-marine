@@ -9,6 +9,7 @@
  * No display, and no network: the key and the tile arithmetic are pure.
  */
 
+#include "library/preview-engine.h"
 #include "library/preview.h"
 
 /* The tile a point falls in, as every tile server counts them. */
@@ -98,6 +99,69 @@ test_zoom_in_the_key (void)
   g_assert_cmpstr (nine, !=, ten);
 }
 
+/* When a render off to one side is finished.
+ *
+ * The frame loop reports idle before the style has even been asked for, so a
+ * render that stopped at the first idle tick would hand back an empty style.
+ * Four quiet ticks after a warm-up is the end, and a style behind a dead host
+ * ends when the patience runs out.
+ */
+static void
+test_settle_warms_up (void)
+{
+  LkPreviewSettle state = { 0 };
+
+  /* Idle from the very first tick, which is what the loop reports before the
+   * style has been asked for. The warm-up has to outlast it. */
+  for (int i = 0; i < 9; i++)
+    g_assert_false (lk_preview_settle_step (&state, TRUE, FALSE, TRUE));
+
+  /* Now the quiet ticks count, and four of them end it. */
+  g_assert_false (lk_preview_settle_step (&state, TRUE, FALSE, TRUE));
+  g_assert_false (lk_preview_settle_step (&state, TRUE, FALSE, TRUE));
+  g_assert_false (lk_preview_settle_step (&state, TRUE, FALSE, TRUE));
+  g_assert_true (lk_preview_settle_step (&state, TRUE, FALSE, TRUE));
+  g_assert_true (state.drawn);
+}
+
+/* A tile landing resets the count: the frame that follows it is a new chart. */
+static void
+test_settle_resets_on_work (void)
+{
+  LkPreviewSettle state = { 0 };
+
+  for (int i = 0; i < 12; i++)
+    lk_preview_settle_step (&state, TRUE, FALSE, TRUE);
+  /* Three quiet ticks in, and then the engine has work again. */
+  state = (LkPreviewSettle) { .ticks = 12, .settled = 3, .drawn = TRUE };
+  g_assert_false (lk_preview_settle_step (&state, FALSE, TRUE, TRUE));
+  g_assert_cmpint (state.settled, ==, 0);
+
+  /* And four quiet ticks from there. */
+  g_assert_false (lk_preview_settle_step (&state, TRUE, FALSE, TRUE));
+  g_assert_false (lk_preview_settle_step (&state, TRUE, FALSE, TRUE));
+  g_assert_false (lk_preview_settle_step (&state, TRUE, FALSE, TRUE));
+  g_assert_true (lk_preview_settle_step (&state, TRUE, FALSE, TRUE));
+}
+
+/* A style that never settles ends anyway. A publisher behind a dead host must
+ * not hold the engine for the life of the app. */
+static void
+test_settle_runs_out_of_patience (void)
+{
+  LkPreviewSettle state = { 0 };
+  int ticks = 0;
+
+  while (!lk_preview_settle_step (&state, FALSE, TRUE, FALSE))
+    {
+      ticks++;
+      g_assert_cmpint (ticks, <, 500); /* it has to end */
+    }
+  g_assert_cmpint (state.ticks, ==, 70);
+  /* Nothing was ever drawn, so the caller has no picture to keep. */
+  g_assert_false (state.drawn);
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -111,6 +175,9 @@ main (int argc, char *argv[])
   g_test_add_func ("/preview/tile-numbers", test_tile_numbers);
   g_test_add_func ("/preview/cache-key", test_cache_key);
   g_test_add_func ("/preview/zoom-in-the-key", test_zoom_in_the_key);
+  g_test_add_func ("/preview/settle-warms-up", test_settle_warms_up);
+  g_test_add_func ("/preview/settle-resets-on-work", test_settle_resets_on_work);
+  g_test_add_func ("/preview/settle-runs-out-of-patience", test_settle_runs_out_of_patience);
 
   return g_test_run ();
 }

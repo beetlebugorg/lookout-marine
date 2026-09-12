@@ -2,6 +2,7 @@
 #include "library/preview.h"
 
 #include "library/agent.h"
+#include "library/preview-engine.h"
 #include "ui/charts/catalog.h"
 
 #include <glib/gstdio.h>
@@ -48,6 +49,12 @@ struct _LkChartPreviews {
    * a picture of water they have left says nothing about the style. */
   int tile_x, tile_y;
   gboolean have_tile;
+
+  /* The engine that draws a style nobody has picked, and the charts waiting
+   * for it. Opened at the first chart that needs it and closed with the list:
+   * a second Vulkan device is not something to hold while nobody is looking. */
+  LkPreviewEngine *engine;
+  GQueue          *queue; /* char*, the urls waiting for the engine */
 
   /* The chart being watched as it settles, and how many looks are left. */
   char    *watching;
@@ -332,6 +339,73 @@ lk_chart_previews_fetch (LkChartPreviews *self, const char *url, const char *til
                                     lk_preview_tile_done, fetch);
 }
 
+/* ---- drawing a style nobody has picked ----------------------------------- */
+
+static void lk_chart_previews_draw_next (LkChartPreviews *self);
+
+static void
+lk_chart_previews_drawn (const char *url, GdkTexture *picture, gpointer user_data)
+{
+  LkChartPreviews *self = user_data;
+
+  if (picture != NULL)
+    {
+      lk_chart_previews_write (self, url, picture);
+      lk_chart_previews_keep (self, url, g_object_ref (picture));
+    }
+  else
+    {
+      /* Nothing came back. The style is refused, or it draws nothing this
+       * engine can read: the card shows its kind. */
+      g_hash_table_add (self->unavailable, g_strdup (url));
+    }
+
+  lk_chart_previews_draw_next (self);
+}
+
+/* One at a time. A second engine is one device and one style's worth of
+ * working set; two would be two. */
+static void
+lk_chart_previews_draw_next (LkChartPreviews *self)
+{
+  double lon = 0, lat = 0;
+
+  if (self->engine == NULL || lk_preview_engine_busy (self->engine))
+    return;
+  if (!lk_chart_controller_view_centre (self->controller, &lon, &lat))
+    return;
+
+  while (!g_queue_is_empty (self->queue))
+    {
+      g_autofree char *url = g_queue_pop_head (self->queue);
+
+      /* A picture arrived while this one waited. */
+      if (g_hash_table_contains (self->pictures, url))
+        continue;
+      if (lk_preview_engine_render (self->engine, url, lon, lat, LK_PREVIEW_ZOOM,
+                                    lk_chart_previews_drawn, self))
+        return;
+    }
+
+  /* Nothing left to draw. The device goes back. */
+  lk_preview_engine_close (self->engine);
+}
+
+/* Draw this chart on the engine with no window, when nothing cheaper can
+ * picture it. */
+static void
+lk_chart_previews_draw (LkChartPreviews *self, const char *url)
+{
+  for (GList *at = self->queue->head; at != NULL; at = at->next)
+    if (g_strcmp0 (at->data, url) == 0)
+      return;
+
+  if (self->engine == NULL)
+    self->engine = lk_preview_engine_new ();
+  g_queue_push_tail (self->queue, g_strdup (url));
+  lk_chart_previews_draw_next (self);
+}
+
 /* ---- asking for what is missing ------------------------------------------ */
 
 /* Ask the core for each chart's tile, and fetch the ones it can name. TRUE
@@ -394,7 +468,13 @@ lk_chart_previews_round (LkChartPreviews *self)
                                                       LK_PREVIEW_ZOOM);
       if (tile == NULL)
         {
-          /* The core has not read this style yet. Ask again next round. */
+          /* Either the core has not read this style yet, or it has and the
+           * style names no raster tiles. The first wants another round; the
+           * second has no tile to fetch, ever, and goes to the engine with no
+           * window instead. Asking again a few times costs nothing and tells
+           * the two apart. */
+          if (self->tries >= LK_PREVIEW_TRIES / 2)
+            lk_chart_previews_draw (self, url);
           settled = FALSE;
           continue;
         }
@@ -411,11 +491,18 @@ lk_chart_previews_ask (gpointer data)
 
   if (lk_chart_previews_round (self) || ++self->tries >= LK_PREVIEW_TRIES)
     {
-      /* Out of patience: whatever has no picture draws its kind. */
+      /* Out of patience for a tile. Anything still unpictured goes to the
+       * engine with no window, which draws the style itself. */
       for (guint i = 0; self->wanted != NULL && self->wanted[i] != NULL; i++)
-        if (self->wanted[i][0] != '\0' && !g_hash_table_contains (self->pictures,
-                                                                  self->wanted[i]))
-          g_hash_table_add (self->unavailable, g_strdup (self->wanted[i]));
+        {
+          const char *url = self->wanted[i];
+
+          if (url[0] == '\0' || g_hash_table_contains (self->pictures, url))
+            continue;
+          if (lk_chart_catalog_art (url) != NULL)
+            continue;
+          lk_chart_previews_draw (self, url);
+        }
       self->ask_id = 0;
       return G_SOURCE_REMOVE;
     }
@@ -462,6 +549,7 @@ lk_chart_previews_shutdown (LkChartPreviews *self)
   lk_chart_previews_stop (self);
   if (self->session != NULL)
     soup_session_abort (self->session);
+  g_clear_pointer (&self->engine, lk_preview_engine_free);
   g_clear_object (&self->controller);
 }
 
@@ -479,6 +567,12 @@ lk_chart_previews_dispose (GObject *object)
   g_clear_pointer (&self->in_flight, g_hash_table_unref);
   g_clear_pointer (&self->unavailable, g_hash_table_unref);
   g_clear_pointer (&self->watching, g_free);
+  g_clear_pointer (&self->engine, lk_preview_engine_free);
+  if (self->queue != NULL)
+    {
+      g_queue_free_full (self->queue, g_free);
+      self->queue = NULL;
+    }
 
   G_OBJECT_CLASS (lk_chart_previews_parent_class)->dispose (object);
 }
@@ -498,6 +592,7 @@ lk_chart_previews_class_init (LkChartPreviewsClass *klass)
 static void
 lk_chart_previews_init (LkChartPreviews *self)
 {
+  self->queue = g_queue_new ();
   self->pictures = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_object_unref);
   self->in_flight = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
   self->unavailable = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
