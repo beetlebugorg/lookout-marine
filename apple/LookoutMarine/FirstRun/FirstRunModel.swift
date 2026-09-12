@@ -136,6 +136,24 @@ final class FirstRunModel {
         return charts.nothingToDraw && charts.chartWork == nil
     }
 
+    // MARK: NOAA's terms
+
+    /// Raised when the mariner continues from the source step with NOAA
+    /// picked. The regions come after they accept.
+    var showingEncTerms = false
+
+    /// Accepted. On to picking water.
+    func agreeToEncTerms() {
+        showingEncTerms = false
+        step = .coverage
+    }
+
+    /// Dismissed without accepting. The source step stands, so another source
+    /// is still open to them.
+    func declineEncTerms() {
+        showingEncTerms = false
+    }
+
     // MARK: Moving through it
 
     func begin() {
@@ -155,7 +173,11 @@ final class FirstRunModel {
         case .source:
             switch source {
             case .noaa:
-                step = .coverage
+                // NOAA's terms apply to NOAA's charts, so they are put where
+                // those charts are chosen. A mariner who picks an online chart
+                // or their own files never downloads an ENC and is not asked
+                // to accept one.
+                showingEncTerms = true
                 return nil
             case .online:
                 step = .onlineChart

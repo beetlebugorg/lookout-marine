@@ -10,8 +10,9 @@ struct WelcomeStep: View {
     @Bindable var flow: FirstRunModel
 
     /// NOAA's ENC agreement, which applies to their charts however they were
-    /// prepared.
-    static let noaaDownloads = URL(string: "https://www.charts.noaa.gov/ENCs/ENCs.shtml")!
+    /// prepared. Setup asks the mariner to accept it before it downloads any,
+    /// in EncTermsSheet; this is the same document, for reading beforehand.
+    static let noaaAgreement = URL(string: "https://www.charts.noaa.gov/ENCs/ENC_Agreement.shtml")!
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -77,7 +78,7 @@ struct WelcomeStep: View {
                     .lineSpacing(2)
                     .foregroundStyle(Chrome.muted)
                     .fixedSize(horizontal: false, vertical: true)
-                Link("NOAA ENC User Agreement", destination: WelcomeStep.noaaDownloads)
+                Link("NOAA ENC User Agreement", destination: WelcomeStep.noaaAgreement)
                     .font(.system(size: 11.5, weight: .medium))
                     .foregroundStyle(Chrome.accent)
             }

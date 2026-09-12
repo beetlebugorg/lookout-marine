@@ -91,10 +91,29 @@ class FirstRunModel {
      * once the flow has finished asking and the shell has work to do, such as
      * raising a file picker.
      */
+    /** Raised when the mariner continues from the source step with NOAA
+     *  picked. The regions come after they accept. */
+    var showingEncTerms by mutableStateOf(false)
+
+    /** Accepted. On to picking water. */
+    fun agreeToEncTerms() {
+        showingEncTerms = false
+        step = Step.COVERAGE
+    }
+
+    /** Dismissed without accepting. The source step stands, so another source
+     *  is still open to them. */
+    fun declineEncTerms() {
+        showingEncTerms = false
+    }
+
     fun advance(): Source? = when (step) {
         Step.WELCOME -> { step = Step.SOURCE; null }
         Step.SOURCE -> when (source) {
-            Source.NOAA -> { step = Step.COVERAGE; null }
+            // NOAA's terms apply to NOAA's charts, so they are put where those
+            // charts are chosen. A mariner who picks an online chart or their
+            // own files downloads no ENC and is asked to accept none.
+            Source.NOAA -> { showingEncTerms = true; null }
             Source.ONLINE -> { step = Step.ONLINE_CHART; null }
             Source.FILES -> { finish(); Source.FILES }
         }

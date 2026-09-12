@@ -96,6 +96,12 @@ struct FirstRunFlow: View {
             .frame(height: maxContent.map { min(contentHeight, max($0, 120)) })
             footer
         }
+        // Over the setup sheet rather than as a step of it: accepting NOAA's
+        // terms is a gate on one source, and it does not belong in the step
+        // count or under Back.
+        .sheet(isPresented: $flow.showingEncTerms) {
+            EncTermsSheet(flow: flow)
+        }
     }
 
     @ViewBuilder private var stepContent: some View {

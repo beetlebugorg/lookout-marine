@@ -62,6 +62,10 @@ fun FirstRunFlow(
 ) {
     BackHandler(enabled = flow.canGoBack) { flow.back() }
 
+    // Over setup rather than as a step of it: accepting NOAA's terms is a gate
+    // on one source, and it does not belong in the step count or under Back.
+    if (flow.showingEncTerms) EncTermsDialog(flow)
+
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Column(Modifier.fillMaxSize()) {
             Spacer(Modifier.height(WindowInsets.statusBars.asPaddingValues().calculateTopPadding()))
