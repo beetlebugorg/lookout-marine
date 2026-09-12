@@ -509,6 +509,35 @@ lk_chart_previews_ask (gpointer data)
   return G_SOURCE_CONTINUE;
 }
 
+/* TRUE while a wanted chart still needs a tile template off the core.
+ *
+ * Reading a style is not free: a publisher's chart names its sources, its
+ * sprite packs and its fonts, and the core reads all of them inside a frame.
+ * One style here holds 389 layers and 5,354 sprite cells, which is over a
+ * second of the main thread on this machine. A chart the app ships art for,
+ * or one already pictured, needs none of that. */
+static gboolean
+lk_chart_previews_need_template (LkChartPreviews *self)
+{
+  for (guint i = 0; self->wanted != NULL && self->wanted[i] != NULL; i++)
+    {
+      const char *url = self->wanted[i];
+
+      if (url[0] == '\0')
+        continue;
+      if (lk_chart_catalog_art (url) != NULL)
+        continue;
+      if (g_hash_table_contains (self->pictures, url))
+        continue;
+      if (g_hash_table_contains (self->unavailable, url))
+        continue;
+      if (g_hash_table_contains (self->in_flight, url))
+        continue;
+      return TRUE;
+    }
+  return FALSE;
+}
+
 void
 lk_chart_previews_want (LkChartPreviews *self, const char *const *urls)
 {
@@ -520,7 +549,8 @@ lk_chart_previews_want (LkChartPreviews *self, const char *const *urls)
 
   /* The core reads the style of every link whose template it does not know.
    * One call covers the whole list. */
-  lk_chart_controller_chart_links_preview (self->controller);
+  if (lk_chart_previews_need_template (self))
+    lk_chart_controller_chart_links_preview (self->controller);
 
   if (lk_chart_previews_round (self))
     return;
