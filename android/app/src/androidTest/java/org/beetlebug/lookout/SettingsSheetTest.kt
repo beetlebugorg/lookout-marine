@@ -21,6 +21,8 @@ import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performImeAction
@@ -286,12 +288,18 @@ class SettingsSheetTest {
 
     // ---- Charts -------------------------------------------------------------
 
-    /** Which chart DRAWS is the tab's headline decision, so the picker leads. */
+    /**
+     * Which chart DRAWS is the pane's headline decision, so the gallery leads.
+     * Lookout's own chart is the first tile and it is the one drawing until a
+     * link is picked.
+     */
     @Test fun theChartsSectionLeadsWithTheChartChoice() {
         openSection("Charts", "charts")
-        compose.onNodeWithText("CHART").assertIsDisplayed()
-        compose.onNodeWithText("Lookout chart").assertIsDisplayed()
-        compose.onNodeWithText("The built-in portrayal of your opened cells.").assertIsDisplayed()
+        compose.onNodeWithText("ACTIVE CHART").assertIsDisplayed()
+        compose.onNodeWithContentDescription("chart-tile-Lookout chart")
+            .assertIsDisplayed()
+            .assertIsSelected()
+        compose.onNodeWithContentDescription("add-chart-tile").assertExists()
     }
 
     /**
@@ -301,9 +309,12 @@ class SettingsSheetTest {
      */
     @Test fun theChartsSectionAsksForAccessBeforeShowingALibrary() {
         openSection("Charts", "charts")
-        compose.onNodeWithTag("settings-pane").performScrollToNode(hasText("Grant file access"))
-        compose.onNodeWithText("Grant file access").assertIsDisplayed()
-        compose.onNode(hasText("nothing is copied", substring = true)).assertIsDisplayed()
+        compose.onNode(hasText("Grant file access")).assertExists()
+        compose.onNode(hasText("nothing is copied", substring = true)).assertExists()
+        // And no way into the library until it is granted. Where the grant
+        // falls on the page is a matter of screen height; that it stands in
+        // the browser's place is the claim.
+        compose.onNodeWithContentDescription("add-charts-files").assertDoesNotExist()
     }
 
     // ---- Plugins ------------------------------------------------------------
