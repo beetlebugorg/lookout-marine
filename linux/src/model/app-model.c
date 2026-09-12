@@ -618,14 +618,40 @@ lk_app_model_open_prepared (LkAppModel *self, const char *source)
   if (lk_chart_sets_note (self->chart_sets, source))
     lk_app_model_emit_chart_sets_changed (self);
 
-  g_auto (GStrv) all = lk_chart_sets_compose (self->chart_sets);
-  if (all == NULL || all[0] == NULL)
+  /* BOTH what the core composed and what is on disk under this source.
+   *
+   * The core composes from its own background scan, and that scan has not run
+   * by the time a bake finishes and this is called: composing alone reported
+   * that a folder just imported holds no charts. What the bake wrote is on the
+   * disk either way, so it is opened now and the scan catches up. */
+  g_auto (GStrv) composed = lk_chart_sets_compose (self->chart_sets);
+  g_autoptr (GPtrArray) all = g_ptr_array_new_with_free_func (g_free);
+  g_autoptr (GHashTable) seen = g_hash_table_new (g_str_hash, g_str_equal);
+
+  for (guint i = 0; composed != NULL && composed[i] != NULL; i++)
+    if (g_hash_table_add (seen, composed[i]))
+      g_ptr_array_add (all, g_strdup (composed[i]));
+
+  g_autofree char *prepared = lk_chart_bake_prepared_dir (source);
+  g_auto (GStrv) own = lk_chart_cell_paths_for (source);
+  g_auto (GStrv) baked = prepared != NULL ? lk_chart_paths_in_dir (prepared)
+                                          : g_new0 (char *, 1);
+
+  for (guint i = 0; own != NULL && own[i] != NULL; i++)
+    if (g_hash_table_add (seen, own[i]))
+      g_ptr_array_add (all, g_strdup (own[i]));
+  for (guint i = 0; baked != NULL && baked[i] != NULL; i++)
+    if (g_hash_table_add (seen, baked[i]))
+      g_ptr_array_add (all, g_strdup (baked[i]));
+
+  if (all->len == 0)
     {
       lk_app_model_set_open_error (self, "That folder contains no charts this app can draw.");
       return;
     }
 
-  lk_app_model_request_open (self, all);
+  g_ptr_array_add (all, NULL);
+  lk_app_model_request_open (self, (char **) all->pdata);
 }
 
 static void
