@@ -1,5 +1,6 @@
 #include "model/app-model.h"
 
+#include "library/noaa.h"
 #include "library/scan.h"
 #include "library/sets.h"
 #include "model/store.h"
@@ -12,6 +13,7 @@ struct _LkAppModel {
 
   LkChartController *controller;
   LkChartLinks      *chart_links;
+  LkNoaa            *noaa;
 
   gboolean has_chart;
   char    *chart_path;
@@ -165,6 +167,10 @@ lk_app_model_dispose (GObject *object)
   if (self->chart_links != NULL)
     lk_chart_links_shutdown (self->chart_links);
   g_clear_object (&self->chart_links);
+  /* Same reason: the poll timer holds this model's controller. */
+  if (self->noaa != NULL)
+    lk_noaa_shutdown (self->noaa);
+  g_clear_object (&self->noaa);
   g_clear_object (&self->controller);
   g_clear_pointer (&self->chart_path, g_free);
   g_clear_pointer (&self->open_error, g_free);
@@ -288,6 +294,15 @@ lk_app_model_recompose_library (LkAppModel *self)
     }
 }
 
+/* NOAA asked for its catalog with no chart open. Open one of no charts: the
+ * read runs through a handle, and a mariner with an empty library is exactly
+ * who has to read that catalog. */
+static void
+lk_app_model_noaa_needs_chart (gpointer user_data)
+{
+  lk_app_model_open_empty (LK_APP_MODEL (user_data));
+}
+
 static void
 lk_app_model_init (LkAppModel *self)
 {
@@ -305,6 +320,13 @@ lk_app_model_init (LkAppModel *self)
 
   self->raster_charts = lk_raster_charts_new ();
   self->raster_state = lk_raster_state_new ();
+
+  /* NOAA's catalog, the regions a mariner picks, and the downloads run from
+   * them. Every call it makes runs through a chart handle, and setup reads the
+   * catalog before the first chart is installed, so it is given the way to ask
+   * for one. */
+  self->noaa = lk_noaa_new (self->controller);
+  lk_noaa_set_need_chart (self->noaa, lk_app_model_noaa_needs_chart, self);
 }
 
 LkAppModel *
@@ -339,6 +361,22 @@ lk_app_model_poll_chart_links (LkAppModel *self)
 {
   g_return_if_fail (LK_IS_APP_MODEL (self));
   lk_chart_links_poll (self->chart_links);
+}
+
+/* ---- NOAA charts --------------------------------------------------------- */
+
+LkNoaa *
+lk_app_model_get_noaa (LkAppModel *self)
+{
+  g_return_val_if_fail (LK_IS_APP_MODEL (self), NULL);
+  return self->noaa;
+}
+
+void
+lk_app_model_noaa_chart_did_open (LkAppModel *self)
+{
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+  lk_noaa_chart_did_open (self->noaa);
 }
 
 /* ---- opening charts ----------------------------------------------------- */

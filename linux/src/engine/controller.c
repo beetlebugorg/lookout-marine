@@ -837,6 +837,11 @@ lk_chart_controller_open (LkChartController *self,
   if (self->model != NULL)
     lk_app_model_reapply_chart_link (self->model);
 
+  /* And NOAA's catalog, which belongs to the handle as well: a read asked for
+   * before there was one, or one the old handle took with it, runs here. */
+  if (self->model != NULL)
+    lk_app_model_noaa_chart_did_open (self->model);
+
   lookout_set_pixel_density (handle, (float) gtk_widget_get_scale_factor (view));
   lookout_resize (handle, width, height);
 
@@ -1025,6 +1030,123 @@ lk_chart_controller_chart_links_read (LkChartController *self)
   if (lookout_chart_links_changed (self->handle) == 0)
     return NULL;
   return lookout_links_read (self->handle);
+}
+
+/* ---- NOAA charts --------------------------------------------------------- */
+
+gboolean
+lk_chart_controller_noaa_refresh (LkChartController *self)
+{
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), FALSE);
+
+  if (self->handle == NULL)
+    return FALSE;
+  lookout_noaa_refresh (self->handle);
+  /* The read is several fetches deep and the core adopts each answer at the
+   * top of a frame, so the tick has to be running for it to progress. */
+  lk_chart_controller_kick (self);
+  return TRUE;
+}
+
+gboolean
+lk_chart_controller_noaa_poll (LkChartController *self, lookout_noaa_state *out)
+{
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), FALSE);
+  g_return_val_if_fail (out != NULL, FALSE);
+
+  if (self->handle == NULL)
+    {
+      memset (out, 0, sizeof *out);
+      return FALSE;
+    }
+  lookout_noaa_poll (self->handle, out);
+  return TRUE;
+}
+
+gboolean
+lk_chart_controller_noaa_cost (LkChartController *self, const char *region_ids,
+                               guint32 *out_cells, guint64 *out_bytes,
+                               guint32 *out_held, guint64 *out_held_bytes)
+{
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), FALSE);
+
+  if (self->handle == NULL || region_ids == NULL)
+    return FALSE;
+  return lookout_noaa_cost (self->handle, region_ids, out_cells, out_bytes,
+                            out_held, out_held_bytes) != 0;
+}
+
+void
+lk_chart_controller_noaa_have (LkChartController *self, const char *const *names)
+{
+  g_return_if_fail (LK_IS_CHART_CONTROLLER (self));
+
+  if (self->handle == NULL)
+    return;
+  if (names == NULL)
+    {
+      lookout_noaa_have (self->handle, NULL, 0);
+      return;
+    }
+  lookout_noaa_have (self->handle, names, g_strv_length ((char **) names));
+}
+
+gsize
+lk_chart_controller_noaa_coverage (LkChartController *self, const char *region_id,
+                                   lookout_noaa_box *out, gsize cap)
+{
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), 0);
+
+  if (self->handle == NULL || region_id == NULL)
+    return 0;
+  return lookout_noaa_region_coverage (self->handle, region_id, out, cap);
+}
+
+void
+lk_chart_controller_noaa_download (LkChartController *self, const char *region_ids,
+                                   const char *dest_dir, gboolean again)
+{
+  g_return_if_fail (LK_IS_CHART_CONTROLLER (self));
+
+  if (self->handle == NULL || region_ids == NULL || dest_dir == NULL)
+    return;
+  lookout_noaa_download (self->handle, region_ids, dest_dir, again ? 1 : 0);
+  lk_chart_controller_kick (self);
+}
+
+void
+lk_chart_controller_noaa_cancel (LkChartController *self)
+{
+  g_return_if_fail (LK_IS_CHART_CONTROLLER (self));
+
+  if (self->handle == NULL)
+    return;
+  lookout_noaa_cancel (self->handle);
+  lk_chart_controller_kick (self);
+}
+
+guint32
+lk_chart_controller_noaa_outdated (LkChartController *self,
+                                   const lookout_noaa_installed *have, gsize n)
+{
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), 0);
+
+  if (self->handle == NULL || have == NULL || n == 0)
+    return 0;
+  return lookout_noaa_outdated (self->handle, have, n);
+}
+
+void
+lk_chart_controller_noaa_update (LkChartController *self,
+                                 const lookout_noaa_installed *have, gsize n,
+                                 const char *dest_dir)
+{
+  g_return_if_fail (LK_IS_CHART_CONTROLLER (self));
+
+  if (self->handle == NULL || have == NULL || n == 0 || dest_dir == NULL)
+    return;
+  lookout_noaa_update (self->handle, have, n, dest_dir);
+  lk_chart_controller_kick (self);
 }
 
 /* ---- view --------------------------------------------------------------- */

@@ -172,6 +172,54 @@ void  lk_chart_controller_chart_links_import (LkChartController *self, const cha
  * polls clears the flag. */
 lookout_links *lk_chart_controller_chart_links_read (LkChartController *self);
 
+/* ---- NOAA charts --------------------------------------------------------- */
+/*
+ * The core reads NOAA's product catalog, works out which cells a region needs
+ * and fetches them through the same HTTP provider the chart links installed.
+ * These are the calls that start that work and read where it got to. Each
+ * answers its empty value with no chart open, because every one of them runs
+ * through a lookout handle. See include/lookout-library.h.
+ */
+
+/* FALSE when no chart is open, so the caller knows to ask for one. */
+gboolean lk_chart_controller_noaa_refresh (LkChartController *self);
+
+/* The whole snapshot in one call. FALSE with no chart open, leaving `out`
+ * zeroed. */
+gboolean lk_chart_controller_noaa_poll (LkChartController *self, lookout_noaa_state *out);
+
+/* What picking `region_ids` (a comma separated list) costs. Any output may be
+ * NULL. FALSE when no catalog is loaded. */
+gboolean lk_chart_controller_noaa_cost (LkChartController *self, const char *region_ids,
+                                        guint32 *out_cells, guint64 *out_bytes,
+                                        guint32 *out_held, guint64 *out_held_bytes);
+
+/* Name the NOAA cells this device already holds, as dataset names with no
+ * extension. The cost above leaves them out and a download skips them. */
+void lk_chart_controller_noaa_have (LkChartController *self, const char *const *names);
+
+/* One region's coverage, as the boxes the catalog states. Writes at most `cap`
+ * and answers how many there are, so a caller sizes its buffer by asking once
+ * with `out` NULL. */
+gsize lk_chart_controller_noaa_coverage (LkChartController *self, const char *region_id,
+                                         lookout_noaa_box *out, gsize cap);
+
+/* Download the cells covering `region_ids` into `dest_dir`. `again` fetches the
+ * cells already held as well, which is how a mariner repairs a set. */
+void lk_chart_controller_noaa_download (LkChartController *self, const char *region_ids,
+                                        const char *dest_dir, gboolean again);
+
+void lk_chart_controller_noaa_cancel (LkChartController *self);
+
+/* How many of these cells NOAA has reissued, and the download that replaces
+ * them. The editions come from the caller: a file on disk does not say which
+ * edition it is. */
+guint32 lk_chart_controller_noaa_outdated (LkChartController *self,
+                                           const lookout_noaa_installed *have, gsize n);
+void    lk_chart_controller_noaa_update (LkChartController *self,
+                                         const lookout_noaa_installed *have, gsize n,
+                                         const char *dest_dir);
+
 /* ---- wasm plugins -------------------------------------------------------- */
 
 /* TRUE while a plugin layer is running. Own ship, AIS, NMEA 0183, Signal K and

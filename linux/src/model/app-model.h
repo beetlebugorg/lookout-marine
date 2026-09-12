@@ -10,6 +10,7 @@
 
 #include "engine/controller.h"
 #include "library/links.h"
+#include "library/noaa.h"
 #include "library/raster.h"
 
 G_BEGIN_DECLS
@@ -168,6 +169,18 @@ void lk_app_model_reapply_chart_link (LkAppModel *self);
 /* Take lookout's chart-link snapshot if it changed. Called once per render
  * tick: the changed flag has ONE consumer. */
 void lk_app_model_poll_chart_links (LkAppModel *self);
+
+/* ---- NOAA charts --------------------------------------------------------- */
+
+/* NOAA's catalog, the regions a mariner picks, and the downloads run from
+ * them. Owned here so the picker, the Charts page and setup read one object.
+ * See library/noaa.h for what a region selects. */
+LkNoaa *lk_app_model_get_noaa (LkAppModel *self);
+
+/* A chart handle has just been created. NOAA's catalog belongs to the handle,
+ * so a read held while there was none runs now. Called beside the raster
+ * replay and the chart-link reapply, for the same reason. */
+void lk_app_model_noaa_chart_did_open (LkAppModel *self);
 
 /* What the pill is built from. The sets are borrowed. */
 GPtrArray  *lk_app_model_get_raster_sets (LkAppModel *self);

@@ -129,6 +129,7 @@ sources = files(
   'src/engine/surface.c',
   'src/library/bake.c',
   'src/library/links.c',
+  'src/library/noaa.c',
   'src/library/raster.c',
   'src/library/scan.c',
   'src/library/sets.c',

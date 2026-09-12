@@ -8,7 +8,7 @@
 # Every test links the same objects the app links, so what a test proves is
 # what the app runs.
 
-unit_tests = ['format', 'import', 'json', 'library', 'store', 'pick']
+unit_tests = ['format', 'import', 'json', 'library', 'noaa', 'store', 'pick']
 
 foreach name : unit_tests
   exe = executable('test-' + name,
