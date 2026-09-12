@@ -133,11 +133,12 @@ class HudTest {
     // ---- the narrow capsule -------------------------------------------------
 
     /**
-     * A phone will not take the whole row on one line, so it falls to two
-     * rather than dropping the position: the position is the one readout a
-     * mariner may have to write down or pass over the radio.
+     * A phone keeps every readout the wide row has, in the order the wide row
+     * reads in. Only the position moves to a second line, because it is the
+     * one a phone has no width for and the one a mariner may have to write
+     * down or pass over the radio.
      */
-    @Test fun theNarrowCapsuleKeepsThePositionOnASecondLine() {
+    @Test fun theNarrowCapsuleKeepsTheBandScaleAndZoom() {
         show(compact = true)
         compose.onNodeWithText("Harbor").assertIsDisplayed()
         compose.onNodeWithText("1:13,267").assertIsDisplayed()
