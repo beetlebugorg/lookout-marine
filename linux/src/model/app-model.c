@@ -448,7 +448,8 @@ lk_app_model_start_noaa_download (LkAppModel *self, gboolean again)
 
 /* ---- opening charts ----------------------------------------------------- */
 
-static void lk_app_model_open_prepared (LkAppModel *self, const char *source);
+static void lk_app_model_open_prepared (LkAppModel *self, const char *source,
+                                        gboolean pictures);
 
 /* ---- the library's public face ------------------------------------------- */
 
@@ -605,7 +606,7 @@ lk_app_model_open_chart (LkAppModel *self, const char *path)
 
   /* A single cell is a set of one. It joins the library like a folder does,
    * so it survives a restart and composes with what is already installed. */
-  lk_app_model_open_prepared (self, path);
+  lk_app_model_open_prepared (self, path, FALSE);
 }
 
 /* Open the LIBRARY with `source` added: the source goes on the set list,
@@ -614,7 +615,7 @@ lk_app_model_open_chart (LkAppModel *self, const char *path)
  * directory. A second folder composes with the first instead of replacing
  * it. */
 static void
-lk_app_model_open_prepared (LkAppModel *self, const char *source)
+lk_app_model_open_prepared (LkAppModel *self, const char *source, gboolean pictures)
 {
   if (lk_chart_sets_note (self->chart_sets, source))
     lk_app_model_emit_chart_sets_changed (self);
@@ -647,7 +648,12 @@ lk_app_model_open_prepared (LkAppModel *self, const char *source)
 
   if (all->len == 0)
     {
-      lk_app_model_set_open_error (self, "That folder contains no charts this app can draw.");
+      /* Pictures draw through the raster chart list and compose into no
+       * chart, so a folder holding only pictures reaches here with nothing
+       * to open. */
+      if (!pictures)
+        lk_app_model_set_open_error (self,
+                                     "That folder contains no charts this app can draw.");
       return;
     }
 
@@ -705,7 +711,7 @@ lk_app_model_bake_done (const char *out_dir, guint baked, gpointer user_data)
   if (self->pending_open_source != NULL)
     {
       g_autofree char *src = g_steal_pointer (&self->pending_open_source);
-      lk_app_model_open_prepared (self, src);
+      lk_app_model_open_prepared (self, src, FALSE);
     }
 }
 
@@ -733,6 +739,19 @@ lk_scan_done_idle (gpointer data)
     for (guint i = 0; i < set->cells->len; i++)
       if (lk_scanned_cell_needs_prepare (g_ptr_array_index (set->cells, i)))
         to_prepare++;
+
+  /* The pictures in the pick are installed here as well.
+   *
+   * A survey and a picture arrive in the same folder, so one pick adds
+   * both. A picture draws through the raster chart list instead of composing
+   * into the chart, and only the pictures picker wrote to that list, so a
+   * folder holding both added the cells and left the .mbtiles out. A BSB or
+   * KAP sheet bakes into a chart first, and the count above covers it. */
+  g_auto (GStrv) pictures = lk_chart_set_picture_paths (set);
+  gboolean any_pictures = g_strv_length (pictures) > 0;
+
+  if (any_pictures)
+    lk_app_model_add_raster_charts (self, (const char *const *) pictures);
 
   if (set != NULL && to_prepare > 0)
     {
@@ -766,7 +785,7 @@ lk_scan_done_idle (gpointer data)
       g_clear_pointer (&self->pending_open_source, g_free);
     }
 
-  lk_app_model_open_prepared (self, dir);
+  lk_app_model_open_prepared (self, dir, any_pictures);
 
 out:
   g_object_unref (job->model);

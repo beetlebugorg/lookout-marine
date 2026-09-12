@@ -8,6 +8,7 @@
  * No display. This is the model's answer, read directly.
  */
 
+#include "library/scan.h"
 #include "library/sets.h"
 #include "model/app-model.h"
 
@@ -168,6 +169,45 @@ test_installed_cell_names (void)
   lk_chart_sets_free (sets);
 }
 
+/* A pick holds a survey and a picture together, and only the pictures go to
+ * the raster chart list. A BSB sheet bakes into a chart, and a picture inside
+ * an archive has no file at its path yet, so neither belongs on that list. */
+static void
+test_pictures_in_a_pick (void)
+{
+  LkScannedCell cells[] = {
+    { .path = (char *) "/set/US5MD1MC.000", .kind = LOOKOUT_FILE_SOURCE },
+    { .path = (char *) "/set/imagery.mbtiles", .kind = LOOKOUT_FILE_RASTER },
+    { .path = (char *) "/set/US5MD1MC.pmtiles", .kind = LOOKOUT_FILE_BAKED },
+    { .path = (char *) "/set/sheet.kap", .kind = LOOKOUT_FILE_RASTER_SOURCE },
+    { .path = (char *) "inside.mbtiles", .kind = LOOKOUT_FILE_RASTER, .archived = TRUE },
+    { .path = (char *) "/set/notes.txt", .kind = LOOKOUT_FILE_OTHER },
+    { .path = (char *) "/set/other.mbtiles", .kind = LOOKOUT_FILE_RASTER },
+  };
+  g_autoptr (GPtrArray) list = g_ptr_array_new ();
+  LkChartSet set = { .cells = list };
+
+  for (guint i = 0; i < G_N_ELEMENTS (cells); i++)
+    g_ptr_array_add (list, &cells[i]);
+
+  g_auto (GStrv) pictures = lk_chart_set_picture_paths (&set);
+
+  g_assert_cmpuint (g_strv_length (pictures), ==, 2);
+  g_assert_cmpstr (pictures[0], ==, "/set/imagery.mbtiles");
+  g_assert_cmpstr (pictures[1], ==, "/set/other.mbtiles");
+
+  /* A pick with no pictures answers an empty list, never NULL: the caller
+   * counts it. */
+  g_ptr_array_set_size (list, 1);
+  g_auto (GStrv) none = lk_chart_set_picture_paths (&set);
+  g_assert_nonnull (none);
+  g_assert_cmpuint (g_strv_length (none), ==, 0);
+
+  g_auto (GStrv) empty = lk_chart_set_picture_paths (NULL);
+  g_assert_nonnull (empty);
+  g_assert_cmpuint (g_strv_length (empty), ==, 0);
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -188,6 +228,7 @@ main (int argc, char *argv[])
   g_test_add_func ("/library/env-open-wins", test_env_open_wins);
   g_test_add_func ("/library/nothing-to-draw", test_nothing_to_draw);
   g_test_add_func ("/library/installed-cell-names", test_installed_cell_names);
+  g_test_add_func ("/library/pictures-in-a-pick", test_pictures_in_a_pick);
 
   return g_test_run ();
 }

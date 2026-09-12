@@ -914,8 +914,8 @@ lk_build_charts_page (LkSettings *settings)
                         "prepares them. Free.",
                         checked, G_CALLBACK (lk_charts_noaa_clicked), settings);
   lk_add_chart_row (add, "folder-open-symbolic", "Add charts from this computer…",
-                    "A folder of cells, or charts already prepared. Or drop either "
-                    "anywhere in the chart window.",
+                    "A folder of cells, of prepared charts, or of pictures. Or drop "
+                    "one anywhere in the chart window.",
                     NULL, G_CALLBACK (lk_charts_open_clicked), settings);
   lk_add_chart_row (add, "package-x-generic-symbolic", "Add an archive…",
                     "The .zip a chart agency publishes, read where it lies: nothing "
