@@ -239,6 +239,48 @@ lk_prepare_for (const LkScannedCell *cell)
   return LOOKOUT_PREPARE_LIFT;
 }
 
+GPtrArray *
+lk_chart_bake_to_prepare (const char *source, const LkChartSet *set)
+{
+  GPtrArray *todo = g_ptr_array_new ();
+
+  if (set == NULL || set->cells == NULL)
+    return todo;
+
+  /* This directory may not exist yet. lk_chart_bake_start creates it before
+     it writes the first chart. */
+  g_autofree char *prepared = lk_chart_bake_prepared_dir (source);
+
+  for (guint i = 0; i < set->cells->len; i++)
+    {
+      const LkScannedCell *cell = g_ptr_array_index (set->cells, i);
+
+      if (!lk_scanned_cell_needs_prepare (cell))
+        continue;
+
+      lookout_bake_item item = {
+        .path = cell->path,
+        .name = cell->name,
+        .band = cell->band,
+        .work = lk_prepare_for (cell),
+      };
+      char path[2048];
+
+      /* Already prepared. lookout_bake_output_path gives the file this cell
+         is prepared into, so the import count and the bake use one rule for
+         it. The test is for a regular file, because the bake also creates a
+         directory of the chart's name under this root. */
+      if (prepared != NULL
+          && lookout_bake_output_path (prepared, source, &item, path, sizeof path) != 0
+          && g_file_test (path, G_FILE_TEST_IS_REGULAR))
+        continue;
+
+      g_ptr_array_add (todo, (gpointer) cell);
+    }
+
+  return todo;
+}
+
 static void
 lk_chart_bake_free (LkChartBake *bake)
 {
@@ -304,13 +346,11 @@ lk_chart_bake_start (const char        *source,
   if (source == NULL || set == NULL || set->cells == NULL)
     return NULL;
 
+  g_autoptr (GPtrArray) todo = lk_chart_bake_to_prepare (source, set);
   g_autoptr (GArray) items = g_array_new (FALSE, FALSE, sizeof (lookout_bake_item));
-  for (guint i = 0; i < set->cells->len; i++)
+  for (guint i = 0; i < todo->len; i++)
     {
-      const LkScannedCell *cell = g_ptr_array_index (set->cells, i);
-
-      if (!lk_scanned_cell_needs_prepare (cell))
-        continue;
+      const LkScannedCell *cell = g_ptr_array_index (todo, i);
 
       lookout_bake_item item = {
         .path = cell->path,
@@ -372,14 +412,8 @@ lk_chart_bake_start (const char        *source,
           continue;
         }
 
-      /* Already made. A source always reports its cells as needing preparing —
-         a .zip of raw cells says so however many times it is opened — so
-         without this every reopen bakes the whole set again. Re-importing one
-         chart must not re-bake the rest. */
-      if (g_file_test (path, G_FILE_TEST_EXISTS))
-        continue;
-
-      /* Only now is the chart's own directory worth making. */
+      /* The chart's own directory. Every item here still needs preparing,
+         because lk_chart_bake_to_prepare dropped the rest. */
       g_autofree char *dir = g_path_get_dirname (path);
       g_mkdir_with_parents (dir, 0755);
 

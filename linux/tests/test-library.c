@@ -8,6 +8,7 @@
  * No display. This is the model's answer, read directly.
  */
 
+#include "library/bake.h"
 #include "library/scan.h"
 #include "library/sets.h"
 #include "model/app-model.h"
@@ -208,6 +209,145 @@ test_pictures_in_a_pick (void)
   g_assert_cmpuint (g_strv_length (empty), ==, 0);
 }
 
+/* A chart the bake has already written. An empty file is enough, because
+ * lk_chart_bake_to_prepare tests for a file at a path. */
+static void
+place_at (const char *path)
+{
+  g_autofree char *dir = g_path_get_dirname (path);
+
+  g_assert_cmpint (g_mkdir_with_parents (dir, 0700), ==, 0);
+  g_assert_true (g_file_set_contents (path, "", 0, NULL));
+}
+
+/* The same, at `relative` under the prepared folder. */
+static void
+place_prepared (const char *prepared, const char *relative)
+{
+  g_autofree char *path = g_build_filename (prepared, relative, NULL);
+
+  place_at (path);
+}
+
+/* A cell with its prepared chart on disk counts as done.
+ *
+ * An S-57 cell keeps the kind LOOKOUT_FILE_SOURCE after the bake writes its
+ * chart. A count from the kind alone therefore reported the whole folder on
+ * every import, so a mariner who downloaded one region into a folder of
+ * charts saw the size of the folder on the import page. */
+static void
+test_prepared_cells_are_not_work (void)
+{
+  g_autofree char *source = g_build_filename (home, "noaa", NULL);
+  LkScannedCell cells[] = {
+    { .path = (char *) "/noaa/US5MD1MC.000", .name = (char *) "US5MD1MC",
+      .kind = LOOKOUT_FILE_SOURCE },
+    { .path = (char *) "/noaa/US4TE3W0.000", .name = (char *) "US4TE3W0",
+      .kind = LOOKOUT_FILE_SOURCE },
+    { .path = (char *) "/noaa/sheet.kap", .name = (char *) "sheet.kap",
+      .kind = LOOKOUT_FILE_RASTER_SOURCE },
+    /* Already drawable, so it stays out of the work whatever else is true. */
+    { .path = (char *) "/noaa/imagery.mbtiles", .name = (char *) "imagery.mbtiles",
+      .kind = LOOKOUT_FILE_RASTER },
+  };
+  g_autoptr (GPtrArray) list = g_ptr_array_new ();
+  LkChartSet set = { .cells = list };
+
+  for (guint i = 0; i < G_N_ELEMENTS (cells); i++)
+    g_ptr_array_add (list, &cells[i]);
+  g_assert_cmpint (g_mkdir_with_parents (source, 0700), ==, 0);
+
+  /* Before any import: the two cells and the sheet all need preparing. */
+  g_autoptr (GPtrArray) all = lk_chart_bake_to_prepare (source, &set);
+  g_assert_cmpuint (all->len, ==, 3);
+
+  /* Prepare two of the three. The bake writes each chart in a directory of
+     the cell's name. */
+  g_autofree char *prepared = lk_chart_bake_prepared_dir (source);
+  g_assert_nonnull (prepared);
+  place_prepared (prepared, "US5MD1MC/US5MD1MC.pmtiles");
+  place_prepared (prepared, "sheet/sheet.pmtiles");
+
+  g_autoptr (GPtrArray) left = lk_chart_bake_to_prepare (source, &set);
+  g_assert_cmpuint (left->len, ==, 1);
+  g_assert_cmpstr (((const LkScannedCell *) g_ptr_array_index (left, 0))->name,
+                   ==, "US4TE3W0");
+
+  /* lk_scanned_cell_needs_prepare still reads the kind alone.
+     lk_chart_set_picture_paths and the openable paths use it that way. */
+  g_assert_true (lk_scanned_cell_needs_prepare (&cells[0]));
+  g_assert_false (lk_scanned_cell_needs_prepare (&cells[3]));
+
+  /* With the last one prepared the folder is done, and the pick opens
+     straight into the chart. */
+  place_prepared (prepared, "US4TE3W0/US4TE3W0.pmtiles");
+  g_autoptr (GPtrArray) none = lk_chart_bake_to_prepare (source, &set);
+  g_assert_cmpuint (none->len, ==, 0);
+}
+
+/* Every chart entry in an archive needs preparing, because each one has to be
+ * extracted. An entry with its prepared file on disk counts as done.
+ *
+ * A cell and a picture are prepared into different paths. A cell goes in a
+ * directory of its own name, and a lifted picture keeps the name it has in the
+ * archive. The test calls lookout_bake_output_path for each path, because
+ * agreement with that function is what lk_chart_bake_to_prepare is for. */
+static void
+test_prepared_archive_is_not_work (void)
+{
+  g_autofree char *source = g_build_filename (home, "ENC.zip", NULL);
+  LkScannedCell cells[] = {
+    { .path = (char *) "US5MD1MC.000", .name = (char *) "US5MD1MC",
+      .kind = LOOKOUT_FILE_SOURCE, .archived = TRUE },
+    /* Already baked, and still inside the archive, so it has to be lifted. */
+    { .path = (char *) "US4TE3W0.pmtiles", .name = (char *) "US4TE3W0",
+      .kind = LOOKOUT_FILE_BAKED, .archived = TRUE },
+    { .path = (char *) "imagery.mbtiles", .name = (char *) "imagery.mbtiles",
+      .kind = LOOKOUT_FILE_RASTER, .archived = TRUE },
+    { .path = (char *) "notes.txt", .name = (char *) "notes.txt",
+      .kind = LOOKOUT_FILE_OTHER },
+  };
+  g_autoptr (GPtrArray) list = g_ptr_array_new ();
+  LkChartSet set = { .cells = list, .archive = TRUE };
+
+  for (guint i = 0; i < G_N_ELEMENTS (cells); i++)
+    g_ptr_array_add (list, &cells[i]);
+  g_assert_true (g_file_set_contents (source, "", 0, NULL));
+
+  /* Three chart entries out of the four files. */
+  g_autoptr (GPtrArray) all = lk_chart_bake_to_prepare (source, &set);
+  g_assert_cmpuint (all->len, ==, 3);
+
+  g_autofree char *prepared = lk_chart_bake_prepared_dir (source);
+  g_assert_nonnull (prepared);
+
+  /* Prepare them one at a time. The count drops by one each time. */
+  for (guint i = 0; i < 3; i++)
+    {
+      g_autoptr (GPtrArray) left = lk_chart_bake_to_prepare (source, &set);
+      g_assert_cmpuint (left->len, ==, 3 - i);
+
+      const LkScannedCell *next = g_ptr_array_index (left, 0);
+      lookout_bake_item item = { .path = next->path, .name = next->name,
+                                 .work = next->kind == LOOKOUT_FILE_SOURCE
+                                             ? LOOKOUT_PREPARE_CELL
+                                             : LOOKOUT_PREPARE_LIFT };
+      char path[2048];
+
+      g_assert_cmpuint (lookout_bake_output_path (prepared, source, &item, path,
+                                                  sizeof path), >, 0);
+      place_at (path);
+    }
+
+  g_autoptr (GPtrArray) none = lk_chart_bake_to_prepare (source, &set);
+  g_assert_cmpuint (none->len, ==, 0);
+
+  /* A NULL set returns an empty array, so the caller can count it. */
+  g_autoptr (GPtrArray) empty = lk_chart_bake_to_prepare (source, NULL);
+  g_assert_nonnull (empty);
+  g_assert_cmpuint (empty->len, ==, 0);
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -229,6 +369,10 @@ main (int argc, char *argv[])
   g_test_add_func ("/library/nothing-to-draw", test_nothing_to_draw);
   g_test_add_func ("/library/installed-cell-names", test_installed_cell_names);
   g_test_add_func ("/library/pictures-in-a-pick", test_pictures_in_a_pick);
+  g_test_add_func ("/library/prepared-cells-are-not-work",
+                   test_prepared_cells_are_not_work);
+  g_test_add_func ("/library/prepared-archive-is-not-work",
+                   test_prepared_archive_is_not_work);
 
   return g_test_run ();
 }

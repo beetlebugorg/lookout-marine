@@ -734,14 +734,15 @@ lk_scan_done_idle (gpointer data)
 
   self->scanning = FALSE;
 
-  /* Counted from the cells, not set->sources: that counter is the vector
-     sources alone. A folder of BSB/KAP sheets, or an archive whose charts
-     are already baked, still has to prepare before anything can draw. */
-  guint to_prepare = 0;
-  if (set != NULL)
-    for (guint i = 0; i < set->cells->len; i++)
-      if (lk_scanned_cell_needs_prepare (g_ptr_array_index (set->cells, i)))
-        to_prepare++;
+  /* The count comes from the cells rather than set->sources, which holds the
+     vector sources alone. A folder of BSB/KAP sheets, and an archive whose
+     charts are already baked, both need preparing before anything draws.
+     lk_chart_bake_to_prepare also drops the cells this folder has already
+     prepared. A source cell keeps its kind after the bake writes its chart,
+     so a count from the kind alone reported the whole folder on every
+     import. */
+  g_autoptr (GPtrArray) todo = lk_chart_bake_to_prepare (dir, set);
+  guint to_prepare = todo->len;
 
   /* The pictures in the pick are installed here as well.
    *
