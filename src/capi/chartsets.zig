@@ -99,6 +99,16 @@ export fn lookout_chart_sets_is_on(s: ?*lookout_chart_sets, path: ?[*:0]const u8
     return @intFromBool(x.isOn(span(path)));
 }
 
+export fn lookout_chart_sets_set_managed(s: ?*lookout_chart_sets, path: ?[*:0]const u8, managed: c_int) c_int {
+    const x = s orelse return 0;
+    return @intFromBool(x.setManaged(span(path), managed != 0));
+}
+
+export fn lookout_chart_sets_is_managed(s: ?*lookout_chart_sets, path: ?[*:0]const u8) c_int {
+    const x = s orelse return 0;
+    return @intFromBool(x.isManaged(span(path)));
+}
+
 /// The charts to open. Borrowed until the next call that changes the list.
 export fn lookout_chart_sets_compose(s: ?*lookout_chart_sets, out_n: ?*usize) ?[*]const [*:0]const u8 {
     const x = s orelse {

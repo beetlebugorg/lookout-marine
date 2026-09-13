@@ -337,6 +337,9 @@ typedef struct {
     const char *producer;
     /* 0 when the mariner switched this set off. It stays installed. */
     int on;
+    /* 1 when a downloader owns this set rather than the mariner. See
+     * lookout_chart_sets_set_managed. */
+    int managed;
     /* 1 once the background scan has read this folder. 0 while it is being
      * read: on the first pass with every count below 0, and after
      * lookout_chart_sets_rescan with what the last pass found. */
@@ -403,6 +406,13 @@ int lookout_chart_sets_remove(lookout_chart_sets *s, const char *path);
 /* 1 when the switch moved. */
 int lookout_chart_sets_set_on(lookout_chart_sets *s, const char *path, int on);
 int lookout_chart_sets_is_on(lookout_chart_sets *s, const char *path);
+
+/* Mark a set as a downloader's rather than the mariner's. A managed set is
+ * added and removed where it was downloaded, a shell says so on its row, and
+ * it wins a dataset name it shares with a set the mariner added by hand.
+ * Returns 1 when the mark changed. */
+int lookout_chart_sets_set_managed(lookout_chart_sets *s, const char *path, int managed);
+int lookout_chart_sets_is_managed(lookout_chart_sets *s, const char *path);
 
 /* Every chart the switched-on sets hold, sorted and deduplicated: the UNION,
  * the list lookout_open_charts_in_window reads. Two sets may overlap, and
