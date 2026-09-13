@@ -29,14 +29,25 @@ typedef struct {
   GtkWidget         *scroller; /* not owned */
   char              *signature;
   double             restore_to;
+  guint              restore_id;
 
-  /* The chart just picked, while the core has yet to be told. Reading a
+  /* The chart just picked, and held until the core is drawing it. Reading a
    * publisher's style is the core's work and it runs inside a frame: a 389
    * layer style with a 5,354 cell sprite pack holds the main thread for over
-   * a second on this machine. The tile says so before that starts. */
+   * a second on this machine. The tile says so for the whole of that wait.
+   *
+   * IT IS NOT DROPPED WHEN THE CORE IS TOLD. An ADD does not set the core's
+   * active url until the style has landed, so between the two the snapshot
+   * reads "busy, nothing active" — and NO ACTIVE URL IS LOOKOUT'S OWN CHART.
+   * The row put the pick back on Lookout's chart for the whole resolve, which
+   * reads as the pick being refused. */
   char              *pending;
   gboolean           pending_mine;
+  /* The core has begun: from here a resolve that ends retires the pick. */
+  gboolean           pending_begun;
   guint              act_id;
+  /* A pick the core never reports on must not mark the row for ever. */
+  guint              pending_id;
 } LkGallery;
 
 static void lk_gallery_fill (LkGallery *self);
@@ -54,11 +65,34 @@ lk_gallery_free (gpointer data)
   g_free (self->drawing);
   g_free (self->signature);
   g_clear_handle_id (&self->act_id, g_source_remove);
+  g_clear_handle_id (&self->restore_id, g_source_remove);
+  g_clear_handle_id (&self->pending_id, g_source_remove);
   g_free (self->pending);
   g_free (self);
 }
 
 /* ---- what a tile does ---------------------------------------------------- */
+
+/* Long enough for the slowest style this has been pointed at, and short enough
+ * that a pick the core says nothing about does not mark the row for ever. */
+#define LK_GALLERY_PICK_MS 25000
+
+/* The core never reported on the pick. Give the row back to what is drawing. */
+static gboolean
+lk_gallery_pick_gave_up (gpointer user_data)
+{
+  GtkWidget *row = user_data;
+  LkGallery *self = g_object_get_data (G_OBJECT (row), "lk-gallery");
+
+  if (self == NULL || gtk_widget_in_destruction (row))
+    return G_SOURCE_REMOVE;
+
+  self->pending_id = 0;
+  g_clear_pointer (&self->pending, g_free);
+  self->pending_begun = FALSE;
+  lk_gallery_fill (self);
+  return G_SOURCE_REMOVE;
+}
 
 /* Draw the chart the mariner picked.
  *
@@ -75,7 +109,12 @@ lk_gallery_act (gpointer user_data)
     return G_SOURCE_REMOVE;
 
   self->act_id = 0;
-  url = g_steal_pointer (&self->pending);
+  /* A COPY. The pick stays on the row until the core is drawing it or has
+   * given up on it: see `pending` in LkGallery. */
+  url = g_strdup (self->pending);
+  self->pending_begun = FALSE;
+  g_clear_handle_id (&self->pending_id, g_source_remove);
+  self->pending_id = g_timeout_add (LK_GALLERY_PICK_MS, lk_gallery_pick_gave_up, row);
 
   /* NULL is how the links object spells "lookout's own chart". */
   if (url[0] == '\0' || self->pending_mine)
@@ -424,21 +463,53 @@ typedef struct {
  * pointer, and the row is rebuilt whenever a picture lands. The offset can
  * only be restored once the new tiles are measured, which is what the
  * adjustment's upper says. */
+/* Put the offset back, once the new tiles have been measured. */
+static void
+lk_gallery_restore_now (LkGallery *self)
+{
+  GtkAdjustment *adjustment;
+  double room;
+
+  if (self->scroller == NULL || self->restore_to <= 0)
+    return;
+
+  adjustment = gtk_scrolled_window_get_hadjustment (GTK_SCROLLED_WINDOW (self->scroller));
+  room = gtk_adjustment_get_upper (adjustment) - gtk_adjustment_get_page_size (adjustment);
+  if (room <= 0)
+    return;
+  gtk_adjustment_set_value (adjustment, MIN (self->restore_to, room));
+  self->restore_to = 0;
+}
+
 static void
 lk_gallery_upper_changed (GtkAdjustment *adjustment, GParamSpec *pspec,
                           gpointer user_data)
 {
   GtkWidget *row = user_data;
   LkGallery *self = g_object_get_data (G_OBJECT (row), "lk-gallery");
-  double room;
 
-  if (self == NULL || self->restore_to <= 0)
-    return;
-  room = gtk_adjustment_get_upper (adjustment) - gtk_adjustment_get_page_size (adjustment);
-  if (room <= 0)
-    return;
-  gtk_adjustment_set_value (adjustment, MIN (self->restore_to, room));
-  self->restore_to = 0;
+  if (self != NULL)
+    lk_gallery_restore_now (self);
+}
+
+/* The last word on where the row sits.
+ *
+ * Refocusing the tile makes the scroller reveal it, and a reveal worked out
+ * against an allocation the rebuild has not run yet moves the row by a few
+ * points. This runs under the layout and puts the offset back. The row is not
+ * rebuilt often, and nothing is armed when it is not. */
+static gboolean
+lk_gallery_restore_settled (gpointer user_data)
+{
+  GtkWidget *row = user_data;
+  LkGallery *self = g_object_get_data (G_OBJECT (row), "lk-gallery");
+
+  if (self == NULL || gtk_widget_in_destruction (row))
+    return G_SOURCE_REMOVE;
+
+  self->restore_id = 0;
+  lk_gallery_restore_now (self);
+  return G_SOURCE_REMOVE;
 }
 
 static void
@@ -456,6 +527,27 @@ lk_gallery_fill (LkGallery *self)
   /* A chart being read is the one the mariner picked, whatever the core still
    * reports as active, and its line says what is happening. */
   gboolean busy = lk_chart_links_busy (links);
+
+  /* Retire the pick once the core has answered for it: it is the chart being
+   * drawn, or the resolve that began for it has ended. Only after the core has
+   * BEGUN, because the error and the active url both still read as the last
+   * chart's until then. */
+  if (self->pending != NULL)
+    {
+      gboolean landed = self->pending[0] == '\0'
+                            ? active == NULL
+                            : g_strcmp0 (active, self->pending) == 0;
+
+      if (busy)
+        self->pending_begun = TRUE;
+      if (landed || (self->pending_begun && !busy))
+        {
+          g_clear_pointer (&self->pending, g_free);
+          self->pending_begun = FALSE;
+          g_clear_handle_id (&self->pending_id, g_source_remove);
+        }
+    }
+
   const char *picked = self->pending != NULL ? self->pending
                        : busy                ? (active != NULL ? active : "")
                                              : NULL;
@@ -528,6 +620,29 @@ lk_gallery_fill (LkGallery *self)
         self->restore_to = at;
     }
 
+  /* WHICH TILE HAS THE KEYBOARD. A click focuses the tile, this rebuild
+   * destroys it, and GTK then moves the focus to the first thing it can find
+   * in the row. A scroller puts its focused child on screen, so the row jumped
+   * home to the first tile every time a chart was picked — taking the tiles
+   * the mariner was looking at out from under the pointer. The tile in the
+   * same place gets it back. */
+  int focused = -1;
+  GtkRoot *root = gtk_widget_get_root (self->row);
+  GtkWidget *had = root != NULL ? gtk_root_get_focus (root) : NULL;
+
+  if (had != NULL)
+    {
+      int i = 0;
+
+      for (child = gtk_widget_get_first_child (self->row); child != NULL;
+           child = gtk_widget_get_next_sibling (child), i++)
+        if (child == had || gtk_widget_is_ancestor (had, child))
+          {
+            focused = i;
+            break;
+          }
+    }
+
   while ((child = gtk_widget_get_first_child (self->row)) != NULL)
     gtk_box_remove (GTK_BOX (self->row), child);
 
@@ -541,6 +656,23 @@ lk_gallery_fill (LkGallery *self)
     }
 
   gtk_box_append (GTK_BOX (self->row), lk_add_tile_new (self));
+
+  if (focused >= 0)
+    {
+      int i = 0;
+
+      for (child = gtk_widget_get_first_child (self->row); child != NULL;
+           child = gtk_widget_get_next_sibling (child), i++)
+        if (i == focused)
+          {
+            gtk_widget_grab_focus (child);
+            break;
+          }
+    }
+
+  if (self->restore_to > 0 && self->restore_id == 0)
+    self->restore_id = g_idle_add_full (G_PRIORITY_LOW, lk_gallery_restore_settled,
+                                        self->row, NULL);
 
   lk_gallery_ask_for_pictures (self, mine, catalog, n_catalog);
 }
