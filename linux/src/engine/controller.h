@@ -174,6 +174,17 @@ lookout_links *lk_chart_controller_chart_links_read (LkChartController *self);
 
 /* ---- pictures of charts -------------------------------------------------- */
 
+/* TRUE when the chart has nothing left to build and no frame pending.
+ *
+ * A SNAPSHOT IS NOT CHEAP WHILE THE CHART IS STILL COMING TOGETHER:
+ * lookout_snapshot_rgba builds the whole scene before it reads the frame back,
+ * and on a linked style that is still fetching its sprite packs one call has
+ * been measured at eleven seconds on the main thread. Anything that wants a
+ * picture asks this first, and waits.
+ *
+ * Read from the last frame, so it answers after the loop has gone idle. */
+gboolean lk_chart_controller_settled (LkChartController *self);
+
 /* The chart as it is drawing, as a picture, or NULL with no chart open.
  *
  * The engine draws ONE chart at a time, so this is the only true picture of a
