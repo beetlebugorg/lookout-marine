@@ -81,6 +81,20 @@ extension ChartController {
         kick()
     }
 
+    /// The dataset names of every cell covering these regions.
+    func noaaRegionCells(regionIDs: String) -> [String] {
+        guard let h = handle, !regionIDs.isEmpty else { return [] }
+        return regionIDs.withCString { ids -> [String] in
+            let n = lookout_noaa_region_cells(h, ids, nil, 0)
+            guard n > 0 else { return [] }
+            var raw = [UnsafePointer<CChar>?](repeating: nil, count: n)
+            let got = raw.withUnsafeMutableBufferPointer {
+                lookout_noaa_region_cells(h, ids, $0.baseAddress, n)
+            }
+            return raw.prefix(min(got, n)).compactMap { $0.map { String(cString: $0) } }
+        }
+    }
+
     /// The boxes of one region's coarse cells, as the catalog states them.
     func noaaRegionCoverage(_ regionID: String) -> [GeoBox] {
         guard let h = handle else { return [] }

@@ -102,6 +102,9 @@ final class NoaaModel {
 
     init() {
         regions = NoaaModel.readRegions()
+        if let at = Store.shared.number(NoaaModel.group, NoaaModel.checkedKey), at > 0 {
+            updatedCheckedAt = Date(timeIntervalSince1970: at)
+        }
     }
 
     /// The region table from the core. Static for the life of the process.
@@ -170,6 +173,7 @@ final class NoaaModel {
         state = next
         if gained {
             recost()
+            repriceRegions()
             loadCoverage()
         }
     }
@@ -210,6 +214,81 @@ final class NoaaModel {
     func noteInstalled(_ names: [String]) {
         engine?.noaaHave(names)
         recost()
+        repriceRegions()
+    }
+
+    // MARK: - What water is held
+
+    /// What one region costs, and how much of it is already on the device.
+    struct RegionState: Equatable {
+        /// Cells the region covers that are missing.
+        var missing: UInt32 = 0
+        /// Cells the region covers that are installed.
+        var held: UInt32 = 0
+        /// What the missing ones cost to fetch.
+        var bytes: UInt64 = 0
+
+        var total: UInt32 { missing + held }
+        /// True when every cell this region covers is on the device.
+        var complete: Bool { missing == 0 && held > 0 }
+        /// True when part of it is here. A region NOAA files cells across
+        /// district lines for is often partly held before it is ever picked.
+        var partial: Bool { held > 0 && missing > 0 }
+    }
+
+    /// Each region, priced on its own. Empty before a catalog is read.
+    private(set) var regionState: [String: RegionState] = [:]
+
+    /// Price every region on its own.
+    ///
+    /// One cost call per region, which the core answers off the catalog it
+    /// already holds. Six calls, and the picker draws what a mariner holds
+    /// rather than only what a pick would cost.
+    private func repriceRegions() {
+        guard let engine, state.haveCatalog else {
+            regionState = [:]
+            return
+        }
+        var out: [String: RegionState] = [:]
+        for r in regions {
+            guard let c = engine.noaaCost(regionIDs: r.id) else { continue }
+            out[r.id] = RegionState(missing: c.cells, held: c.held, bytes: c.bytes)
+        }
+        regionState = out
+    }
+
+    /// Pick the regions whose water is already on the device.
+    ///
+    /// The picker states what a mariner HOLDS. Opening it with everything
+    /// unticked said they held nothing, and ticking a region they had already
+    /// downloaded read as a second download of the same water.
+    func pickInstalled() {
+        picked = Set(regions.filter { regionState[$0.id]?.complete ?? false }.map(\.id))
+        recost()
+    }
+
+    /// The regions that were complete when the picker opened and have since
+    /// been unticked: the water to remove.
+    func removedRegions(from held: Set<String>) -> [NoaaRegion] {
+        regions.filter { held.contains($0.id) && !picked.contains($0.id) }
+    }
+
+    /// The cells to delete when these regions are unticked.
+    ///
+    /// Every cell the unpicked regions name, minus every cell a region still
+    /// picked names. NOAA files a cell under one district that covers another's
+    /// water, so deleting an unpicked region's whole list removes charts from under
+    /// water the mariner is keeping.
+    func cellsToRemove(unpicking gone: [NoaaRegion]) -> Set<String> {
+        guard let engine, !gone.isEmpty else { return [] }
+        let ids = gone.map(\.id).joined(separator: ",")
+        var out = Set(engine.noaaRegionCells(regionIDs: ids).map { $0.uppercased() })
+        if !picked.isEmpty {
+            for keep in engine.noaaRegionCells(regionIDs: pickedIDs) {
+                out.remove(keep.uppercased())
+            }
+        }
+        return out
     }
 
     /// True when every cell the pick names is already on the device. The
@@ -246,6 +325,90 @@ final class NoaaModel {
     func update(_ have: [NoaaInstalledCell], to destination: String) {
         engine?.noaaUpdate(have, destination: destination)
         poll()
+    }
+
+    // MARK: - Checking for reissued charts
+
+    /// How often to look. The wording an app uses for its own updates, because
+    /// this is the same question about the charts.
+    enum UpdateCheck: String, CaseIterable, Identifiable {
+        case never, startup, daily
+
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .never:   return "Never"
+            case .startup: return "At startup"
+            case .daily:   return "Daily"
+            }
+        }
+    }
+
+    /// How many installed cells NOAA has reissued, as the last check counted
+    /// them. Zero before a check has run.
+    private(set) var outdated: UInt32 = 0
+    /// When the last update check finished, across launches.
+    private(set) var updatedCheckedAt: Date?
+    /// True while a check runs. The catalog read is the slow half.
+    private(set) var checking = false
+
+    private static let group = Store.Group.chartsets
+    private static let cadenceKey = "noaa-update-check"
+    private static let checkedKey = "noaa-update-checked"
+
+    var updateCheck: UpdateCheck {
+        get {
+            guard let raw = Store.shared.string(NoaaModel.group, NoaaModel.cadenceKey),
+                  let v = UpdateCheck(rawValue: raw) else { return .daily }
+            return v
+        }
+        set {
+            Store.shared.set(newValue.rawValue, NoaaModel.group, NoaaModel.cadenceKey)
+        }
+    }
+
+    /// True when the cadence says to look now. Daily means the last check is
+    /// over a day old, so an app left running for a week checks once a day and
+    /// one opened twice in an hour checks once.
+    func shouldCheck(now: Date = Date()) -> Bool {
+        switch updateCheck {
+        case .never: return false
+        case .startup: return true
+        case .daily:
+            guard let last = updatedCheckedAt else { return true }
+            return now.timeIntervalSince(last) >= 24 * 60 * 60
+        }
+    }
+
+    /// Read NOAA's catalog, then count how many of `have` it has reissued.
+    ///
+    /// One pass. It ends with the count, so an app that is not being asked
+    /// anything runs no timer: the poll below stops with the catalog read.
+    func checkForUpdates(_ have: [NoaaInstalledCell]) async {
+        guard !checking, !have.isEmpty else { return }
+        checking = true
+        defer { checking = false }
+        if !state.haveCatalog {
+            refresh()
+            // The core reads the catalog on a thread of its own and reports no
+            // callback across the C ABI.
+            for _ in 0..<200 {
+                poll()
+                if state.phase != .readingCatalog { break }
+                try? await Task.sleep(for: .milliseconds(300))
+            }
+        }
+        guard state.haveCatalog else { return }
+        outdated = outdatedCount(have)
+        let now = Date()
+        updatedCheckedAt = now
+        Store.shared.set(now.timeIntervalSince1970, NoaaModel.group, NoaaModel.checkedKey)
+    }
+
+    /// Fetch the reissued editions of every installed cell.
+    func downloadUpdates(_ have: [NoaaInstalledCell]) {
+        guard let dest = NoaaModel.downloadDirectory else { return }
+        update(have, to: dest)
     }
 
     /// Where downloaded cells are staged before they bake. One directory, so

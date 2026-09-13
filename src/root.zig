@@ -3750,6 +3750,14 @@ fn verifyArchive(_: ?*anyopaque, path: [:0]const u8, out: *library.Facts) librar
 }
 
 
+/// One DSID field as a number. 0 for an empty or unparseable string. tile57
+/// reports an empty string for a file with no dataset identity.
+fn tagNumber(p: [*c]const u8) u32 {
+    if (p == null) return 0;
+    const text = std.mem.span(p);
+    return std.fmt.parseInt(u32, std.mem.trim(u8, text, " "), 10) catch 0;
+}
+
 /// tile57's answer for one path: what each file that looks like a chart
 /// actually is. This is the whole of the shell's knowledge about chart file
 /// formats now, and it amounts to passing the path along.
@@ -3789,6 +3797,11 @@ fn takeInventory(
             .bytes = r.bytes,
             .scale = r.scale,
             .bounds = if (r.has_bounds) .{ r.west, r.south, r.east, r.north } else null,
+            // tile57 states EDTN and UPDN as the text DSID holds. A dataset
+            // that states neither reports an empty string, and so does every
+            // baked archive and picture.
+            .edition = tagNumber(r.edition),
+            .update = tagNumber(r.update),
         }) catch {
             alloc.free(row_path);
             alloc.free(row_name);

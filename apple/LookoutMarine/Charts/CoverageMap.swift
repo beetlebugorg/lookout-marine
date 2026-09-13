@@ -194,6 +194,9 @@ struct NoaaRegionPills: View {
     let regions: [NoaaRegion]
     let picked: Set<String>
     let enabled: Bool
+    /// How much of each region is on the device. A pill for water already held
+    /// says so, because the tick then means "keep this" rather than "fetch it".
+    var state: [String: NoaaModel.RegionState] = [:]
     let toggle: (String) -> Void
 
     var body: some View {
@@ -214,6 +217,12 @@ struct NoaaRegionPills: View {
                 }
                 Text(r.name)
                     .font(.system(size: 12.5, weight: on ? .semibold : .regular))
+                if let note = badge(r) {
+                    Text(note)
+                        .font(.system(size: 11))
+                        .monospacedDigit()
+                        .opacity(0.75)
+                }
             }
             .foregroundStyle(on ? Color.white : Chrome.ink)
             .padding(.horizontal, 13)
@@ -225,9 +234,25 @@ struct NoaaRegionPills: View {
         .disabled(!enabled)
         .opacity(enabled ? 1 : 0.5)
         .help(r.blurb)
-        .accessibilityLabel("\(r.name). \(r.blurb)")
+        .accessibilityLabel(label(r))
         .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
         .accessibilityIdentifier("region-\(r.id)")
+    }
+
+    /// What of this region is here, in the pill. Nothing before the catalog is
+    /// read, and nothing for water with none of it on the device.
+    private func badge(_ r: NoaaRegion) -> String? {
+        guard let st = state[r.id] else { return nil }
+        if st.complete { return "installed" }
+        if st.partial { return "\(st.held) of \(st.total)" }
+        return nil
+    }
+
+    private func label(_ r: NoaaRegion) -> String {
+        guard let st = state[r.id] else { return "\(r.name). \(r.blurb)" }
+        if st.complete { return "\(r.name). \(r.blurb). All \(st.held) charts installed." }
+        if st.partial { return "\(r.name). \(r.blurb). \(st.held) of \(st.total) charts installed." }
+        return "\(r.name). \(r.blurb). \(st.total) charts, none installed."
     }
 
     #if os(macOS)

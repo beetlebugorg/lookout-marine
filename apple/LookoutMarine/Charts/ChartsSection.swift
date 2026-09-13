@@ -60,7 +60,7 @@ struct ChartsSections: View {
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(model.charts.sets) { set in
-                    ChartSetRow(model: model, set: set)
+                    ChartSetRow(model: model, set: set) { openNoaaPicker() }
                 }
             }
             if let msg = model.charts.emptyPick {
@@ -132,6 +132,35 @@ struct ChartsSections: View {
             .buttonStyle(.plain)
             .disabled(model.charts.chartWork != nil)
             .accessibilityIdentifier("add-charts-files")
+
+            // The same question an app asks about its own updates, asked about
+            // the charts. NOAA reissues cells continuously, and a chart a
+            // season out of date is the kind a mariner wants told about rather
+            // than left to notice.
+            Picker(selection: Binding(
+                get: { model.noaa.updateCheck },
+                set: { model.noaa.updateCheck = $0 }
+            )) {
+                ForEach(NoaaModel.UpdateCheck.allCases) { c in
+                    Text(c.label).tag(c)
+                }
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Check for NOAA chart updates")
+                    if let line = updateCheckedText {
+                        Text(line).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .accessibilityIdentifier("noaa-update-check")
+
+            if model.noaa.checking {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Checking NOAA for newer editions…")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
         } header: { Text("Add charts") } footer: {
             Text("S-57 and S-101 cells (.000 with their updates) · charts Lookout has already prepared (.pmtiles) · imagery and vendor charts (.mbtiles) · BSB/KAP raster sheets (.kap, .bsb). Cells and raster sheets are converted once on the way in. Encrypted S-63 cells are not supported.")
                 .captionFooter()
@@ -162,6 +191,19 @@ struct ChartsSections: View {
         return "\(cells) charts · \(NoaaModel.sizeText(UInt64(max(bytes, 0))))"
     }
 
+    /// What the last update check found, and when it ran.
+    private var updateCheckedText: String? {
+        guard let at = model.noaa.updatedCheckedAt else {
+            return model.noaa.updateCheck == .never ? nil : "Not checked yet"
+        }
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .full
+        let when = f.localizedString(for: at, relativeTo: Date())
+        return model.noaa.outdated == 0
+            ? "Every chart was current \(when)"
+            : "\(model.noaa.outdated) charts have newer editions, checked \(when)"
+    }
+
     /// When NOAA's catalog was last read.
     private var checkedText: String? {
         guard let at = model.noaa.state.checkedAt else { return nil }
@@ -184,6 +226,24 @@ struct ChartsSections: View {
         "A folder of cells, or a chart already prepared."
     }
     #endif
+}
+
+
+/// The mark on a set the NOAA downloader owns.
+///
+/// It says where the charts came from and, by saying it, where they are added
+/// and removed. A mariner otherwise reads the download as a folder they picked
+/// and looks for it on the disk.
+private struct ManagedBadge: View {
+    var body: some View {
+        Text("Managed by NOAA chart downloader")
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(Chrome.accent)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Chrome.accent.opacity(0.12), in: Capsule())
+            .accessibilityLabel("Managed by the NOAA chart downloader")
+    }
 }
 
 
@@ -324,6 +384,8 @@ private struct AddChartSheet: View {
 private struct ChartSetRow: View {
     var model: AppModel
     let set: ChartSet
+    /// Opens the NOAA downloader. Only a managed row shows it.
+    var manage: () -> Void = {}
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -338,10 +400,13 @@ private struct ChartSetRow: View {
                 .accessibilityLabel("Draw \(set.title)")
 
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(set.title)
-                        .fontWeight(.medium)
-                        .lineLimit(1).truncationMode(.middle)
-                        .foregroundStyle(set.on ? .primary : .secondary)
+                    HStack(spacing: 6) {
+                        Text(set.title)
+                            .fontWeight(.medium)
+                            .lineLimit(1).truncationMode(.middle)
+                            .foregroundStyle(set.on ? .primary : .secondary)
+                        if set.managed { ManagedBadge() }
+                    }
                     // Where it came from, under what it is. Two sets from one
                     // office share a title, so the folder still shows.
                     Text(set.title == set.name ? set.summary : "\(set.name) · \(set.summary)")
@@ -350,30 +415,61 @@ private struct ChartSetRow: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button {
-                    // A set Lookout prepared is work to do again. Ask. A folder
-                    // of the mariner's own files is a list entry, so it goes
-                    // without a question.
-                    if set.isDerived { model.charts.pendingRemoval = set }
-                    else { model.charts.removeChartSet(set.path) }
-                } label: {
-                    Image(systemName: "minus.circle")
+                if set.managed {
+                    // A managed set is added to and taken from in the
+                    // downloader, so the row leads there rather than offering a
+                    // removal that would leave the downloader claiming water
+                    // that had gone.
+                    Button("Manage…") { manage() }
+                        .buttonStyle(.link)
+                        .font(.caption)
+                        .accessibilityIdentifier("manage-noaa-set")
+                } else {
+                    Button {
+                        // A set Lookout prepared is work to do again. Ask. A
+                        // folder of the mariner's own files is a list entry, so
+                        // it goes without a question.
+                        if set.isDerived { model.charts.pendingRemoval = set }
+                        else { model.charts.removeChartSet(set.path) }
+                    } label: {
+                        Image(systemName: "minus.circle")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help(set.isDerived
+                          ? "Remove. The charts this app prepared are deleted; your own cells stay where they are."
+                          : "Take these charts out of the list. Your files stay where they are.")
+                    .accessibilityLabel("Remove \(set.title)")
+                    .accessibilityHint(set.isDerived
+                                       ? "The prepared charts are deleted. Your own cells stay where they are."
+                                       : "Your files stay where they are.")
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .help(set.isDerived
-                      ? "Remove. The charts this app prepared are deleted; your own cells stay where they are."
-                      : "Take these charts out of the list. Your files stay where they are.")
-                .accessibilityLabel("Remove \(set.title)")
-                .accessibilityHint(set.isDerived
-                                   ? "The prepared charts are deleted. Your own cells stay where they are."
-                                   : "Your files stay where they are.")
             }
 
             if !set.bandCounts.isEmpty {
                 BandRamp(counts: set.bandCounts)
                     .padding(.leading, 30)
                     .opacity(set.on ? 1 : 0.5)
+            }
+
+            // What NOAA has reissued since these were downloaded, and the way
+            // to fetch it. Only on the managed row: that is the set this app
+            // knows the provenance of, and the one it can update in place.
+            if set.managed, model.noaa.outdated > 0 {
+                HStack(spacing: 8) {
+                    Label("\(model.noaa.outdated) charts have newer editions",
+                          systemImage: "arrow.down.circle")
+                        .font(.caption)
+                        .foregroundStyle(Chrome.accent)
+                    Button("Update") {
+                        model.noaa.downloadUpdates(model.charts.installedCells)
+                    }
+                    .font(.caption)
+                    .disabled(model.noaa.state.phase == .downloading
+                              || model.charts.chartWork != nil)
+                    .accessibilityIdentifier("noaa-update")
+                }
+                .padding(.leading, 30)
             }
 
             if set.refusedCount > 0 {

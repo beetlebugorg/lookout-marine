@@ -263,6 +263,10 @@ typedef struct {
     /* 1 when the archive states its coverage, and the four edges of it. */
     int located;
     double west, south, east, north;
+    /* The dataset edition and update number, from DSID after the update chain
+     * is applied. Both 0 when the file states no identity: a baked archive, a
+     * picture, or an entry read from a zip listing. */
+    uint32_t edition, update;
 } lookout_chart_file;
 
 /* The totals, and where the scan started. */
@@ -333,6 +337,9 @@ typedef struct {
     const char *producer;
     /* 0 when the mariner switched this set off. It stays installed. */
     int on;
+    /* 1 when a downloader owns this set rather than the mariner. See
+     * lookout_chart_sets_set_managed. */
+    int managed;
     /* 1 once the background scan has read this folder. 0 while it is being
      * read: on the first pass with every count below 0, and after
      * lookout_chart_sets_rescan with what the last pass found. */
@@ -399,6 +406,13 @@ int lookout_chart_sets_remove(lookout_chart_sets *s, const char *path);
 /* 1 when the switch moved. */
 int lookout_chart_sets_set_on(lookout_chart_sets *s, const char *path, int on);
 int lookout_chart_sets_is_on(lookout_chart_sets *s, const char *path);
+
+/* Mark a set as a downloader's rather than the mariner's. A managed set is
+ * added and removed where it was downloaded, a shell says so on its row, and
+ * it wins a dataset name it shares with a set the mariner added by hand.
+ * Returns 1 when the mark changed. */
+int lookout_chart_sets_set_managed(lookout_chart_sets *s, const char *path, int managed);
+int lookout_chart_sets_is_managed(lookout_chart_sets *s, const char *path);
 
 /* Every chart the switched-on sets hold, sorted and deduplicated: the UNION,
  * the list lookout_open_charts_in_window reads. Two sets may overlap, and
@@ -893,15 +907,26 @@ int lookout_noaa_cost(lookout *h, const char *region_ids,
                       uint32_t *out_held, uint64_t *out_held_bytes);
 
 /* Download the cells covering these regions into `dest_dir`, created if it is
- * not there. Each cell is written there as <NAME>.zip, so the whole
- * directory bakes in one lookout_bake_start. Replaces a download already
- * running. Progress surfaces through lookout_noaa_poll.
+ * not there. Each cell's exchange set is unpacked as it arrives, so `dest_dir`
+ * becomes an ordinary ENC_ROOT and bakes in one lookout_bake_start. Replaces a
+ * download already running. Progress surfaces through lookout_noaa_poll.
  *
  * Cells named by lookout_noaa_have are left out, so picking water that is
  * partly installed fetches the rest of it. `again` nonzero fetches those too,
  * so a mariner can repair or refresh charts they already hold. */
 void lookout_noaa_download(lookout *h, const char *region_ids,
                            const char *dest_dir, int again);
+
+/* The dataset names of every cell covering these regions, in catalog order.
+ * Writes at most `cap` and returns how many there are, so a caller sizes its
+ * buffer by calling once with `out` NULL. The strings are borrowed until the
+ * next call. Returns 0 when no catalog is loaded.
+ *
+ * For a shell that removes water a mariner has unpicked. Regions overlap,
+ * because NOAA files a cell under one district that covers another's, so the
+ * cells to delete are the unpicked regions' minus every region still picked. */
+size_t lookout_noaa_region_cells(lookout *h, const char *region_ids,
+                                 const char **out, size_t cap);
 
 /* A cell already installed, for the update check. */
 typedef struct {
