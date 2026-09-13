@@ -37,6 +37,49 @@ namespace lkw
         return buf;
     }
 
+    bool RegionPicked(std::string const &list, std::string const &id)
+    {
+        if (id.empty())
+            return false;
+        for (size_t at = 0; at < list.size();)
+        {
+            size_t end = list.find(',', at);
+            if (end == std::string::npos)
+                end = list.size();
+            if (list.compare(at, end - at, id) == 0)
+                return true;
+            at = end + 1;
+        }
+        return false;
+    }
+
+    std::string RegionToggle(std::string const &list, std::string const &id)
+    {
+        if (id.empty())
+            return list;
+        std::string out;
+        bool found = false;
+        for (size_t at = 0; at < list.size();)
+        {
+            size_t end = list.find(',', at);
+            if (end == std::string::npos)
+                end = list.size();
+            std::string one = list.substr(at, end - at);
+            at = end + 1;
+            if (one.empty())
+                continue;
+            if (one == id)
+            {
+                found = true; // dropped: this is what makes it a toggle
+                continue;
+            }
+            out += (out.empty() ? "" : ",") + one;
+        }
+        if (!found)
+            out += (out.empty() ? "" : ",") + id;
+        return out;
+    }
+
     std::wstring PrepareEstimate(size_t charts)
     {
         double seconds = (double)(charts < 1 ? 1 : charts) * 0.2;

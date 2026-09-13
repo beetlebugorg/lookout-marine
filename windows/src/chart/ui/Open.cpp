@@ -160,7 +160,10 @@ namespace winrt::LookoutMarine::implementation
             StartRenderThread();
         }
         if (raster_paths.empty())
+        {
+            readout_timer.Stop(); // a basemap under a setup card reads out nothing
             FirstRunBegin();
+        }
     }
 
     void MainWindow::DoOpenPaths(std::vector<std::string> const &paths, std::string const &recent,

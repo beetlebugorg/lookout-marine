@@ -68,6 +68,14 @@ namespace lkw
     std::wstring SizeText(uint64_t bytes);
     std::wstring Thousands(uint64_t n);
 
+    // The regions a download covers, as the core's own comma separated list
+    // ("d5,d8"). A mariner picks several: lookout_noaa_cost and
+    // lookout_noaa_download both take the list and answer for the union, which
+    // is why one total is stated rather than a price per region (the cells of
+    // neighbouring districts overlap, so per-region prices do not sum).
+    bool RegionPicked(std::string const &list, std::string const &id);
+    std::string RegionToggle(std::string const &list, std::string const &id);
+
     // About how long preparing this many charts takes, for the question asked
     // before a set's prepared charts are deleted: the mariner is deciding
     // whether to throw away work, so the size of that work is the fact they

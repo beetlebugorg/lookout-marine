@@ -455,4 +455,36 @@ void TestFirstRun()
         Case("no charts still reads as work");
         LK_EQ(PrepareEstimate(0), std::wstring(L"under a minute"));
     }
+
+    /* The picked regions, as the core's comma separated list. A pill toggles
+     * one id in it and every other pick stands. */
+    Suite("lk_firstrun: the regions picked");
+    {
+        Case("the first pick starts the list");
+        LK_EQ(RegionToggle("", "d5"), std::string("d5"));
+
+        Case("a second pick joins it");
+        LK_EQ(RegionToggle("d5", "d9"), std::string("d5,d9"));
+        LK_EQ(RegionToggle("d5,d9", "d17"), std::string("d5,d9,d17"));
+
+        Case("picking again drops it");
+        LK_EQ(RegionToggle("d5,d9,d17", "d9"), std::string("d5,d17"));
+        LK_EQ(RegionToggle("d5", "d5"), std::string(""));
+
+        Case("dropping the first leaves no comma at the front");
+        LK_EQ(RegionToggle("d5,d9", "d5"), std::string("d9"));
+
+        Case("what is picked");
+        LK_EQ(RegionPicked("d5,d9", "d5"), true);
+        LK_EQ(RegionPicked("d5,d9", "d9"), true);
+        LK_EQ(RegionPicked("d5,d9", "d17"), false);
+        LK_EQ(RegionPicked("", "d5"), false);
+
+        /* "d1" must not answer for "d11", which a plain search for the id
+         * inside the string would. */
+        Case("an id is matched whole");
+        LK_EQ(RegionPicked("d11", "d1"), false);
+        LK_EQ(RegionPicked("d1,d11", "d1"), true);
+        LK_EQ(RegionToggle("d11", "d1"), std::string("d11,d1"));
+    }
 }

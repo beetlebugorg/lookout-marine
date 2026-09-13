@@ -400,7 +400,14 @@ namespace winrt::LookoutMarine::implementation
         lkw::FirstRun first_run;
         Microsoft::UI::Xaml::DispatcherTimer first_run_timer{ nullptr };
         // The region the coverage step has picked, as the core's id ("d17").
+        // The districts picked, as the core's comma separated list ("d5,d8").
+        // lookout_noaa_cost and lookout_noaa_download both take it as it
+        // stands (lkw::RegionPicked, lkw::RegionToggle).
         std::string noaa_region_id;
+        // Whether the coverage step has asked for the catalog. It asks once
+        // per page, so a read that failed is not asked for again on every
+        // render; the step's Try Again is what asks after that.
+        bool noaa_catalog_asked{ false };
         // What the online step has been given, so the button can read Skip
         // until there is something to continue with.
         std::string chart_link_url;
