@@ -441,6 +441,23 @@ pub const Service = struct {
         return noaa.cost(cat, picked, self.held.items);
     }
 
+    /// The dataset names of every cell covering these regions, in catalog
+    /// order. Borrowed from the catalog, so valid until the next read.
+    ///
+    /// A shell removing water needs the names, because regions overlap: NOAA
+    /// files a cell under one district that covers another's water, and the
+    /// cells to delete are the unpicked regions' minus every region still
+    /// picked.
+    pub fn cellsOf(self: *Service, districts: []const u8, out: *std.ArrayList([]const u8)) void {
+        const cat = &(self.cat orelse return);
+        const picked = noaa.selectRegions(self.alloc, cat, districts) catch return;
+        defer self.alloc.free(picked);
+        for (picked) |i| {
+            if (i >= cat.cells.len) continue;
+            out.append(self.alloc, cat.cells[i].name) catch return;
+        }
+    }
+
     /// Replace the list of cells this device holds. Sorted here, so the
     /// caller hands them over in whatever order it walked its folders.
     pub fn setHeld(self: *Service, names: []const []const u8) void {

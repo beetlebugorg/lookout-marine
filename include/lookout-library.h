@@ -907,15 +907,26 @@ int lookout_noaa_cost(lookout *h, const char *region_ids,
                       uint32_t *out_held, uint64_t *out_held_bytes);
 
 /* Download the cells covering these regions into `dest_dir`, created if it is
- * not there. Each cell is written there as <NAME>.zip, so the whole
- * directory bakes in one lookout_bake_start. Replaces a download already
- * running. Progress surfaces through lookout_noaa_poll.
+ * not there. Each cell's exchange set is unpacked as it arrives, so `dest_dir`
+ * becomes an ordinary ENC_ROOT and bakes in one lookout_bake_start. Replaces a
+ * download already running. Progress surfaces through lookout_noaa_poll.
  *
  * Cells named by lookout_noaa_have are left out, so picking water that is
  * partly installed fetches the rest of it. `again` nonzero fetches those too,
  * so a mariner can repair or refresh charts they already hold. */
 void lookout_noaa_download(lookout *h, const char *region_ids,
                            const char *dest_dir, int again);
+
+/* The dataset names of every cell covering these regions, in catalog order.
+ * Writes at most `cap` and returns how many there are, so a caller sizes its
+ * buffer by calling once with `out` NULL. The strings are borrowed until the
+ * next call. Returns 0 when no catalog is loaded.
+ *
+ * For a shell that removes water a mariner has unpicked. Regions overlap,
+ * because NOAA files a cell under one district that covers another's, so the
+ * cells to delete are the unpicked regions' minus every region still picked. */
+size_t lookout_noaa_region_cells(lookout *h, const char *region_ids,
+                                 const char **out, size_t cap);
 
 /* A cell already installed, for the update check. */
 typedef struct {

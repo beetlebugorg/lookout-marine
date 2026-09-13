@@ -612,6 +612,40 @@ export fn lookout_noaa_cost(h: ?*lookout, region_ids: ?[*:0]const u8,
     return 1;
 }
 
+/// The cell names covering these regions. See lookout-library.h.
+export fn lookout_noaa_region_cells(h: ?*lookout, region_ids: ?[*:0]const u8,
+                                    out: ?[*][*:0]const u8, cap: usize) usize {
+    if (h == null) return 0;
+    const l = locked(h);
+    defer l.apiUnlock();
+    if (!l.noaa.haveCatalog()) return 0;
+    var buf: [noaa.regions.len]u8 = undefined;
+    const ids = if (region_ids) |r| std.mem.span(r) else "";
+
+    var names = std.ArrayList([]const u8).empty;
+    defer names.deinit(gpa);
+    l.noaa.cellsOf(noaa.districtsFromIds(&buf, ids), &names);
+    if (out == null) return names.items.len;
+
+    // The catalog holds the names unterminated. A caller reads C strings, so
+    // they are copied into an arena that lives until the next call.
+    if (noaa_cells) |old| old.deinit();
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    const a = arena.allocator();
+    var n: usize = 0;
+    for (names.items) |name| {
+        if (n >= cap) break;
+        const z = a.dupeZ(u8, name) catch break;
+        out.?[n] = z.ptr;
+        n += 1;
+    }
+    noaa_cells = arena;
+    return names.items.len;
+}
+
+/// The strings the call above handed out, freed when it is called again.
+var noaa_cells: ?std.heap.ArenaAllocator = null;
+
 /// Download every cell covering these regions. See lookout-library.h.
 export fn lookout_noaa_download(h: ?*lookout, region_ids: ?[*:0]const u8,
                                 dest_dir: ?[*:0]const u8, again: c_int) void {
