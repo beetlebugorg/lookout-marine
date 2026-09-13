@@ -94,6 +94,20 @@ struct FirstRunFlow: View {
             // owns its own insets rather than taking them from here.
             .scrollBounceBehavior(.basedOnSize)
             .frame(height: maxContent.map { min(contentHeight, max($0, 120)) })
+            // A short window cuts the step off mid-sentence, and the part that
+            // goes under is the end of it: the third fact on the welcome page,
+            // and the prototype notice with the ENC agreement under that. Say
+            // there is more with an edge that fades and a bar that stays up.
+            .scrollIndicators(clipped(maxContent) ? .visible : .automatic)
+            .overlay(alignment: .bottom) {
+                if clipped(maxContent) {
+                    LinearGradient(
+                        colors: [Chrome.surface.opacity(0), Chrome.surface],
+                        startPoint: .top, endPoint: .bottom)
+                        .frame(height: 24)
+                        .allowsHitTesting(false)
+                }
+            }
             footer
         }
         // Over the setup sheet rather than as a step of it: accepting NOAA's
@@ -102,6 +116,13 @@ struct FirstRunFlow: View {
         .sheet(isPresented: $flow.showingEncTerms) {
             EncTermsSheet(flow: flow)
         }
+    }
+
+    /// True when the step is taller than the room the sheet has for it, so
+    /// part of it is under the fold.
+    private func clipped(_ maxContent: CGFloat?) -> Bool {
+        guard let maxContent else { return false }
+        return contentHeight > max(maxContent, 120) + 1
     }
 
     @ViewBuilder private var stepContent: some View {

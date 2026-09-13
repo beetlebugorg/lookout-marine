@@ -101,6 +101,19 @@ gboolean lk_chart_bake_is_derived (const char *path);
  * Free with g_free. */
 char *lk_chart_bake_prepared_dir (const char *source);
 
+/* The cells of `set` that still need preparing, given what `source` has
+ * already prepared.
+ *
+ * lk_scanned_cell_needs_prepare reads the kind of one file. An S-57 cell keeps
+ * the kind LOOKOUT_FILE_SOURCE after the bake writes its chart, so that
+ * predicate stays true for every source cell in a folder, import after import.
+ * The rest of the answer is on disk under the prepared directory. Use this
+ * function for any count of the work left.
+ *
+ * Transfer container, empty when the set is fully prepared. The cells belong
+ * to `set`. */
+GPtrArray *lk_chart_bake_to_prepare (const char *source, const LkChartSet *set);
+
 /* Delete charts this app prepared. Refuses any path it did not make, so a
  * mariner's own folder can never be deleted by removing a set. */
 gboolean lk_chart_bake_delete_derived (const char *path);
