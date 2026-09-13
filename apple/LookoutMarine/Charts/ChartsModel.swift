@@ -133,6 +133,31 @@ final class ChartsModel {
         return Array(seen)
     }
 
+    /// Every installed US cell that states which edition it is, for the update
+    /// check. A cell prepared before Lookout recorded an edition states 0, and
+    /// including it would report every chart as reissued: the catalog holds an
+    /// edition for it and 0 is lower than all of them.
+    ///
+    /// One entry per cell name. A cell held in two sets is one chart on the
+    /// water, and the newer edition is the one the chart draws, so the newer is
+    /// the one to ask about.
+    var installedCells: [NoaaInstalledCell] {
+        var best: [String: NoaaInstalledCell] = [:]
+        for set in sets {
+            for cell in set.cells where !cell.isRaster && cell.edition > 0 {
+                let name = cell.stem.uppercased()
+                guard name.hasPrefix("US") else { continue }
+                let held = NoaaInstalledCell(name: name,
+                                             edition: cell.edition,
+                                             update: cell.update)
+                if let had = best[name],
+                   (had.edition, had.update) >= (held.edition, held.update) { continue }
+                best[name] = held
+            }
+        }
+        return Array(best.values)
+    }
+
     /// The installed folders of charts, in the order added. A set on this list has
     /// been looked through and holds charts, so it always opens.
     var sets: [ChartSet] = []
@@ -400,7 +425,8 @@ final class ChartsModel {
                     ? prepared : nil,
                 cells: files.filter { !$0.isRaster },
                 rasters: files.filter(\.isRaster),
-                on: row.on)
+                on: row.on,
+                managed: row.managed)
         }
         syncRasterFromSets()
         // The launch walk cannot see a library of pictures: it looks for
@@ -508,6 +534,12 @@ final class ChartsModel {
         // directory, and the core composes no openable path until it reads
         // them.
         let rereading = !ChartSetStore.add(set.path) && ChartSetStore.rescan(set.path)
+        // The NOAA downloader writes to one directory, and the set at that path
+        // is the one it owns. The core keeps the mark, so the row says so on
+        // every later launch without this running again.
+        if set.path == NoaaModel.downloadDirectory {
+            ChartSetStore.setManaged(set.path, true)
+        }
         syncRasterFromSets()
         if reopen {
             // Both what the core composed and what this scan found. The core
@@ -743,6 +775,39 @@ final class ChartsModel {
                     kind: .removing, done: p.done, total: p.total, name: name, elapsed: p.elapsed)
             }
         }
+        requestOpen(openPaths)
+    }
+
+    /// Delete these cells from the NOAA download, and the charts prepared from
+    /// them.
+    ///
+    /// For a mariner who unticks water in the downloader. Only the managed set
+    /// is touched: a folder of their own holding the same cell is theirs, and
+    /// removing water they chose not to download is not a reason to delete it.
+    ///
+    /// Each cell is a directory of its own, both where it was unpacked and
+    /// where it was prepared, and the directory holds the text and pictures the
+    /// chart references. Deleting the chart file alone leaves those behind.
+    func removeNoaaCells(_ names: Set<String>) {
+        guard !names.isEmpty, let dest = NoaaModel.downloadDirectory else { return }
+        let fm = FileManager.default
+        var gone = Set<String>()
+        for file in ChartSetStore.files(of: dest) {
+            let stem = file.stem.uppercased()
+            guard names.contains(stem) else { continue }
+            // The enclosing directory when it is the cell's own, else the file.
+            let dir = (file.path as NSString).deletingLastPathComponent
+            let target = (dir as NSString).lastPathComponent.uppercased() == stem
+                ? dir : file.path
+            guard !gone.contains(target) else { continue }
+            gone.insert(target)
+            try? fm.removeItem(atPath: target)
+        }
+        guard !gone.isEmpty else { return }
+        ChartSetStore.rescan(dest)
+        // The set stays on the list with the water that is left. A download
+        // whose every cell was unticked leaves an empty folder, and the next
+        // scan drops it.
         requestOpen(openPaths)
     }
 

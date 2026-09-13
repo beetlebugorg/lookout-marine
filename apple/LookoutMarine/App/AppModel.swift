@@ -38,6 +38,9 @@ final class AppModel {
     let noaa = NoaaModel()
     /// Follows a NOAA download to its end. Cancelled when a new one starts.
     private var noaaWatch: Task<Void, Never>?
+    /// True once the update check has run in this session. A chart reopens
+    /// whenever the set list changes, and the check is a launch question.
+    private var noaaChecked = false
     let raster = RasterModel()
     let plugins = PluginsModel()
     let overlay = OverlayModel()
@@ -94,6 +97,30 @@ final class AppModel {
                 if self.noaa.state.done > 0 { self.charts.openChartDirectory(dest) }
                 return
             }
+        }
+    }
+
+    /// Look for reissued charts, when the cadence says to and there is
+    /// something to look for.
+    ///
+    /// Once per launch, from the first chart that opens: every NOAA call goes
+    /// through a chart handle. Daily means the last check was over a day ago,
+    /// which an app left running for a week satisfies once a day, so nothing
+    /// here wakes on a clock.
+    private func considerNoaaUpdateCheck() {
+        guard !noaaChecked, noaa.shouldCheck() else { return }
+        noaaChecked = true
+        Task { [weak self] in
+            guard let self else { return }
+            // The scan at launch fills the set list on a worker of its own, and
+            // an empty list has no editions to ask about.
+            for _ in 0..<40 {
+                if !self.charts.installedCells.isEmpty { break }
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+            let have = self.charts.installedCells
+            guard !have.isEmpty else { return }
+            await self.noaa.checkForUpdates(have)
         }
     }
 
@@ -171,6 +198,7 @@ final class AppModel {
         // the chart handle, which exists only now.
         if firstRun.showing { showWholeCountry() }
         noaa.chartDidOpen()
+        considerNoaaUpdateCheck()
         chartLinks.migrate()
         // The chart-link calls held while no chart was open.
         chartLinks.chartDidOpen()

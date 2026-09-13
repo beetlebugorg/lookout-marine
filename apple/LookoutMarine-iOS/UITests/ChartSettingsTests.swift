@@ -20,12 +20,12 @@ final class ChartSettingsTests: UITestCase {
         XCTAssertTrue(row.waitForExistence(timeout: 30))
         row.tap()
 
-        let download = app.buttons["Download"]
-        XCTAssertTrue(download.waitForExistence(timeout: 10),
+        let apply = app.buttons["noaa-apply"]
+        XCTAssertTrue(apply.waitForExistence(timeout: 10),
                       "the picker did not open")
         // Long enough for a sheet the form tears down to have gone.
         Thread.sleep(forTimeInterval: 3)
-        XCTAssertTrue(download.exists, "the picker closed itself")
+        XCTAssertTrue(apply.exists, "the picker closed itself")
         XCTAssertTrue(app.buttons["Cancel"].exists)
     }
 }

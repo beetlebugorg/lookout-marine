@@ -68,6 +68,7 @@ protocol NoaaEngine: AnyObject {
     /// Name the NOAA cells already installed, so a pick prices the rest.
     func noaaHave(_ names: [String])
     func noaaDownload(regionIDs: String, destination: String, again: Bool)
+    func noaaRegionCells(regionIDs: String) -> [String]
     func noaaOutdated(_ have: [NoaaInstalledCell]) -> UInt32
     func noaaUpdate(_ have: [NoaaInstalledCell], destination: String)
     func noaaCancel()
