@@ -313,10 +313,26 @@ namespace winrt::LookoutMarine::implementation
         // in without ever being unpacked.
         picker.FileTypeFilter().Append(L".zip");
         picker.FileTypeFilter().Append(L".000");
+        // A picture is a chart to the mariner who holds it, and the Charts
+        // page offers one way in for everything on the disk.
+        picker.FileTypeFilter().Append(L".mbtiles");
+        picker.FileTypeFilter().Append(L".kap");
+        picker.FileTypeFilter().Append(L".bsb");
         auto file = co_await picker.PickSingleFileAsync();
         if (file != nullptr)
         {
             std::string path = winrt::to_string(file.Path());
+            // Pictures go to the underlay, which bakes a BSB/KAP sheet and
+            // installs an .mbtiles as it is. The vector open has no use for
+            // either.
+            std::string ext = std::filesystem::path(path).extension().string();
+            for (auto &c : ext)
+                c = (char)tolower((unsigned char)c);
+            if (ext == ".mbtiles" || lkw::IsRasterSource(path))
+            {
+                AddRasterPaths({ path });
+                co_return;
+            }
             // A .pmtiles is already a chart; a .zip or a raw cell has to bake.
             // ImportCharts tells them apart by scanning, so both routes are one.
             ImportCharts(path);
