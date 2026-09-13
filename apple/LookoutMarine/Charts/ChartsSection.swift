@@ -421,7 +421,8 @@ private struct ChartSetRow: View {
                     // removal that would leave the downloader claiming water
                     // that had gone.
                     Button("Manage…") { manage() }
-                        .buttonStyle(.link)
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Chrome.accent)
                         .font(.caption)
                         .accessibilityIdentifier("manage-noaa-set")
                 } else {
