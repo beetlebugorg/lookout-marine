@@ -169,8 +169,14 @@ pub fn outputPath(
         try std.fs.path.join(a, &.{ base, stem });
     defer a.free(dir);
 
+    // A lift keeps the file name the archive holds, taken from the path
+    // rather than the name. A scan strips the extension off a name it
+    // recognizes as a dataset, so a baked US4TE3W0.pmtiles inside a zip came
+    // out as US4TE3W0 with no extension, and a folder glob for *.pmtiles then
+    // never listed it. A picture keeps its extension in the name and was
+    // unaffected, because its stem is no dataset name.
     const file = if (item.work == .lift)
-        try a.dupe(u8, std.fs.path.basename(item.name))
+        try a.dupe(u8, std.fs.path.basename(item.path))
     else
         try std.fmt.allocPrint(a, "{s}.pmtiles", .{stem});
     defer a.free(file);
@@ -293,4 +299,19 @@ test "a lift keeps the name the file already has" {
     defer a.free(p);
     // An .mbtiles is a chart already, and no directory of its own.
     try t.expectEqualStrings(out ++ "/pictures/ncds_08.mbtiles", p);
+}
+
+test "a lifted chart keeps the extension its name lost" {
+    const a = t.allocator;
+    // A scan names a dataset by its stem, so the extension survives only on
+    // the path.
+    const item = Item{
+        .path = "ENC_ROOT/US4TE3W0/US4TE3W0.pmtiles",
+        .name = "US4TE3W0",
+        .band = 4,
+        .work = .lift,
+    };
+    const out = try outputPath(a, "/prepared", "/charts/set.zip", item);
+    defer a.free(out);
+    try t.expectEqualStrings("/prepared/ENC_ROOT/US4TE3W0/US4TE3W0.pmtiles", out);
 }
