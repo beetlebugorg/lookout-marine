@@ -223,9 +223,12 @@ namespace winrt::LookoutMarine::implementation
         // tile and has to be clipped. The badge and the menu go over the
         // CLIPPED picture: aligned inside it, a badge starts left of the
         // tile's own edge and loses its first letter.
+        // Height only. The width is the tile's content width, which is the
+        // tile less its border, so a fixed 250 here draws over the border it
+        // is meant to sit inside.
         Controls::Border crop;
-        crop.Width(kTileWidth);
         crop.Height(kTileArt);
+        crop.HorizontalAlignment(HorizontalAlignment::Stretch);
         crop.CornerRadius({ 10, 10, 0, 0 });
         if (auto picture = ChartArt(art))
         {
@@ -308,11 +311,10 @@ namespace winrt::LookoutMarine::implementation
         b.VerticalAlignment(VerticalAlignment::Top);
         b.HorizontalContentAlignment(HorizontalAlignment::Stretch);
         b.VerticalContentAlignment(VerticalAlignment::Top);
-        if (active)
-        {
-            b.BorderThickness({ 2, 2, 2, 2 });
-            b.BorderBrush(lkw::Brush(lkw::chrome::Accent(dark)));
-        }
+        // The ring is the same width whether or not this tile is the one
+        // drawing, so the row does not shift by two points as the pick moves.
+        b.BorderThickness({ 2, 2, 2, 2 });
+        b.BorderBrush(lkw::Brush(active ? lkw::chrome::Accent(dark) : lkw::chrome::kClear));
         if (!url.empty())
             Controls::ToolTipService::SetToolTip(b, winrt::box_value(winrt::to_hstring(url)));
         Automation::AutomationProperties::SetName(b, name);
