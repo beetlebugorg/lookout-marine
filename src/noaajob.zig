@@ -938,16 +938,52 @@ pub const Service = struct {
         return self.pub_state;
     }
 
+    /// What the transfers in flight have brought so far.
+    ///
+    /// Bytes are exact: they are what has been written to the part files. The
+    /// chart count is the share of each transfer's bytes that has landed,
+    /// because a district bundle is one transfer worth hundreds of charts and
+    /// the count otherwise stood at zero for the whole download and then
+    /// jumped to the district in one step.
+    fn inFlight(self: *Service) struct { cells: u32, bytes: u64 } {
+        self.stage_mu.lock();
+        defer self.stage_mu.unlock();
+        var cells: u64 = 0;
+        var bytes: u64 = 0;
+        for (self.stage.items) |st| {
+            if (st.broken or st.size == 0) continue;
+            bytes += st.size;
+            const job = self.jobOf(st.id) orelse continue;
+            const t = self.plan.items[job];
+            // One cell rounds to nothing, and a transfer with no stated size
+            // has no share to take.
+            if (t.cells <= 1 or t.bytes == 0) continue;
+            const got = @min(st.size, t.bytes);
+            cells += (got * t.cells) / t.bytes;
+        }
+        return .{ .cells = std.math.cast(u32, cells) orelse 0, .bytes = bytes };
+    }
+
+    /// Which plan entry a request is fetching, for the counts above.
+    fn jobOf(self: *const Service, id: u64) ?usize {
+        for (self.reqs.items) |r| {
+            if (r.id == id and r.kind == .cell and r.job < self.plan.items.len) return r.job;
+        }
+        return null;
+    }
+
     pub fn snapshot(self: *Service) State {
+        const live = self.inFlight();
+        const total = self.planCells();
         var s = State{
             .phase = @intFromEnum(self.phase),
             .have_catalog = if (self.cat != null) 1 else 0,
             .checked_at = self.checked_at,
-            .total = self.planCells(),
-            .done = self.done,
+            .total = total,
+            .done = @min(self.done + live.cells, total),
             .failed = self.failed,
             .bytes_total = self.bytes_total,
-            .bytes_done = self.bytes_done,
+            .bytes_done = self.bytes_done + live.bytes,
         };
         if (self.cat) |*c| {
             s.catalog_cells = @intCast(c.cells.len);
@@ -1105,6 +1141,42 @@ test "a bundle NOAA does not serve is asked for cell by cell" {
     try testing.expectEqual(@as(usize, 1 + MAX_INFLIGHT), rec.ids.items.len);
     try testing.expect(std.mem.endsWith(u8, rec.urls.items[1], ".zip"));
     try testing.expect(!std.mem.endsWith(u8, rec.urls.items[1], "CGD_ENCs.zip"));
+
+    s.cancelAll();
+    std.Io.Dir.cwd().deleteTree(std.Io.Threaded.global_single_threaded.io(), dest) catch {};
+}
+
+test "a bundle part way down counts the charts its bytes have brought" {
+    const alloc = testing.allocator;
+    const dest = "/tmp/lookout-noaa-inflight";
+    std.Io.Dir.cwd().deleteTree(std.Io.Threaded.global_single_threaded.io(), dest) catch {};
+
+    var rec = Recorder{ .alloc = alloc };
+    defer rec.deinit();
+
+    var s = Service.init(alloc);
+    defer s.deinit();
+    s.cat = try oneDistrict(alloc, 5, 30);
+    s.phase = .ready;
+    s.setProvider(Recorder.get, null, &rec);
+    s.start(&.{5}, dest, false);
+
+    // One bundle standing for thirty cells of a thousand bytes each.
+    try testing.expectEqual(@as(u32, 30), s.snapshot().total);
+    try testing.expectEqual(@as(u32, 0), s.snapshot().done);
+
+    // Half the bytes have landed and nothing has finished.
+    const id = rec.ids.items[0];
+    const half = [_]u8{0} ** 15000;
+    s.respondChunk(id, &half, 200, false);
+    const mid = s.snapshot();
+    try testing.expectEqual(@as(u32, 15), mid.done);
+    try testing.expectEqual(@as(u64, 15000), mid.bytes_done);
+
+    // It never runs past the plan.
+    const rest = [_]u8{0} ** 30000;
+    s.respondChunk(id, &rest, 200, false);
+    try testing.expectEqual(@as(u32, 30), s.snapshot().done);
 
     s.cancelAll();
     std.Io.Dir.cwd().deleteTree(std.Io.Threaded.global_single_threaded.io(), dest) catch {};
