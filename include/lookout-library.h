@@ -263,6 +263,10 @@ typedef struct {
     /* 1 when the archive states its coverage, and the four edges of it. */
     int located;
     double west, south, east, north;
+    /* The dataset edition and update number, from DSID after the update chain
+     * is applied. Both 0 when the file states no identity: a baked archive, a
+     * picture, or an entry read from a zip listing. */
+    uint32_t edition, update;
 } lookout_chart_file;
 
 /* The totals, and where the scan started. */
