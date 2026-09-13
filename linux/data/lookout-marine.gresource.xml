@@ -31,6 +31,7 @@
     <file preprocess="xml-stripblanks">lk-alarms-symbolic.svg</file>
     <file preprocess="xml-stripblanks">lk-alarm-symbolic.svg</file>
     <file preprocess="xml-stripblanks">lk-advanced-symbolic.svg</file>
+    <file preprocess="xml-stripblanks">lk-remove-symbolic.svg</file>
   </gresource>
   <gresource prefix="/org/beetlebug/LookoutMarine/firstrun">
     <file compressed="true">coastline.bin</file>
