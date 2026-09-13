@@ -199,7 +199,17 @@ lk_chart_sets_rows (LkChartSets *self)
       row->pictures = (guint) set->pictures;
       row->bytes = (gint64) set->bytes;
       row->scanned = set->scanned != 0;
-      row->derived = lk_chart_bake_is_derived (set->path);
+      /* TRUE when REMOVING THIS DELETES WORK — the charts Lookout prepared
+       * from it. That is the question the removal actually asks, and it is NOT
+       * the same as the set's own path sitting under the prepared root: a
+       * folder of the mariner's own cells lives in their home and still has a
+       * prepared directory of its own, which the removal deletes. Asking the
+       * other question took a gigabyte of prepared charts off the disk with no
+       * word, under a tooltip promising the mariner's files stayed where they
+       * were. The reference asks this one (ChartSets.swift, isDerived). */
+      g_autofree char *prepared = lk_chart_bake_prepared_dir (set->path);
+      row->derived = lk_chart_bake_is_derived (set->path) ||
+                     (prepared != NULL && g_file_test (prepared, G_FILE_TEST_IS_DIR));
       row->on = set->on != 0;
       lk_chart_set_count_bands (self, set->path, row->bands);
       g_ptr_array_add (rows, row);
@@ -214,18 +224,21 @@ lk_chart_sets_set_on (LkChartSets *self, const char *path, gboolean on)
 }
 
 gboolean
-lk_chart_sets_remove (LkChartSets *self, const char *path)
+lk_chart_sets_remove (LkChartSets *self, const char *path, char **out_prepared)
 {
+  if (out_prepared != NULL)
+    *out_prepared = NULL;
   if (!lookout_chart_sets_remove (self->sets, path))
     return FALSE;
   lk_chart_sets_sync_paths (self);
 
-  /* The core deletes nothing. What Lookout prepared from this set can be made
-   * again, so it goes; the mariner's own folder is never touched. The delete
-   * renames first and clears behind, so nothing here waits on the disk. */
-  g_autofree char *prepared = lk_chart_bake_prepared_dir (path);
-  if (prepared != NULL)
-    lk_chart_bake_delete_derived (prepared);
+  /* The core deletes nothing, and neither does this. What Lookout prepared
+   * from the set can be made again, so it goes — but the delete is thousands
+   * of files and says where it has got to, and this unit has nowhere to say
+   * it. The caller does the deleting. The mariner's own folder is never
+   * touched either way. */
+  if (out_prepared != NULL)
+    *out_prepared = lk_chart_bake_prepared_dir (path);
 
   return TRUE;
 }

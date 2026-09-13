@@ -34,6 +34,13 @@ struct _LkAppModel {
   char          *bake_name;
   LkBakeBand     bake_bands[7];
   gboolean       baking;
+
+  /* A removal running behind the app. Its own channel, not the bake's: one
+   * set can be removed while another is still importing, and only one of the
+   * two can be cancelled. */
+  LkBakeProgress remove_progress;
+  char          *remove_name;
+  gboolean       removing;
   GStrv    recents;
 
   gboolean is_opening;
@@ -97,6 +104,7 @@ enum {
   PROP_SCHEME,
   PROP_BUILDING,
   PROP_BAKING,
+  PROP_REMOVING,
   PROP_VIEW_WIDTH,
   PROP_VIEW_HEIGHT,
   PROP_FOLLOW,
@@ -145,6 +153,7 @@ lk_app_model_get_property (GObject *object, guint prop_id, GValue *value, GParam
     case PROP_SCHEME:              g_value_set_int (value, self->scheme); break;
     case PROP_BUILDING:            g_value_set_boolean (value, self->building); break;
     case PROP_BAKING:              g_value_set_boolean (value, self->baking); break;
+    case PROP_REMOVING:            g_value_set_boolean (value, self->removing); break;
     case PROP_VIEW_WIDTH:          g_value_set_int (value, self->view_width); break;
     case PROP_VIEW_HEIGHT:         g_value_set_int (value, self->view_height); break;
     case PROP_FOLLOW:              g_value_set_int (value, self->follow); break;
@@ -181,6 +190,7 @@ lk_app_model_dispose (GObject *object)
   g_clear_pointer (&self->open_error, g_free);
   g_clear_pointer (&self->pending_open_source, g_free);
   g_clear_pointer (&self->bake_name, g_free);
+  g_clear_pointer (&self->remove_name, g_free);
   g_clear_pointer (&self->noaa_dest, g_free);
   g_clear_pointer (&self->recents, g_strfreev);
   g_clear_pointer (&self->overlay_pin, g_free);
@@ -216,6 +226,7 @@ lk_app_model_class_init (LkAppModelClass *klass)
   properties[PROP_SCHEME] = g_param_spec_int ("scheme", NULL, NULL, 0, 2, 0, RO);
   properties[PROP_BUILDING] = g_param_spec_boolean ("building", NULL, NULL, FALSE, RO);
   properties[PROP_BAKING] = g_param_spec_boolean ("baking", NULL, NULL, FALSE, RO);
+  properties[PROP_REMOVING] = g_param_spec_boolean ("removing", NULL, NULL, FALSE, RO);
   properties[PROP_VIEW_WIDTH] = g_param_spec_int ("view-width", NULL, NULL, 0, G_MAXINT, 0, RO);
   properties[PROP_VIEW_HEIGHT] = g_param_spec_int ("view-height", NULL, NULL, 0, G_MAXINT, 0, RO);
   properties[PROP_FOLLOW] = g_param_spec_int ("follow", NULL, NULL, 0, 2, 0, RO);
@@ -265,6 +276,9 @@ lk_app_model_class_init (LkAppModelClass *klass)
       g_signal_new ("chrome-retired", G_TYPE_FROM_CLASS (klass), G_SIGNAL_RUN_FIRST,
                     0, NULL, NULL, NULL, G_TYPE_NONE, 0);
 }
+
+static void lk_app_model_remove_progress (const LkBakeProgress *progress,
+                                          gpointer user_data);
 
 static void
 lk_app_model_emit_chart_sets_changed (LkAppModel *self)
@@ -481,8 +495,20 @@ lk_app_model_remove_chart_set (LkAppModel *self, const char *path)
   g_return_if_fail (LK_IS_APP_MODEL (self));
   g_return_if_fail (path != NULL);
 
-  if (!lk_chart_sets_remove (self->chart_sets, path))
+  g_autofree char *prepared = NULL;
+
+  if (!lk_chart_sets_remove (self->chart_sets, path, &prepared))
     return;
+
+  /* What Lookout prepared from the set goes with it: it can be made again, and
+   * a library the mariner removed is the app hoarding on their disk. Thousands
+   * of files, so it runs behind the app and says where it has got to. */
+  if (prepared != NULL)
+    {
+      g_autofree char *name = g_path_get_basename (path);
+
+      lk_chart_bake_delete_derived (prepared, name, lk_app_model_remove_progress, self);
+    }
 
   lk_app_model_recompose_library (self);
   lk_app_model_emit_chart_sets_changed (self);
@@ -692,6 +718,28 @@ lk_app_model_bake_progress (const LkBakeProgress *progress, gpointer user_data)
       self->bake_progress.n_bands = n;
     }
   g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_BAKING]);
+}
+
+/* The delete saying where it has got to. It runs on a thread, so this is the
+ * main thread's copy of the count; an empty name is the last report and takes
+ * the panel down. */
+static void
+lk_app_model_remove_progress (const LkBakeProgress *progress, gpointer user_data)
+{
+  LkAppModel *self = user_data;
+  gboolean over = progress->name == NULL || progress->name[0] == '\0';
+
+  g_free (self->remove_name);
+  self->remove_name = g_strdup (progress->name);
+  self->remove_progress = *progress;
+  self->remove_progress.name = self->remove_name;
+  self->remove_progress.bands = NULL;
+  self->remove_progress.n_bands = 0;
+
+  if (self->removing == !over)
+    return;
+  self->removing = !over;
+  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_REMOVING]);
 }
 
 static void
@@ -1615,6 +1663,13 @@ lk_app_model_get_bake_progress (LkAppModel *self)
 {
   g_return_val_if_fail (LK_IS_APP_MODEL (self), NULL);
   return self->baking ? &self->bake_progress : NULL;
+}
+
+const LkBakeProgress *
+lk_app_model_get_remove_progress (LkAppModel *self)
+{
+  g_return_val_if_fail (LK_IS_APP_MODEL (self), NULL);
+  return self->removing ? &self->remove_progress : NULL;
 }
 
 void

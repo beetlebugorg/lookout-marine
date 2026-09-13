@@ -40,7 +40,15 @@ typedef struct {
  * mariner who can see that the coarse charts are already in. */
 void lk_bake_bands_advance (LkBakeBand *bands, guint n, guint done);
 
+/* Which work a report is about. One struct carries both, so the pill and the
+ * panel cannot call a removal an import. */
+typedef enum {
+  LK_BAKE_IMPORT,
+  LK_BAKE_REMOVE,
+} LkBakeKind;
+
 typedef struct {
+  LkBakeKind  kind;
   int         done;
   int         total;
   const char *name;   /* the set being worked on; borrowed for the call */
@@ -116,7 +124,20 @@ GPtrArray *lk_chart_bake_to_prepare (const char *source, const LkChartSet *set);
 
 /* Delete charts this app prepared. Refuses any path it did not make, so a
  * mariner's own folder can never be deleted by removing a set. */
-gboolean lk_chart_bake_delete_derived (const char *path);
+/* Delete the charts Lookout prepared, saying where it has got to.
+ *
+ * `name` is the set the mariner removed, for the report to name. `on_progress`
+ * runs ON THE MAIN THREAD as chart directories go, and once more with an empty
+ * name when the removal is over — that last report is what takes the panel
+ * down. Both may be NULL for a delete nobody is watching.
+ *
+ * The count is the mariner's own unit: the bake writes a directory per chart,
+ * so one gone is one chart gone, and the panel counts the same things coming
+ * out that it counted going in. */
+gboolean lk_chart_bake_delete_derived (const char        *path,
+                                       const char        *name,
+                                       LkBakeProgressFunc on_progress,
+                                       gpointer           user_data);
 
 /* Throw away what a previous run renamed but did not finish deleting. Without
  * this, quitting mid-delete leaves gigabytes that nothing will mention again. */

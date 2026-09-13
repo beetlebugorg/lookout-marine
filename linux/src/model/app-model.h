@@ -79,6 +79,11 @@ gboolean lk_app_model_all_sets_off (LkAppModel *self);
  * for ::chart-sets-changed and ask again. */
 gboolean lk_app_model_library_scanning (LkAppModel *self);
 
+/* The removal running behind the app, or NULL. Its own channel, not the
+ * bake's: a set can be removed while another is still importing, and a
+ * removal cannot be cancelled. ::removing says when to ask again. */
+const LkBakeProgress *lk_app_model_get_remove_progress (LkAppModel *self);
+
 /* ---- commands (headerbar / menu) ---------------------------------------- */
 
 void lk_app_model_zoom_in (LkAppModel *self);

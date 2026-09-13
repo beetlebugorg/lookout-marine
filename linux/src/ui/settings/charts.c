@@ -748,6 +748,7 @@ lk_settings_fill_work_list (LkSettings *settings)
   GtkWidget *list = settings->work.box;
   const LkNoaaState *noaa = lk_noaa_state (lk_app_model_get_noaa (settings->model));
   const LkBakeProgress *bake = lk_app_model_get_bake_progress (settings->model);
+  const LkBakeProgress *gone = lk_app_model_get_remove_progress (settings->model);
   GtkWidget *child;
 
   while ((child = gtk_widget_get_first_child (list)) != NULL)
@@ -826,10 +827,45 @@ lk_settings_fill_work_list (LkSettings *settings)
       gtk_box_append (GTK_BOX (list), bar);
     }
 
+  /* A removal, the same way. Deleting a library is thousands of files and it
+   * runs behind the app: without this the panel says nothing at all while the
+   * charts go, which reads as the removal having done nothing. It offers no
+   * Cancel — the set is already off the list, and half a deleted library is
+   * not a state to stop in. */
+  if (gone != NULL)
+    {
+      GtkWidget *head = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 10);
+      g_autofree char *title = lk_bake_progress_title (gone);
+      GtkWidget *label = gtk_label_new (title);
+      GtkWidget *bar = gtk_progress_bar_new ();
+
+      gtk_widget_add_css_class (label, "caption");
+      gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+      gtk_label_set_ellipsize (GTK_LABEL (label), PANGO_ELLIPSIZE_MIDDLE);
+      gtk_widget_set_hexpand (label, TRUE);
+      gtk_box_append (GTK_BOX (head), label);
+
+      if (gone->total > 0)
+        {
+          g_autofree char *counts = g_strdup_printf ("%d of %d", gone->done, gone->total);
+          GtkWidget *count = gtk_label_new (counts);
+
+          gtk_widget_add_css_class (count, "dim-label");
+          gtk_widget_add_css_class (count, "caption");
+          gtk_box_append (GTK_BOX (head), count);
+        }
+
+      gtk_progress_bar_set_fraction (GTK_PROGRESS_BAR (bar),
+                                     lk_bake_progress_fraction (gone));
+      gtk_box_append (GTK_BOX (list), head);
+      gtk_box_append (GTK_BOX (list), bar);
+    }
+
   /* A section with nothing in it is a heading over empty space. */
   if (settings->work_section != NULL)
     gtk_widget_set_visible (settings->work_section,
-                            noaa->phase == LK_NOAA_DOWNLOADING || bake != NULL);
+                            noaa->phase == LK_NOAA_DOWNLOADING || bake != NULL ||
+                                gone != NULL);
 }
 
 /* The NOAA service moving. */

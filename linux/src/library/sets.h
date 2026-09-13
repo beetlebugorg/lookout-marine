@@ -88,7 +88,14 @@ gboolean lk_chart_sets_set_on (LkChartSets *self, const char *path, gboolean on)
 
 /* Take a set off the list and delete what Lookout prepared from it. The
  * mariner's own folder is never touched. TRUE when the set was installed. */
-gboolean lk_chart_sets_remove (LkChartSets *self, const char *path);
+/* Take a set off the list. FALSE when it was not on it.
+ *
+ * `out_prepared` receives the directory of charts Lookout prepared from it,
+ * which THE CALLER deletes: the delete reports where it has got to, and this
+ * unit does not know where a report goes. NULL when nothing was prepared.
+ * Free with g_free. */
+gboolean lk_chart_sets_remove (LkChartSets *self, const char *path,
+                               char **out_prepared);
 
 /* The UNION of the sets switched on — the library the chart opens as.
  * Transfer full strv. */
