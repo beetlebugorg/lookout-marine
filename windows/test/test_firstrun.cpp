@@ -406,4 +406,32 @@ void TestFirstRun()
         Case("no charts at all gives no bands");
         LK_EQ(FirstRunBands({}, 0).size(), size_t{ 0 });
     }
+
+    /* The two figures a download is priced in and a library is totalled in.
+     * The settings pane reads them as well as the coverage step. */
+    Suite("lk_firstrun: the figures");
+    {
+        Case("megabytes under a gigabyte");
+        LK_EQ(SizeText(226'492'416ull), std::wstring(L"216.0 MB"));
+
+        Case("gigabytes above one");
+        LK_EQ(SizeText(4'617'089'843ull), std::wstring(L"4.3 GB"));
+
+        Case("a gigabyte exactly reads in gigabytes");
+        LK_EQ(SizeText(1ull << 30), std::wstring(L"1.0 GB"));
+
+        Case("nothing measured reads as zero");
+        LK_EQ(SizeText(0), std::wstring(L"0.0 MB"));
+
+        Case("thousands are grouped");
+        LK_EQ(Thousands(1238), std::wstring(L"1,238"));
+        LK_EQ(Thousands(8233), std::wstring(L"8,233"));
+
+        Case("a number under a thousand is left alone");
+        LK_EQ(Thousands(4), std::wstring(L"4"));
+        LK_EQ(Thousands(999), std::wstring(L"999"));
+
+        Case("a library of millions of charts still groups");
+        LK_EQ(Thousands(2'631'004), std::wstring(L"2,631,004"));
+    }
 }

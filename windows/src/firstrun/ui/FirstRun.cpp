@@ -252,24 +252,11 @@ namespace
         }
     }
 
-    // The shape the other shells price a region in, so "1,238 charts, 226.5 MB".
-    std::wstring SizeText(uint64_t bytes)
-    {
-        wchar_t buf[64];
-        if (bytes >= (uint64_t{ 1 } << 30))
-            swprintf_s(buf, L"%.1f GB", (double)bytes / (double)(uint64_t{ 1 } << 30));
-        else
-            swprintf_s(buf, L"%.1f MB", (double)bytes / (double)(1u << 20));
-        return buf;
-    }
-
-    std::wstring Thousands(uint32_t n)
-    {
-        std::wstring s = std::to_wstring(n);
-        for (int i = (int)s.size() - 3; i > 0; i -= 3)
-            s.insert((size_t)i, L",");
-        return s;
-    }
+    // The shape the other shells price a region in, so "1,238 charts,
+    // 226.5 MB". The settings pane totals a library the same way, so both
+    // read the model's copy.
+    using lkw::SizeText;
+    using lkw::Thousands;
 }
 
 namespace winrt::LookoutMarine::implementation

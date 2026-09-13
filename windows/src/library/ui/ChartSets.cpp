@@ -53,6 +53,8 @@ namespace winrt::LookoutMarine::implementation
                 row.title = all[i]->title;
                 row.on = all[i]->on != 0;
                 row.scanned = all[i]->scanned != 0;
+                row.unprepared = all[i]->unprepared;
+                row.bytes = all[i]->bytes;
                 // What the row says it holds. The engine's own counts split a
                 // file that bakes first out of both halves, and this line has
                 // always counted a picture waiting to be baked as a picture.

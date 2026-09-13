@@ -272,6 +272,10 @@ namespace winrt::LookoutMarine::implementation
             bool scanned{ false };
             size_t charts{ 0 };
             size_t pictures{ 0 };
+            // Files that bake before they draw, and what the folder holds on
+            // disk. Both are the core's own figures for the set.
+            size_t unprepared{ 0 };
+            uint64_t bytes{ 0 };
             // How many prepared charts this set holds in each usage band,
             // keyed 1 to 6. A set that stops at Coastal does not draw the
             // harbour a passage ends in, so the row says which scales are in
@@ -556,6 +560,20 @@ namespace winrt::LookoutMarine::implementation
         int settings_size_w{ 0 };
         int settings_size_h{ 0 };
         Microsoft::UI::Xaml::DispatcherTimer apply_timer{ nullptr };
+        // The work the Charts page reports while it runs. The settings window
+        // stands over the chart, so a download or a bake begun here otherwise
+        // runs behind it. These live on the built page and are updated in
+        // place, so the page is not rebuilt several times a second; each
+        // BuildSettingsPage clears them. Nothing is polled while they are
+        // null, which is whenever no such work is on the page.
+        Microsoft::UI::Xaml::Controls::TextBlock noaa_pane_count{ nullptr };
+        Microsoft::UI::Xaml::Controls::ProgressBar noaa_pane_bar{ nullptr };
+        Microsoft::UI::Xaml::Controls::TextBlock bake_pane_count{ nullptr };
+        Microsoft::UI::Xaml::Controls::TextBlock bake_pane_eta{ nullptr };
+        Microsoft::UI::Xaml::Controls::ProgressBar bake_pane_bar{ nullptr };
+        // Read the download the Charts page is reporting, and put the page
+        // away once it ends.
+        void PollNoaaPane();
 
         // wasm plugin settings. The schemas are read when the pane opens; only
         // the status lines are polled after that.

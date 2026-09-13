@@ -1,6 +1,7 @@
 // Model code: no WinRT, so the flow is reachable from a test.
 #include "lk_firstrun.h"
 
+#include <cwchar>
 #include <map>
 
 namespace
@@ -24,6 +25,24 @@ namespace lkw
         case 6: return L"Berthing";
         default: return L"Other";
         }
+    }
+
+    std::wstring SizeText(uint64_t bytes)
+    {
+        wchar_t buf[64];
+        if (bytes >= (uint64_t{ 1 } << 30))
+            std::swprintf(buf, 64, L"%.1f GB", (double)bytes / (double)(uint64_t{ 1 } << 30));
+        else
+            std::swprintf(buf, 64, L"%.1f MB", (double)bytes / (double)(1u << 20));
+        return buf;
+    }
+
+    std::wstring Thousands(uint64_t n)
+    {
+        std::wstring s = std::to_wstring(n);
+        for (int i = (int)s.size() - 3; i > 0; i -= 3)
+            s.insert((size_t)i, L",");
+        return s;
     }
 
     std::vector<FirstRunBand> FirstRunBands(std::vector<int> const &band_of_each_chart,

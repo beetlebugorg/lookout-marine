@@ -375,6 +375,9 @@ namespace winrt::LookoutMarine::implementation
             // landing answer raises needs-redraw, so a resolve keeps the render
             // loop ticking until it is done.
             PollChartLinks();
+            // A download the Charts page is reporting. Returns at once unless
+            // that line is on the page.
+            PollNoaaPane();
         }
         catch (...)
         {

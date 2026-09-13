@@ -63,6 +63,11 @@ namespace lkw
     // "Other". The same words the other shells use.
     std::wstring FirstRunBandName(int band);
 
+    // The shape the other shells price a download in, so "226.5 MB" and
+    // "1,238". What the settings pane totals a library in as well.
+    std::wstring SizeText(uint64_t bytes);
+    std::wstring Thousands(uint64_t n);
+
     // The band breakdown, from what the scan found and how far the bake has
     // got. `band_of_each_chart` is the band of every chart the scan returned,
     // in any order. `done` is the bake's own count.

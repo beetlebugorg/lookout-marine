@@ -788,6 +788,36 @@ namespace winrt::LookoutMarine::implementation
         BuildSettingsPage();
     }
 
+    // The download the Charts page is reporting. Read on the readout tick,
+    // and only while the page holds the line that says so: the controls are
+    // null on every other page and whenever no transfer is running, which is
+    // what keeps this off the tick the rest of the time.
+    void MainWindow::PollNoaaPane()
+    {
+        if (noaa_pane_count == nullptr || controller == nullptr)
+            return;
+        lookout_noaa_state nst{};
+        lk_controller_noaa_poll(controller, &nst);
+        if (nst.phase != 3)
+        {
+            // The transfer ended. The section goes, and the sets it landed in
+            // are read again by their own scan.
+            BuildSettingsPage();
+            return;
+        }
+        std::string line = std::to_string(nst.done) + " of " + std::to_string(nst.total) +
+                           " charts";
+        if (nst.failed > 0)
+            line += "  ·  " + std::to_string(nst.failed) + " failed";
+        noaa_pane_count.Text(winrt::to_hstring(line));
+        if (noaa_pane_bar != nullptr)
+        {
+            noaa_pane_bar.IsIndeterminate(nst.total == 0);
+            if (nst.total > 0)
+                noaa_pane_bar.Value((double)nst.done / (double)nst.total);
+        }
+    }
+
     void MainWindow::BuildSettingsPage()
     {
         settings_loading = true;
@@ -797,6 +827,11 @@ namespace winrt::LookoutMarine::implementation
         // The controls the status poll updates in place died with that Clear.
         plugin_status_ui.clear();
         band_preview = nullptr; // died with the Clear too; depths re-makes it
+        noaa_pane_count = nullptr;
+        noaa_pane_bar = nullptr;
+        bake_pane_count = nullptr;
+        bake_pane_eta = nullptr;
+        bake_pane_bar = nullptr;
 
         const double ft = 3.28084;
         bool feet = pending.depth_unit == 1;
@@ -1183,13 +1218,51 @@ namespace winrt::LookoutMarine::implementation
             }
 
             // ---- Your chart sets ----------------------------------------------
-
-            // ---- the installed sets: each folder of charts with its own
-            // switch. What draws is the union of the switched-on ones; a set
-            // whose water is not today's water is switched off, not removed.
-            if (!chart_sets.empty())
+            // The installed sets: each folder of charts with its own switch.
+            // What draws is the union of the switched-on ones. A set whose
+            // water is not today's water is switched off and stays installed.
             {
-                header(L"Your chart sets");
+                // What every set holds, together, beside the heading.
+                size_t all_charts = 0;
+                uint64_t all_bytes = 0;
+                for (auto const &s : chart_sets)
+                {
+                    all_charts += s.charts + s.pictures;
+                    all_bytes += s.bytes;
+                }
+                Controls::Grid head;
+                Controls::ColumnDefinition h0, h1;
+                h0.Width({ 1, GridUnitType::Star });
+                h1.Width({ 0, GridUnitType::Auto });
+                head.ColumnDefinitions().ReplaceAll({ h0, h1 });
+                head.Margin({ 0, 10, 0, 0 });
+                Controls::TextBlock head_tb;
+                head_tb.Text(L"Your chart sets");
+                head_tb.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
+                head.Children().Append(head_tb);
+                if (!chart_sets.empty())
+                {
+                    Controls::TextBlock total;
+                    total.Text(winrt::hstring{ lkw::Thousands(all_charts) + L" charts · " +
+                                               lkw::SizeText(all_bytes) });
+                    total.FontSize(11);
+                    total.Opacity(0.7);
+                    total.VerticalAlignment(VerticalAlignment::Center);
+                    Controls::Grid::SetColumn(total, 1);
+                    head.Children().Append(total);
+                }
+                stack.Children().Append(head);
+
+                // A library being read has not failed to answer.
+                if (chart_sets.empty())
+                {
+                    Controls::TextBlock none;
+                    none.Text(ChartSetsScanning() ? L"Finding charts…" : L"No chart sets");
+                    none.FontSize(12);
+                    none.Opacity(0.7);
+                    stack.Children().Append(none);
+                }
+
                 for (auto const &set : chart_sets)
                 {
                     Controls::Grid srow;
@@ -1225,12 +1298,15 @@ namespace winrt::LookoutMarine::implementation
                     if (set.charts != 0)
                         sum = std::to_string(set.charts) + (set.charts == 1 ? " chart" : " charts");
                     if (set.pictures != 0)
-                        sum += (sum.empty() ? "" : ", ") + std::to_string(set.pictures) +
+                        sum += (sum.empty() ? "" : " \xC2\xB7 ") + std::to_string(set.pictures) +
                                (set.pictures == 1 ? " picture" : " pictures");
                     // A row is listed before the scan has read its folder, and
                     // a folder still being read has not failed to answer.
                     if (sum.empty() && set.scanned)
                         sum = "not answering (drive unplugged?)";
+                    else if (set.bytes != 0)
+                        sum += (sum.empty() ? "" : " \xC2\xB7 ") +
+                               winrt::to_string(lkw::SizeText(set.bytes));
                     // What scales it holds, coarse first. A set that stops at
                     // Coastal does not draw the harbour a passage ends in.
                     if (!set.bands.empty())
@@ -1250,6 +1326,18 @@ namespace winrt::LookoutMarine::implementation
                     ssum.FontSize(11);
                     ssum.Opacity(0.7);
                     stext.Children().Append(ssum);
+                    // What in this set has yet to be prepared. A folder of the
+                    // mariner's own cells reports them until an import bakes
+                    // them.
+                    if (set.unprepared != 0)
+                    {
+                        Controls::TextBlock prep;
+                        prep.Text(winrt::hstring{ lkw::Thousands(set.unprepared) +
+                                                  L" to prepare" });
+                        prep.FontSize(11);
+                        prep.Opacity(0.7);
+                        stext.Children().Append(prep);
+                    }
                     stext.VerticalAlignment(VerticalAlignment::Center);
                     Controls::Grid::SetColumn(stext, 1);
                     srow.Children().Append(stext);
@@ -1462,6 +1550,8 @@ namespace winrt::LookoutMarine::implementation
 
 
             // ---- Downloading from NOAA, while a transfer runs -----------------
+            // Where it was started. This window stands over the chart, so a
+            // transfer begun here otherwise runs behind it.
             if (lk_controller_is_open(controller))
             {
                 lookout_noaa_state nst{};
@@ -1469,14 +1559,91 @@ namespace winrt::LookoutMarine::implementation
                 if (nst.phase == 3)
                 {
                     header(L"Downloading from NOAA");
-                    Controls::TextBlock dl;
-                    dl.Text(winrt::to_hstring(std::to_string(nst.done) + " of " +
-                                              std::to_string(nst.total) + " charts"));
-                    dl.FontSize(12);
-                    stack.Children().Append(dl);
+                    Controls::Grid line;
+                    Controls::ColumnDefinition n0, n1;
+                    n0.Width({ 1, GridUnitType::Star });
+                    n1.Width({ 0, GridUnitType::Auto });
+                    line.ColumnDefinitions().ReplaceAll({ n0, n1 });
+
+                    noaa_pane_count = Controls::TextBlock{};
+                    noaa_pane_count.FontSize(12);
+                    noaa_pane_count.VerticalAlignment(VerticalAlignment::Center);
+                    line.Children().Append(noaa_pane_count);
+
+                    Controls::Button stop;
+                    stop.Content(winrt::box_value(L"Cancel"));
+                    stop.Click([this](auto &&, auto &&) {
+                        lk_controller_noaa_cancel(controller);
+                        BuildSettingsPage();
+                    });
+                    Controls::Grid::SetColumn(stop, 1);
+                    line.Children().Append(stop);
+                    stack.Children().Append(line);
+
+                    noaa_pane_bar = Controls::ProgressBar{};
+                    noaa_pane_bar.Minimum(0);
+                    noaa_pane_bar.Maximum(1);
+                    noaa_pane_bar.HorizontalAlignment(HorizontalAlignment::Stretch);
+                    noaa_pane_bar.Margin({ 0, 6, 0, 0 });
+                    stack.Children().Append(noaa_pane_bar);
+                    // Fill both from the reading just taken, so the section is
+                    // current on the frame it is built in.
+                    PollNoaaPane();
                 }
             }
-            
+
+            // ---- Preparing charts, while a bake runs --------------------------
+            // The bake, for the same reason. Its own panel is over the chart,
+            // behind this window.
+            if (bake_job != nullptr)
+            {
+                auto p = bake_job->Snapshot();
+                header(winrt::to_hstring(p.Title()).c_str());
+
+                bake_pane_bar = Controls::ProgressBar{};
+                bake_pane_bar.Minimum(0);
+                bake_pane_bar.Maximum(1);
+                bake_pane_bar.IsIndeterminate(p.total == 0);
+                bake_pane_bar.Value(p.Fraction());
+                bake_pane_bar.HorizontalAlignment(HorizontalAlignment::Stretch);
+                stack.Children().Append(bake_pane_bar);
+
+                Controls::Grid line;
+                Controls::ColumnDefinition b0, b1;
+                b0.Width({ 1, GridUnitType::Star });
+                b1.Width({ 0, GridUnitType::Auto });
+                line.ColumnDefinitions().ReplaceAll({ b0, b1 });
+                line.Margin({ 0, 6, 0, 0 });
+
+                Controls::StackPanel words;
+                bake_pane_count = Controls::TextBlock{};
+                bake_pane_count.FontSize(12);
+                words.Children().Append(bake_pane_count);
+                bake_pane_eta = Controls::TextBlock{};
+                bake_pane_eta.FontSize(11);
+                bake_pane_eta.Opacity(0.7);
+                words.Children().Append(bake_pane_eta);
+                words.VerticalAlignment(VerticalAlignment::Center);
+                line.Children().Append(words);
+
+                Controls::Button stop;
+                stop.Content(winrt::box_value(L"Cancel"));
+                stop.Click([this](auto &&, auto &&) {
+                    if (bake_job != nullptr)
+                        bake_job->Cancel();
+                });
+                Controls::Grid::SetColumn(stop, 1);
+                line.Children().Append(stop);
+                stack.Children().Append(line);
+                // The bake's own tick fills these in. This is the first
+                // reading, for the frame the page is built in.
+                bake_pane_count.Text(winrt::to_hstring(
+                    p.total > 0 ? std::to_string(p.done) + " of " + std::to_string(p.total)
+                                : p.cell));
+                bake_pane_eta.Text(winrt::to_hstring(p.Remaining()));
+            }
+
+
             // ---- Recent -------------------------------------------------------
             //
             // Not in the reference, which has no recents list. It predates this
@@ -1505,15 +1672,108 @@ namespace winrt::LookoutMarine::implementation
 
 
             // ---- Add charts, last ---------------------------------------------
-            // Where to get more, last. The reference puts adding at the bottom
-            // of the pane rather than the top: a mariner reads what they have
-            // before reading how to get more.
+            // Where to get more, last: a mariner reads what they have before
+            // reading how to get more. One row per way in, each saying what it
+            // does and what it costs to find out.
             header(L"Add charts");
             {
+                bool dark = DarkChrome();
+                bool working = bake_job != nullptr;
+                // What the row's face is: the mark, the two lines, and the
+                // answer on the right.
+                auto face = [&](wchar_t const *glyph, wchar_t const *title,
+                                wchar_t const *detail, std::wstring const &trailing) {
+                    Controls::Grid row;
+                    Controls::ColumnDefinition a0, a1, a2, a3;
+                    a0.Width({ 0, GridUnitType::Auto });
+                    a1.Width({ 1, GridUnitType::Star });
+                    a2.Width({ 0, GridUnitType::Auto });
+                    a3.Width({ 0, GridUnitType::Auto });
+                    row.ColumnDefinitions().ReplaceAll({ a0, a1, a2, a3 });
+
+                    Controls::FontIcon mark;
+                    mark.Glyph(glyph);
+                    mark.FontSize(17);
+                    mark.Foreground(lkw::Brush(lkw::chrome::Accent(dark)));
+                    mark.Width(22);
+                    mark.Margin({ 0, 0, 13, 0 });
+                    mark.VerticalAlignment(VerticalAlignment::Center);
+                    row.Children().Append(mark);
+
+                    Controls::TextBlock name;
+                    name.Text(title);
+                    name.FontSize(13);
+                    name.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
+                    Controls::TextBlock says;
+                    says.Text(detail);
+                    says.FontSize(12);
+                    says.Foreground(lkw::Brush(lkw::chrome::Muted(dark)));
+                    says.TextWrapping(TextWrapping::Wrap);
+                    Controls::StackPanel words;
+                    words.Spacing(3);
+                    words.Children().Append(name);
+                    words.Children().Append(says);
+                    words.VerticalAlignment(VerticalAlignment::Center);
+                    Controls::Grid::SetColumn(words, 1);
+                    row.Children().Append(words);
+
+                    if (!trailing.empty())
+                    {
+                        Controls::TextBlock right;
+                        right.Text(winrt::hstring{ trailing });
+                        right.FontSize(12);
+                        right.Foreground(lkw::Brush(lkw::chrome::Muted(dark)));
+                        right.Margin({ 8, 0, 8, 0 });
+                        right.VerticalAlignment(VerticalAlignment::Center);
+                        Controls::Grid::SetColumn(right, 2);
+                        row.Children().Append(right);
+                    }
+
+                    Controls::FontIcon chevron;
+                    chevron.Glyph(L"");
+                    chevron.FontSize(12);
+                    chevron.Foreground(lkw::Brush(lkw::chrome::Muted(dark)));
+                    chevron.VerticalAlignment(VerticalAlignment::Center);
+                    Controls::Grid::SetColumn(chevron, 3);
+                    row.Children().Append(chevron);
+                    return row;
+                };
+
+                // When NOAA's catalog was last read, which is what the prices
+                // in the picker are built from.
+                std::wstring checked;
+                if (lk_controller_is_open(controller))
+                {
+                    lookout_noaa_state nst{};
+                    lk_controller_noaa_poll(controller, &nst);
+                    if (nst.checked_at != 0)
+                    {
+                        std::time_t at = (std::time_t)nst.checked_at;
+                        std::tm when{};
+                        std::tm today{};
+                        std::time_t now = std::time(nullptr);
+                        if (localtime_s(&when, &at) == 0 && localtime_s(&today, &now) == 0)
+                        {
+                            wchar_t buf[64]{};
+                            bool same_day = when.tm_year == today.tm_year &&
+                                            when.tm_yday == today.tm_yday;
+                            std::wcsftime(buf, 64, same_day ? L"%H:%M" : L"%d %b %H:%M", &when);
+                            checked = (same_day ? L"Checked today " : L"Checked ") + std::wstring{ buf };
+                        }
+                    }
+                }
+
                 Controls::Button noaa;
-                noaa.Content(box_value(L"Get charts from NOAA\x2026"));
+                noaa.Content(face(L"\uE753", L"Get charts from NOAA…",
+                                  L"Pick the waters you sail. Lookout downloads the cells "
+                                  L"and prepares them. Free.",
+                                  checked));
                 noaa.HorizontalAlignment(HorizontalAlignment::Stretch);
-                noaa.HorizontalContentAlignment(HorizontalAlignment::Left);
+                noaa.HorizontalContentAlignment(HorizontalAlignment::Stretch);
+                noaa.Background(lkw::Brush(lkw::chrome::kClear));
+                noaa.BorderThickness({ 0, 0, 0, 0 });
+                noaa.Padding({ 0, 6, 0, 6 });
+                noaa.IsEnabled(!working && noaa_pane_count == nullptr);
                 // Hand it to the next tick. ShowNoaaPicker closes the settings
                 // window, and closing the window that owns this button from
                 // inside its own Click handler destroys the button while the
@@ -1523,33 +1783,36 @@ namespace winrt::LookoutMarine::implementation
                 });
                 stack.Children().Append(noaa);
 
-                Controls::TextBlock noaa_sub;
-                noaa_sub.Text(L"Pick the waters you sail. Lookout downloads the cells and "
-                              L"prepares them. Free.");
-                noaa_sub.FontSize(11);
-                noaa_sub.Opacity(0.7);
-                noaa_sub.TextWrapping(TextWrapping::Wrap);
-                stack.Children().Append(noaa_sub);
+                // ONE ROW FOR EVERYTHING ON THE DISK. A folder of cells, the
+                // .zip an agency publishes, a chart already prepared and a
+                // picture are all the mariner's own files: they are added the
+                // same way and switched on the same way. Three rows made them
+                // remember which row a file had gone in by.
+                Controls::MenuFlyout ways;
+                Controls::MenuFlyoutItem folder;
+                folder.Text(L"Choose a Folder…");
+                folder.Click([this](auto &&, auto &&) { PickChartFolder(); });
+                ways.Items().Append(folder);
+                Controls::MenuFlyoutItem one;
+                one.Text(L"Choose a File…");
+                one.Click([this](auto &&, auto &&) { PickChartFile(); });
+                ways.Items().Append(one);
+
+                Controls::Button disk;
+                disk.Content(face(L"\uE8B7", L"Add charts from this computer…",
+                                  L"A folder of cells, an archive, a prepared chart, or "
+                                  L"pictures. Or drop any of them anywhere in the chart "
+                                  L"window.",
+                                  std::wstring{}));
+                disk.HorizontalAlignment(HorizontalAlignment::Stretch);
+                disk.HorizontalContentAlignment(HorizontalAlignment::Stretch);
+                disk.Background(lkw::Brush(lkw::chrome::kClear));
+                disk.BorderThickness({ 0, 0, 0, 0 });
+                disk.Padding({ 0, 6, 0, 6 });
+                disk.IsEnabled(!working);
+                disk.Flyout(ways);
+                stack.Children().Append(disk);
             }
-
-            Controls::Button add;
-            add.Content(winrt::box_value(L"Add Charts…"));
-            add.HorizontalAlignment(HorizontalAlignment::Stretch);
-            add.Margin({ 0, 8, 0, 0 });
-            add.Click([this](auto &&, auto &&) { PickChartFolder(); });
-            stack.Children().Append(add);
-            Controls::Button add_raster;
-            add_raster.Content(winrt::box_value(L"Add Raster Charts…"));
-            add_raster.HorizontalAlignment(HorizontalAlignment::Stretch);
-            add_raster.Margin({ 0, 8, 0, 0 });
-            add_raster.Click([this](auto &&, auto &&) { AddRasterFiles(); });
-            stack.Children().Append(add_raster);
-
-            Controls::Button add_raster_dir;
-            add_raster_dir.Content(winrt::box_value(L"Add a Folder of Raster Charts…"));
-            add_raster_dir.HorizontalAlignment(HorizontalAlignment::Stretch);
-            add_raster_dir.Click([this](auto &&, auto &&) { AddRasterFolder(); });
-            stack.Children().Append(add_raster_dir);
 
 
             Controls::TextBlock add_foot;
