@@ -75,7 +75,10 @@ namespace winrt::LookoutMarine::implementation
             lk_store_free_recents(recents);
             if (paths.empty())
             {
-                EmptyState().Visibility(Visibility::Visible);
+                // Nothing configured to open. Setup is where an empty chart
+                // area goes, on this launch and every later one that finds it
+                // empty (T-005), with the basemap drawing behind it.
+                OpenBasemapForSetup();
                 return;
             }
             // Name the set by who made the charts ("NOAA"), not by where the
@@ -167,7 +170,14 @@ namespace winrt::LookoutMarine::implementation
                     AddChartLink(spec);
             }
             RefreshPluginTables();  // the Vessels menu follows the declarations
-            EmptyState().Visibility(Visibility::Collapsed);
+            // A chart opened. Setup is still up when this is the handover at
+            // the end of its own download, and down otherwise. The chart
+            // controls follow it either way: hiding them for setup and not
+            // restoring them here left the mariner with a drawn chart and no
+            // search, menu, zoom, gear or readout.
+            FirstRunPane().Visibility(first_run.showing() ? Visibility::Visible
+                                                          : Visibility::Collapsed);
+            FirstRunChartChrome(!first_run.showing());
             SetLoaderTessellating(); // the loader stands until the first build
             warmup_frames.store(30);
             StartRenderThread();
@@ -184,10 +194,55 @@ namespace winrt::LookoutMarine::implementation
         else
         {
             HideStartupLoader();
-            EmptyState().Visibility(Visibility::Visible);
+            // The open failed or found nothing. Same page as a fresh install:
+            // the source step is where a mariner re-points at their charts.
+            OpenBasemapForSetup();
             // Nothing to read out, so nothing to poll for.
             readout_timer.Stop();
         }
+    }
+
+    // No chart to draw, for any reason: a fresh install, or an open that
+    // returned nothing. Open the engine with no cells so the basemap draws
+    // from the first frame, then put setup over it.
+    //
+    // Without this the mariner meets a flat empty window behind the welcome
+    // card and reads the app as broken. The other shells warn about opening
+    // at a chart-scale zoom over empty water. Opening nothing at all puts
+    // even less on screen.
+    //
+    // An open with n 0 is supported. Apple uses the same path when its list
+    // is empty (ChartController.swift), and the core draws its own basemap
+    // on the handle it hands back.
+    void MainWindow::OpenBasemapForSetup()
+    {
+        bool const opened = OpenChart({});
+        if (!opened)
+        {
+            // The basemap failed to open, so setup stands over an empty view.
+            // The mariner can still answer every question, and the difference
+            // is a chart under the card, so log it.
+            fprintf(stderr, "shell: basemap-only open failed; setup stands over an empty view\n");
+        }
+        if (opened)
+        {
+            // The fetcher, before setup can need it: the coverage step prices
+            // regions from NOAA s catalog and the online step resolves a style,
+            // and both go through this door.
+            ChartLinksAttach();
+            lk_controller_noaa_refresh(controller);
+            StartRenderThread();
+        }
+        // Either way the loader comes down: there is no chart coming, and a
+        // spinner over the welcome card says one is.
+        HideStartupLoader();
+        readout_timer.Stop(); // nothing to read out
+        // The screenshot hooks apply here as well as after a chart opens.
+        // $LOOKOUT_WINDOW is what makes a capture the same size on any
+        // machine, and setup is a page that needs capturing. It is the page a
+        // mariner with no charts sees.
+        ApplyDevHooks();
+        FirstRunBegin();
     }
 
     // The core makes its own D3D12 device and composition swapchain; the shell

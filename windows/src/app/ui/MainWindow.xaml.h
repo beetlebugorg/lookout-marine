@@ -3,6 +3,8 @@
 
 #include "lk_alerts.h"
 #include "lk_bake.h"
+#include "lk_coastline.h"
+#include "lk_firstrun.h"
 #include "lk_controller.h"
 #include "lk_pick.h"
 #include "lk_discovery.h"
@@ -270,6 +272,11 @@ namespace winrt::LookoutMarine::implementation
             bool scanned{ false };
             size_t charts{ 0 };
             size_t pictures{ 0 };
+            // How many prepared charts this set holds in each usage band,
+            // keyed 1 to 6. A set that stops at Coastal does not draw the
+            // harbour a passage ends in, so the row says which scales are in
+            // it.
+            std::map<int, size_t> bands;
             std::string title; // the agency whose charts these are, else the folder
         };
         lookout_chart_sets *ChartSetsModel();
@@ -300,6 +307,24 @@ namespace winrt::LookoutMarine::implementation
             std::string name;
         };
         void SelectChartLink(std::string const &url); // "" = the built-in chart
+        // Which chart draws now, as a url. Empty is Lookout's own.
+        std::string ActiveChartUrl();
+        // Draw the chart the mariner picked from the shelf. A frame goes out
+        // between the pick and the call, so a tile is marked as being read
+        // before the core takes the thread to read the style.
+        void PickChartTile(std::string const &url);
+        // The Active chart shelf: one tile per chart, the menu on a tile the
+        // mariner added, and the tile that adds one (settings/ui/Settings.cpp).
+        Microsoft::UI::Xaml::Controls::Button ChartTile(std::string const &url,
+                                                        std::wstring const &name,
+                                                        std::wstring const &detail,
+                                                        wchar_t const *art, bool active,
+                                                        bool mine);
+        Microsoft::UI::Xaml::Controls::Button ChartTileMenu(std::string const &url,
+                                                            std::wstring const &name);
+        Microsoft::UI::Xaml::Controls::Button AddChartTile();
+        fire_and_forget ShowAddChartDialog();
+        fire_and_forget PickChartStyleFile();
         void AddChartLink(std::string const &raw);
         void RefreshChartLink(std::string const &url);
         void RemoveChartLink(std::string const &url);
@@ -308,6 +333,77 @@ namespace winrt::LookoutMarine::implementation
         void MigrateChartLinks(); // the old store, handed over once
         void PollChartLinks();    // the snapshot; UI thread, one consumer
         void ChartLinkRespond(uint64_t id, void const *bytes, size_t len, int status);
+        // ---- setup (firstrun/) ------------------------------------------
+        //
+        // The MODEL decides; this half only draws it. See firstrun/lk_firstrun.h.
+        void FirstRunAttach(); // wire the pane's three buttons, once
+        void FirstRunBegin();  // no chart to draw: put setup up
+        // Get charts from NOAA, from the Charts pane: the coverage step alone.
+        void ShowNoaaPicker();
+        // Open the engine with NO cells so the basemap draws, then begin
+        // setup over it. Both of the ways to arrive with nothing to draw.
+        void OpenBasemapForSetup();
+        void FirstRunRender(); // build the step on screen from the model
+        // The chart controls, hidden while setup covers the chart.
+        void FirstRunChartChrome(bool shown);
+        // The fade and the scrollbar, while a step runs past the card.
+        void FirstRunUpdateFold();
+        void FirstRunPrimary();
+        // The welcome step centers a column; every later step uses a row.
+        void FirstRunFooterShape(bool welcome);
+        // What to DO once the flow has finished asking: start the NOAA
+        // download, add the chart link, or raise the folder picker.
+        void FirstRunAct(lkw::ChartSource source);
+        fire_and_forget FirstRunShowEncTerms();
+        // The two services, read on a timer and handed to the model, which
+        // decides what survives their resetting.
+        // Hand the core the cells this device holds, so a cost and a download
+        // leave them out.
+        void FirstRunNoaaHave();
+        void FirstRunPollStart();
+        void FirstRunPoll();
+
+        // The welcome picture, outside the step inset so it meets the edges.
+        void FirstRunHero(Microsoft::UI::Xaml::Controls::StackPanel const &body);
+        void FirstRunWelcome(Microsoft::UI::Xaml::Controls::StackPanel const &body);
+        void FirstRunSource(Microsoft::UI::Xaml::Controls::StackPanel const &body);
+        // The coverage map, above the region list on the coverage step.
+        void FirstRunCoverageMap(Microsoft::UI::Xaml::Controls::StackPanel const &body);
+        void FirstRunCoverage(Microsoft::UI::Xaml::Controls::StackPanel const &body);
+        void FirstRunOnline(Microsoft::UI::Xaml::Controls::StackPanel const &body);
+        void FirstRunImporting(Microsoft::UI::Xaml::Controls::StackPanel const &body);
+        void FirstRunDepths(Microsoft::UI::Xaml::Controls::StackPanel const &body);
+        void FirstRunPhase(Microsoft::UI::Xaml::Controls::StackPanel const &body,
+                           std::wstring const &name, std::wstring const &detail,
+                           bool running, bool done);
+
+        lkw::FirstRun first_run;
+        Microsoft::UI::Xaml::DispatcherTimer first_run_timer{ nullptr };
+        // The region the coverage step has picked, as the core's id ("d17").
+        std::string noaa_region_id;
+        // What the online step has been given, so the button can read Skip
+        // until there is something to continue with.
+        std::string chart_link_url;
+        // Where the district zips go. Beside the library rather than in it:
+        // they are the source a bake reads, and the vector open globs the
+        // library for .pmtiles.
+        std::string noaa_dest_dir;
+        // The usage band of every chart the scan found, which with the bake's
+        // own count gives the by-band breakdown. See lkw::FirstRunBands.
+        std::vector<int> noaa_scan_bands;
+        // GSHHG rings for the coverage map, read once and kept: a step
+        // rebuild redraws the map and the file is a quarter of a megabyte.
+        std::vector<lkw::CoastRing> coastline_;
+        // The baked library has been opened and adopted, once per run.
+        bool noaa_handed_over{ false };
+        bool first_run_footer_welcome{ false };
+        bool first_run_footer_shaped{ false };
+
+
+        // One piece of an answer. `done` marks the last; a large body never
+        // exists whole on this side. See lk_controller_http_respond_chunk.
+        void ChartLinkRespondChunk(uint64_t id, void const *bytes, size_t len,
+                                   int status, int done);
         static void HttpGetThunk(void *user, unsigned long long req_id,
                                  const char *url, int allow_file);
         static void HttpCancelThunk(void *user, unsigned long long req_id);
@@ -317,6 +413,16 @@ namespace winrt::LookoutMarine::implementation
         std::string chart_link_error;
         bool chart_link_busy{ false };
         bool chart_links_imported{ false };
+        // The chart the mariner just picked, while the core has yet to be
+        // told. Reading a publisher's style is the core's work and it runs
+        // inside a frame, so the tile says what is happening before that
+        // starts.
+        std::string chart_link_pending;
+        bool chart_link_picking{ false };
+        // Where the mariner had the shelf scrolled. The links poll several
+        // times a second while a style resolves, and every report rebuilds
+        // the page, which sent the row back home.
+        double chart_shelf_offset{ 0 };
         // Answers are given under this lock, so a closing handle is never
         // answered into.
         std::mutex link_mu;

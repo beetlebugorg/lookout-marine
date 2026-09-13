@@ -116,6 +116,14 @@ void lk_controller_set_http_provider(lk_controller *self, lk_http_get get,
  * carries a body the core reads. Lock-free. */
 void lk_controller_http_respond(lk_controller *self, unsigned long long req_id,
                                 const void *bytes, size_t len, int status);
+/* The same answer delivered a piece at a time, for a body too big to hold: a
+ * NOAA district is one zip of a couple of hundred megabytes. Deliver the
+ * pieces of one req_id in order on one thread and set `done` on the last;
+ * `status` is that same final status on every piece. A piece with len 0 and
+ * `done` clear is ignored, so a short read needs no special case. Lock-free,
+ * same as above. */
+void lk_controller_http_respond_chunk(lk_controller *self, unsigned long long req_id,
+                                      const void *bytes, size_t len, int status, int done);
 
 /* The chart-link management surface, straight through to lookout. */
 void lk_controller_chart_link_add(lk_controller *self, const char *link);
@@ -127,6 +135,31 @@ void lk_controller_chart_links_import(lk_controller *self, const char *json);
  * poll. Free with lookout_links_free. ONE consumer: whoever polls it clears
  * the flag. */
 lookout_links *lk_controller_chart_links_changed_read(lk_controller *self);
+
+/* ---- NOAA charts ---------------------------------------------------------
+ *
+ * Straight through to lookout, which owns the catalog, decides which cells a
+ * region needs and drives the same fetcher the chart links use. See
+ * lookout-library.h. Everything here is a no-op, or 0, on a closed handle.
+ *
+ * The region table is static for the life of the process and does NOT need an
+ * open handle, so a first-run picker can list the regions before any chart
+ * exists. Coverage, cost and download all read the catalog and do. */
+size_t lk_controller_noaa_regions(const lookout_noaa_region **out);
+size_t lk_controller_noaa_region_coverage(lk_controller *self, const char *region_id,
+                                          lookout_noaa_box *out, size_t cap);
+void   lk_controller_noaa_refresh(lk_controller *self);
+void   lk_controller_noaa_poll(lk_controller *self, lookout_noaa_state *out);
+/* The cells already on this device, so a cost and a download leave them out. */
+void   lk_controller_noaa_have(lk_controller *self, const char *const *names, size_t n);
+/* What picking these regions costs. `region_ids` is comma separated ("d5,d8").
+ * Any out may be NULL. 0 when no catalog is loaded. */
+int    lk_controller_noaa_cost(lk_controller *self, const char *region_ids,
+                               uint32_t *out_cells, uint64_t *out_bytes,
+                               uint32_t *out_held, uint64_t *out_held_bytes);
+void   lk_controller_noaa_download(lk_controller *self, const char *region_ids,
+                                   const char *dest_dir, int again);
+void   lk_controller_noaa_cancel(lk_controller *self);
 
 /* ---- markers (the mariner's own marks; the core owns and draws them) ----- */
 

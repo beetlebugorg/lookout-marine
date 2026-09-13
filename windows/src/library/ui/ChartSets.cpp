@@ -64,7 +64,11 @@ namespace winrt::LookoutMarine::implementation
                     {
                     case LOOKOUT_FILE_RASTER:
                     case LOOKOUT_FILE_RASTER_SOURCE: row.pictures++; break;
-                    case LOOKOUT_FILE_BAKED:         row.charts++; break;
+                    case LOOKOUT_FILE_BAKED:
+                        row.charts++;
+                        if (found[f]->band >= 1 && found[f]->band <= 6)
+                            ++row.bands[found[f]->band];
+                        break;
                     default:                         break;
                     }
                 }
@@ -129,8 +133,17 @@ namespace winrt::LookoutMarine::implementation
         if (path.empty() || !std::filesystem::is_directory(path, ec))
             return;
         lookout_chart_sets *model = ChartSetsModel();
-        if (model == nullptr || !lookout_chart_sets_add(model, path.c_str()))
+        if (model == nullptr)
             return;
+        // add() scans a path new to the list and returns 0 for one already on
+        // it. A path already on the list needs a rescan instead: a bake writes
+        // into prepared_root after the last scan, and the row keeps its
+        // pre-bake counts until the folder is read again. Returning early on
+        // that 0 left a set reading 0 charts with the charts on disk, and
+        // nothing else asks for a scan (lookout_chart_sets_rescan,
+        // lookout-library.h:386).
+        if (!lookout_chart_sets_add(model, path.c_str()))
+            lookout_chart_sets_rescan(model, path.c_str());
         LoadChartSets([this] {
             if (SettingsOpen())
                 BuildSettingsPage();

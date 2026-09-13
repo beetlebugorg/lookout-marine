@@ -201,7 +201,7 @@ namespace winrt::LookoutMarine::implementation
 
     void MainWindow::WireChrome()
     {
-        EmptyOpenBtn().Click([this](auto &&, auto &&) { PickChartFolder(); });
+        FirstRunAttach();
         ZoomInBtn().Click([this](auto &&, auto &&) { Command('+'); });
         ZoomOutBtn().Click([this](auto &&, auto &&) { Command('-'); });
         // The north bubble is the follow lock; Ctrl+U stays the plain
