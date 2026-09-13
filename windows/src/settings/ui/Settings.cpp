@@ -4,6 +4,7 @@
 #include "MainWindow.xaml.h"
 
 #include <microsoft.ui.xaml.window.h> // IWindowNative, for the window's icon
+#include <winrt/Microsoft.UI.Xaml.Documents.h> // the band legend's wrapping run
 
 #include <algorithm>
 #include <cmath>
@@ -116,6 +117,135 @@ namespace
     constexpr double kAddTileWidth = 176;
     constexpr double kTileGap = 10;
 
+    /* The S-52 depth ramp, deep to shallow, read as fine to coarse. Band 6 is
+     * berthing detail and band 1 is an overview. */
+    winrt::Windows::UI::Color BandColor(int band)
+    {
+        switch (band)
+        {
+        case 6: return Hex(0x2F8FE0);
+        case 5: return Hex(0x61B7FF);
+        case 4: return Hex(0x82CAFF);
+        case 3: return Hex(0xA7D9FB);
+        case 2: return Hex(0xC9EDFF);
+        default: return Hex(0xE4F5FF);
+        }
+    }
+
+    /* A url with its middle taken out. A style link holds the publisher, the
+     * style and often a key, and an end ellipsis removes the style first.
+     * WinUI trims at the end only, so the text is elided here by character
+     * count against the width a tile gives it. */
+    std::wstring ElideMiddle(std::wstring const &text, size_t budget)
+    {
+        if (text.size() <= budget || budget < 8)
+            return text;
+        size_t tail = (budget - 1) / 2;
+        size_t head = budget - 1 - tail;
+        return text.substr(0, head) + L"…" + text.substr(text.size() - tail);
+    }
+
+    /* What scales a chart set holds.
+     *
+     * One bar in the S-52 depth ramp, split by usage band, finest first. A set
+     * that stops at Coastal does not draw the harbour a passage ends in, and
+     * the width of each band says how much of the set is at that scale.
+     *
+     * `bands` is keyed 1 to 6, coarse to fine, as the scan counted them. */
+    Controls::StackPanel BandRamp(std::map<int, size_t> const &bands, bool dark)
+    {
+        auto edge = [dark](double alpha) {
+            return Media::SolidColorBrush{ lkw::WithAlpha(
+                lkw::Rgb(dark ? 0xFFFFFFFFu : 0xFF000000u), alpha) };
+        };
+        std::vector<std::pair<int, size_t>> fine(bands.rbegin(), bands.rend());
+
+        Controls::Grid bar;
+        for (size_t i = 0; i < fine.size(); ++i)
+        {
+            Controls::ColumnDefinition c;
+            c.Width({ (double)fine[i].second, GridUnitType::Star });
+            // The narrowest a band draws. A library of 7,000 cells holds two
+            // dozen overviews, and a band the legend counts has to be on the
+            // bar.
+            c.MinWidth(4);
+            bar.ColumnDefinitions().Append(c);
+
+            Controls::Border seg;
+            seg.Background(Media::SolidColorBrush{ BandColor(fine[i].first) });
+            // A hairline between the segments. Four of the six bands are the
+            // pale end of the ramp, and side by side in a 9 point bar they
+            // read as one stripe.
+            if (i + 1 < fine.size())
+                seg.Margin({ 0, 0, 1, 0 });
+            Controls::Grid::SetColumn(seg, (int)i);
+            bar.Children().Append(seg);
+        }
+
+        Controls::Border capsule;
+        capsule.Height(9);
+        capsule.CornerRadius({ 4.5, 4.5, 4.5, 4.5 });
+        capsule.BorderThickness({ 1, 1, 1, 1 });
+        capsule.BorderBrush(edge(0.5));
+        capsule.Background(edge(0.55));
+        capsule.Child(bar);
+
+        // The legend wraps rather than scrolls: six bands fit two lines at any
+        // width this pane reaches. A rich block is what wraps a run of text
+        // with a swatch in it.
+        Controls::RichTextBlock legend;
+        legend.FontSize(11);
+        legend.TextWrapping(TextWrapping::Wrap);
+        Documents::Paragraph para;
+        for (auto const &[band, n] : fine)
+        {
+            Controls::Border swatch;
+            swatch.Width(8);
+            swatch.Height(8);
+            swatch.CornerRadius({ 2, 2, 2, 2 });
+            swatch.Background(Media::SolidColorBrush{ BandColor(band) });
+            swatch.BorderThickness({ 1, 1, 1, 1 });
+            swatch.BorderBrush(edge(0.5));
+            swatch.Margin({ 0, 0, 5, 0 });
+            Documents::InlineUIContainer box;
+            box.Child(swatch);
+            para.Inlines().Append(box);
+
+            Documents::Run name;
+            name.Text(winrt::hstring{ lkw::FirstRunBandName(band) + L" " });
+            name.Foreground(lkw::Brush(lkw::chrome::Muted(dark)));
+            para.Inlines().Append(name);
+            Documents::Run count;
+            count.Text(winrt::hstring{ lkw::Thousands(n) + L"     " });
+            para.Inlines().Append(count);
+        }
+        legend.Blocks().Append(para);
+
+        Controls::StackPanel column;
+        column.Spacing(8);
+        column.Children().Append(capsule);
+        column.Children().Append(legend);
+        return column;
+    }
+
+    /* The panel a section's rows sit in. The pane is a list of cards, the way
+     * the reference's form is. */
+    Controls::Border Card(bool dark)
+    {
+        Controls::Border b;
+        b.CornerRadius({ 10, 10, 10, 10 });
+        b.BorderThickness({ 1, 1, 1, 1 });
+        b.BorderBrush(Media::SolidColorBrush{
+            dark ? winrt::Windows::UI::Color{ 0x33, 0xFF, 0xFF, 0xFF }
+                 : winrt::Windows::UI::Color{ 0x33, 0x00, 0x00, 0x00 } });
+        b.Background(Media::SolidColorBrush{
+            dark ? winrt::Windows::UI::Color{ 0x14, 0xFF, 0xFF, 0xFF }
+                 : winrt::Windows::UI::Color{ 0x0A, 0x00, 0x00, 0x00 } });
+        b.Padding({ 12, 10, 12, 12 });
+        b.Margin({ 0, 4, 0, 0 });
+        return b;
+    }
+
     // The first-run pictures, beside the exe. The chart shelf draws the same
     // files the welcome step does.
     Media::Imaging::BitmapImage ChartArt(wchar_t const *name)
@@ -158,12 +288,18 @@ namespace winrt::LookoutMarine::implementation
 
     // Draw the chart the mariner picked.
     //
+    // lookout_chart_link_select draws one of the charts the core CARRIES, so
+    // it does nothing for a style the app ships until that style is on the
+    // list. A tile that is not on the list is added instead, which resolves
+    // the style and selects it (lookout-library.h:674). `mine` is what tells
+    // them apart; Lookout's own chart is always a select.
+    //
     // The pick is marked and the page rebuilt first, so the tile reads as
-    // being read while the core holds the thread: a 389 layer style with a
-    // large sprite pack takes over a second to resolve, and the click looked
-    // like it had done nothing. The call goes out at low priority, which runs
-    // after the layout the rebuild queued.
-    void MainWindow::PickChartTile(std::string const &url)
+    // being read while the core holds the thread: resolving a style with its
+    // sprite packs runs inside a frame, and the click looked like it had done
+    // nothing. The call goes out at low priority, which runs after the layout
+    // the rebuild queued.
+    void MainWindow::PickChartTile(std::string const &url, bool mine)
     {
         if (chart_link_picking)
             return;
@@ -171,10 +307,14 @@ namespace winrt::LookoutMarine::implementation
         chart_link_picking = true;
         BuildSettingsPage();
         DispatcherQueue().TryEnqueue(
-            winrt::Microsoft::UI::Dispatching::DispatcherQueuePriority::Low, [this, url] {
+            winrt::Microsoft::UI::Dispatching::DispatcherQueuePriority::Low,
+            [this, url, mine] {
                 chart_link_picking = false;
                 chart_link_pending.clear();
-                SelectChartLink(url);
+                if (url.empty() || mine)
+                    SelectChartLink(url);
+                else
+                    AddChartLink(url);
             });
     }
 
@@ -284,12 +424,12 @@ namespace winrt::LookoutMarine::implementation
         title.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
         title.TextTrimming(TextTrimming::CharacterEllipsis);
         Controls::TextBlock where;
-        where.Text(detail);
+        // Elided in the middle, which keeps the publisher and the style file
+        // and drops the path between them. 42 characters is what 11 point
+        // text fits across a tile.
+        where.Text(winrt::hstring{ ElideMiddle(detail, 42) });
         where.FontSize(11);
         where.Foreground(lkw::Brush(lkw::chrome::Muted(dark)));
-        // A style link holds the publisher, the style and often a key, and
-        // those are the parts this trim removes first. WinUI trims at the end
-        // only, where the reference shells trim in the middle.
         where.TextTrimming(TextTrimming::CharacterEllipsis);
 
         Controls::StackPanel words;
@@ -318,7 +458,7 @@ namespace winrt::LookoutMarine::implementation
         if (!url.empty())
             Controls::ToolTipService::SetToolTip(b, winrt::box_value(winrt::to_hstring(url)));
         Automation::AutomationProperties::SetName(b, name);
-        b.Click([this, url](auto &&, auto &&) { PickChartTile(url); });
+        b.Click([this, url, mine](auto &&, auto &&) { PickChartTile(url, mine); });
         return b;
     }
 
@@ -1081,8 +1221,13 @@ namespace winrt::LookoutMarine::implementation
             // A row of tiles rather than a list, so two styles with similar
             // names are told apart by looking: Lookout's own first, then the
             // styles the app ships, then whatever the mariner linked, and the
-            // way to add one last. The pictures are the files the welcome step
-            // reads, under data\firstrun beside the exe.
+            // way to add one last.
+            //
+            // Only Lookout's own chart has a picture, welcome-chart.png from
+            // data\firstrun beside the exe. A publisher's portrayal needs the
+            // style resolved and its tiles fetched before there is anything to
+            // picture, and the engine draws one chart at a time, so a linked
+            // tile draws its kind instead.
             header(L"Active chart");
             {
                 struct Tile
@@ -1098,13 +1243,12 @@ namespace winrt::LookoutMarine::implementation
                 {
                     char const *url;
                     wchar_t const *name;
-                    wchar_t const *art;
                 };
                 static constexpr Shipped kShipped[] = {
                     { "https://tiles.openwaters.io/seascape/style.json",
-                      L"Open Waters Seascape", L"seascape-preview.png" },
+                      L"Open Waters Seascape" },
                     { "https://tiles.openwaters.io/seamap/style.json",
-                      L"Open Waters Seamap", L"seamap-preview.png" },
+                      L"Open Waters Seamap" },
                 };
                 auto on_my_list = [this](std::string const &url) -> ChartLink const * {
                     for (auto const &l : chart_links)
@@ -1152,7 +1296,7 @@ namespace winrt::LookoutMarine::implementation
                                             ? std::wstring{ winrt::to_hstring(mine->name) }
                                             : std::wstring{ e.name };
                     auto [detail, active] = line(e.url, std::wstring{ winrt::to_hstring(e.url) });
-                    tiles.push_back({ e.url, name, detail, e.art, active, mine != nullptr });
+                    tiles.push_back({ e.url, name, detail, nullptr, active, mine != nullptr });
                 }
 
                 // Then the links the mariner added themselves.
@@ -1197,7 +1341,10 @@ namespace winrt::LookoutMarine::implementation
                         s.template as<Controls::ScrollViewer>().ChangeView(
                             chart_shelf_offset, nullptr, nullptr, true);
                 });
-                stack.Children().Append(shelf_scroll);
+                auto shelf_card = Card(DarkChrome());
+                shelf_card.Padding({ 12, 12, 12, 12 });
+                shelf_card.Child(shelf_scroll);
+                stack.Children().Append(shelf_card);
             }
 
             if (!chart_link_error.empty())
@@ -1307,6 +1454,17 @@ namespace winrt::LookoutMarine::implementation
                     if (set.pictures != 0)
                         sum += (sum.empty() ? "" : " \xC2\xB7 ") + std::to_string(set.pictures) +
                                (set.pictures == 1 ? " picture" : " pictures");
+                    // How far down the scales it goes, coarse to fine. The
+                    // counts are on the ramp under the row.
+                    if (!set.bands.empty())
+                    {
+                        int lo = set.bands.begin()->first;
+                        int hi = set.bands.rbegin()->first;
+                        std::string span = winrt::to_string(lkw::FirstRunBandName(lo));
+                        if (hi != lo)
+                            span += " to " + winrt::to_string(lkw::FirstRunBandName(hi));
+                        sum += (sum.empty() ? "" : " \xC2\xB7 ") + span;
+                    }
                     // A row is listed before the scan has read its folder, and
                     // a folder still being read has not failed to answer.
                     if (sum.empty() && set.scanned)
@@ -1314,20 +1472,6 @@ namespace winrt::LookoutMarine::implementation
                     else if (set.bytes != 0)
                         sum += (sum.empty() ? "" : " \xC2\xB7 ") +
                                winrt::to_string(lkw::SizeText(set.bytes));
-                    // What scales it holds, coarse first. A set that stops at
-                    // Coastal does not draw the harbour a passage ends in.
-                    if (!set.bands.empty())
-                    {
-                        std::string ramp;
-                        for (auto const &[band, n] : set.bands)
-                        {
-                            if (!ramp.empty())
-                                ramp += "  \xC2\xB7  ";
-                            ramp += winrt::to_string(lkw::FirstRunBandName(band)) + " " +
-                                    std::to_string(n);
-                        }
-                        sum += (sum.empty() ? "" : "\n") + ramp;
-                    }
                     ssum.Text(winrt::to_hstring(sum));
                     ssum.TextWrapping(TextWrapping::Wrap);
                     ssum.FontSize(11);
@@ -1362,7 +1506,25 @@ namespace winrt::LookoutMarine::implementation
                     srm.Click([this, spath](auto &&, auto &&) { RemoveChartSet(spath); });
                     Controls::Grid::SetColumn(srm, 3);
                     srow.Children().Append(srm);
-                    stack.Children().Append(srow);
+
+                    // The row, then what scales the set holds. The ramp reads
+                    // from the whole width of the card, so it goes under the
+                    // switch rather than beside it.
+                    Controls::StackPanel body;
+                    body.Spacing(10);
+                    body.Children().Append(srow);
+                    if (!set.bands.empty())
+                    {
+                        auto ramp = BandRamp(set.bands, DarkChrome());
+                        // Indented past the switch, so the bar starts under
+                        // what it describes.
+                        ramp.Margin({ 30, 0, 0, 0 });
+                        ramp.Opacity(set.on ? 1.0 : 0.5);
+                        body.Children().Append(ramp);
+                    }
+                    auto card = Card(DarkChrome());
+                    card.Child(body);
+                    stack.Children().Append(card);
                 }
             }
 
@@ -1650,34 +1812,6 @@ namespace winrt::LookoutMarine::implementation
                 bake_pane_eta.Text(winrt::to_hstring(p.Remaining()));
             }
 
-
-            // ---- Recent -------------------------------------------------------
-            //
-            // Not in the reference, which has no recents list. It predates this
-            // ordering, and reopening a chart by name earns its place, so it sits
-            // between what the library holds and where to get more.
-            header(L"Recent");
-            char **recents = lk_store_load_recents();
-            for (int i = 0; recents != nullptr && recents[i] != nullptr; ++i)
-            {
-                std::string path = recents[i];
-                std::string name = std::filesystem::path(path).filename().string();
-                // Same naming as the Open Recent menu: the library's entry is
-                // the office whose charts are open, never "Charts".
-                if (path == lkw::ChartLibraryDir())
-                    name = (!open_chart_label.empty() &&
-                            open_chart_label.find_first_of("\\/") == std::string::npos)
-                               ? open_chart_label
-                               : "Chart Library";
-                Controls::Button b;
-                b.Content(winrt::box_value(winrt::to_hstring(name.empty() ? path : name)));
-                b.HorizontalAlignment(HorizontalAlignment::Stretch);
-                b.Click([this, path](auto &&, auto &&) { OpenPaths(lkw::CellsFor(path), path); });
-                stack.Children().Append(b);
-            }
-            lk_store_free_recents(recents);
-
-
             // ---- Add charts, last ---------------------------------------------
             // Where to get more, last: a mariner reads what they have before
             // reading how to get more. One row per way in, each saying what it
@@ -1788,7 +1922,6 @@ namespace winrt::LookoutMarine::implementation
                 noaa.Click([this](auto &&, auto &&) {
                     DispatcherQueue().TryEnqueue([this] { ShowNoaaPicker(); });
                 });
-                stack.Children().Append(noaa);
 
                 // ONE ROW FOR EVERYTHING ON THE DISK. A folder of cells, the
                 // .zip an agency publishes, a chart already prepared and a
@@ -1818,7 +1951,19 @@ namespace winrt::LookoutMarine::implementation
                 disk.Padding({ 0, 6, 0, 6 });
                 disk.IsEnabled(!working);
                 disk.Flyout(ways);
-                stack.Children().Append(disk);
+
+                // Both rows in one card, with a hairline between them.
+                Controls::Border divider;
+                divider.Height(1);
+                divider.Background(lkw::Brush(lkw::chrome::Rule(dark)));
+                divider.Margin({ 0, 2, 0, 2 });
+                Controls::StackPanel rows;
+                rows.Children().Append(noaa);
+                rows.Children().Append(divider);
+                rows.Children().Append(disk);
+                auto card = Card(dark);
+                card.Child(rows);
+                stack.Children().Append(card);
             }
 
 

@@ -316,7 +316,7 @@ namespace winrt::LookoutMarine::implementation
         // Draw the chart the mariner picked from the shelf. A frame goes out
         // between the pick and the call, so a tile is marked as being read
         // before the core takes the thread to read the style.
-        void PickChartTile(std::string const &url);
+        void PickChartTile(std::string const &url, bool mine);
         // The Active chart shelf: one tile per chart, the menu on a tile the
         // mariner added, and the tile that adds one (settings/ui/Settings.cpp).
         Microsoft::UI::Xaml::Controls::Button ChartTile(std::string const &url,
