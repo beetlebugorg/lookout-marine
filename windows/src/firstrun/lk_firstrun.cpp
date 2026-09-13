@@ -37,6 +37,24 @@ namespace lkw
         return buf;
     }
 
+    std::wstring PrepareEstimate(size_t charts)
+    {
+        double seconds = (double)(charts < 1 ? 1 : charts) * 0.2;
+        if (seconds < 60)
+            return L"under a minute";
+        wchar_t buf[64];
+        if (seconds < 3600)
+        {
+            int minutes = (int)(seconds / 60.0 + 0.5);
+            if (minutes <= 1)
+                return L"about a minute";
+            std::swprintf(buf, 64, L"about %d minutes", minutes);
+            return buf;
+        }
+        std::swprintf(buf, 64, L"about %.1f hours", seconds / 3600.0);
+        return buf;
+    }
+
     std::wstring Thousands(uint64_t n)
     {
         std::wstring s = std::to_wstring(n);

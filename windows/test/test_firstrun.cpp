@@ -433,5 +433,26 @@ void TestFirstRun()
 
         Case("a library of millions of charts still groups");
         LK_EQ(Thousands(2'631'004), std::wstring(L"2,631,004"));
+
+        /* What the question before a delete says the work is worth. A fifth
+         * of a second a chart. */
+        Case("a handful of charts is under a minute");
+        LK_EQ(PrepareEstimate(4), std::wstring(L"under a minute"));
+        LK_EQ(PrepareEstimate(299), std::wstring(L"under a minute"));
+
+        /* One minute reads as one minute. The reference says "about 1
+         * minutes" here, which is the one place this departs from it. */
+        Case("a region is minutes");
+        LK_EQ(PrepareEstimate(300), std::wstring(L"about a minute"));
+        LK_EQ(PrepareEstimate(937), std::wstring(L"about 3 minutes"));
+
+        Case("a whole coast is hours");
+        LK_EQ(PrepareEstimate(2631), std::wstring(L"about 9 minutes"));
+        LK_EQ(PrepareEstimate(72'000), std::wstring(L"about 4.0 hours"));
+
+        /* An empty set still costs the one chart's worth, because a set with
+         * nothing in it is not what this question is for. */
+        Case("no charts still reads as work");
+        LK_EQ(PrepareEstimate(0), std::wstring(L"under a minute"));
     }
 }

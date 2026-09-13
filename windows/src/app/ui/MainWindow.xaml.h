@@ -134,6 +134,8 @@ namespace winrt::LookoutMarine::implementation
                        std::string const &label = {});
         void DoOpenPaths(std::vector<std::string> const &paths, std::string const &recent,
                          std::string const &label = {});
+        /* Everything that belongs to the handle about to be destroyed. */
+        void CloseChartHandle();
         // startup loader (hud/ui/Loader.cpp)
         void ShowStartupLoader(size_t cells);
         void SetLoaderTessellating();
@@ -293,6 +295,20 @@ namespace winrt::LookoutMarine::implementation
         void AdoptChartSet(std::string const &path);
         void SetChartSetOn(std::string const &path, bool on);
         void RemoveChartSet(std::string const &path);
+        /* Whether Lookout made the charts in this set, which decides whether
+         * removing it deletes them and asks first. */
+        bool ChartSetIsDerived(std::string const &path);
+        /* Ask, then remove and delete. The mariner is throwing away work, so
+         * the question says how much of it. */
+        fire_and_forget ConfirmRemoveChartSet(std::string path, std::string name, size_t charts);
+        /* Delete the charts Lookout prepared for one set. Refuses any path it
+         * did not make. Call it with the chart CLOSED: the handle holds the
+         * files open, and Windows refuses to rename a directory under one. */
+        void DeletePreparedCharts(std::string const &path);
+        int remove_seq{ 0 };
+        /* Open what the switched-on sets compose, or take the chart off the
+         * display when nothing is installed. */
+        void ReopenChartSets(std::string const &recent);
         std::vector<ChartSetRow> chart_sets;
         lookout_chart_sets *chart_sets_model{ nullptr };
 

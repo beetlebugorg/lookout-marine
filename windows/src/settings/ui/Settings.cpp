@@ -1549,9 +1549,24 @@ namespace winrt::LookoutMarine::implementation
                     srm.Padding({ 4, 2, 4, 2 });
                     srm.Background(Media::SolidColorBrush{ winrt::Windows::UI::Color{ 0, 0, 0, 0 } });
                     srm.BorderThickness({ 0, 0, 0, 0 });
-                    Automation::AutomationProperties::SetName(srm,
-                        L"Take this set off the list. The folder itself is not touched.");
-                    srm.Click([this, spath](auto &&, auto &&) { RemoveChartSet(spath); });
+                    // A set Lookout prepared is work to do again, so removing
+                    // it asks first and says how much. A folder of the
+                    // mariner's own files is a list entry, so it goes without
+                    // a question.
+                    bool derived = ChartSetIsDerived(set.path);
+                    Automation::AutomationProperties::SetName(
+                        srm, derived ? L"Remove. The charts this app prepared are deleted; your "
+                                       L"own cells stay where they are."
+                                     : L"Take these charts out of the list. Your files stay "
+                                       L"where they are.");
+                    std::string sname_str = set.title;
+                    size_t scharts = set.charts + set.pictures;
+                    srm.Click([this, spath, sname_str, scharts, derived](auto &&, auto &&) {
+                        if (derived)
+                            ConfirmRemoveChartSet(spath, sname_str, scharts);
+                        else
+                            RemoveChartSet(spath);
+                    });
                     Controls::Grid::SetColumn(srm, 3);
                     srow.Children().Append(srm);
 

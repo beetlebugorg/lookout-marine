@@ -117,16 +117,8 @@ namespace winrt::LookoutMarine::implementation
         defer->Start();
     }
 
-    void MainWindow::DoOpenPaths(std::vector<std::string> const &paths, std::string const &recent,
-                                 std::string const &label)
+    void MainWindow::CloseChartHandle()
     {
-        if (!recent.empty())
-            lk_store_note_recent(recent.c_str());
-        // What Settings ▸ Charts names as open: the office whose charts these
-        // are when the caller worked that out ("NOAA"), else the folder or
-        // file the user chose, else the first cell (a startup open).
-        open_chart_label = !label.empty() ? label : !recent.empty() ? recent : paths.front();
-
         StopAlertWatch();     // the alerts belong to the handle this close destroys
         CloseVesselWindows(); // so do the tables
         ChartLinksDetach();   // and the chart-link fetcher
@@ -139,6 +131,49 @@ namespace winrt::LookoutMarine::implementation
                 Root().Children().RemoveAt(idx);
             chart_panel = nullptr;
         }
+    }
+
+    // Open what the switched-on sets compose. With nothing composed the chart
+    // comes OFF the display: it was drawn from charts that are no longer
+    // installed, and leaving it up says they still are.
+    //
+    // A set of pictures with no survey in it still draws, so what decides
+    // whether setup comes up is whether anything at all is installed.
+    void MainWindow::ReopenChartSets(std::string const &recent)
+    {
+        auto paths = ChartSetOpenPaths();
+        if (!paths.empty())
+        {
+            OpenPaths(paths, recent.empty() ? paths.front() : recent,
+                      lkw::AgencyForCells(paths));
+            return;
+        }
+
+        CloseChartHandle();
+        open_chart_label.clear();
+        if (OpenChart({}))
+        {
+            ChartLinksAttach();
+            InstallStoredRasters(); // the pictures, when they are what is left
+            RestoreRasterShown();
+            StartAlertWatch();
+            StartRenderThread();
+        }
+        if (raster_paths.empty())
+            FirstRunBegin();
+    }
+
+    void MainWindow::DoOpenPaths(std::vector<std::string> const &paths, std::string const &recent,
+                                 std::string const &label)
+    {
+        if (!recent.empty())
+            lk_store_note_recent(recent.c_str());
+        // What Settings ▸ Charts names as open: the office whose charts these
+        // are when the caller worked that out ("NOAA"), else the folder or
+        // file the user chose, else the first cell (a startup open).
+        open_chart_label = !label.empty() ? label : !recent.empty() ? recent : paths.front();
+
+        CloseChartHandle();
 
         if (OpenChart(paths))
         {

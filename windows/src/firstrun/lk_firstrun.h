@@ -68,6 +68,13 @@ namespace lkw
     std::wstring SizeText(uint64_t bytes);
     std::wstring Thousands(uint64_t n);
 
+    // About how long preparing this many charts takes, for the question asked
+    // before a set's prepared charts are deleted: the mariner is deciding
+    // whether to throw away work, so the size of that work is the fact they
+    // need. A fifth of a second a chart, measured by the reference over a
+    // mixed Chesapeake set with every core working.
+    std::wstring PrepareEstimate(size_t charts);
+
     // The band breakdown, from what the scan found and how far the bake has
     // got. `band_of_each_chart` is the band of every chart the scan returned,
     // in any order. `done` is the bake's own count.
