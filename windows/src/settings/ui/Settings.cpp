@@ -298,24 +298,35 @@ namespace winrt::LookoutMarine::implementation
     // being read while the core holds the thread: resolving a style with its
     // sprite packs runs inside a frame, and the click looked like it had done
     // nothing. The call goes out at low priority, which runs after the layout
-    // the rebuild queued.
+    // the rebuild queued. The mark stays until the resolve settles, which
+    // PollChartLinks reports; the core names the chart it is resolving only
+    // once it has one, so without the mark the line would sit on whichever
+    // chart was drawing before.
     void MainWindow::PickChartTile(std::string const &url, bool mine)
     {
         if (chart_link_picking)
             return;
         chart_link_pending = url;
+        chart_link_picked = true;
         chart_link_picking = true;
         BuildSettingsPage();
-        DispatcherQueue().TryEnqueue(
-            winrt::Microsoft::UI::Dispatching::DispatcherQueuePriority::Low,
-            [this, url, mine] {
-                chart_link_picking = false;
-                chart_link_pending.clear();
-                if (url.empty() || mine)
-                    SelectChartLink(url);
-                else
-                    AddChartLink(url);
-            });
+        // At the queue's own priority. A low-priority call runs only once the
+        // thread has nothing else to do, and this thread has a readout tick on
+        // it, so the call was never made and the guard above stayed closed:
+        // that first pick was the last one the shelf answered.
+        bool queued = DispatcherQueue().TryEnqueue([this, url, mine] {
+            chart_link_picking = false;
+            if (url.empty() || mine)
+                SelectChartLink(url);
+            else
+                AddChartLink(url);
+        });
+        if (!queued)
+        {
+            chart_link_picking = false;
+            chart_link_picked = false;
+            chart_link_pending.clear();
+        }
     }
 
     // Read this chart again, or take it off the list. Lookout's own chart has
@@ -965,6 +976,43 @@ namespace winrt::LookoutMarine::implementation
         }
     }
 
+    // Everything the Charts page reads, in one string. The NOAA counters are
+    // left out: that line is updated in place, and a moving count would
+    // rebuild the page twice a second.
+    std::string MainWindow::ChartsPageSignature()
+    {
+        std::string s;
+        for (auto const &l : chart_links)
+            s += l.url + "\x1f" + l.name + "\x1e";
+        s += active_chart_link + "\x1f" + chart_link_error + "\x1f" + chart_link_pending +
+             "\x1f" + (chart_link_picked ? "1" : "0") + (chart_link_busy ? "1" : "0") + "\x1f" +
+             (lk_controller_alt_style_active(controller) ? "1" : "0") + "\x1e";
+        for (auto const &set : chart_sets)
+        {
+            s += set.path + "\x1f" + set.title + "\x1f" + (set.on ? "1" : "0") +
+                 (set.scanned ? "1" : "0") + "\x1f" + std::to_string(set.charts) + "\x1f" +
+                 std::to_string(set.pictures) + "\x1f" + std::to_string(set.unprepared) +
+                 "\x1f" + std::to_string(set.bytes);
+            for (auto const &[band, n] : set.bands)
+                s += "\x1f" + std::to_string(band) + ":" + std::to_string(n);
+            s += "\x1e";
+        }
+        for (auto const &p : raster_paths)
+            s += p + "\x1e";
+        s += bake_job != nullptr ? "baking" : "idle";
+        return s;
+    }
+
+    void MainWindow::RefreshChartsPageOnChange()
+    {
+        bool charts_visible = SettingsOpen() && settings_tab >= 0 &&
+                              settings_tab < (int)settings_tabs.size() &&
+                              settings_tabs[settings_tab].id == "charts";
+        if (!charts_visible || ChartsPageSignature() == charts_page_sig)
+            return;
+        BuildSettingsPage();
+    }
+
     void MainWindow::BuildSettingsPage()
     {
         settings_loading = true;
@@ -1261,8 +1309,8 @@ namespace winrt::LookoutMarine::implementation
                 // the core still reports as drawing, and its line says what is
                 // happening. Only that tile has such a line: that a tile draws
                 // once it is picked needs no saying.
-                bool reading = chart_link_picking || chart_link_busy;
-                std::string picked = chart_link_picking ? chart_link_pending : active_chart_link;
+                bool reading = chart_link_picked || chart_link_busy;
+                std::string picked = chart_link_picked ? chart_link_pending : active_chart_link;
                 std::string drawing = ActiveChartUrl();
                 auto line = [&](std::string const &url, std::wstring where) {
                     bool being_read = reading && picked == url;
@@ -2077,6 +2125,10 @@ namespace winrt::LookoutMarine::implementation
         // settings for it. A section nothing contributed to draws nothing.
         if (tab != "plugins")
             BuildPluginSections(tab);
+
+        // What the Charts page now draws, for the polls to compare against.
+        if (tab == "charts")
+            charts_page_sig = ChartsPageSignature();
 
         settings_loading = false;
     }

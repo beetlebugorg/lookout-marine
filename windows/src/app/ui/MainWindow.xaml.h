@@ -421,7 +421,13 @@ namespace winrt::LookoutMarine::implementation
         // told. Reading a publisher's style is the core's work and it runs
         // inside a frame, so the tile says what is happening before that
         // starts.
+        // The url picked, empty for Lookout's own chart, and whether that pick
+        // is still in flight. An empty url is a real answer, so the flag says
+        // whether there is a pick at all.
         std::string chart_link_pending;
+        bool chart_link_picked{ false };
+        // True only until the call goes out, which is what keeps a poll
+        // landing in between from clearing the pick.
         bool chart_link_picking{ false };
         // Where the mariner had the shelf scrolled. The links poll several
         // times a second while a style resolves, and every report rebuilds
@@ -574,6 +580,17 @@ namespace winrt::LookoutMarine::implementation
         // Read the download the Charts page is reporting, and put the page
         // away once it ends.
         void PollNoaaPane();
+        /* What the Charts page draws, as one string, and the rebuild that
+         * compares it.
+         *
+         * The links and the sets are polled off the readout tick, and the core
+         * raises its changed flag for work that leaves the page identical: a
+         * tile landing for a style that is drawing, a rescan finding what it
+         * found before. Rebuilding for those tore down and rebuilt every
+         * control ten times a second, which reads as flicker. */
+        std::string ChartsPageSignature();
+        void RefreshChartsPageOnChange();
+        std::string charts_page_sig;
 
         // wasm plugin settings. The schemas are read when the pane opens; only
         // the status lines are polled after that.

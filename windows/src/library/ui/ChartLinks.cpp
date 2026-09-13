@@ -495,6 +495,17 @@ namespace winrt::LookoutMarine::implementation
         }
         lookout_links_free(read);
 
+        // The chart the mariner picked off the shelf is marked until its
+        // resolve settles, so the "Reading this chart…" line sits on the tile
+        // they clicked. chart_link_picking means the call has yet to go out,
+        // where a poll landing first would clear the mark before the core
+        // reported anything.
+        if (!chart_link_picking && !chart_link_busy)
+        {
+            chart_link_pending.clear();
+            chart_link_picked = false;
+        }
+
         // Public tile hosts make the visible credit a condition of service, so
         // it sits under the scale bar for as long as the link draws.
         if (credit.empty())
@@ -507,17 +518,16 @@ namespace winrt::LookoutMarine::implementation
             ScaleBarCredit().Text(winrt::to_hstring(credit));
             ScaleBarCredit().Visibility(Visibility::Visible);
         }
-        // The list appears only in the Charts settings section. Rebuild the page
-        // solely when it is on screen there — a change with the settings window
-        // closed, or open on another section, has nothing to redraw. The members
-        // above are updated regardless, so the section is current the next time
-        // it is built. This runs on the readout tick, so an unconditional rebuild
-        // here churned the whole page while a link resolved.
-        bool charts_visible = SettingsOpen() && settings_tab >= 0 &&
-                              settings_tab < (int)settings_tabs.size() &&
-                              settings_tabs[settings_tab].id == "charts";
-        if (charts_visible)
-            BuildSettingsPage();
+        // The list appears only in the Charts settings section, and only a
+        // change to what that page draws is worth a rebuild. The members above
+        // are updated regardless, so the section is current the next time it
+        // is built.
+        //
+        // This runs on the readout tick. The core raises its changed flag
+        // while a style draws, for tiles landing that leave every tile, row
+        // and line the same, and rebuilding for those flickered the whole
+        // page several times a second.
+        RefreshChartsPageOnChange();
     }
 
     // ---- the management surface --------------------------------------------

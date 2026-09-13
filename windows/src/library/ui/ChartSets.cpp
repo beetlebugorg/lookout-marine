@@ -89,8 +89,9 @@ namespace winrt::LookoutMarine::implementation
         if (chart_sets_model == nullptr || !lookout_chart_sets_changed(chart_sets_model))
             return;
         LoadChartSets([this] {
-            if (SettingsOpen())
-                BuildSettingsPage();
+            // Only when a row on the page changed. A rescan that finds what it
+            // found before raises the same flag.
+            RefreshChartsPageOnChange();
         });
     }
 
