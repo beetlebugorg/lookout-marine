@@ -559,6 +559,14 @@ lk_app_model_all_sets_off (LkAppModel *self)
   return TRUE;
 }
 
+gboolean
+lk_app_model_library_scanning (LkAppModel *self)
+{
+  g_return_val_if_fail (LK_IS_APP_MODEL (self), FALSE);
+
+  return lk_chart_sets_scanning (self->chart_sets);
+}
+
 void
 lk_app_model_open_empty (LkAppModel *self)
 {

@@ -256,6 +256,18 @@ lk_chart_sets_any_on_drawable (LkChartSets *self)
   return FALSE;
 }
 
+gboolean
+lk_chart_sets_scanning (LkChartSets *self)
+{
+  size_t count = 0;
+  const lookout_chart_set *const *all = lookout_chart_sets_all (self->sets, &count);
+
+  for (size_t i = 0; i < count; i++)
+    if (all[i]->scanned == 0)
+      return TRUE;
+  return FALSE;
+}
+
 /* Put a source on the list, switched on. Opening a source is also
  * selecting it. */
 gboolean
@@ -333,16 +345,21 @@ static gboolean
 lk_chart_sets_poll (gpointer data)
 {
   LkChartSets *self = data;
+  gboolean changed = lookout_chart_sets_changed (self->sets);
   size_t count = 0;
   const lookout_chart_set *const *all;
   gboolean waiting = FALSE;
 
-  if (lookout_chart_sets_changed (self->sets))
-    self->on_changed (self->owner);
-
   all = lookout_chart_sets_all (self->sets, &count);
   for (size_t i = 0; i < count && !waiting; i++)
     waiting = all[i]->scanned == 0;
+
+  /* The tick that settles the scan always reports, flag or no flag. The last
+   * scan can land between the flag read and the count read, and this timer
+   * stops here: there is no later tick for that landing to arrive on, and the
+   * chart the library composes to waits for it. */
+  if (changed || !waiting)
+    self->on_changed (self->owner);
 
   if (waiting)
     return G_SOURCE_CONTINUE;
