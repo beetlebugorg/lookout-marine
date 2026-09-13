@@ -421,8 +421,13 @@ namespace winrt::LookoutMarine::implementation
         dialog.DefaultButton(Controls::ContentDialogButton::Primary);
         // The picker cannot stand under the dialog: both are modal to the same
         // window. The dialog goes away and the picker takes over from there.
-        file.Click([this, dialog](auto &&, auto &&) {
-            dialog.Hide();
+        //
+        // Weakly. The dialog owns this button, which owns the handler, so a
+        // strong reference here keeps the dialog alive after it closes.
+        winrt::weak_ref<Controls::ContentDialog> weak_dialog{ dialog };
+        file.Click([this, weak_dialog](auto &&, auto &&) {
+            if (auto d = weak_dialog.get())
+                d.Hide();
             PickChartStyleFile();
         });
 
