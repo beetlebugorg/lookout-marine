@@ -204,10 +204,34 @@ lk_chart_view_maybe_auto_open (LkChartView *self)
   g_auto (GStrv) paths = lk_app_model_initial_chart_paths (self->model);
   /* Nothing baked is not nothing to do: the path may be an exchange set of raw
      cells, which the open below scans and bakes. Only a path with neither
-     stops here. */
+     stops here.
+
+     Nothing at all opens NOTHING. A chart of no charts is opened on demand, by
+     whatever needs a handle to run through: see lk_app_model_open_empty. */
   g_autofree char *source = lk_app_model_initial_source (self->model);
+
+  /* The library is read on the core's own thread, and a set that thread has
+     not reached yet composes to nothing. A big library takes longer to read
+     than the window takes to lay out, so opening here would draw a short chart
+     or none at all. Wait: lk_chart_view_sets_changed brings this back when the
+     scan lands. An environment source is a path, not a library, and waits for
+     nothing. */
+  if (source == NULL && lk_app_model_library_scanning (self->model))
+    {
+      /* The loader stands over the wait rather than blank water. The count is
+         not known until the read lands, so it says "the chart", not a number. */
+      lk_app_model_set_opening_cells (self->model, 0);
+      lk_app_model_set_opening (self->model, TRUE, lookout_atlas_cache_ready () == 0);
+      return;
+    }
+
   if ((paths == NULL || g_strv_length (paths) == 0) && source == NULL)
-    return;
+    {
+      /* Read, and there is nothing to draw. Take the loader down: the window
+         puts up setup, or the switch the mariner turned off. */
+      lk_app_model_set_opening (self->model, FALSE, FALSE);
+      return;
+    }
 
   self->did_auto_open = TRUE;
   /* Loader up before the synchronous open; the flag marks a first-ever run,
@@ -215,6 +239,18 @@ lk_chart_view_maybe_auto_open (LkChartView *self)
   lk_app_model_set_opening_cells (self->model, paths != NULL ? g_strv_length (paths) : 0);
   lk_app_model_set_opening (self->model, TRUE, lookout_atlas_cache_ready () == 0);
   self->auto_open_id = g_idle_add (lk_chart_view_do_auto_open, self);
+}
+
+/* A background scan landed, so the library composes to more than it did. The
+ * chart is opened once, and only while nothing is open: a scan landing must
+ * not reopen a chart the mariner is already sailing on. */
+static void
+lk_chart_view_sets_changed (LkAppModel *model, gpointer user_data)
+{
+  LkChartView *self = user_data;
+
+  if (!self->did_auto_open)
+    lk_chart_view_maybe_auto_open (self);
 }
 
 /* ---- widget lifecycle --------------------------------------------------- */
@@ -1238,6 +1274,10 @@ lk_chart_view_new (LkAppModel *model)
      leave it standing over water it no longer points at. */
   g_signal_connect_object (model, "chrome-retired",
                            G_CALLBACK (lk_chart_view_chrome_retired), self, 0);
+  /* The auto-open below holds off while the library is still being read. This
+     is what tells it to look again. */
+  g_signal_connect_object (model, "chart-sets-changed",
+                           G_CALLBACK (lk_chart_view_sets_changed), self, 0);
   return GTK_WIDGET (self);
 }
 

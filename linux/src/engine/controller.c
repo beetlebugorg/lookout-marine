@@ -20,7 +20,19 @@ struct _LkChartController {
   /* The one-shot the core asked for with LOOKOUT_FRAME_WAIT. */
   guint    wake_id;
 
+  /* An empty open asked for before a view existed. Every lookout call runs
+   * through a handle, and the first thing to want one can be a page built
+   * before the chart view has realized: setup reads NOAA's catalog as its
+   * coverage step is built. The ask is kept and run when the view arrives. */
+  gboolean pending_empty_open;
+
   gint64 last_readouts_us;
+
+  /* What the last frame said. A snapshot BUILDS the scene before it reads the
+   * frame back, so whatever wants a picture of the chart has to know when the
+   * chart has nothing left to build. */
+  gboolean last_building;
+  gboolean last_render;
 };
 
 G_DEFINE_FINAL_TYPE (LkChartController, lk_chart_controller, G_TYPE_OBJECT)
@@ -72,6 +84,16 @@ lk_chart_controller_chart_path (LkChartController *self)
 {
   g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), NULL);
   return self->chart_path;
+}
+
+guint
+lk_chart_controller_charts_count (LkChartController *self)
+{
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), 0);
+
+  if (self->handle == NULL)
+    return 0;
+  return lookout_charts_count (self->handle);
 }
 
 /* ---- readouts ----------------------------------------------------------- */
@@ -145,6 +167,9 @@ lk_chart_controller_tick (GtkWidget     *widget,
     }
 
   lookout_frame_next (self->handle, &frame);
+
+  self->last_building = frame.building != 0;
+  self->last_render = frame.verdict == LOOKOUT_FRAME_RENDER;
 
   if (self->model != NULL)
     {
@@ -742,16 +767,29 @@ lk_chart_controller_attach_view (LkChartController *self, GtkWidget *view)
 
   if (self->view == NULL)
     self->view = view;
+
+  /* Whatever wanted a handle before this view existed gets one now. */
+  if (self->pending_empty_open && self->handle == NULL)
+    {
+      static const char *const none[] = { NULL };
+
+      self->pending_empty_open = FALSE;
+      lk_chart_controller_open (self, none, view);
+    }
 }
 
-/* One open call, given the native surface kind + handle. */
+/* One open call, given the native surface kind + handle. `n` may be 0, which
+ * opens a chart of no charts. */
 static lookout *
 lk_chart_controller_open_handle (const char *const *paths, guint n,
                                  int kind, void *native, int width, int height)
 {
+  static const char *const none[] = { NULL };
+
   if (n == 1)
     return lookout_open_in_window (kind, native, paths[0], width, height, 1);
-  return lookout_open_charts_in_window (kind, native, paths, n, width, height, 1);
+  return lookout_open_charts_in_window (kind, native, n == 0 ? none : paths, n,
+                                        width, height, 1);
 }
 
 gboolean
@@ -763,8 +801,6 @@ lk_chart_controller_open (LkChartController *self,
   g_return_val_if_fail (LK_IS_CHART_VIEW (view), FALSE);
 
   guint n = paths == NULL ? 0 : g_strv_length ((char **) paths);
-  if (n == 0)
-    return FALSE;
 
   lk_chart_controller_close (self);
   self->view = view;
@@ -787,7 +823,8 @@ lk_chart_controller_open (LkChartController *self,
 
   LkNativeSurface *surface = lk_chart_view_get_native_surface (LK_CHART_VIEW (view));
   g_message ("opening %u chart(s) into a %d×%d pt %s surface: %s",
-             n, width, height, lk_native_surface_backend (surface), paths[0]);
+             n, width, height, lk_native_surface_backend (surface),
+             n == 0 ? "the basemap" : paths[0]);
   lookout *handle = lk_chart_controller_open_handle (paths, n,
                                                      lk_native_surface_kind (surface),
                                                      lk_native_surface_handle (surface),
@@ -808,7 +845,9 @@ lk_chart_controller_open (LkChartController *self,
     lk_app_model_set_open_error (self->model, NULL);
 
   g_free (self->chart_path);
-  self->chart_path = n == 1 ? g_strdup (paths[0]) : g_path_get_dirname (paths[0]);
+  self->chart_path = n == 0   ? NULL
+                     : n == 1 ? g_strdup (paths[0])
+                              : g_path_get_dirname (paths[0]);
 
   /* Re-install the mariner's raster charts. A raster chart belongs to a lookout
    * handle, and the close above destroyed the old one, so every open replays
@@ -821,6 +860,11 @@ lk_chart_controller_open (LkChartController *self,
    * belongs to a handle, and this is a new one. */
   if (self->model != NULL)
     lk_app_model_reapply_chart_link (self->model);
+
+  /* And NOAA's catalog, which belongs to the handle as well: a read asked for
+   * before there was one, or one the old handle took with it, runs here. */
+  if (self->model != NULL)
+    lk_app_model_noaa_chart_did_open (self->model);
 
   lookout_set_pixel_density (handle, (float) gtk_widget_get_scale_factor (view));
   lookout_resize (handle, width, height);
@@ -894,7 +938,13 @@ lk_chart_controller_reopen (LkChartController *self, const char *const *paths)
   g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), FALSE);
 
   if (self->view == NULL)
-    return FALSE;
+    {
+      /* No view yet. An empty open is worth keeping, because the caller wants
+       * a handle rather than a chart and nothing else will ask again. */
+      if (paths == NULL || g_strv_length ((char **) paths) == 0)
+        self->pending_empty_open = TRUE;
+      return FALSE;
+    }
   return lk_chart_controller_open (self, paths, self->view);
 }
 
@@ -1010,6 +1060,208 @@ lk_chart_controller_chart_links_read (LkChartController *self)
   if (lookout_chart_links_changed (self->handle) == 0)
     return NULL;
   return lookout_links_read (self->handle);
+}
+
+/* ---- pictures of charts -------------------------------------------------- */
+
+gboolean
+lk_chart_controller_settled (LkChartController *self)
+{
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), FALSE);
+
+  return self->handle != NULL && !self->last_building && !self->last_render;
+}
+
+GdkTexture *
+lk_chart_controller_snapshot (LkChartController *self)
+{
+  int width = 0, height = 0, scale = 1;
+  gsize len;
+
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), NULL);
+
+  if (self->handle == NULL || self->view == NULL)
+    return NULL;
+
+  lk_chart_view_get_point_size (LK_CHART_VIEW (self->view), &width, &height);
+  scale = gtk_widget_get_scale_factor (self->view);
+  width *= scale;
+  height *= scale;
+  if (width <= 0 || height <= 0)
+    return NULL;
+
+  len = (gsize) width * height * 4;
+  g_autofree guint8 *pixels = g_malloc0 (len);
+  /* 0 is success here, unlike the rest of this ABI. */
+  if (lookout_snapshot_rgba (self->handle, pixels, len) != 0)
+    return NULL;
+
+  g_autoptr (GBytes) bytes = g_bytes_new_take (g_steal_pointer (&pixels), len);
+  return gdk_memory_texture_new (width, height, GDK_MEMORY_R8G8B8A8,
+                                 bytes, (gsize) width * 4);
+}
+
+void
+lk_chart_controller_chart_links_preview (LkChartController *self)
+{
+  g_return_if_fail (LK_IS_CHART_CONTROLLER (self));
+
+  if (self->handle == NULL)
+    return;
+  lookout_chart_links_preview (self->handle);
+  /* The style reads go out through the fetcher, and the core adopts each
+   * answer at the top of a frame. */
+  lk_chart_controller_kick (self);
+}
+
+char *
+lk_chart_controller_chart_link_preview_url (LkChartController *self, const char *link,
+                                            double lon, double lat, int zoom)
+{
+  char url[2048];
+
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), NULL);
+
+  if (self->handle == NULL || link == NULL)
+    return NULL;
+  if (!lookout_chart_link_preview_url (self->handle, link, lon, lat, zoom,
+                                       url, sizeof url))
+    return NULL;
+  return g_strdup (url);
+}
+
+gboolean
+lk_chart_controller_view_centre (LkChartController *self, double *out_lon, double *out_lat)
+{
+  lookout_view view;
+
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), FALSE);
+
+  if (self->handle == NULL)
+    return FALSE;
+  lookout_get_view (self->handle, &view);
+  if (out_lon != NULL)
+    *out_lon = view.lon;
+  if (out_lat != NULL)
+    *out_lat = view.lat;
+  return TRUE;
+}
+
+/* ---- NOAA charts --------------------------------------------------------- */
+
+gboolean
+lk_chart_controller_noaa_refresh (LkChartController *self)
+{
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), FALSE);
+
+  if (self->handle == NULL)
+    return FALSE;
+  lookout_noaa_refresh (self->handle);
+  /* The read is several fetches deep and the core adopts each answer at the
+   * top of a frame, so the tick has to be running for it to progress. */
+  lk_chart_controller_kick (self);
+  return TRUE;
+}
+
+gboolean
+lk_chart_controller_noaa_poll (LkChartController *self, lookout_noaa_state *out)
+{
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), FALSE);
+  g_return_val_if_fail (out != NULL, FALSE);
+
+  if (self->handle == NULL)
+    {
+      memset (out, 0, sizeof *out);
+      return FALSE;
+    }
+  lookout_noaa_poll (self->handle, out);
+  return TRUE;
+}
+
+gboolean
+lk_chart_controller_noaa_cost (LkChartController *self, const char *region_ids,
+                               guint32 *out_cells, guint64 *out_bytes,
+                               guint32 *out_held, guint64 *out_held_bytes)
+{
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), FALSE);
+
+  if (self->handle == NULL || region_ids == NULL)
+    return FALSE;
+  return lookout_noaa_cost (self->handle, region_ids, out_cells, out_bytes,
+                            out_held, out_held_bytes) != 0;
+}
+
+void
+lk_chart_controller_noaa_have (LkChartController *self, const char *const *names)
+{
+  g_return_if_fail (LK_IS_CHART_CONTROLLER (self));
+
+  if (self->handle == NULL)
+    return;
+  if (names == NULL)
+    {
+      lookout_noaa_have (self->handle, NULL, 0);
+      return;
+    }
+  lookout_noaa_have (self->handle, names, g_strv_length ((char **) names));
+}
+
+gsize
+lk_chart_controller_noaa_coverage (LkChartController *self, const char *region_id,
+                                   lookout_noaa_box *out, gsize cap)
+{
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), 0);
+
+  if (self->handle == NULL || region_id == NULL)
+    return 0;
+  return lookout_noaa_region_coverage (self->handle, region_id, out, cap);
+}
+
+void
+lk_chart_controller_noaa_download (LkChartController *self, const char *region_ids,
+                                   const char *dest_dir, gboolean again)
+{
+  g_return_if_fail (LK_IS_CHART_CONTROLLER (self));
+
+  if (self->handle == NULL || region_ids == NULL || dest_dir == NULL)
+    return;
+  lookout_noaa_download (self->handle, region_ids, dest_dir, again ? 1 : 0);
+  lk_chart_controller_kick (self);
+}
+
+void
+lk_chart_controller_noaa_cancel (LkChartController *self)
+{
+  g_return_if_fail (LK_IS_CHART_CONTROLLER (self));
+
+  if (self->handle == NULL)
+    return;
+  lookout_noaa_cancel (self->handle);
+  lk_chart_controller_kick (self);
+}
+
+guint32
+lk_chart_controller_noaa_outdated (LkChartController *self,
+                                   const lookout_noaa_installed *have, gsize n)
+{
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), 0);
+
+  if (self->handle == NULL || have == NULL || n == 0)
+    return 0;
+  return lookout_noaa_outdated (self->handle, have, n);
+}
+
+void
+lk_chart_controller_noaa_update (LkChartController *self,
+                                 const lookout_noaa_installed *have, gsize n,
+                                 const char *dest_dir)
+{
+  g_return_if_fail (LK_IS_CHART_CONTROLLER (self));
+
+  if (self->handle == NULL || have == NULL || n == 0 || dest_dir == NULL)
+    return;
+  lookout_noaa_update (self->handle, have, n, dest_dir);
+  lk_chart_controller_kick (self);
 }
 
 /* ---- view --------------------------------------------------------------- */

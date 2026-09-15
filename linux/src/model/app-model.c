@@ -1,5 +1,6 @@
 #include "model/app-model.h"
 
+#include "library/noaa.h"
 #include "library/scan.h"
 #include "library/sets.h"
 #include "model/store.h"
@@ -12,6 +13,11 @@ struct _LkAppModel {
 
   LkChartController *controller;
   LkChartLinks      *chart_links;
+  LkNoaa            *noaa;
+  /* The directory a NOAA download is filling, and whether this model is still
+   * following that download to its end. */
+  char              *noaa_dest;
+  gboolean           noaa_watching;
 
   gboolean has_chart;
   char    *chart_path;
@@ -23,10 +29,18 @@ struct _LkAppModel {
   LkChartBake   *bake;
   char          *pending_open_source;
   LkBakeProgress bake_progress;
-  /* The set name the progress borrows. Owned here, for the pill to keep
-   * reading between posts. */
+  /* The set name and the band table the progress borrows. Owned here, for the
+   * pill and the import step to keep reading between posts. */
   char          *bake_name;
+  LkBakeBand     bake_bands[7];
   gboolean       baking;
+
+  /* A removal running behind the app. Its own channel, not the bake's: one
+   * set can be removed while another is still importing, and only one of the
+   * two can be cancelled. */
+  LkBakeProgress remove_progress;
+  char          *remove_name;
+  gboolean       removing;
   GStrv    recents;
 
   gboolean is_opening;
@@ -90,6 +104,7 @@ enum {
   PROP_SCHEME,
   PROP_BUILDING,
   PROP_BAKING,
+  PROP_REMOVING,
   PROP_VIEW_WIDTH,
   PROP_VIEW_HEIGHT,
   PROP_FOLLOW,
@@ -138,6 +153,7 @@ lk_app_model_get_property (GObject *object, guint prop_id, GValue *value, GParam
     case PROP_SCHEME:              g_value_set_int (value, self->scheme); break;
     case PROP_BUILDING:            g_value_set_boolean (value, self->building); break;
     case PROP_BAKING:              g_value_set_boolean (value, self->baking); break;
+    case PROP_REMOVING:            g_value_set_boolean (value, self->removing); break;
     case PROP_VIEW_WIDTH:          g_value_set_int (value, self->view_width); break;
     case PROP_VIEW_HEIGHT:         g_value_set_int (value, self->view_height); break;
     case PROP_FOLLOW:              g_value_set_int (value, self->follow); break;
@@ -165,11 +181,17 @@ lk_app_model_dispose (GObject *object)
   if (self->chart_links != NULL)
     lk_chart_links_shutdown (self->chart_links);
   g_clear_object (&self->chart_links);
+  /* Same reason: the poll timer holds this model's controller. */
+  if (self->noaa != NULL)
+    lk_noaa_shutdown (self->noaa);
+  g_clear_object (&self->noaa);
   g_clear_object (&self->controller);
   g_clear_pointer (&self->chart_path, g_free);
   g_clear_pointer (&self->open_error, g_free);
   g_clear_pointer (&self->pending_open_source, g_free);
   g_clear_pointer (&self->bake_name, g_free);
+  g_clear_pointer (&self->remove_name, g_free);
+  g_clear_pointer (&self->noaa_dest, g_free);
   g_clear_pointer (&self->recents, g_strfreev);
   g_clear_pointer (&self->overlay_pin, g_free);
   g_clear_pointer (&self->pick_results, g_ptr_array_unref);
@@ -204,6 +226,7 @@ lk_app_model_class_init (LkAppModelClass *klass)
   properties[PROP_SCHEME] = g_param_spec_int ("scheme", NULL, NULL, 0, 2, 0, RO);
   properties[PROP_BUILDING] = g_param_spec_boolean ("building", NULL, NULL, FALSE, RO);
   properties[PROP_BAKING] = g_param_spec_boolean ("baking", NULL, NULL, FALSE, RO);
+  properties[PROP_REMOVING] = g_param_spec_boolean ("removing", NULL, NULL, FALSE, RO);
   properties[PROP_VIEW_WIDTH] = g_param_spec_int ("view-width", NULL, NULL, 0, G_MAXINT, 0, RO);
   properties[PROP_VIEW_HEIGHT] = g_param_spec_int ("view-height", NULL, NULL, 0, G_MAXINT, 0, RO);
   properties[PROP_FOLLOW] = g_param_spec_int ("follow", NULL, NULL, 0, 2, 0, RO);
@@ -254,6 +277,9 @@ lk_app_model_class_init (LkAppModelClass *klass)
                     0, NULL, NULL, NULL, G_TYPE_NONE, 0);
 }
 
+static void lk_app_model_remove_progress (const LkBakeProgress *progress,
+                                          gpointer user_data);
+
 static void
 lk_app_model_emit_chart_sets_changed (LkAppModel *self)
 {
@@ -288,6 +314,43 @@ lk_app_model_recompose_library (LkAppModel *self)
     }
 }
 
+/* A NOAA download has ended. Prepare what landed.
+ *
+ * ::changed carries every move the service makes, so this watches for the
+ * phase leaving the transfer rather than running a timer of its own. The
+ * service's own poll is what raises it, and that poll stops with the
+ * download.
+ *
+ * The counters are the transfer's: they hold their final values once it ends,
+ * so `done` is how many cells arrived. */
+static void
+lk_app_model_noaa_changed (LkNoaa *noaa, gpointer user_data)
+{
+  LkAppModel *self = user_data;
+  const LkNoaaState *state = lk_noaa_state (noaa);
+
+  if (!self->noaa_watching || state->phase == LK_NOAA_DOWNLOADING)
+    return;
+  self->noaa_watching = FALSE;
+
+  /* Nothing arrived. A download that failed every cell leaves an empty
+   * directory, and adding that to the library makes a set that never fills.
+   * The service carries its own error. */
+  if (state->done == 0 || self->noaa_dest == NULL)
+    return;
+
+  lk_app_model_open_chart_directory (self, self->noaa_dest);
+}
+
+/* NOAA asked for its catalog with no chart open. Open one of no charts: the
+ * read runs through a handle, and a mariner with an empty library is exactly
+ * who has to read that catalog. */
+static void
+lk_app_model_noaa_needs_chart (gpointer user_data)
+{
+  lk_app_model_open_empty (LK_APP_MODEL (user_data));
+}
+
 static void
 lk_app_model_init (LkAppModel *self)
 {
@@ -305,6 +368,14 @@ lk_app_model_init (LkAppModel *self)
 
   self->raster_charts = lk_raster_charts_new ();
   self->raster_state = lk_raster_state_new ();
+
+  /* NOAA's catalog, the regions a mariner picks, and the downloads run from
+   * them. Every call it makes runs through a chart handle, and setup reads the
+   * catalog before the first chart is installed, so it is given the way to ask
+   * for one. */
+  self->noaa = lk_noaa_new (self->controller);
+  lk_noaa_set_need_chart (self->noaa, lk_app_model_noaa_needs_chart, self);
+  g_signal_connect (self->noaa, "changed", G_CALLBACK (lk_app_model_noaa_changed), self);
 }
 
 LkAppModel *
@@ -341,9 +412,58 @@ lk_app_model_poll_chart_links (LkAppModel *self)
   lk_chart_links_poll (self->chart_links);
 }
 
+/* ---- NOAA charts --------------------------------------------------------- */
+
+LkNoaa *
+lk_app_model_get_noaa (LkAppModel *self)
+{
+  g_return_val_if_fail (LK_IS_APP_MODEL (self), NULL);
+  return self->noaa;
+}
+
+void
+lk_app_model_noaa_chart_did_open (LkAppModel *self)
+{
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+  lk_noaa_chart_did_open (self->noaa);
+}
+
+char **
+lk_app_model_installed_cell_names (LkAppModel *self)
+{
+  g_return_val_if_fail (LK_IS_APP_MODEL (self), g_new0 (char *, 1));
+  return lk_chart_sets_cell_names (self->chart_sets);
+}
+
+void
+lk_app_model_start_noaa_download (LkAppModel *self, gboolean again)
+{
+  g_autofree char *dest = NULL;
+
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+
+  dest = lk_noaa_download_dir ();
+  if (g_mkdir_with_parents (dest, 0700) != 0)
+    {
+      lk_app_model_set_open_error (self, "Couldn't make a place to download charts to.");
+      return;
+    }
+
+  /* Price against what is already here first. A mariner who picks water they
+   * partly hold fetches the rest of it. */
+  g_auto (GStrv) have = lk_app_model_installed_cell_names (self);
+  lk_noaa_note_installed (self->noaa, (const char *const *) have);
+
+  g_free (self->noaa_dest);
+  self->noaa_dest = g_strdup (dest);
+  self->noaa_watching = TRUE;
+  lk_noaa_download (self->noaa, dest, again);
+}
+
 /* ---- opening charts ----------------------------------------------------- */
 
-static void lk_app_model_open_prepared (LkAppModel *self, const char *source);
+static void lk_app_model_open_prepared (LkAppModel *self, const char *source,
+                                        gboolean pictures);
 
 /* ---- the library's public face ------------------------------------------- */
 
@@ -375,8 +495,20 @@ lk_app_model_remove_chart_set (LkAppModel *self, const char *path)
   g_return_if_fail (LK_IS_APP_MODEL (self));
   g_return_if_fail (path != NULL);
 
-  if (!lk_chart_sets_remove (self->chart_sets, path))
+  g_autofree char *prepared = NULL;
+
+  if (!lk_chart_sets_remove (self->chart_sets, path, &prepared))
     return;
+
+  /* What Lookout prepared from the set goes with it: it can be made again, and
+   * a library the mariner removed is the app hoarding on their disk. Thousands
+   * of files, so it runs behind the app and says where it has got to. */
+  if (prepared != NULL)
+    {
+      g_autofree char *name = g_path_get_basename (path);
+
+      lk_chart_bake_delete_derived (prepared, name, lk_app_model_remove_progress, self);
+    }
 
   lk_app_model_recompose_library (self);
   lk_app_model_emit_chart_sets_changed (self);
@@ -421,16 +553,10 @@ lk_app_model_initial_chart_paths (LkAppModel *self)
       g_strfreev (cells);
     }
 
-  /* The Zig demo's built-in default, if present. */
-  g_autofree char *demo = g_build_filename (g_get_home_dir (), ".cache", "chartplotter",
-                                            "NOAA", "tiles", "d5", "US5MD1MC.pmtiles", NULL);
-  if (g_file_test (demo, G_FILE_TEST_EXISTS))
-    {
-      char **one = g_new0 (char *, 2);
-      one[0] = g_steal_pointer (&demo);
-      return one;
-    }
-
+  /* Nothing installed. The app opens a chart of no charts and setup runs over
+   * it. It must NOT reach for a cell left in a cache by another program: a
+   * chart the mariner never installed is one they cannot account for, and it
+   * keeps setup down on the one run that needs it. */
   return g_new0 (char *, 1);
 }
 
@@ -441,6 +567,45 @@ lk_app_model_request_open (LkAppModel *self, char **paths)
     return;
 
   lk_chart_controller_reopen (self->controller, (const char *const *) paths);
+}
+
+gboolean
+lk_app_model_all_sets_off (LkAppModel *self)
+{
+  g_autoptr (GPtrArray) rows = NULL;
+
+  g_return_val_if_fail (LK_IS_APP_MODEL (self), FALSE);
+
+  rows = lk_app_model_get_chart_sets (self);
+  if (rows->len == 0)
+    return FALSE;
+  for (guint i = 0; i < rows->len; i++)
+    if (((const LkChartSetRow *) g_ptr_array_index (rows, i))->on)
+      return FALSE;
+  return TRUE;
+}
+
+gboolean
+lk_app_model_library_scanning (LkAppModel *self)
+{
+  g_return_val_if_fail (LK_IS_APP_MODEL (self), FALSE);
+
+  return lk_chart_sets_scanning (self->chart_sets);
+}
+
+void
+lk_app_model_open_empty (LkAppModel *self)
+{
+  static const char *const none[] = { NULL };
+
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+
+  /* A chart already open is already a handle. Reopening would throw away the
+   * one the caller is about to use, along with whatever it is holding. */
+  if (self->has_chart || self->is_opening)
+    return;
+
+  lk_chart_controller_reopen (self->controller, none);
 }
 
 void
@@ -473,9 +638,12 @@ lk_app_model_open_chart (LkAppModel *self, const char *path)
       return;
     }
 
-  /* A single cell is a set of one. It joins the library like a folder does,
-   * so it survives a restart and composes with what is already installed. */
-  lk_app_model_open_prepared (self, path);
+  /* A single file is a set of one, and it goes through the scan the way a
+   * folder does: the core reads what the file IS, so one cell bakes, a
+   * prepared chart opens, and a picture goes to the raster chart list.
+   * Reaching open_prepared straight from here reported that a picture held
+   * no charts this app can draw. */
+  lk_app_model_open_chart_directory (self, path);
 }
 
 /* Open the LIBRARY with `source` added: the source goes on the set list,
@@ -484,19 +652,50 @@ lk_app_model_open_chart (LkAppModel *self, const char *path)
  * directory. A second folder composes with the first instead of replacing
  * it. */
 static void
-lk_app_model_open_prepared (LkAppModel *self, const char *source)
+lk_app_model_open_prepared (LkAppModel *self, const char *source, gboolean pictures)
 {
   if (lk_chart_sets_note (self->chart_sets, source))
     lk_app_model_emit_chart_sets_changed (self);
 
-  g_auto (GStrv) all = lk_chart_sets_compose (self->chart_sets);
-  if (all == NULL || all[0] == NULL)
+  /* BOTH what the core composed and what is on disk under this source.
+   *
+   * The core composes from its own background scan, and that scan has not run
+   * by the time a bake finishes and this is called: composing alone reported
+   * that a folder just imported holds no charts. What the bake wrote is on the
+   * disk either way, so it is opened now and the scan catches up. */
+  g_auto (GStrv) composed = lk_chart_sets_compose (self->chart_sets);
+  g_autoptr (GPtrArray) all = g_ptr_array_new_with_free_func (g_free);
+  g_autoptr (GHashTable) seen = g_hash_table_new (g_str_hash, g_str_equal);
+
+  for (guint i = 0; composed != NULL && composed[i] != NULL; i++)
+    if (g_hash_table_add (seen, composed[i]))
+      g_ptr_array_add (all, g_strdup (composed[i]));
+
+  g_autofree char *prepared = lk_chart_bake_prepared_dir (source);
+  g_auto (GStrv) own = lk_chart_cell_paths_for (source);
+  g_auto (GStrv) baked = prepared != NULL ? lk_chart_paths_in_dir (prepared)
+                                          : g_new0 (char *, 1);
+
+  for (guint i = 0; own != NULL && own[i] != NULL; i++)
+    if (g_hash_table_add (seen, own[i]))
+      g_ptr_array_add (all, g_strdup (own[i]));
+  for (guint i = 0; baked != NULL && baked[i] != NULL; i++)
+    if (g_hash_table_add (seen, baked[i]))
+      g_ptr_array_add (all, g_strdup (baked[i]));
+
+  if (all->len == 0)
     {
-      lk_app_model_set_open_error (self, "That folder contains no charts this app can draw.");
+      /* Pictures draw through the raster chart list and compose into no
+       * chart, so a folder holding only pictures reaches here with nothing
+       * to open. */
+      if (!pictures)
+        lk_app_model_set_open_error (self,
+                                     "That folder contains no charts this app can draw.");
       return;
     }
 
-  lk_app_model_request_open (self, all);
+  g_ptr_array_add (all, NULL);
+  lk_app_model_request_open (self, (char **) all->pdata);
 }
 
 static void
@@ -508,7 +707,39 @@ lk_app_model_bake_progress (const LkBakeProgress *progress, gpointer user_data)
   self->bake_name = g_strdup (progress->name);
   self->bake_progress = *progress;
   self->bake_progress.name = self->bake_name;
+  /* The band table is borrowed for the call, and the import step reads it
+   * between posts. */
+  if (progress->bands != NULL && progress->n_bands > 0)
+    {
+      guint n = MIN (progress->n_bands, G_N_ELEMENTS (self->bake_bands));
+
+      memcpy (self->bake_bands, progress->bands, n * sizeof (LkBakeBand));
+      self->bake_progress.bands = self->bake_bands;
+      self->bake_progress.n_bands = n;
+    }
   g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_BAKING]);
+}
+
+/* The delete saying where it has got to. It runs on a thread, so this is the
+ * main thread's copy of the count; an empty name is the last report and takes
+ * the panel down. */
+static void
+lk_app_model_remove_progress (const LkBakeProgress *progress, gpointer user_data)
+{
+  LkAppModel *self = user_data;
+  gboolean over = progress->name == NULL || progress->name[0] == '\0';
+
+  g_free (self->remove_name);
+  self->remove_name = g_strdup (progress->name);
+  self->remove_progress = *progress;
+  self->remove_progress.name = self->remove_name;
+  self->remove_progress.bands = NULL;
+  self->remove_progress.n_bands = 0;
+
+  if (self->removing == !over)
+    return;
+  self->removing = !over;
+  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_REMOVING]);
 }
 
 static void
@@ -539,7 +770,7 @@ lk_app_model_bake_done (const char *out_dir, guint baked, gpointer user_data)
   if (self->pending_open_source != NULL)
     {
       g_autofree char *src = g_steal_pointer (&self->pending_open_source);
-      lk_app_model_open_prepared (self, src);
+      lk_app_model_open_prepared (self, src, FALSE);
     }
 }
 
@@ -559,14 +790,28 @@ lk_scan_done_idle (gpointer data)
 
   self->scanning = FALSE;
 
-  /* Counted from the cells, not set->sources: that counter is the vector
-     sources alone. A folder of BSB/KAP sheets, or an archive whose charts
-     are already baked, still has to prepare before anything can draw. */
-  guint to_prepare = 0;
-  if (set != NULL)
-    for (guint i = 0; i < set->cells->len; i++)
-      if (lk_scanned_cell_needs_prepare (g_ptr_array_index (set->cells, i)))
-        to_prepare++;
+  /* The count comes from the cells rather than set->sources, which holds the
+     vector sources alone. A folder of BSB/KAP sheets, and an archive whose
+     charts are already baked, both need preparing before anything draws.
+     lk_chart_bake_to_prepare also drops the cells this folder has already
+     prepared. A source cell keeps its kind after the bake writes its chart,
+     so a count from the kind alone reported the whole folder on every
+     import. */
+  g_autoptr (GPtrArray) todo = lk_chart_bake_to_prepare (dir, set);
+  guint to_prepare = todo->len;
+
+  /* The pictures in the pick are installed here as well.
+   *
+   * A survey and a picture arrive in the same folder, so one pick adds
+   * both. A picture draws through the raster chart list instead of composing
+   * into the chart, and only the pictures picker wrote to that list, so a
+   * folder holding both added the cells and left the .mbtiles out. A BSB or
+   * KAP sheet bakes into a chart first, and the count above covers it. */
+  g_auto (GStrv) pictures = lk_chart_set_picture_paths (set);
+  gboolean any_pictures = g_strv_length (pictures) > 0;
+
+  if (any_pictures)
+    lk_app_model_add_raster_charts (self, (const char *const *) pictures);
 
   if (set != NULL && to_prepare > 0)
     {
@@ -600,7 +845,7 @@ lk_scan_done_idle (gpointer data)
       g_clear_pointer (&self->pending_open_source, g_free);
     }
 
-  lk_app_model_open_prepared (self, dir);
+  lk_app_model_open_prepared (self, dir, any_pictures);
 
 out:
   g_object_unref (job->model);
@@ -1387,11 +1632,44 @@ int         lk_app_model_get_scheme (LkAppModel *self)            { return self-
 gboolean    lk_app_model_get_building (LkAppModel *self)          { return self->building; }
 gboolean    lk_app_model_get_baking (LkAppModel *self)            { return self->baking; }
 
+gboolean
+lk_app_model_get_chart_is_empty (LkAppModel *self)
+{
+  g_return_val_if_fail (LK_IS_APP_MODEL (self), FALSE);
+
+  return self->has_chart && lk_chart_controller_charts_count (self->controller) == 0;
+}
+
+gboolean
+lk_app_model_get_nothing_to_draw (LkAppModel *self)
+{
+  g_return_val_if_fail (LK_IS_APP_MODEL (self), FALSE);
+
+  if (self->has_chart && !lk_app_model_get_chart_is_empty (self))
+    return FALSE;
+  /* Something is on its way. An open, a folder scan and a bake all end with
+   * charts on the screen, so none of them is an empty library. */
+  if (self->is_opening || self->scanning || self->bake != NULL)
+    return FALSE;
+  /* A picture is a chart. A library of imagery alone holds no vector chart and
+   * draws perfectly well. */
+  if (lk_raster_charts_count (self->raster_charts) > 0)
+    return FALSE;
+  return !lk_chart_sets_any_on_drawable (self->chart_sets);
+}
+
 const LkBakeProgress *
 lk_app_model_get_bake_progress (LkAppModel *self)
 {
   g_return_val_if_fail (LK_IS_APP_MODEL (self), NULL);
   return self->baking ? &self->bake_progress : NULL;
+}
+
+const LkBakeProgress *
+lk_app_model_get_remove_progress (LkAppModel *self)
+{
+  g_return_val_if_fail (LK_IS_APP_MODEL (self), NULL);
+  return self->removing ? &self->remove_progress : NULL;
 }
 
 void

@@ -42,6 +42,7 @@
 const std = @import("std");
 const owned = @import("owned");
 const Lock = @import("lock.zig").Lock;
+const httpgather = @import("httpgather.zig");
 
 /// Fetch the bytes at `url`. Called with the api lock held: the shell must not
 /// block and must not call back into the core except `respond` — start the
@@ -105,7 +106,17 @@ pub const Entry = struct {
     doc: ?[]u8 = null,
     /// Whether a kept doc exists on disk (so a lazy read knows to try).
     has_doc: bool = false,
+    /// The first raster tile template the style names, "{z}/{x}/{y}" still in
+    /// it. What a shell draws a thumbnail of this chart from. Empty for a
+    /// style whose tiles are vector, which no single tile can show.
+    tiles: []u8 = &.{},
+    /// TMS counts y from the south, as askTile's own source flag does.
+    tms: bool = false,
 };
+
+/// Which rule chose a saved preview template. A template saved under an older
+/// rule is read as absent, and the style is read again.
+const TILES_RULE = 2;
 
 /// Where a source's tiles come from, after the style is resolved.
 const TileSource = struct {
@@ -116,7 +127,10 @@ const TileSource = struct {
     tms: bool = false,
 };
 
-const Op = enum { add, select, refresh };
+/// `preview` draws a style and changes no state a mariner owns: it never
+/// keeps the link, never selects it, and never writes the list. For a host
+/// rendering a picture of a chart on a handle of its own.
+const Op = enum { add, select, refresh, preview };
 
 const Phase = enum { style, sibling, tilejson, sprites };
 
@@ -177,6 +191,9 @@ const Kind = union(enum) {
     sprite_png: usize,
     /// The renderer's own request id for this tile.
     tile: u64,
+    /// Index into `preview_jobs`: a style fetched only to read a tile
+    /// template out of, for a shell's thumbnail.
+    preview: usize,
 };
 
 const Req = struct {
@@ -253,6 +270,13 @@ pub const Links = struct {
     entries: std.ArrayList(Entry) = .empty,
     /// The selected link's url, or null for lookout's own chart.
     active: ?[]u8 = null,
+    /// The url whose style the renderer holds now. Owned.
+    ///
+    /// Picking the chart already drawn is a no-op, and worth telling apart:
+    /// a resolve re-reads the style, re-fetches its sprite packs and re-lays
+    /// out the scene, which for a 389 layer style with 5,354 sprite cells is
+    /// over a second of the calling thread.
+    applied: ?[]u8 = null,
     /// The credit line the active style's sources ask for. Owned; "" for none.
     attribution: []u8 = &.{},
     /// What went wrong with the last operation. Owned; "" for none.
@@ -272,6 +296,12 @@ pub const Links = struct {
     sources: std.ArrayList(TileSource) = .empty,
     tile_queue: std.ArrayList(TileAsk) = .empty,
 
+    /// Styles being read for their tile template, and how many are out. A
+    /// shell asks for these when it draws the chart list; they never touch
+    /// what is on screen.
+    preview_jobs: std.ArrayList([]u8) = .empty,
+    previews_inflight: usize = 0,
+
     /// Answers from the shell's fetch threads. Guarded by inbox_mu ALONE — the
     /// api lock is deliberately not taken here.
     inbox_mu: Lock = .{},
@@ -280,15 +310,24 @@ pub const Links = struct {
     /// demand wakes for an answer that landed.
     inbox_len: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
 
+    /// Bodies that arrive a piece at a time, held until they are whole.
+    gather: httpgather.Gather = undefined,
+
     pub fn init(alloc: std.mem.Allocator, sink: Sink) Links {
-        return .{ .alloc = alloc, .sink = sink };
+        return .{
+            .alloc = alloc,
+            .sink = sink,
+            .gather = httpgather.Gather.init(alloc, MAX_DOC_BYTES),
+        };
     }
 
     pub fn deinit(self: *Links) void {
+        self.gather.deinit();
         self.dropResolve();
         for (self.entries.items) |*e| self.freeEntry(e);
         self.entries.deinit(self.alloc);
         if (self.active) |a| self.alloc.free(a);
+        if (self.applied) |a| self.alloc.free(a);
         self.freeStr(&self.attribution);
         self.freeStr(&self.err);
         self.clearSources();
@@ -300,12 +339,15 @@ pub const Links = struct {
         self.inbox.deinit(self.alloc);
         if (self.dir) |d| self.alloc.free(d);
         self.* = undefined;
+        for (self.preview_jobs.items) |u| self.alloc.free(u);
+        self.preview_jobs.deinit(self.alloc);
     }
 
     fn freeEntry(self: *Links, e: *Entry) void {
         self.alloc.free(e.url);
         self.alloc.free(e.name);
         if (e.doc) |d| self.alloc.free(d);
+        if (e.tiles.len != 0) self.alloc.free(e.tiles);
     }
 
     fn freeStr(self: *Links, s: *[]u8) void {
@@ -426,16 +468,21 @@ pub const Links = struct {
     /// adopts it. `status` is the final HTTP status after redirects, or 0 for
     /// a transport failure. Bytes are copied.
     pub fn respond(self: *Links, req_id: u64, bytes: []const u8, status: c_int) void {
-        const keep: []u8 = if (bytes.len == 0 or bytes.len > MAX_DOC_BYTES)
-            &.{}
-        else
-            self.alloc.dupe(u8, bytes) catch &.{};
+        self.respondChunk(req_id, bytes, status, true);
+    }
+
+    /// Take one piece of an answer. A style, a TileJSON, a sprite sheet and a
+    /// tile are all read whole, so the pieces are joined before the machine
+    /// sees them.
+    pub fn respondChunk(self: *Links, req_id: u64, bytes: []const u8, status: c_int, done: bool) void {
+        const whole = self.gather.take(req_id, bytes, status, done) orelse return;
+        const keep = whole.bytes;
         self.inbox_mu.lock();
         defer self.inbox_mu.unlock();
         self.inbox.append(self.alloc, .{
             .id = req_id,
             .bytes = keep,
-            .status = if (bytes.len > MAX_DOC_BYTES) 0 else status,
+            .status = whole.status,
         }) catch {
             if (keep.len != 0) self.alloc.free(keep);
             return;
@@ -488,6 +535,10 @@ pub const Links = struct {
             self.sink.tileRespond(self.sink.ctx, req.kind.tile, a.bytes, st);
             return;
         }
+        if (req.kind == .preview) {
+            self.onPreview(req.kind.preview, a.bytes, ok);
+            return;
+        }
         const rs = self.rs orelse return;
         // A superseded epoch's answers are dropped: a newer add or select owns
         // the chart now.
@@ -498,7 +549,7 @@ pub const Links = struct {
             .tilejson => |i| self.onTileJson(rs, i, a.bytes, ok),
             .sprite_json => |i| self.onSprite(rs, i, a.bytes, ok, true),
             .sprite_png => |i| self.onSprite(rs, i, a.bytes, ok, false),
-            .tile => unreachable,
+            .tile, .preview => unreachable,
         }
     }
 
@@ -527,6 +578,18 @@ pub const Links = struct {
             return;
         };
         const e = self.find(want) orelse return;
+        // Already drawn. The pick still gets written down, because a list
+        // that has just been loaded may not have it yet.
+        if (self.applied) |a| {
+            if (std.mem.eql(u8, a, want)) {
+                if (self.active == null or !std.mem.eql(u8, self.active.?, want)) {
+                    self.setActive(want);
+                    self.save();
+                }
+                self.changed = true;
+                return;
+            }
+        }
         // The pick is the mariner's and stands whatever the network does: an
         // offline resolve leaves it selected so the next open retries.
         self.setActive(want);
@@ -546,6 +609,17 @@ pub const Links = struct {
         self.setActive(url);
         self.changed = true;
         self.start(.refresh, e.url, e.url, isLocalPath(e.url));
+    }
+
+    /// Draw a style on this handle without adding it to the list.
+    ///
+    /// For a host rendering a picture of a chart offscreen: every other path
+    /// here keeps the link and writes the list, and a second handle doing that
+    /// rewrites the mariner's own list under them.
+    pub fn drawOnly(self: *Links, link: []const u8) void {
+        const trimmed = std.mem.trim(u8, link, " \t\r\n");
+        if (trimmed.len == 0) return;
+        self.start(.preview, trimmed, trimmed, isLocalPath(trimmed));
     }
 
     /// Drop one chart. Its kept style text goes with it, and if it was the one
@@ -579,12 +653,19 @@ pub const Links = struct {
         self.active = copy;
     }
 
+    fn setApplied(self: *Links, url: ?[]const u8) void {
+        const copy: ?[]u8 = if (url) |u| (self.alloc.dupe(u8, u) catch return) else null;
+        if (self.applied) |a| self.alloc.free(a);
+        self.applied = copy;
+    }
+
     /// Back to lookout's own chart.
     fn clearSelection(self: *Links) void {
         self.dropResolve();
         self.cancelResolves();
         self.clearSources();
         self.setActive(null);
+        self.setApplied(null);
         self.freeStr(&self.attribution);
         self.freeStr(&self.err);
         _ = self.sink.setStyle(self.sink.ctx, null);
@@ -898,7 +979,7 @@ pub const Links = struct {
             self.dropResolve();
             return;
         }
-        if (rs.op != .add) {
+        if (rs.op != .add and rs.op != .preview) {
             const act = self.active orelse {
                 self.dropResolve();
                 return;
@@ -929,6 +1010,7 @@ pub const Links = struct {
             self.cancelResolves();
             self.clearSources();
             self.setActive(null);
+            self.setApplied(null);
             self.freeStr(&self.attribution);
             self.fail("That chart style could not be drawn.");
             self.save();
@@ -936,14 +1018,29 @@ pub const Links = struct {
         }
 
         self.installSources(style);
+        if (rs.op == .preview) {
+            // A picture of the chart and no more. The list, the pick and the
+            // credit belong to the mariner's own handle.
+            for (rs.packs.items) |p| {
+                const j = p.json orelse continue;
+                const b = p.png orelse continue;
+                _ = self.sink.spritePack(self.sink.ctx, p.prefix, j, b);
+            }
+            self.changed = true;
+            self.dropResolve();
+            return;
+        }
         // AFTER the style: setting one clears the previous style's packs.
         for (rs.packs.items) |p| {
             const j = p.json orelse continue;
             const b = p.png orelse continue;
             _ = self.sink.spritePack(self.sink.ctx, p.prefix, j, b);
         }
+        self.setApplied(rs.url);
         self.setStr(&self.attribution, creditLine(rs.arena.allocator(), style) catch "");
         self.keepEntry(rs);
+        // After the entry exists: an add creates it here.
+        self.keepTemplate(rs.url, style);
         self.setActive(rs.url);
         if (rs.note.len != 0) self.setStr(&self.err, rs.note) else self.freeStr(&self.err);
         self.save();
@@ -991,6 +1088,139 @@ pub const Links = struct {
         e.doc = copy;
         e.has_doc = true;
         self.writeDoc(e.url, copy);
+    }
+
+    // ---- previews ------------------------------------------------------------
+    //
+    // A shell drawing the chart list wants a picture of each chart, and the
+    // engine draws one chart at a time. What it can have is one tile: the
+    // style names where its tiles come from, so the same z/x/y off every
+    // publisher puts the same water side by side and the styles are what
+    // differ.
+
+    /// How many style reads for previews are out at once.
+    const MAX_PREVIEW_INFLIGHT = 3;
+
+    /// Read the style of every link with no tile template yet, so a shell can
+    /// draw a thumbnail of it. Nothing here touches the chart on screen.
+    pub fn previewAll(self: *Links) void {
+        for (self.entries.items) |e| {
+            if (e.tiles.len != 0) continue;
+            if (self.previews_inflight >= MAX_PREVIEW_INFLIGHT) return;
+            const url = self.alloc.dupe(u8, e.url) catch return;
+            self.preview_jobs.append(self.alloc, url) catch {
+                self.alloc.free(url);
+                return;
+            };
+            const idx = self.preview_jobs.items.len - 1;
+            if (self.issue(e.url, isLocalPath(e.url), .{ .preview = idx }) == 0) continue;
+            self.previews_inflight += 1;
+        }
+    }
+
+    /// Remember where this chart's tiles come from, for a shell's thumbnail.
+    fn keepTemplate(self: *Links, url: []const u8, style: std.json.Value) void {
+        const found = firstRasterTemplate(style) orelse return;
+        const e = self.find(url) orelse return;
+        if (e.tiles.len != 0 and std.mem.eql(u8, e.tiles, found.template)) return;
+        const copy = self.alloc.dupe(u8, found.template) catch return;
+        if (e.tiles.len != 0) self.alloc.free(e.tiles);
+        e.tiles = copy;
+        e.tms = found.tms;
+    }
+
+    /// A style read for a preview came back. Keep its first raster template.
+    fn onPreview(self: *Links, idx: usize, bytes: []const u8, ok: bool) void {
+        if (self.previews_inflight > 0) self.previews_inflight -= 1;
+        if (idx >= self.preview_jobs.items.len) return;
+        const url = self.preview_jobs.items[idx];
+        if (!ok or bytes.len == 0) return;
+        var parsed = std.json.parseFromSlice(std.json.Value, self.alloc, bytes, .{}) catch return;
+        defer parsed.deinit();
+        const found = firstRasterTemplate(parsed.value) orelse return;
+        const e = self.find(url) orelse return;
+        const copy = self.alloc.dupe(u8, found.template) catch return;
+        if (e.tiles.len != 0) self.alloc.free(e.tiles);
+        e.tiles = copy;
+        e.tms = found.tms;
+        self.save();
+        self.changed = true;
+    }
+
+    /// The tile url a shell draws as this chart's picture, or null when the
+    /// style names no raster tiles. `buf` holds the result.
+    pub fn previewUrl(
+        self: *Links,
+        link: []const u8,
+        lon: f64,
+        lat: f64,
+        zoom: i32,
+        buf: []u8,
+    ) ?[]const u8 {
+        const e = self.find(link) orelse return null;
+        if (e.tiles.len == 0) return null;
+        const z = std.math.clamp(zoom, 0, 20);
+        const n = @as(f64, @floatFromInt(@as(i64, 1) << @intCast(z)));
+        const wrapped = lon - @floor((lon + 180.0) / 360.0) * 360.0;
+        const x_f = (wrapped + 180.0) / 360.0 * n;
+        const clamped_lat = std.math.clamp(lat, -85.05112878, 85.05112878);
+        const rad = clamped_lat * std.math.pi / 180.0;
+        const y_f = (1.0 - @log(@tan(rad) + 1.0 / @cos(rad)) / std.math.pi) / 2.0 * n;
+        const last: i32 = @intFromFloat(n - 1);
+        var x: i32 = @intFromFloat(@floor(x_f));
+        var y: i32 = @intFromFloat(@floor(y_f));
+        x = std.math.clamp(x, 0, last);
+        y = std.math.clamp(y, 0, last);
+        if (e.tms) y = last - y;
+        const url = fillTemplate(self.alloc, e.tiles, z, x, y) catch return null;
+        defer self.alloc.free(url);
+        if (url.len >= buf.len) return null;
+        @memcpy(buf[0..url.len], url);
+        buf[url.len] = 0;
+        return buf[0..url.len];
+    }
+
+    /// The first raster tile template a style names, with its y order. A bare
+    /// TileJSON names its tiles at the top level and has no sources.
+    const Template = struct { template: []const u8, tms: bool };
+
+    /// Only a chart whose tiles are ALL raster has a picture in one tile.
+    ///
+    /// A style that draws vector seamarks over a raster base is the base plus
+    /// the publisher's own work. The base alone is somebody else's map: a
+    /// seamark style over OpenStreetMap previewed as OpenStreetMap, under the
+    /// publisher's name.
+    fn firstRasterTemplate(doc: std.json.Value) ?Template {
+        if (doc != .object) return null;
+        if (doc.object.get("sources")) |sources| {
+            if (sources == .object) {
+                var found: ?Template = null;
+                for (sources.object.keys()) |name| {
+                    const src = sources.object.get(name) orelse continue;
+                    if (src != .object) continue;
+                    const kind = memberString(src, "type") orelse "";
+                    if (!std.mem.eql(u8, kind, "raster")) return null;
+                    if (found == null) found = firstTemplateOf(src);
+                }
+                return found;
+            }
+        }
+        const bare = firstTemplateOf(doc) orelse return null;
+        // A bare TileJSON names no type. Its extension does.
+        if (std.mem.endsWith(u8, bare.template, ".pbf")) return null;
+        if (std.mem.endsWith(u8, bare.template, ".mvt")) return null;
+        return bare;
+    }
+
+    fn firstTemplateOf(obj: std.json.Value) ?Template {
+        const tiles = obj.object.get("tiles") orelse return null;
+        if (tiles != .array) return null;
+        for (tiles.array.items) |t| {
+            if (t != .string or t.string.len == 0) continue;
+            const scheme = memberString(obj, "scheme") orelse "";
+            return .{ .template = t.string, .tms = std.ascii.eqlIgnoreCase(scheme, "tms") };
+        }
+        return null;
     }
 
     // ---- tile serving --------------------------------------------------------
@@ -1149,6 +1379,14 @@ pub const Links = struct {
             try jsonString(alloc, out, e.url);
             try out.appendSlice(alloc, ",\"name\":");
             try jsonString(alloc, out, e.name);
+            // Only in the saved file. The UI snapshot is a pinned contract,
+            // and a shell asks for a preview url rather than reading this.
+            if (!full and e.tiles.len != 0) {
+                try out.appendSlice(alloc, ",\"tiles\":");
+                try jsonString(alloc, out, e.tiles);
+                if (e.tms) try out.appendSlice(alloc, ",\"tms\":true");
+                try out.print(alloc, ",\"tilesrule\":{d}", .{TILES_RULE});
+            }
             try out.append(alloc, '}');
         }
         try out.appendSlice(alloc, "],\"active\":");
@@ -1267,9 +1505,34 @@ pub const Links = struct {
             };
             // has_doc is a maybe, not a claim: entryDoc clears it when the
             // file is not there, which spares a stat per row at load.
-            self.entries.append(self.alloc, .{ .url = u, .name = n, .has_doc = true }) catch {
+            // The tile template a preview was drawn from, so a shell has its
+            // thumbnails at the first frame rather than after a round trip.
+            // Only a template this build's rule chose. Rule 1 read the first
+            // raster source of any style, and previewed a seamark chart as the
+            // raster map under it.
+            const rule = switch (it.object.get("tilesrule") orelse std.json.Value{ .integer = 0 }) {
+                .integer => |v| v,
+                else => 0,
+            };
+            const tmpl = if (rule == TILES_RULE) memberString(it, "tiles") orelse "" else "";
+            const t: []u8 = if (tmpl.len == 0)
+                &.{}
+            else
+                self.alloc.dupe(u8, tmpl) catch &.{};
+            const tms = switch (it.object.get("tms") orelse std.json.Value{ .bool = false }) {
+                .bool => |v| v,
+                else => false,
+            };
+            self.entries.append(self.alloc, .{
+                .url = u,
+                .name = n,
+                .has_doc = true,
+                .tiles = t,
+                .tms = tms,
+            }) catch {
                 self.alloc.free(u);
                 self.alloc.free(n);
+                if (t.len != 0) self.alloc.free(t);
                 continue;
             };
             // A shell's old store may carry the style TEXT it kept for a local
@@ -2327,6 +2590,33 @@ test "chartlinks: an offline resolve keeps the mariner's selection" {
     try testing.expect(f.links.err.len != 0);
 }
 
+test "chartlinks: picking the chart already drawn hands the renderer nothing" {
+    const f = try Fake.open(testing.allocator);
+    defer f.close();
+
+    f.links.add("https://h/style.json");
+    try f.answer("style.json", "{\"version\":8,\"sources\":{},\"layers\":[]}", 200);
+    try testing.expect(f.style != null);
+
+    const styles = f.style_calls;
+    const sent = f.sent.items.len;
+
+    // The same pick again. A resolve would read the style once more and set
+    // a style the renderer is already drawing: for a publisher's chart of
+    // 389 layers and 5,354 sprite cells that is over a second of the
+    // calling thread.
+    f.links.select("https://h/style.json");
+    try testing.expectEqual(styles, f.style_calls);
+    try testing.expectEqual(sent, f.sent.items.len);
+    try testing.expectEqualStrings("https://h/style.json", f.links.active.?);
+
+    // Lookout's own chart takes the renderer back, and the next pick of the
+    // link has work to do again.
+    f.links.select(null);
+    try testing.expect(f.style == null);
+    try testing.expect(f.links.applied == null);
+}
+
 test "chartlinks: a style the core refuses drops the pick and the credit" {
     const f = try Fake.open(testing.allocator);
     defer f.close();
@@ -2590,4 +2880,70 @@ test "chartlinks: lookout's own chart reads as an empty active url" {
     try testing.expectEqualStrings("", std.mem.span(r.state.attribution));
     try testing.expectEqualStrings("", std.mem.span(r.state.err));
     try testing.expectEqual(@as(c_int, 0), r.state.busy);
+}
+
+test "chartlinks: a preview names one tile of a chart, at a point" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try std.fmt.allocPrint(testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer testing.allocator.free(dir);
+
+    const style =
+        \\{"version":8,"sources":{"sea":{"type":"raster",
+        \\ "tiles":["https://t.example/{z}/{x}/{y}.png"]}},"layers":[]}
+    ;
+    {
+        const f = try Fake.open(testing.allocator);
+        defer f.close();
+        f.links.openStore(dir);
+        f.links.add("https://t.example/style.json");
+        try f.answer("style.json", style, 200);
+
+        var buf: [512]u8 = undefined;
+        // Greenwich at zoom 1 is the tile east of the meridian, north of the
+        // equator.
+        const url = f.links.previewUrl("https://t.example/style.json", 0.1, 51.5, 1, &buf).?;
+        try testing.expectEqualStrings("https://t.example/1/1/0.png", url);
+
+        // A link the list does not carry has no picture.
+        try testing.expect(f.links.previewUrl("https://t.example/other.json", 0, 0, 1, &buf) == null);
+    }
+    {
+        // The template is kept with the link, so a shell has its picture at
+        // the first frame after a restart.
+        const f = try Fake.open(testing.allocator);
+        defer f.close();
+        f.links.openStore(dir);
+        var buf: [512]u8 = undefined;
+        const url = f.links.previewUrl("https://t.example/style.json", 0.1, 51.5, 1, &buf).?;
+        try testing.expectEqualStrings("https://t.example/1/1/0.png", url);
+    }
+}
+
+test "chartlinks: a vector style has no preview tile" {
+    const f = try Fake.open(testing.allocator);
+    defer f.close();
+    f.links.add("https://t.example/style.json");
+    try f.answer("style.json",
+        \\{"version":8,"sources":{"v":{"type":"vector",
+        \\ "tiles":["https://t.example/{z}/{x}/{y}.pbf"]}},"layers":[]}
+    , 200);
+    var buf: [512]u8 = undefined;
+    try testing.expect(f.links.previewUrl("https://t.example/style.json", 0, 0, 1, &buf) == null);
+}
+
+test "chartlinks: a raster base under vector work is not a preview of it" {
+    const f = try Fake.open(testing.allocator);
+    defer f.close();
+    f.links.add("https://t.example/style.json");
+    // Seamarks drawn over somebody else's raster map. The base is not this
+    // publisher's chart, and previewing it puts their name on it.
+    try f.answer("style.json",
+        \\{"version":8,"sources":{
+        \\ "base":{"type":"raster","tiles":["https://osm.example/{z}/{x}/{y}.png"]},
+        \\ "marks":{"type":"vector","tiles":["https://t.example/{z}/{x}/{y}.pbf"]}},
+        \\ "layers":[]}
+    , 200);
+    var buf: [512]u8 = undefined;
+    try testing.expect(f.links.previewUrl("https://t.example/style.json", 0, 0, 1, &buf) == null);
 }

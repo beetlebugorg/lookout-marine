@@ -320,6 +320,144 @@ static const char *LK_CSS =
     ".lk-night .lk-capsule .dim-label { color: #7f8894; }"
     /* The NOT FOR NAVIGATION block of the first-run page: amber, bordered,
      * set apart from everything about getting started. */
+    /* ---- the chart gallery ------------------------------------------------
+     *
+     * One tile per chart, in a row. A tile is a card: the picture at the top
+     * bleeds to its edges, so the button keeps no padding of its own and the
+     * corners clip what is drawn into them. */
+    ".lk-chart-tile {"
+    "  padding: 0;"
+    "  background: @theme_base_color;"
+    "  border: 1px solid alpha(@borders, 0.7);"
+    "  border-radius: 11px;"
+    "  box-shadow: none;"
+    "}"
+    ".lk-chart-tile:hover { background: mix(@theme_base_color, @theme_fg_color, 0.04); }"
+    /* The chart being drawn. Two points of accent, so the row says which one
+     * is on at a glance and not by reading. */
+    ".lk-chart-tile-active {"
+    "  border: 2px solid @accent_color;"
+    "  background: alpha(@accent_color, 0.05);"
+    "}"
+    ".lk-chart-art { border-bottom: 1px solid alpha(@borders, 0.5); }"
+    ".lk-chart-art-empty { background: alpha(@theme_fg_color, 0.06); }"
+    ".lk-chart-badge {"
+    "  color: @accent_fg_color;"
+    "  background: @accent_color;"
+    "  border-radius: 5px;"
+    "  padding: 2px 6px;"
+    "  font-size: 80%;"
+    "  font-weight: bold;"
+    "}"
+    ".lk-chart-more > button {"
+    "  min-height: 22px;"
+    "  min-width: 22px;"
+    "  padding: 0;"
+    "  border-radius: 999px;"
+    "  background: alpha(@theme_base_color, 0.92);"
+    "  border: 1px solid alpha(@borders, 0.6);"
+    "}"
+    /* The way in to adding one. Dashed, because it holds no chart. */
+    ".lk-add-tile {"
+    "  background: alpha(@theme_fg_color, 0.02);"
+    "  border: 1.5px dashed alpha(@borders, 0.9);"
+    "  border-radius: 11px;"
+    "  box-shadow: none;"
+    "}"
+    /* ---- setup -------------------------------------------------------------
+     *
+     * A card raised over the running chart. The picture on the welcome step
+     * bleeds to the top edge, so the card clips to its own corners. */
+    ".lk-first-run-card {"
+    "  background: @theme_base_color;"
+    "  border: 1px solid alpha(@borders, 0.8);"
+    "  border-radius: 12px;"
+    "  box-shadow: 0 6px 24px alpha(black, 0.30);"
+    "}"
+    ".lk-first-run-footer {"
+    "  padding: 14px 24px;"
+    "  border-top: 1px solid alpha(@borders, 0.6);"
+    "}"
+    /* The welcome step's own footer: the action under the prose, and the way
+     * out under it. No rule above it, because there is no bar. */
+    ".lk-first-run-choice {"
+    "  padding: 4px 24px 30px 24px;"
+    "}"
+    /* A pick-one card. The chosen one takes the accent, so the row says which
+     * it is at a glance and not by reading. */
+    ".lk-step-card {"
+    "  padding: 21px 17px;"
+    "  background: @theme_base_color;"
+    "  border: 1px solid alpha(@borders, 0.7);"
+    "  border-radius: 12px;"
+    "  box-shadow: none;"
+    "}"
+    ".lk-step-card:hover { background: mix(@theme_base_color, @theme_fg_color, 0.04); }"
+    ".lk-step-card-picked {"
+    "  border: 2px solid @accent_color;"
+    "  background: alpha(@accent_color, 0.05);"
+    "}"
+    /* The icon tile at the top of a card. */
+    ".lk-card-tile {"
+    "  padding: 16px;"
+    "  background: alpha(@accent_color, 0.10);"
+    "  border-radius: 14px;"
+    "}"
+    /* A publisher's warning. Amber, and shaped differently from an ordinary
+     * note, so it separates from the page at a glance. */
+    ".lk-step-warning {"
+    "  padding: 13px 14px;"
+    "  background: alpha(#e5a50a, 0.12);"
+    "  border-radius: 9px;"
+    "}"
+    ".lk-amber { color: #b5820a; }"
+    /* One derived number on the depth step, with a rule above it. */
+    /* ---- the settings groups ----------------------------------------------
+     *
+     * A section's rows sit on a shaded rounded shelf, with the heading outside
+     * it and above. The reference's Form groups the same way, and it is what
+     * makes a page read as a handful of groups rather than one long column.
+     * The shelf carries the air, so the rows inside it need less of their own. */
+    ".lk-settings-group {"
+    "  background: alpha(@theme_fg_color, 0.04);"
+    "  border-radius: 12px;"
+    "  padding: 14px 16px;"
+    "}"
+    ".lk-settings-group separator { background: alpha(@borders, 0.55); }"
+    /* What KIND of chart a row holds. A picture and a survey sit in the same
+     * list and switch on the same way, so the row says which it is where the
+     * mariner is reading it. It used to be filed under a heading of its own,
+     * which made the list two lists again. */
+    ".lk-type-pill {"
+    "  background: alpha(@theme_fg_color, 0.10);"
+    "  border-radius: 5px;"
+    "  padding: 1px 6px;"
+    "  font-size: 76%;"
+    "  font-weight: bold;"
+    "}"
+    /* The band panel on the import step: a shelf of its own, so the bands
+     * read as one list rather than as more of the page. */
+    ".lk-band-panel {"
+    "  padding: 13px 16px;"
+    "  background: alpha(@theme_fg_color, 0.03);"
+    "  border: 1px solid alpha(@borders, 0.7);"
+    "  border-radius: 12px;"
+    "}"
+    /* The water the depth answers make: one panel, with the key under it. */
+    ".lk-water {"
+    "  background: @theme_base_color;"
+    "  border: 1px solid alpha(@borders, 0.7);"
+    "  border-radius: 12px;"
+    "}"
+    ".lk-water-panel { border-bottom: 1px solid alpha(@borders, 0.6); }"
+    ".lk-water-key {"
+    "  padding: 11px 12px;"
+    "  border-left: 1px solid alpha(@borders, 0.5);"
+    "}"
+    ".lk-depth-row {"
+    "  padding: 11px 0;"
+    "  border-top: 1px solid alpha(@borders, 0.5);"
+    "}"
     ".lk-not-nav {"
     "  background: alpha(#f59e0b, 0.14);"
     "  border: 1px solid alpha(#f59e0b, 0.55);"

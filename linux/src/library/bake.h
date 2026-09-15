@@ -21,11 +21,42 @@
 
 #include <glib.h>
 
+/* One usage band in a bake, and how far the bake has reached into it.
+ *
+ * lookout_bake_order runs the bake COARSE BAND FIRST, so the done count says
+ * which band is being worked and how much of it is left. A mariner who stops
+ * part way keeps charts that cover the whole passage. */
 typedef struct {
+  int   band;  /* 1 to 6, or 0 for a cell whose name states no band */
+  guint total; /* charts of this band the bake will prepare */
+  guint done;  /* how many of them it has prepared */
+} LkBakeBand;
+
+/* Split a done count across the bands, in the order the bake works them: the
+ * first band takes as many as it holds, then the next. Writes each band's
+ * `done`.
+ *
+ * This is the whole of what the order buys: one counter from the core, and a
+ * mariner who can see that the coarse charts are already in. */
+void lk_bake_bands_advance (LkBakeBand *bands, guint n, guint done);
+
+/* Which work a report is about. One struct carries both, so the pill and the
+ * panel cannot call a removal an import. */
+typedef enum {
+  LK_BAKE_IMPORT,
+  LK_BAKE_REMOVE,
+} LkBakeKind;
+
+typedef struct {
+  LkBakeKind  kind;
   int         done;
   int         total;
   const char *name;   /* the set being worked on; borrowed for the call */
   double      elapsed; /* seconds since the work started */
+  /* The bands the bake holds, in the order it works them. Borrowed for the
+   * call; empty when nothing in the set states a band. */
+  const LkBakeBand *bands;
+  guint             n_bands;
 } LkBakeProgress;
 
 /* The fraction done, 0 when nothing is known yet. */
@@ -78,9 +109,35 @@ gboolean lk_chart_bake_is_derived (const char *path);
  * Free with g_free. */
 char *lk_chart_bake_prepared_dir (const char *source);
 
+/* The cells of `set` that still need preparing, given what `source` has
+ * already prepared.
+ *
+ * lk_scanned_cell_needs_prepare reads the kind of one file. An S-57 cell keeps
+ * the kind LOOKOUT_FILE_SOURCE after the bake writes its chart, so that
+ * predicate stays true for every source cell in a folder, import after import.
+ * The rest of the answer is on disk under the prepared directory. Use this
+ * function for any count of the work left.
+ *
+ * Transfer container, empty when the set is fully prepared. The cells belong
+ * to `set`. */
+GPtrArray *lk_chart_bake_to_prepare (const char *source, const LkChartSet *set);
+
 /* Delete charts this app prepared. Refuses any path it did not make, so a
  * mariner's own folder can never be deleted by removing a set. */
-gboolean lk_chart_bake_delete_derived (const char *path);
+/* Delete the charts Lookout prepared, saying where it has got to.
+ *
+ * `name` is the set the mariner removed, for the report to name. `on_progress`
+ * runs ON THE MAIN THREAD as chart directories go, and once more with an empty
+ * name when the removal is over — that last report is what takes the panel
+ * down. Both may be NULL for a delete nobody is watching.
+ *
+ * The count is the mariner's own unit: the bake writes a directory per chart,
+ * so one gone is one chart gone, and the panel counts the same things coming
+ * out that it counted going in. */
+gboolean lk_chart_bake_delete_derived (const char        *path,
+                                       const char        *name,
+                                       LkBakeProgressFunc on_progress,
+                                       gpointer           user_data);
 
 /* Throw away what a previous run renamed but did not finish deleting. Without
  * this, quitting mid-delete leaves gigabytes that nothing will mention again. */

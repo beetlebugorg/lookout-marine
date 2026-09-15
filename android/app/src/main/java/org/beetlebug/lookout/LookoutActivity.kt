@@ -34,11 +34,11 @@ import java.io.FileOutputStream
  * the HUD, the controls and the settings sheet — the analogue of HUDOverlay
  * and SettingsView sitting over the Metal layer.
  *
- * Charts come from a library chosen in the Charts tab, else anything pushed into
- * the app's external files dir, else the cell baked into the APK assets — see
- * [ChartsModel]. Chosen libraries are opened IN PLACE (by path, mmap'd), never
- * copied; the bundled asset is the one exception, since an APK asset has no path
- * of its own.
+ * Charts come from a library chosen in the Charts tab, else anything pushed
+ * into the app's external files dir — see [ChartsModel]. No chart ships in the
+ * APK: a device with nothing installed opens the engine empty, draws the
+ * basemap and runs setup over it. Libraries are opened IN PLACE (by path,
+ * mmap'd) and never copied.
  */
 class LookoutActivity : ComponentActivity() {
     private var chartView: LookoutView? = null
@@ -87,15 +87,18 @@ class LookoutActivity : ComponentActivity() {
             requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), REQ_NOTIFY)
         }
 
-        // The bundled cell is the last resort, extracted once; the model prefers
-        // the installed sets, then anything pushed into our external files dir.
-        charts = ChartsModel(applicationContext, extractAsset(CHART_ASSET, CHART_NAME))
-        if (charts.chartPaths.isEmpty()) {
-            Log.e(TAG, "no charts: none chosen, none pushed, asset extraction failed")
-            finish()
-            return
-        }
+        // No chart ships in the APK. A device with nothing installed opens the
+        // engine empty, draws the basemap and runs setup over it, which is
+        // what a mariner with no charts needs rather than one cell of somebody
+        // else's water.
+        charts = ChartsModel(applicationContext)
         controller = ChartController(applicationContext)
+        // A folder holds surveys and pictures together, so adding one installs
+        // both. One direction: the raster model knows nothing about sets.
+        charts.onPictures = { add, remove ->
+            if (add.isNotEmpty()) controller.rasterController.addRasterCharts(add)
+            for (p in remove) controller.rasterController.removeRasterChart(p)
+        }
         // The set scans run on the core's own worker; this is what tells the
         // panel a folder's counts have arrived.
         controller.onSetsScanned = { charts.pullSets() }
@@ -241,23 +244,6 @@ class LookoutActivity : ComponentActivity() {
     override fun onGenericMotionEvent(e: MotionEvent): Boolean =
         chartView?.handleScroll(e) == true || super.onGenericMotionEvent(e)
 
-    /** Copy an APK asset to internal storage (skipped when already current). */
-    private fun extractAsset(asset: String, outName: String): String? {
-        val out = File(filesDir, outName)
-        return try {
-            val assetLen = assets.open(asset).use { it.available().toLong() }
-            if (out.length() != assetLen || assetLen == 0L) {
-                assets.open(asset).use { input ->
-                    FileOutputStream(out).use { output -> input.copyTo(output) }
-                }
-                Log.i(TAG, "chart extracted -> $out (${out.length()} bytes)")
-            }
-            out.absolutePath
-        } catch (e: Exception) {
-            Log.e(TAG, "asset extract: $e")
-            null
-        }
-    }
 
     /**
      * Extract assets/plugins into filesDir/plugins and answer its path, or null
@@ -306,8 +292,6 @@ class LookoutActivity : ComponentActivity() {
 
     private companion object {
         const val TAG = "lookout"
-        const val CHART_ASSET = "charts/US5MD1MC.pmtiles"
-        const val CHART_NAME = "US5MD1MC.pmtiles"
         const val PLUGIN_ASSET_DIR = "plugins"
         const val PLUGIN_DIR_NAME = "plugins"
         const val REQ_READ = 1

@@ -32,7 +32,8 @@ $target = if ($Platform -eq 'arm64') { 'aarch64-windows-gnu' } else { 'x86_64-wi
 # directories are on it as well: a model header may not include one, but the
 # path costs nothing and keeps the two builds saying the same thing.
 $sourceDirs = @('app\ui', 'chart', 'chart\ui', 'hud', 'hud\ui', 'library', 'library\ui',
-    'plugins', 'plugins\ui', 'settings\ui', 'about', 'about\ui', 'engine', 'util') |
+    'plugins', 'plugins\ui', 'settings\ui', 'about', 'about\ui', 'engine', 'util',
+    'firstrun', 'firstrun\ui') |
     ForEach-Object { "-I$PSScriptRoot\src\$_" }
 
 # The core's headers, for the TYPES the model speaks in (lookout_view,
@@ -58,7 +59,9 @@ $cppSources = @(
     'src\plugins\lk_plugin_registry.cpp',
     'src\plugins\lk_alerts.cpp',
     'src\plugins\lk_table.cpp',
-    'src\library\lk_paths.cpp'
+    'src\library\lk_paths.cpp',
+    'src\firstrun\lk_firstrun.cpp',
+    'src\firstrun\lk_coastline.cpp'
 )
 $suites = @(
     'test\main.cpp',
@@ -70,7 +73,9 @@ $suites = @(
     'test\test_plugin_registry.cpp',
     'test\test_alerts.cpp',
     'test\test_table.cpp',
-    'test\test_paths.cpp'
+    'test\test_paths.cpp',
+    'test\test_firstrun.cpp',
+    'test\test_coastline.cpp'
 )
 
 New-Item -ItemType Directory -Force $out | Out-Null

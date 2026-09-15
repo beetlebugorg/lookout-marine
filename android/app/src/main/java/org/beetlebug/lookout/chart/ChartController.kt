@@ -8,6 +8,8 @@ import org.beetlebug.lookout.plugins.rowsJson
 import org.beetlebug.lookout.Lookout
 import org.beetlebug.lookout.LookoutActivity
 import org.beetlebug.lookout.charts.ChartLinkController
+import org.beetlebug.lookout.charts.NoaaController
+import org.beetlebug.lookout.firstrun.FirstRunModel
 import org.beetlebug.lookout.charts.ChartSets
 import org.beetlebug.lookout.charts.RasterController
 import org.beetlebug.lookout.charts.RasterCharts
@@ -182,6 +184,10 @@ class ChartController(private val appContext: Context) {
 
     /** Charts by link: an online map AS the chart. */
     val chartLinkController = ChartLinkController(appContext, access)
+    /** NOAA's catalog and downloads. Setup drives it; so does the Charts pane. */
+    val noaaController = NoaaController(access)
+    /** Setup, over an app with nothing to draw. */
+    val firstRun = FirstRunModel()
 
     val rasterCharts get() = rasterController.charts
 
@@ -380,6 +386,10 @@ class ChartController(private val appContext: Context) {
         // landing answer raises needs-redraw, so a resolve keeps this ticking
         // until it is done.
         chartLinkController.poll(l)
+        // NOAA's catalog and whatever the screen asked for while no handle was
+        // to hand. Quiet until something asks: a poll with nothing outstanding
+        // is one call that reads a published copy.
+        noaaController.poll(l)
         if (r == lastPushed) return
         lastPushed = r
         access.onMain {

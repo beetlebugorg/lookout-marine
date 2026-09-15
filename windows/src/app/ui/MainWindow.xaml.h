@@ -3,6 +3,8 @@
 
 #include "lk_alerts.h"
 #include "lk_bake.h"
+#include "lk_coastline.h"
+#include "lk_firstrun.h"
 #include "lk_controller.h"
 #include "lk_pick.h"
 #include "lk_discovery.h"
@@ -132,6 +134,8 @@ namespace winrt::LookoutMarine::implementation
                        std::string const &label = {});
         void DoOpenPaths(std::vector<std::string> const &paths, std::string const &recent,
                          std::string const &label = {});
+        /* Everything that belongs to the handle about to be destroyed. */
+        void CloseChartHandle();
         // startup loader (hud/ui/Loader.cpp)
         void ShowStartupLoader(size_t cells);
         void SetLoaderTessellating();
@@ -270,6 +274,15 @@ namespace winrt::LookoutMarine::implementation
             bool scanned{ false };
             size_t charts{ 0 };
             size_t pictures{ 0 };
+            // Files that bake before they draw, and what the folder holds on
+            // disk. Both are the core's own figures for the set.
+            size_t unprepared{ 0 };
+            uint64_t bytes{ 0 };
+            // How many prepared charts this set holds in each usage band,
+            // keyed 1 to 6. A set that stops at Coastal does not draw the
+            // harbour a passage ends in, so the row says which scales are in
+            // it.
+            std::map<int, size_t> bands;
             std::string title; // the agency whose charts these are, else the folder
         };
         lookout_chart_sets *ChartSetsModel();
@@ -282,6 +295,20 @@ namespace winrt::LookoutMarine::implementation
         void AdoptChartSet(std::string const &path);
         void SetChartSetOn(std::string const &path, bool on);
         void RemoveChartSet(std::string const &path);
+        /* Whether Lookout made the charts in this set, which decides whether
+         * removing it deletes them and asks first. */
+        bool ChartSetIsDerived(std::string const &path);
+        /* Ask, then remove and delete. The mariner is throwing away work, so
+         * the question says how much of it. */
+        fire_and_forget ConfirmRemoveChartSet(std::string path, std::string name, size_t charts);
+        /* Delete the charts Lookout prepared for one set. Refuses any path it
+         * did not make. Call it with the chart CLOSED: the handle holds the
+         * files open, and Windows refuses to rename a directory under one. */
+        void DeletePreparedCharts(std::string const &path);
+        int remove_seq{ 0 };
+        /* Open what the switched-on sets compose, or take the chart off the
+         * display when nothing is installed. */
+        void ReopenChartSets(std::string const &recent);
         std::vector<ChartSetRow> chart_sets;
         lookout_chart_sets *chart_sets_model{ nullptr };
 
@@ -300,6 +327,26 @@ namespace winrt::LookoutMarine::implementation
             std::string name;
         };
         void SelectChartLink(std::string const &url); // "" = the built-in chart
+        // Which chart draws now, as a url. Empty is Lookout's own.
+        std::string ActiveChartUrl();
+        // Draw the chart the mariner picked from the shelf. A frame goes out
+        // between the pick and the call, so a tile is marked as being read
+        // before the core takes the thread to read the style.
+        void PickChartTile(std::string const &url, bool mine);
+        // The Active chart shelf: one tile per chart, the menu on a tile the
+        // mariner added, and the tile that adds one (settings/ui/Settings.cpp).
+        /* One tile, registered in chart_tile_ui as it is built. `where` is its
+         * detail line at rest; which tile is drawing and which is being read
+         * is applied by RefreshChartsPageInPlace, so a pick never rebuilds. */
+        Microsoft::UI::Xaml::Controls::Button ChartTile(std::string const &url,
+                                                        std::wstring const &name,
+                                                        std::wstring const &where,
+                                                        wchar_t const *art, bool mine);
+        Microsoft::UI::Xaml::Controls::Button ChartTileMenu(std::string const &url,
+                                                            std::wstring const &name);
+        Microsoft::UI::Xaml::Controls::Button AddChartTile();
+        fire_and_forget ShowAddChartDialog();
+        fire_and_forget PickChartStyleFile();
         void AddChartLink(std::string const &raw);
         void RefreshChartLink(std::string const &url);
         void RemoveChartLink(std::string const &url);
@@ -308,6 +355,121 @@ namespace winrt::LookoutMarine::implementation
         void MigrateChartLinks(); // the old store, handed over once
         void PollChartLinks();    // the snapshot; UI thread, one consumer
         void ChartLinkRespond(uint64_t id, void const *bytes, size_t len, int status);
+        // ---- setup (firstrun/) ------------------------------------------
+        //
+        // The MODEL decides; this half only draws it. See firstrun/lk_firstrun.h.
+        void FirstRunAttach(); // wire the pane's three buttons, once
+        void FirstRunBegin();  // no chart to draw: put setup up
+        // Get charts from NOAA, from the Charts pane: the coverage step alone.
+        void ShowNoaaPicker();
+        // Open the engine with NO cells so the basemap draws, then begin
+        // setup over it. Both of the ways to arrive with nothing to draw.
+        void OpenBasemapForSetup();
+        void FirstRunRender(); // build the step on screen from the model
+        // The chart controls, hidden while setup covers the chart.
+        void FirstRunChartChrome(bool shown);
+        // The fade and the scrollbar, while a step runs past the card.
+        void FirstRunUpdateFold();
+        void FirstRunPrimary();
+        // The welcome step centers a column; every later step uses a row.
+        void FirstRunFooterShape(bool welcome);
+        // What to DO once the flow has finished asking: start the NOAA
+        // download, add the chart link, or raise the folder picker.
+        void FirstRunAct(lkw::ChartSource source);
+        fire_and_forget FirstRunShowEncTerms();
+        // The two services, read on a timer and handed to the model, which
+        // decides what survives their resetting.
+        // Hand the core the cells this device holds, so a cost and a download
+        // leave them out.
+        void FirstRunNoaaHave();
+        void FirstRunPollStart();
+        void FirstRunPoll();
+
+        // The welcome picture, outside the step inset so it meets the edges.
+        void FirstRunHero(Microsoft::UI::Xaml::Controls::StackPanel const &body);
+        void FirstRunWelcome(Microsoft::UI::Xaml::Controls::StackPanel const &body);
+        void FirstRunSource(Microsoft::UI::Xaml::Controls::StackPanel const &body);
+        // The coverage map, above the region list on the coverage step.
+        void FirstRunCoverageMap(Microsoft::UI::Xaml::Controls::StackPanel const &body);
+        /* One panel of that map: a window on the ground, and the regions in
+         * `ids` drawn on it as the water they cover. Each region is one
+         * tappable path, so the map picks as well as it shows. */
+        Microsoft::UI::Xaml::Controls::Border FirstRunCoveragePanel(
+            lkw::MapWindow const &win, std::vector<std::string> const &ids, double width,
+            double radius, bool enabled);
+        /* The catalog state the coverage step last drew. The catalog lands on
+         * its own and the map and the prices come from it, so the step is
+         * rendered again when this changes rather than on every tick. */
+        std::string noaa_catalog_drawn;
+        std::string NoaaCatalogSignature();
+
+        /* The Preparing step's live parts. That step is polled four times a
+         * second, and building it again restarted the progress bar's sweep and
+         * every phase ring on each tick. The values are written here instead;
+         * the step is built again only when its shape changes, which
+         * FirstRunImportingShape names. */
+        struct FirstRunPhaseUi
+        {
+            Microsoft::UI::Xaml::Controls::TextBlock name{ nullptr };
+            Microsoft::UI::Xaml::Controls::TextBlock detail{ nullptr };
+            Microsoft::UI::Xaml::Controls::FontIcon tick{ nullptr };
+            Microsoft::UI::Xaml::Controls::ProgressRing ring{ nullptr };
+        };
+        std::vector<FirstRunPhaseUi> first_run_phase_ui;
+        struct FirstRunBandUi
+        {
+            Microsoft::UI::Xaml::Controls::TextBlock count{ nullptr };
+            Microsoft::UI::Xaml::Controls::FontIcon tick{ nullptr };
+        };
+        std::vector<FirstRunBandUi> first_run_band_ui;
+        Microsoft::UI::Xaml::Controls::ProgressBar first_run_bar{ nullptr };
+        std::string first_run_importing_shape;
+        std::string FirstRunImportingShape();
+        /* What the step on screen now says, and whether its action can be
+         * taken. Creates nothing, so a poll may call it. */
+        void FirstRunRestate();
+        void FirstRunCoverage(Microsoft::UI::Xaml::Controls::StackPanel const &body);
+        void FirstRunOnline(Microsoft::UI::Xaml::Controls::StackPanel const &body);
+        void FirstRunImporting(Microsoft::UI::Xaml::Controls::StackPanel const &body);
+        void FirstRunDepths(Microsoft::UI::Xaml::Controls::StackPanel const &body);
+        void FirstRunPhase(Microsoft::UI::Xaml::Controls::StackPanel const &body,
+                           std::wstring const &name, std::wstring const &detail,
+                           bool running, bool done);
+
+        lkw::FirstRun first_run;
+        Microsoft::UI::Xaml::DispatcherTimer first_run_timer{ nullptr };
+        // The region the coverage step has picked, as the core's id ("d17").
+        // The districts picked, as the core's comma separated list ("d5,d8").
+        // lookout_noaa_cost and lookout_noaa_download both take it as it
+        // stands (lkw::RegionPicked, lkw::RegionToggle).
+        std::string noaa_region_id;
+        // Whether the coverage step has asked for the catalog. It asks once
+        // per page, so a read that failed is not asked for again on every
+        // render; the step's Try Again is what asks after that.
+        bool noaa_catalog_asked{ false };
+        // What the online step has been given, so the button can read Skip
+        // until there is something to continue with.
+        std::string chart_link_url;
+        // Where the district zips go. Beside the library rather than in it:
+        // they are the source a bake reads, and the vector open globs the
+        // library for .pmtiles.
+        std::string noaa_dest_dir;
+        // The usage band of every chart the scan found, which with the bake's
+        // own count gives the by-band breakdown. See lkw::FirstRunBands.
+        std::vector<int> noaa_scan_bands;
+        // GSHHG rings for the coverage map, read once and kept: a step
+        // rebuild redraws the map and the file is a quarter of a megabyte.
+        std::vector<lkw::CoastRing> coastline_;
+        // The baked library has been opened and adopted, once per run.
+        bool noaa_handed_over{ false };
+        bool first_run_footer_welcome{ false };
+        bool first_run_footer_shaped{ false };
+
+
+        // One piece of an answer. `done` marks the last; a large body never
+        // exists whole on this side. See lk_controller_http_respond_chunk.
+        void ChartLinkRespondChunk(uint64_t id, void const *bytes, size_t len,
+                                   int status, int done);
         static void HttpGetThunk(void *user, unsigned long long req_id,
                                  const char *url, int allow_file);
         static void HttpCancelThunk(void *user, unsigned long long req_id);
@@ -317,6 +479,22 @@ namespace winrt::LookoutMarine::implementation
         std::string chart_link_error;
         bool chart_link_busy{ false };
         bool chart_links_imported{ false };
+        // The chart the mariner just picked, while the core has yet to be
+        // told. Reading a publisher's style is the core's work and it runs
+        // inside a frame, so the tile says what is happening before that
+        // starts.
+        // The url picked, empty for Lookout's own chart, and whether that pick
+        // is still in flight. An empty url is a real answer, so the flag says
+        // whether there is a pick at all.
+        std::string chart_link_pending;
+        bool chart_link_picked{ false };
+        // True only until the call goes out, which is what keeps a poll
+        // landing in between from clearing the pick.
+        bool chart_link_picking{ false };
+        // Where the mariner had the shelf scrolled. The links poll several
+        // times a second while a style resolves, and every report rebuilds
+        // the page, which sent the row back home.
+        double chart_shelf_offset{ 0 };
         // Answers are given under this lock, so a closing handle is never
         // answered into.
         std::mutex link_mu;
@@ -450,6 +628,80 @@ namespace winrt::LookoutMarine::implementation
         int settings_size_w{ 0 };
         int settings_size_h{ 0 };
         Microsoft::UI::Xaml::DispatcherTimer apply_timer{ nullptr };
+        // The work the Charts page reports while it runs. The settings window
+        // stands over the chart, so a download or a bake begun here otherwise
+        // runs behind it. These live on the built page and are updated in
+        // place, so the page is not rebuilt several times a second; each
+        // BuildSettingsPage clears them. Nothing is polled while they are
+        // null, which is whenever no such work is on the page.
+        Microsoft::UI::Xaml::Controls::TextBlock noaa_pane_count{ nullptr };
+        Microsoft::UI::Xaml::Controls::ProgressBar noaa_pane_bar{ nullptr };
+        Microsoft::UI::Xaml::Controls::TextBlock bake_pane_count{ nullptr };
+        Microsoft::UI::Xaml::Controls::TextBlock bake_pane_eta{ nullptr };
+        Microsoft::UI::Xaml::Controls::ProgressBar bake_pane_bar{ nullptr };
+        // Read the download the Charts page is reporting, and put the page
+        // away once it ends.
+        void PollNoaaPane();
+        /* What the Charts page draws, as one string, and the rebuild that
+         * compares it.
+         *
+         * The links and the sets are polled off the readout tick, and the core
+         * raises its changed flag for work that leaves the page identical: a
+         * tile landing for a style that is drawing, a rescan finding what it
+         * found before. Rebuilding for those tore down and rebuilt every
+         * control ten times a second, which reads as flicker. */
+        /* The Charts page is built once and then updated in place.
+         *
+         * A rebuild destroys every control on the page. The pointer standing
+         * on a control loses the hover it was showing, because a fresh control
+         * only takes that state on the next pointer move; a press and its
+         * release land on two different controls, so the click is either lost
+         * or delivered to whatever now sits under the cursor. Both happen
+         * while a mariner is picking a chart, which is exactly when the links
+         * poll reports something. So a poll updates the page's VALUES and the
+         * page is rebuilt only when its STRUCTURE changes: a tile, a set, a
+         * raster group or a section coming or going.
+         *
+         * Every registry below is cleared and filled again by each build. */
+        struct ChartTileUi
+        {
+            std::string url;
+            Microsoft::UI::Xaml::Controls::Button button{ nullptr };
+            Microsoft::UI::Xaml::Controls::Border badge{ nullptr };
+            Microsoft::UI::Xaml::Controls::TextBlock detail{ nullptr };
+            /* What the detail line says when this chart is not being read. */
+            std::wstring where;
+        };
+        std::vector<ChartTileUi> chart_tile_ui;
+        struct ChartSetRowUi
+        {
+            std::string path;
+            Microsoft::UI::Xaml::Controls::TextBlock name{ nullptr };
+            Microsoft::UI::Xaml::Controls::TextBlock summary{ nullptr };
+            Microsoft::UI::Xaml::Controls::TextBlock prepare{ nullptr };
+            Microsoft::UI::Xaml::Controls::ToggleSwitch on{ nullptr };
+            Microsoft::UI::Xaml::Controls::StackPanel ramp{ nullptr };
+            /* The bands the ramp was drawn from, so it is redrawn only when
+             * they change. */
+            std::map<int, size_t> bands;
+        };
+        std::vector<ChartSetRowUi> chart_set_ui;
+        Microsoft::UI::Xaml::Controls::TextBlock chart_sets_total{ nullptr };
+        Microsoft::UI::Xaml::Controls::TextBlock chart_sets_none{ nullptr };
+        Microsoft::UI::Xaml::Controls::TextBlock chart_link_error_ui{ nullptr };
+        Microsoft::UI::Xaml::Controls::TextBlock chart_publisher_note{ nullptr };
+        /* What every line on the page now says. Cheap, and safe to call from a
+         * poll: it creates nothing and destroys nothing. */
+        void RefreshChartsPageInPlace();
+        /* The page's shape, as one string. A change here is a rebuild. */
+        std::string ChartsPageStructure();
+        void RefreshChartsPageOnChange();
+        std::string charts_page_sig;
+        /* Whether the page on screen draws what the network browse found. The
+         * browse is a plugin's, its answers come and go on their own, and only
+         * the page showing them has a reason to be built again for one. Set
+         * while that page is built; false on every other page. */
+        bool page_reads_discovery{ false };
 
         // wasm plugin settings. The schemas are read when the pane opens; only
         // the status lines are polled after that.

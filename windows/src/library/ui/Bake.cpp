@@ -214,6 +214,19 @@ namespace winrt::LookoutMarine::implementation
         if (!p.cancelled)
             BakeEta().Text(winrt::to_hstring(p.Remaining()));
 
+        /* The same three lines on the Charts settings page, which stands over
+         * this panel in a window of its own. Null unless that page is up with
+         * the section built. */
+        if (bake_pane_bar != nullptr)
+        {
+            bake_pane_bar.IsIndeterminate(p.total == 0);
+            bake_pane_bar.Value(p.Fraction());
+            bake_pane_count.Text(winrt::to_hstring(
+                p.total > 0 ? std::to_string(p.done) + " of " + std::to_string(p.total) : p.cell));
+            if (!p.cancelled)
+                bake_pane_eta.Text(winrt::to_hstring(p.Remaining()));
+        }
+
         if (p.running)
             return;
 
@@ -224,6 +237,9 @@ namespace winrt::LookoutMarine::implementation
         auto error = bake_job->Error();
         bake_job.reset();
         BakePanel().Visibility(Visibility::Collapsed);
+        /* The settings page loses its Preparing section with the job. */
+        if (SettingsOpen())
+            BuildSettingsPage();
 
         /* An import that produced nothing says why. Anything partial opens
          * below without a dialog: what landed is a usable library. */

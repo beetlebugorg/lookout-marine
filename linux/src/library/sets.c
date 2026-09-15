@@ -152,6 +152,28 @@ lk_chart_sets_paths (LkChartSets *self)
 static char *lk_chart_set_detail (const lookout_chart_set *row);
 static const char *lk_chart_set_agency (const char *producer);
 
+/* The cells one set holds, by usage band. The scan has already read every
+ * file, so this counts what it found rather than walking the folder again. */
+static void
+lk_chart_set_count_bands (LkChartSets *self, const char *path, guint bands[7])
+{
+  size_t n = 0;
+  const lookout_chart_file *const *files = lookout_chart_set_files (self->sets, path, &n);
+
+  for (size_t i = 0; i < n; i++)
+    {
+      const lookout_chart_file *file = files[i];
+      int band;
+
+      /* Surveys only. A picture covers water rather than sitting on a scale,
+       * and an update bakes into its base cell. */
+      if (file->kind != LOOKOUT_FILE_BAKED && file->kind != LOOKOUT_FILE_SOURCE)
+        continue;
+      band = file->band >= 1 && file->band <= 6 ? file->band : 0;
+      bands[band]++;
+    }
+}
+
 GPtrArray *
 lk_chart_sets_rows (LkChartSets *self)
 {
@@ -170,9 +192,26 @@ lk_chart_sets_rows (LkChartSets *self)
        * better name, and a producer code the app does not know keeps the
        * folder: a wrong agency on a chart set is worse than a dull one. */
       row->title = agency != NULL ? g_strdup (agency) : g_strdup (set->title);
+      row->name = g_path_get_basename (set->path);
       row->detail = lk_chart_set_detail (set);
       row->charts = (guint) set->charts;
+      row->unprepared = (guint) set->unprepared;
+      row->pictures = (guint) set->pictures;
+      row->bytes = (gint64) set->bytes;
+      row->scanned = set->scanned != 0;
+      /* TRUE when REMOVING THIS DELETES WORK — the charts Lookout prepared
+       * from it. That is the question the removal actually asks, and it is NOT
+       * the same as the set's own path sitting under the prepared root: a
+       * folder of the mariner's own cells lives in their home and still has a
+       * prepared directory of its own, which the removal deletes. Asking the
+       * other question took a gigabyte of prepared charts off the disk with no
+       * word, under a tooltip promising the mariner's files stayed where they
+       * were. The reference asks this one (ChartSets.swift, isDerived). */
+      g_autofree char *prepared = lk_chart_bake_prepared_dir (set->path);
+      row->derived = lk_chart_bake_is_derived (set->path) ||
+                     (prepared != NULL && g_file_test (prepared, G_FILE_TEST_IS_DIR));
       row->on = set->on != 0;
+      lk_chart_set_count_bands (self, set->path, row->bands);
       g_ptr_array_add (rows, row);
     }
   return rows;
@@ -185,18 +224,21 @@ lk_chart_sets_set_on (LkChartSets *self, const char *path, gboolean on)
 }
 
 gboolean
-lk_chart_sets_remove (LkChartSets *self, const char *path)
+lk_chart_sets_remove (LkChartSets *self, const char *path, char **out_prepared)
 {
+  if (out_prepared != NULL)
+    *out_prepared = NULL;
   if (!lookout_chart_sets_remove (self->sets, path))
     return FALSE;
   lk_chart_sets_sync_paths (self);
 
-  /* The core deletes nothing. What Lookout prepared from this set can be made
-   * again, so it goes; the mariner's own folder is never touched. The delete
-   * renames first and clears behind, so nothing here waits on the disk. */
-  g_autofree char *prepared = lk_chart_bake_prepared_dir (path);
-  if (prepared != NULL)
-    lk_chart_bake_delete_derived (prepared);
+  /* The core deletes nothing, and neither does this. What Lookout prepared
+   * from the set can be made again, so it goes — but the delete is thousands
+   * of files and says where it has got to, and this unit has nowhere to say
+   * it. The caller does the deleting. The mariner's own folder is never
+   * touched either way. */
+  if (out_prepared != NULL)
+    *out_prepared = lk_chart_bake_prepared_dir (path);
 
   return TRUE;
 }
@@ -205,6 +247,38 @@ gboolean
 lk_chart_sets_is_on (LkChartSets *self, const char *path)
 {
   return lookout_chart_sets_is_on (self->sets, path) != 0;
+}
+
+gboolean
+lk_chart_sets_any_on_drawable (LkChartSets *self)
+{
+  size_t count = 0;
+  const lookout_chart_set *const *all = lookout_chart_sets_all (self->sets, &count);
+
+  for (size_t i = 0; i < count; i++)
+    {
+      const lookout_chart_set *set = all[i];
+
+      if (set->on == 0)
+        continue;
+      /* Unread counts as drawable. The counts arrive with the scan, and a set
+       * read as empty in the meantime is a set the mariner watches vanish. */
+      if (!set->scanned || set->charts > 0 || set->pictures > 0)
+        return TRUE;
+    }
+  return FALSE;
+}
+
+gboolean
+lk_chart_sets_scanning (LkChartSets *self)
+{
+  size_t count = 0;
+  const lookout_chart_set *const *all = lookout_chart_sets_all (self->sets, &count);
+
+  for (size_t i = 0; i < count; i++)
+    if (all[i]->scanned == 0)
+      return TRUE;
+  return FALSE;
 }
 
 /* Put a source on the list, switched on. Opening a source is also
@@ -241,22 +315,64 @@ lk_chart_sets_compose (LkChartSets *self)
   return out;
 }
 
+char **
+lk_chart_sets_cell_names (LkChartSets *self)
+{
+  size_t n_sets = 0;
+  const lookout_chart_set *const *sets = lookout_chart_sets_all (self->sets, &n_sets);
+  g_autoptr (GHashTable) seen = g_hash_table_new (g_str_hash, g_str_equal);
+  GPtrArray *names = g_ptr_array_new ();
+
+  for (size_t s = 0; s < n_sets; s++)
+    {
+      size_t n_files = 0;
+      const lookout_chart_file *const *files =
+          lookout_chart_set_files (self->sets, sets[s]->path, &n_files);
+
+      for (size_t f = 0; f < n_files; f++)
+        {
+          const lookout_chart_file *file = files[f];
+
+          if (file->name == NULL || file->name[0] == '\0')
+            continue;
+          /* An update carries its base cell's name, so it dedups into it. */
+          if (file->kind != LOOKOUT_FILE_BAKED && file->kind != LOOKOUT_FILE_SOURCE &&
+              file->kind != LOOKOUT_FILE_UPDATE)
+            continue;
+
+          char *upper = g_ascii_strup (file->name, -1);
+          if (g_hash_table_add (seen, upper))
+            g_ptr_array_add (names, upper);
+          else
+            g_free (upper);
+        }
+    }
+
+  g_ptr_array_add (names, NULL);
+  return (char **) g_ptr_array_free (names, FALSE);
+}
+
 /* ---- watching for a scan to land ------------------------------------------ */
 
 static gboolean
 lk_chart_sets_poll (gpointer data)
 {
   LkChartSets *self = data;
+  gboolean changed = lookout_chart_sets_changed (self->sets);
   size_t count = 0;
   const lookout_chart_set *const *all;
   gboolean waiting = FALSE;
 
-  if (lookout_chart_sets_changed (self->sets))
-    self->on_changed (self->owner);
-
   all = lookout_chart_sets_all (self->sets, &count);
   for (size_t i = 0; i < count && !waiting; i++)
     waiting = all[i]->scanned == 0;
+
+  /* The tick that settles the scan always reports, flag or no flag. The last
+   * scan can land between the flag read and the count read, and this timer
+   * stops here: there is no later tick for that landing to arrive on, and the
+   * chart the library composes to waits for it. */
+  if (changed || !waiting)
+    self->on_changed (self->owner);
 
   if (waiting)
     return G_SOURCE_CONTINUE;
@@ -294,6 +410,7 @@ lk_chart_set_row_free (LkChartSetRow *row)
     return;
   g_free (row->path);
   g_free (row->title);
+  g_free (row->name);
   g_free (row->detail);
   g_free (row);
 }
@@ -331,8 +448,8 @@ lk_chart_set_agency (const char *producer)
   return NULL;
 }
 
-static const char *
-lk_chart_set_band_name (int band)
+const char *
+lk_chart_band_name (int band)
 {
   static const char *names[] = { "Overview", "General", "Coastal",
                                  "Approach", "Harbor", "Berthing" };
@@ -364,10 +481,10 @@ lk_chart_set_detail (const lookout_chart_set *row)
     {
       g_string_append (detail, detail->len > 0 ? " · " : "");
       if (row->band_lo == row->band_hi)
-        g_string_append (detail, lk_chart_set_band_name (row->band_lo));
+        g_string_append (detail, lk_chart_band_name (row->band_lo));
       else
-        g_string_append_printf (detail, "%s to %s", lk_chart_set_band_name (row->band_lo),
-                                lk_chart_set_band_name (row->band_hi));
+        g_string_append_printf (detail, "%s to %s", lk_chart_band_name (row->band_lo),
+                                lk_chart_band_name (row->band_hi));
     }
   if (row->bytes > 0)
     {

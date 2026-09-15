@@ -31,6 +31,10 @@ pub const Set = extern struct {
     producer: [*:0]const u8,
     /// 0 when the mariner switched this set off. It stays installed.
     on: c_int,
+    /// 1 when a downloader owns this set rather than the mariner. The charts
+    /// are added and removed where they were downloaded, and the set wins a
+    /// name it shares with a set the mariner added by hand.
+    managed: c_int,
     /// 1 once the background scan has read this folder. 0 while it is being
     /// read: on the first pass with every count below 0, and after a rescan
     /// with what the last pass found.
@@ -47,12 +51,39 @@ pub const Set = extern struct {
     band_hi: c_int,
 };
 
+/// One chart that can be handed to the engine, and the dataset it holds.
+///
+/// The name and the edition are what compose deduplicates on. Two sets holding
+/// the same cell used to compose it twice, and the engine drew both.
+const Openable = struct {
+    path: [:0]u8,
+    /// The dataset name without its extension. Empty for a file that states no
+    /// dataset name. Such a file is never deduplicated by name.
+    name: []u8,
+    /// DSID EDTN and UPDN. Both 0 for a baked archive, which states neither.
+    edition: u32 = 0,
+    update: u32 = 0,
+
+    /// True when this chart should replace `other` in the composed list.
+    ///
+    /// The newer edition wins, so a mariner who downloads fresh cells over an
+    /// old folder draws the fresh ones without removing anything. With neither
+    /// edition known the downloaded set wins, because that is the one whose
+    /// provenance this app knows.
+    fn beats(self: Openable, other: Openable, mine_managed: bool, other_managed: bool) bool {
+        if (self.edition != other.edition) return self.edition > other.edition;
+        if (self.update != other.update) return self.update > other.update;
+        return mine_managed and !other_managed;
+    }
+};
+
 /// One set's rows, held while the model owns them.
 const Row = struct {
     path: [:0]u8,
     title: [:0]u8,
     producer: [:0]u8,
     on: bool,
+    managed: bool = false,
     scanned: bool,
     charts: usize = 0,
     pictures: usize = 0,
@@ -61,7 +92,7 @@ const Row = struct {
     band_lo: u8 = 0,
     band_hi: u8 = 0,
     /// Every chart in this set that can be handed to the engine now, sorted.
-    openable: [][:0]u8 = &.{},
+    openable: []Openable = &.{},
     /// Every file the scan found, as the scan found it. A shell bakes from
     /// this rather than walking the folder again.
     files: []library.File = &.{},
@@ -99,6 +130,7 @@ pub const Sets = struct {
     const group = settings.group_chartsets;
     const paths_key = "paths";
     const off_key = "off";
+    const managed_key = "managed";
 
     /// Load the saved list and start scanning it.
     pub fn open(
@@ -127,12 +159,24 @@ pub const Sets = struct {
         }
         for (off) |p| try off_owned.append(gpa, try gpa.dupeZ(u8, p));
 
+        const managed = store.list(group, managed_key);
+        var managed_owned = std.ArrayList([:0]u8).empty;
+        defer {
+            for (managed_owned.items) |p| gpa.free(p);
+            managed_owned.deinit(gpa);
+        }
+        for (managed) |p| try managed_owned.append(gpa, try gpa.dupeZ(u8, p));
+
         for (store.list(group, paths_key)) |p| {
             var on = true;
             for (off_owned.items) |o| {
                 if (std.mem.eql(u8, o, p)) on = false;
             }
-            _ = try self.addRow(p, on);
+            var owned = false;
+            for (managed_owned.items) |m| {
+                if (std.mem.eql(u8, m, p)) owned = true;
+            }
+            _ = try self.addRow(p, on, owned);
         }
         self.startScans();
         return self;
@@ -158,7 +202,10 @@ pub const Sets = struct {
         self.gpa.free(r.path);
         self.gpa.free(r.title);
         self.gpa.free(r.producer);
-        for (r.openable) |p| self.gpa.free(p);
+        for (r.openable) |o| {
+            self.gpa.free(o.path);
+            self.gpa.free(o.name);
+        }
         self.gpa.free(r.openable);
         if (r.files_arena) |*a| a.deinit();
     }
@@ -207,6 +254,7 @@ pub const Sets = struct {
                 .title = r.title.ptr,
                 .producer = r.producer.ptr,
                 .on = @intFromBool(r.on),
+                .managed = @intFromBool(r.managed),
                 .scanned = @intFromBool(r.scanned),
                 .charts = r.charts,
                 .pictures = r.pictures,
@@ -222,7 +270,7 @@ pub const Sets = struct {
 
     /// Put a folder on the list and scan it. False when it is already there.
     pub fn add(self: *Sets, path: []const u8) bool {
-        const added = self.addRow(path, true) catch return false;
+        const added = self.addRow(path, true, false) catch return false;
         if (!added) return false;
         self.save();
         self.startScans();
@@ -294,6 +342,34 @@ pub const Sets = struct {
         return changed;
     }
 
+    /// Mark a set as a downloader's rather than the mariner's. False when the
+    /// path is not on the list, or already marked that way.
+    pub fn setManaged(self: *Sets, path: []const u8, managed: bool) bool {
+        self.mu.lock();
+        var changed = false;
+        for (self.rows.items) |*r| {
+            if (!std.mem.eql(u8, r.path, path)) continue;
+            if (r.managed != managed) {
+                r.managed = managed;
+                changed = true;
+            }
+            break;
+        }
+        if (changed) _ = self.reads.reset(.retain_capacity);
+        self.mu.unlock();
+        if (changed) self.save();
+        return changed;
+    }
+
+    pub fn isManaged(self: *Sets, path: []const u8) bool {
+        self.mu.lock();
+        defer self.mu.unlock();
+        for (self.rows.items) |r| {
+            if (std.mem.eql(u8, r.path, path)) return r.managed;
+        }
+        return false;
+    }
+
     pub fn isOn(self: *Sets, path: []const u8) bool {
         self.mu.lock();
         defer self.mu.unlock();
@@ -303,22 +379,54 @@ pub const Sets = struct {
         return false;
     }
 
-    /// Every chart the switched-on sets hold, sorted and deduplicated. Two
-    /// sets may overlap, and the same cell twice would be composed twice.
+    /// Every chart the switched-on sets hold, sorted and deduplicated.
+    ///
+    /// By path, and then BY DATASET NAME. Two sets overlap whenever a mariner
+    /// downloads water they already hold in a folder of their own, and the
+    /// same cell composed twice is drawn twice. Openable.beats decides which
+    /// copy stays: the newer edition, then the downloaded set.
+    ///
+    /// A file that states no dataset name is kept on its path alone. Only a
+    /// name identifies the water, and two unnamed files are two charts.
+    ///
     /// Borrowed until the next call that changes the list.
     pub fn compose(self: *Sets) []const [*:0]const u8 {
         self.mu.lock();
         defer self.mu.unlock();
         const a = self.reads.allocator();
         var out = std.ArrayList([:0]const u8).empty;
+        // The winner so far for each dataset name, as its index in `out`.
+        var byName = std.StringHashMap(struct {
+            at: usize,
+            held: Openable,
+            managed: bool,
+        }).init(self.gpa);
+        defer byName.deinit();
+
         for (self.rows.items) |r| {
             if (!r.on) continue;
-            for (r.openable) |p| {
+            for (r.openable) |o| {
                 var seen = false;
                 for (out.items) |q| {
-                    if (std.mem.eql(u8, q, p)) seen = true;
+                    if (std.mem.eql(u8, q, o.path)) seen = true;
                 }
-                if (!seen) out.append(a, p) catch return &.{};
+                if (seen) continue;
+                if (o.name.len == 0) {
+                    out.append(a, o.path) catch return &.{};
+                    continue;
+                }
+                if (byName.get(o.name)) |won| {
+                    if (!o.beats(won.held, r.managed, won.managed)) continue;
+                    out.items[won.at] = o.path;
+                    byName.put(o.name, .{ .at = won.at, .held = o, .managed = r.managed }) catch {};
+                    continue;
+                }
+                byName.put(o.name, .{
+                    .at = out.items.len,
+                    .held = o,
+                    .managed = r.managed,
+                }) catch {};
+                out.append(a, o.path) catch return &.{};
             }
         }
         std.mem.sort([:0]const u8, out.items, {}, struct {
@@ -343,18 +451,22 @@ pub const Sets = struct {
         defer paths.deinit(self.gpa);
         var off = std.ArrayList([]const u8).empty;
         defer off.deinit(self.gpa);
+        var managed = std.ArrayList([]const u8).empty;
+        defer managed.deinit(self.gpa);
         for (self.rows.items) |r| {
             paths.append(self.gpa, r.path) catch return;
             if (!r.on) off.append(self.gpa, r.path) catch return;
+            if (r.managed) managed.append(self.gpa, r.path) catch return;
         }
         self.store.setList(group, paths_key, paths.items);
         self.store.setList(group, off_key, off.items);
+        self.store.setList(group, managed_key, managed.items);
     }
 
     // ---- the scans -------------------------------------------------------
 
     /// Add a row, or return false when the path is already listed.
-    fn addRow(self: *Sets, path: []const u8, on: bool) !bool {
+    fn addRow(self: *Sets, path: []const u8, on: bool, managed: bool) !bool {
         self.mu.lock();
         defer self.mu.unlock();
         for (self.rows.items) |r| {
@@ -370,6 +482,7 @@ pub const Sets = struct {
             .title = title,
             .producer = producer,
             .on = on,
+            .managed = managed,
             .scanned = false,
         });
         try self.queue.append(self.gpa, try self.gpa.dupeZ(u8, path));
@@ -422,6 +535,41 @@ pub const Sets = struct {
         }
     }
 
+    /// One openable chart, with the dataset identity compose deduplicates on.
+    ///
+    /// A BAKED archive states no DSID: the identity is in the source cell it
+    /// was made from. That cell is still in the same folder, so the identity is
+    /// read from `source` by stem. A set whose source cells have been deleted reports
+    /// edition 0, and two such copies of a cell fall back to the downloaded
+    /// one winning.
+    fn openableOf(self: *Sets, c: library.Cell, source: *const library.Scan) !Openable {
+        const id = identityOf(c, source);
+        const path = try self.gpa.dupeZ(u8, c.path);
+        errdefer self.gpa.free(path);
+        return .{
+            .path = path,
+            .name = try self.gpa.dupe(u8, library.stemOf(c.name)),
+            .edition = id.edition,
+            .update = id.update,
+        };
+    }
+
+    /// The dataset edition and update number of one chart.
+    ///
+    /// A BAKED archive states no DSID, so the identity is read off the source
+    /// cell it was made from, matched by stem in the same folder. A set whose
+    /// source cells have been deleted reports 0, and an update check skips it.
+    fn identityOf(c: library.Cell, source: *const library.Scan) struct { edition: u32, update: u32 } {
+        if (c.facts.edition != 0) return .{ .edition = c.facts.edition, .update = c.facts.update };
+        const stem = library.stemOf(c.name);
+        for (source.cells) |o| {
+            if (o.facts.edition == 0) continue;
+            if (!std.mem.eql(u8, library.stemOf(o.name), stem)) continue;
+            return .{ .edition = o.facts.edition, .update = o.facts.update };
+        }
+        return .{ .edition = 0, .update = 0 };
+    }
+
     /// True when the prepared scan holds a chart made from this file.
     fn readyHas(prepared: *const library.Scan, name: []const u8) bool {
         const stem = library.stemOf(name);
@@ -456,13 +604,26 @@ pub const Sets = struct {
         var found = std.ArrayList(library.File).empty;
         if (prepared) |p| {
             for ([_][]const library.Cell{ p.cells, p.raster }) |list| {
-                for (list) |c| found.append(fa, library.fileOf(fa, c) catch continue) catch {};
+                for (list) |c| {
+                    // The bake drops the source cell from this list, so the
+                    // archive has to answer for the edition or a shell asking
+                    // what is installed reads none.
+                    var f = library.fileOf(fa, c) catch continue;
+                    const id = identityOf(c, scan);
+                    f.edition = id.edition;
+                    f.update = id.update;
+                    found.append(fa, f) catch {};
+                }
             }
         }
         for ([_][]const library.Cell{ scan.cells, scan.raster }) |list| {
             for (list) |c| {
                 if (prepared != null and readyHas(prepared.?, c.name)) continue;
-                found.append(fa, library.fileOf(fa, c) catch continue) catch {};
+                var f = library.fileOf(fa, c) catch continue;
+                const id = identityOf(c, scan);
+                f.edition = id.edition;
+                f.update = id.update;
+                found.append(fa, f) catch {};
             }
         }
 
@@ -477,7 +638,7 @@ pub const Sets = struct {
             }
         }
 
-        var openable = std.ArrayList([:0]u8).empty;
+        var openable = std.ArrayList(Openable).empty;
         var charts: usize = 0;
         var pictures: usize = 0;
         var unprepared: usize = 0;
@@ -489,7 +650,7 @@ pub const Sets = struct {
             for (p.cells) |c| {
                 if (c.kind == .source) continue;
                 charts += 1;
-                openable.append(self.gpa, self.gpa.dupeZ(u8, c.path) catch continue) catch {};
+                openable.append(self.gpa, self.openableOf(c, scan) catch continue) catch {};
                 if (c.band >= 1 and c.band <= 6) {
                     if (lo == 0 or c.band < lo) lo = c.band;
                     if (c.band > hi) hi = c.band;
@@ -505,7 +666,7 @@ pub const Sets = struct {
                 unprepared += 1;
             } else {
                 charts += 1;
-                openable.append(self.gpa, self.gpa.dupeZ(u8, c.path) catch continue) catch {};
+                openable.append(self.gpa, self.openableOf(c, scan) catch continue) catch {};
             }
             if (c.band >= 1 and c.band <= 6) {
                 if (lo == 0 or c.band < lo) lo = c.band;
@@ -521,7 +682,10 @@ pub const Sets = struct {
         defer self.mu.unlock();
         for (self.rows.items) |*r| {
             if (!std.mem.eql(u8, r.path, path)) continue;
-            for (r.openable) |p| self.gpa.free(p);
+            for (r.openable) |o| {
+                self.gpa.free(o.path);
+                self.gpa.free(o.name);
+            }
             self.gpa.free(r.openable);
             r.openable = openable.toOwnedSlice(self.gpa) catch &.{};
             if (r.files_arena) |*a| a.deinit();
@@ -546,7 +710,10 @@ pub const Sets = struct {
             return;
         }
         // The row went while the scan ran.
-        for (openable.items) |p| self.gpa.free(p);
+        for (openable.items) |o| {
+            self.gpa.free(o.path);
+            self.gpa.free(o.name);
+        }
         openable.deinit(self.gpa);
         files_arena.deinit();
     }
@@ -671,9 +838,11 @@ test "a set switched off stays listed and drops out of the composition" {
 test "the composition is the union of the sets switched on, deduplicated" {
     var f = try Fixture.init();
     defer f.deinit();
-    const a = try f.folder("Set A");
+    // Two DIFFERENT cells. One cell in two folders is one chart, and the
+    // next test covers that.
+    const a = try f.folderNamed("Set A", &.{ "US5MD1MC.pmtiles", "ncds_08.mbtiles" });
     defer t.allocator.free(a);
-    const b = try f.folder("Set B");
+    const b = try f.folderNamed("Set B", &.{ "US4MD2MC.pmtiles", "ncds_09.mbtiles" });
     defer t.allocator.free(b);
 
     const s = try f.open();
@@ -902,3 +1071,146 @@ test "a set being read again keeps what the last scan found" {
     try t.expectEqual(@as(usize, 1), rows[0].charts);
 }
 
+
+// ---- composing one cell that two sets hold ------------------------------------
+
+/// An inventory reporting one cell per folder, baked, with the source it was
+/// made from beside it. The edition comes from the folder name, so a test
+/// stands two editions of one cell against each other.
+///
+/// A real baked archive states no DSID, and openableOf reads the edition off
+/// the source cell in the same folder. This reports both for that reason.
+fn editionByFolder(
+    _: ?*anyopaque,
+    alloc: std.mem.Allocator,
+    path: []const u8,
+    out: *std.ArrayList(library.InventoryRow),
+) bool {
+    const edition: u32 = if (std.mem.indexOf(u8, path, "New") != null) 28 else 27;
+    const baked = std.fmt.allocPrint(alloc, "{s}/US5MD1MC.pmtiles", .{path}) catch return false;
+    out.append(alloc, .{
+        .path = baked,
+        .name = alloc.dupe(u8, "US5MD1MC") catch return false,
+        .kind = .baked,
+        .bytes = 900,
+    }) catch return false;
+    const source = std.fmt.allocPrint(alloc, "{s}/US5MD1MC.000", .{path}) catch return false;
+    out.append(alloc, .{
+        .path = source,
+        .name = alloc.dupe(u8, "US5MD1MC") catch return false,
+        .kind = .source,
+        .bytes = 4096,
+        .edition = edition,
+    }) catch return false;
+    return true;
+}
+
+test "two sets holding one cell compose it once" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const a = try f.folder("Set A");
+    defer t.allocator.free(a);
+    const b = try f.folder("Set B");
+    defer t.allocator.free(b);
+
+    const s = try f.open();
+    defer s.close();
+    try t.expect(s.add(a));
+    try t.expect(s.add(b));
+    settle(s);
+
+    // Both folders hold US5MD1MC.pmtiles. Composed by path alone that is two
+    // charts of the same water, and the engine draws both.
+    try t.expectEqual(@as(usize, 1), s.compose().len);
+}
+
+test "the managed set wins a cell the mariner also holds" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const mine = try f.folder("Mine");
+    defer t.allocator.free(mine);
+    const downloaded = try f.folder("NOAA");
+    defer t.allocator.free(downloaded);
+
+    const s = try f.open();
+    defer s.close();
+    try t.expect(s.add(mine));
+    try t.expect(s.add(downloaded));
+    try t.expect(s.setManaged(downloaded, true));
+    settle(s);
+
+    const paths = s.compose();
+    try t.expectEqual(@as(usize, 1), paths.len);
+    // Neither states an edition, so the downloaded copy wins even though the
+    // mariner's folder was added first.
+    try t.expect(std.mem.startsWith(u8, std.mem.span(paths[0]), downloaded));
+}
+
+test "the newer edition wins, whoever holds it" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const old = try f.folderNamed("Old", &.{});
+    defer t.allocator.free(old);
+    const new = try f.folderNamed("New", &.{});
+    defer t.allocator.free(new);
+
+    const s = try Sets.open(t.allocator, f.io, f.store, "", editionByFolder);
+    defer s.close();
+    // The older edition is the managed set, so an edition that loses to the
+    // mark would be caught here.
+    try t.expect(s.add(old));
+    try t.expect(s.setManaged(old, true));
+    try t.expect(s.add(new));
+    settle(s);
+
+    const paths = s.compose();
+    try t.expectEqual(@as(usize, 1), paths.len);
+    try t.expect(std.mem.startsWith(u8, std.mem.span(paths[0]), new));
+}
+
+test "the managed mark is saved and read back" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const dir = try f.folder("NOAA");
+    defer t.allocator.free(dir);
+
+    {
+        const s = try f.open();
+        defer s.close();
+        try t.expect(s.add(dir));
+        try t.expect(s.setManaged(dir, true));
+        // Marking it twice changes nothing.
+        try t.expect(!s.setManaged(dir, true));
+        settle(s);
+        try t.expectEqual(@as(c_int, 1), s.all()[0].managed);
+    }
+
+    const s = try f.open();
+    defer s.close();
+    settle(s);
+    try t.expect(s.isManaged(dir));
+    try t.expectEqual(@as(c_int, 1), s.all()[0].managed);
+}
+
+test "a baked chart reports the edition of the cell it was made from" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const dir = try f.folderNamed("New", &.{});
+    defer t.allocator.free(dir);
+
+    const s = try Sets.open(t.allocator, f.io, f.store, "", editionByFolder);
+    defer s.close();
+    try t.expect(s.add(dir));
+    settle(s);
+
+    // The scan reports a .pmtiles and the .000 it was made from. A shell asks
+    // what is installed to check NOAA for reissues, and the archive is what it
+    // gets: it has to answer with the source cell's edition.
+    const files = s.files(dir);
+    var baked: ?*const library.File = null;
+    for (files) |x| {
+        if (std.mem.endsWith(u8, std.mem.span(x.path), ".pmtiles")) baked = x;
+    }
+    try t.expect(baked != null);
+    try t.expectEqual(@as(u32, 28), baked.?.edition);
+}

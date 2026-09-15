@@ -14,6 +14,7 @@
 //  and are empty, because the methods are already there.
 
 import Foundation
+import SwiftUI
 
 /// What RasterModel asks the chart for.
 @MainActor
@@ -44,10 +45,38 @@ protocol ChartLinkEngine: AnyObject {
     @discardableResult func selectChartLink(_ url: String?) -> Bool
     func importChartLinks(_ json: String)
     func chartLinksSnapshot() -> ChartLinkSnapshot?
+    /// True while the engine still has drawing to do.
+    func chartIsDrawing() -> Bool
+    /// Read every link's style for the tile its picture comes from.
+    func previewChartLinks()
+    /// The tile url that pictures one chart at a point, or nil when the style
+    /// names no raster tiles.
+    func chartLinkPreviewURL(_ url: String, lon: Double, lat: Double, zoom: Int) -> String?
+    /// Where the chart is now, for a preview every tile shares.
+    func viewCenter() -> (lon: Double, lat: Double)?
+    /// The chart as it is drawing. The one true picture of the active chart.
+    func snapshot() -> Image?
 }
 
 /// What PluginsModel asks the chart for.
 @MainActor
+/// NOAA's chart catalog and the downloads run from it. The core reads the
+/// catalog, chooses the cells a region needs and fetches them; these are the
+/// calls that start it and read where it got to.
+protocol NoaaEngine: AnyObject {
+    @discardableResult func noaaRefresh() -> Bool
+    func noaaState() -> NoaaState
+    func noaaCost(regionIDs: String) -> NoaaCost?
+    /// Name the NOAA cells already installed, so a pick prices the rest.
+    func noaaHave(_ names: [String])
+    func noaaDownload(regionIDs: String, destination: String, again: Bool)
+    func noaaRegionCells(regionIDs: String) -> [String]
+    func noaaOutdated(_ have: [NoaaInstalledCell]) -> UInt32
+    func noaaUpdate(_ have: [NoaaInstalledCell], destination: String)
+    func noaaCancel()
+    func noaaRegionCoverage(_ regionID: String) -> [GeoBox]
+}
+
 protocol PluginEngine: AnyObject {
     func tableSpecs() -> [PluginTableSpec]
     func pluginAlerts() -> (seq: Int, alerts: [PluginAlert])?
@@ -74,7 +103,7 @@ protocol ReadoutEngine: AnyObject {
 /// What ChartsModel asks the chart for: open a library, and put it away.
 @MainActor
 protocol ChartOpenEngine: AnyObject {
-    @discardableResult func reopen(charts: [String]) -> Bool
+    @discardableResult func reopen(charts: [String], requestID: Int) -> Bool
     func close()
 }
 
@@ -94,5 +123,5 @@ protocol OverlayEngine: AnyObject {
     @discardableResult func removeMarker(_ id: UInt64) -> Bool
 }
 
-extension ChartController: RasterEngine, ChartLinkEngine, PluginEngine,
+extension ChartController: RasterEngine, ChartLinkEngine, NoaaEngine, PluginEngine,
                           ChartOpenEngine, ReadoutEngine, OverlayEngine {}

@@ -26,7 +26,26 @@ class ChartImport(private val appContext: Context) {
         val total: Int,
         val running: Boolean,
         val failed: Boolean,
-    )
+        /** How many charts fall in each usage band, in bake order. The bake
+         *  runs coarse band first, so `done` walks down this list and says
+         *  which band it has reached. */
+        val bands: List<Band> = emptyList(),
+    ) {
+        /** Each band with the part of it that is done, from the one count the
+         *  bake reports. */
+        val bandProgress: List<Band>
+            get() {
+                var left = done
+                return bands.map { b ->
+                    val n = minOf(left, b.total)
+                    left -= n
+                    b.copy(done = n)
+                }
+            }
+    }
+
+    /** One usage band of the charts being prepared. */
+    data class Band(val band: Int, val name: String, val total: Int, val done: Int = 0)
 
     var state by mutableStateOf<State?>(null)
         private set
@@ -77,7 +96,8 @@ class ChartImport(private val appContext: Context) {
             job = j
             val buf = IntArray(4)
             while (Lookout.bakePoll(j, buf)) {
-                val s = State(source.name, buf[0], buf[1], running = true, failed = false)
+                val s = State(source.name, buf[0], buf[1], running = true, failed = false,
+                              bands = plan.bands)
                 main.post { state = s }
                 Thread.sleep(200)
             }
@@ -106,6 +126,7 @@ class ChartImport(private val appContext: Context) {
         val sheets: Int,
         val lifts: Int,
         val chartsOut: File,
+        val bands: List<Band> = emptyList(),
     )
 
     /**
@@ -124,7 +145,7 @@ class ChartImport(private val appContext: Context) {
         val read = ChartScanRead.decode(scan)
         val needs = read?.files.orEmpty()
             .filter { zip || it.kind == ChartScanRead.SOURCE || it.kind == ChartScanRead.RASTER_SOURCE }
-        if (needs.isEmpty()) return Plan(emptyList(), emptyList(), 0, 0, 0, chartsOut)
+        if (needs.isEmpty()) return Plan(emptyList(), emptyList(), 0, 0, 0, chartsOut, emptyList())
 
         val works = needs.map { prepare(it.kind) }.toIntArray()
         val order = Lookout.bakeOrder(
@@ -135,6 +156,7 @@ class ChartImport(private val appContext: Context) {
 
         val ins = ArrayList<String>()
         val outs = ArrayList<String>()
+        val bandOrder = ArrayList<Int>()
         var cells = 0
         var sheets = 0
         var lifts = 0
@@ -154,13 +176,45 @@ class ChartImport(private val appContext: Context) {
             file.parentFile?.mkdirs()
             ins.add(c.path)
             outs.add(out)
+            bandOrder.add(c.band)
             when (work) {
                 PREPARE_CELL -> cells++
                 PREPARE_SHEET -> sheets++
                 else -> lifts++
             }
         }
-        return Plan(ins, outs, cells, sheets, lifts, chartsOut)
+        return Plan(ins, outs, cells, sheets, lifts, chartsOut, bandTotals(bandOrder))
+    }
+
+    /**
+     * The bands the plan holds, in the order the bake reaches them. Counted
+     * from the ordered list rather than sorted after, so the totals line up
+     * with the one count the bake reports.
+     */
+    private fun bandTotals(order: List<Int>): List<Band> {
+        val out = ArrayList<Band>()
+        for (b in order) {
+            val last = out.lastOrNull()
+            if (last != null && last.band == b) {
+                out[out.size - 1] = last.copy(total = last.total + 1)
+            } else if (out.any { it.band == b }) {
+                val at = out.indexOfFirst { it.band == b }
+                out[at] = out[at].copy(total = out[at].total + 1)
+            } else {
+                out.add(Band(b, bandName(b), 1))
+            }
+        }
+        return out
+    }
+
+    private fun bandName(band: Int): String = when (band) {
+        1 -> "Overview"
+        2 -> "General"
+        3 -> "Coastal"
+        4 -> "Approach"
+        5 -> "Harbor"
+        6 -> "Berthing"
+        else -> "Other"
     }
 
     /**

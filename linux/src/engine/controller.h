@@ -29,7 +29,12 @@ void lk_chart_controller_set_model (LkChartController *self, LkAppModel *model);
 /* ---- lifecycle ---------------------------------------------------------- */
 
 /* Open baked charts into `view`, composing multiple into one library.
- * Recreates the handle if one exists. `paths` is a NULL-terminated strv. */
+ * Recreates the handle if one exists. `paths` is a NULL-terminated strv.
+ *
+ * An EMPTY `paths` opens a chart of no charts, which draws the basemap. Every
+ * NOAA call and every chart-link call runs through a lookout handle, so a
+ * mariner with nothing installed still needs one: without it the catalog
+ * cannot be read and a published style cannot be picked. */
 gboolean lk_chart_controller_open (LkChartController *self,
                                    const char *const *paths,
                                    GtkWidget         *view);
@@ -43,6 +48,11 @@ void lk_chart_controller_attach_view (LkChartController *self, GtkWidget *view);
 void     lk_chart_controller_close    (LkChartController *self);
 gboolean lk_chart_controller_is_open  (LkChartController *self);
 const char *lk_chart_controller_chart_path (LkChartController *self);
+
+/* How many vector charts the open library holds. 0 for a chart opened with
+ * none, which draws the basemap. Pictures are counted separately: a library of
+ * raster charts alone also answers 0 here and still draws. */
+guint lk_chart_controller_charts_count (LkChartController *self);
 
 /* ---- view --------------------------------------------------------------- */
 
@@ -161,6 +171,94 @@ void  lk_chart_controller_chart_links_import (LkChartController *self, const cha
  * poll. Transfer full; free it with lookout_links_free. ONE consumer: whoever
  * polls clears the flag. */
 lookout_links *lk_chart_controller_chart_links_read (LkChartController *self);
+
+/* ---- pictures of charts -------------------------------------------------- */
+
+/* TRUE when the chart has nothing left to build and no frame pending.
+ *
+ * A SNAPSHOT IS NOT CHEAP WHILE THE CHART IS STILL COMING TOGETHER:
+ * lookout_snapshot_rgba builds the whole scene before it reads the frame back,
+ * and on a linked style that is still fetching its sprite packs one call has
+ * been measured at eleven seconds on the main thread. Anything that wants a
+ * picture asks this first, and waits.
+ *
+ * Read from the last frame, so it answers after the loop has gone idle. */
+gboolean lk_chart_controller_settled (LkChartController *self);
+
+/* The chart as it is drawing, as a picture, or NULL with no chart open.
+ *
+ * The engine draws ONE chart at a time, so this is the only true picture of a
+ * publisher's portrayal: their own style, rendered by the engine, at the water
+ * the mariner is on. A style that layers its own work over somebody else's
+ * raster base otherwise previews as that base, which is another map under this
+ * publisher's name. */
+GdkTexture *lk_chart_controller_snapshot (LkChartController *self);
+
+/* Read the style of every link whose tile template is not known yet, and keep
+ * the template with the link. Nothing here touches the chart being drawn.
+ * Call it when a list of charts goes on screen. */
+void lk_chart_controller_chart_links_preview (LkChartController *self);
+
+/* The url of the tile that pictures `link` at a point, or NULL when the style
+ * names no raster tiles. A vector style draws no single-tile picture, and one
+ * whose style has not been read yet has no template to ask about. Free with
+ * g_free. */
+char *lk_chart_controller_chart_link_preview_url (LkChartController *self,
+                                                  const char *link,
+                                                  double lon, double lat, int zoom);
+
+/* Where the camera is looking, for a picture of every chart at one point.
+ * FALSE with no chart open. */
+gboolean lk_chart_controller_view_centre (LkChartController *self,
+                                          double *out_lon, double *out_lat);
+
+/* ---- NOAA charts --------------------------------------------------------- */
+/*
+ * The core reads NOAA's product catalog, works out which cells a region needs
+ * and fetches them through the same HTTP provider the chart links installed.
+ * These are the calls that start that work and read where it got to. Each
+ * answers its empty value with no chart open, because every one of them runs
+ * through a lookout handle. See include/lookout-library.h.
+ */
+
+/* FALSE when no chart is open, so the caller knows to ask for one. */
+gboolean lk_chart_controller_noaa_refresh (LkChartController *self);
+
+/* The whole snapshot in one call. FALSE with no chart open, leaving `out`
+ * zeroed. */
+gboolean lk_chart_controller_noaa_poll (LkChartController *self, lookout_noaa_state *out);
+
+/* What picking `region_ids` (a comma separated list) costs. Any output may be
+ * NULL. FALSE when no catalog is loaded. */
+gboolean lk_chart_controller_noaa_cost (LkChartController *self, const char *region_ids,
+                                        guint32 *out_cells, guint64 *out_bytes,
+                                        guint32 *out_held, guint64 *out_held_bytes);
+
+/* Name the NOAA cells this device already holds, as dataset names with no
+ * extension. The cost above leaves them out and a download skips them. */
+void lk_chart_controller_noaa_have (LkChartController *self, const char *const *names);
+
+/* One region's coverage, as the boxes the catalog states. Writes at most `cap`
+ * and answers how many there are, so a caller sizes its buffer by asking once
+ * with `out` NULL. */
+gsize lk_chart_controller_noaa_coverage (LkChartController *self, const char *region_id,
+                                         lookout_noaa_box *out, gsize cap);
+
+/* Download the cells covering `region_ids` into `dest_dir`. `again` fetches the
+ * cells already held as well, which is how a mariner repairs a set. */
+void lk_chart_controller_noaa_download (LkChartController *self, const char *region_ids,
+                                        const char *dest_dir, gboolean again);
+
+void lk_chart_controller_noaa_cancel (LkChartController *self);
+
+/* How many of these cells NOAA has reissued, and the download that replaces
+ * them. The editions come from the caller: a file on disk does not say which
+ * edition it is. */
+guint32 lk_chart_controller_noaa_outdated (LkChartController *self,
+                                           const lookout_noaa_installed *have, gsize n);
+void    lk_chart_controller_noaa_update (LkChartController *self,
+                                         const lookout_noaa_installed *have, gsize n,
+                                         const char *dest_dir);
 
 /* ---- wasm plugins -------------------------------------------------------- */
 

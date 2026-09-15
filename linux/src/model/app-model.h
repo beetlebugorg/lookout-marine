@@ -10,6 +10,7 @@
 
 #include "engine/controller.h"
 #include "library/links.h"
+#include "library/noaa.h"
 #include "library/raster.h"
 
 G_BEGIN_DECLS
@@ -33,6 +34,19 @@ char *lk_app_model_initial_source (LkAppModel *self);
 void lk_app_model_open_chart (LkAppModel *self, const char *path);
 void lk_app_model_open_chart_directory (LkAppModel *self, const char *dir);
 
+/* Open a chart of NO charts, which draws the basemap.
+ *
+ * Every NOAA call and every chart-link call runs through a lookout handle, and
+ * a mariner with an empty library has none. This is how the shell gets one:
+ * setup reads NOAA's catalog before the first chart is installed, and a
+ * published style is picked the same way.
+ *
+ * ON DEMAND, by whatever needs the handle. The app does not open one at launch:
+ * a launch with nothing installed opens nothing and shows the first-run page,
+ * and the first thing to need a handle raises this. Does nothing while a chart
+ * is open or an open is in flight. */
+void lk_app_model_open_empty (LkAppModel *self);
+
 /* ---- the chart library: installed sets -------------------------------------- */
 
 /* A SET is a folder the mariner added, or one .zip — how a chart agency
@@ -52,6 +66,23 @@ void lk_app_model_set_chart_set_on (LkAppModel *self, const char *path, gboolean
 /* Take a set off the list. What Lookout prepared from it is deleted — it can
  * be made again — and the mariner's own folder is never touched. */
 void lk_app_model_remove_chart_set (LkAppModel *self, const char *path);
+
+/* TRUE when sets ARE installed and every one of them is switched off.
+ *
+ * The one case where the library is not empty and the chart is still blank. A
+ * mariner there does not need setup: they need the switch they turned off, so
+ * the window offers that instead. */
+gboolean lk_app_model_all_sets_off (LkAppModel *self);
+
+/* TRUE while a background scan has a set still to read. The library composes
+ * to the sets already read, so a chart opened now can be short or empty. Wait
+ * for ::chart-sets-changed and ask again. */
+gboolean lk_app_model_library_scanning (LkAppModel *self);
+
+/* The removal running behind the app, or NULL. Its own channel, not the
+ * bake's: a set can be removed while another is still importing, and a
+ * removal cannot be cancelled. ::removing says when to ask again. */
+const LkBakeProgress *lk_app_model_get_remove_progress (LkAppModel *self);
 
 /* ---- commands (headerbar / menu) ---------------------------------------- */
 
@@ -156,6 +187,35 @@ void lk_app_model_reapply_chart_link (LkAppModel *self);
  * tick: the changed flag has ONE consumer. */
 void lk_app_model_poll_chart_links (LkAppModel *self);
 
+/* ---- NOAA charts --------------------------------------------------------- */
+
+/* NOAA's catalog, the regions a mariner picks, and the downloads run from
+ * them. Owned here so the picker, the Charts page and setup read one object.
+ * See library/noaa.h for what a region selects. */
+LkNoaa *lk_app_model_get_noaa (LkAppModel *self);
+
+/* A chart handle has just been created. NOAA's catalog belongs to the handle,
+ * so a read held while there was none runs now. Called beside the raster
+ * replay and the chart-link reapply, for the same reason. */
+void lk_app_model_noaa_chart_did_open (LkAppModel *self);
+
+/* Download the regions the mariner picked, then prepare what arrives.
+ *
+ * The core unpacks each cell's exchange set into one staging directory, so the
+ * whole download is one folder of source cells and bakes as a single set. This
+ * follows the transfer to its end and starts that bake. `again` fetches the
+ * cells already installed as well, which is how a mariner repairs a set.
+ *
+ * A download that failed every cell bakes nothing: an empty directory would
+ * join the library as a set that never fills. */
+void lk_app_model_start_noaa_download (LkAppModel *self, gboolean again);
+
+/* Every survey cell this device holds, by dataset name. Transfer full strv.
+ *
+ * What NOAA is told before it prices a pick, so water already downloaded is
+ * not paid for twice. See lk_chart_sets_cell_names. */
+char **lk_app_model_installed_cell_names (LkAppModel *self);
+
 /* What the pill is built from. The sets are borrowed. */
 GPtrArray  *lk_app_model_get_raster_sets (LkAppModel *self);
 int         lk_app_model_get_raster_active (LkAppModel *self);
@@ -237,6 +297,22 @@ void  lk_app_model_set_pick_index (LkAppModel *self, guint index);
 /* ---- accessors the chrome reads ----------------------------------------- */
 
 gboolean lk_app_model_get_has_chart (LkAppModel *self);
+
+/* A chart is open and holds no vector charts, so it is drawing the basemap.
+ * Not the same as having nothing to draw: a library of pictures alone reads
+ * empty here and still draws. */
+gboolean lk_app_model_get_chart_is_empty (LkAppModel *self);
+
+/* Nothing is on the screen and nothing is on its way there.
+ *
+ * What the first-run page and setup read, rather than has-chart. A chart of no
+ * charts is OPEN, so has-chart says yes while the mariner looks at the
+ * basemap. This answers the question they are actually asking.
+ *
+ * FALSE while an open, a scan or a bake is in flight, so nothing raised off it
+ * covers a library that is still arriving. */
+gboolean lk_app_model_get_nothing_to_draw (LkAppModel *self);
+
 const char *lk_app_model_get_chart_path (LkAppModel *self);
 double   lk_app_model_get_center_lon (LkAppModel *self);
 double   lk_app_model_get_center_lat (LkAppModel *self);

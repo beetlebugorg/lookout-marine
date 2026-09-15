@@ -1,23 +1,42 @@
 /* ui/settings/charts.c — the Charts page.
  *
- * Three lists, and what fills each of them: the chart by link that replaces
- * the portrayal, the library of installed sets, and the raster charts the mariner
- * installed. All three rebuild off an idle, because a control in a list
- * changes the model and the model signals straight back.
+ * In the order a mariner asks: which chart is DRAWN, what it is built from,
+ * what is arriving now, and where to get more.
+ *
+ * NO SEPARATE PICTURE LIST. A picture and a survey are different kinds of
+ * chart, and the row says which, but they are the same kind of THING TO ADD:
+ * they arrive in the same folders and switch on the same way. Two lists made
+ * the mariner remember which panel a file had gone into, and a folder holding
+ * both could only be half added.
+ *
+ * Where they differ is what a switch MEANS. Surveys compose, so a set is on or
+ * off. Only one picture can cover a piece of water, so the pictures inside a
+ * set get a switch each, by whoever made them.
+ *
+ * Every list rebuilds off an idle, because a control in a list changes the
+ * model and the model signals straight back.
  */
 #include "ui/settings/charts.h"
 #include "ui/settings/widgets.h"
 
+#include "library/bake.h"
+#include "ui/charts/band-ramp.h"
+#include "ui/charts/gallery.h"
+#include "ui/charts/noaa-window.h"
 #include "ui/open-dialogs.h"
 
+/* ---- the ways in --------------------------------------------------------- */
+
+/* NOAA's own charts, in the picker's own window. The map wants 1040 points and
+ * this pane is about 550, so it opens beside the form. */
 static void
-lk_charts_archive_clicked (GtkButton *button, gpointer user_data)
+lk_charts_noaa_clicked (GtkButton *button, gpointer user_data)
 {
   LkSettings *settings = user_data;
   GtkRoot *root = gtk_widget_get_root (GTK_WIDGET (button));
 
-  lk_present_open_archive_dialog (GTK_IS_WINDOW (root) ? GTK_WINDOW (root) : NULL,
-                                  settings->model);
+  lk_noaa_window_present (GTK_IS_WINDOW (root) ? GTK_WINDOW (root) : NULL,
+                          settings->model);
 }
 
 static void
@@ -30,334 +49,211 @@ lk_charts_open_clicked (GtkButton *button, gpointer user_data)
                                 settings->model);
 }
 
-/* ---- the raster chart list ---------------------------------------------- */
-
 static void
-lk_raster_group_toggled (GtkSwitch *widget, GParamSpec *pspec, gpointer user_data)
-{
-  LkSettings *settings = user_data;
-  gboolean on = gtk_switch_get_active (widget);
-
-  if (settings->updating)
-    return;
-
-  /* The rebuild this starts frees the switch, and the switch owns the list. */
-  g_autoptr (GPtrArray) paths = g_ptr_array_ref (g_object_get_data (G_OBJECT (widget), "lk-paths"));
-
-  /* A mariner turns off Navionics, not four files that happen to be Navionics. */
-  for (guint i = 0; i < paths->len; i++)
-    lk_app_model_set_raster_enabled (settings->model, g_ptr_array_index (paths, i), on);
-}
-
-static void
-lk_raster_file_toggled (GtkSwitch *widget, GParamSpec *pspec, gpointer user_data)
-{
-  LkSettings *settings = user_data;
-  const char *path = g_object_get_data (G_OBJECT (widget), "lk-path");
-
-  if (settings->updating)
-    return;
-
-  lk_app_model_set_raster_enabled (settings->model, path, gtk_switch_get_active (widget));
-}
-
-static void
-lk_raster_remove_clicked (GtkButton *button, gpointer user_data)
-{
-  LkSettings *settings = user_data;
-  const char *path = g_object_get_data (G_OBJECT (button), "lk-path");
-
-  lk_app_model_remove_raster_chart (settings->model, path);
-}
-
-static void
-lk_raster_add_clicked (GtkButton *button, gpointer user_data)
+lk_charts_file_clicked (GtkButton *button, gpointer user_data)
 {
   LkSettings *settings = user_data;
   GtkRoot *root = gtk_widget_get_root (GTK_WIDGET (button));
+  GtkWidget *popover = gtk_widget_get_ancestor (GTK_WIDGET (button), GTK_TYPE_POPOVER);
 
-  lk_present_add_raster_dialog (GTK_IS_WINDOW (root) ? GTK_WINDOW (root) : NULL,
-                                settings->model);
+  if (popover != NULL)
+    gtk_popover_popdown (GTK_POPOVER (popover));
+  lk_present_open_chart_file_dialog (GTK_IS_WINDOW (root) ? GTK_WINDOW (root) : NULL,
+                                     settings->model);
 }
 
 static void
-lk_raster_add_folder_clicked (GtkButton *button, gpointer user_data)
+lk_charts_folder_clicked (GtkButton *button, gpointer user_data)
 {
   LkSettings *settings = user_data;
-  GtkRoot *root = gtk_widget_get_root (GTK_WIDGET (button));
+  GtkWidget *popover = gtk_widget_get_ancestor (GTK_WIDGET (button), GTK_TYPE_POPOVER);
 
-  lk_present_add_raster_folder_dialog (GTK_IS_WINDOW (root) ? GTK_WINDOW (root) : NULL,
-                                       settings->model);
+  if (popover != NULL)
+    gtk_popover_popdown (GTK_POPOVER (popover));
+  lk_charts_open_clicked (button, settings);
 }
 
-static GtkWidget *
-lk_raster_switch (gboolean on)
-{
-  GtkWidget *widget = gtk_switch_new ();
+/* ---- the active chart ---------------------------------------------------- */
 
-  gtk_switch_set_active (GTK_SWITCH (widget), on);
-  gtk_widget_set_valign (widget, GTK_ALIGN_CENTER);
-  return widget;
-}
-
-/* One switch for the set, one for each file under it. The set is what the pill
- * cycles and what covers a piece of water; the file is what the mariner
- * downloaded. */
-static void
-lk_settings_fill_raster_list (LkSettings *settings)
-{
-  GtkWidget *list = settings->raster.box;
-  GtkWidget *child;
-
-  /* Programming a switch must not read back as a mariner moving it. */
-  settings->updating = TRUE;
-
-  while ((child = gtk_widget_get_first_child (list)) != NULL)
-    gtk_box_remove (GTK_BOX (list), child);
-
-  if (lk_app_model_get_raster_count (settings->model) == 0)
-    {
-      GtkWidget *empty = gtk_label_new ("No raster charts");
-      gtk_widget_add_css_class (empty, "dim-label");
-      gtk_label_set_xalign (GTK_LABEL (empty), 0.0);
-      gtk_box_append (GTK_BOX (list), empty);
-      settings->updating = FALSE;
-      return;
-    }
-
-  g_autoptr (GPtrArray) groups = lk_app_model_get_raster_groups (settings->model);
-
-  for (guint i = 0; i < groups->len; i++)
-    {
-      const LkRasterGroup *group = g_ptr_array_index (groups, i);
-      gboolean any_on = FALSE;
-
-      for (guint j = 0; j < group->paths->len; j++)
-        {
-          if (lk_app_model_raster_enabled (settings->model, g_ptr_array_index (group->paths, j)))
-            any_on = TRUE;
-        }
-
-      GtkWidget *row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 10);
-      GtkWidget *toggle = lk_raster_switch (any_on);
-      GtkWidget *name = gtk_label_new (group->name);
-      g_autofree char *count = g_strdup_printf (group->paths->len == 1 ? "%u file" : "%u files",
-                                                group->paths->len);
-      GtkWidget *files = gtk_label_new (count);
-
-      gtk_widget_add_css_class (name, "heading");
-      gtk_label_set_xalign (GTK_LABEL (name), 0.0);
-      gtk_widget_set_hexpand (name, TRUE);
-      gtk_widget_add_css_class (files, "dim-label");
-      gtk_widget_add_css_class (files, "caption");
-
-      /* The switch owns its copies. The group's strings belong to the installed
-       * list, and a removal frees them while this row is still on the screen. */
-      GPtrArray *owned = g_ptr_array_new_with_free_func (g_free);
-      for (guint j = 0; j < group->paths->len; j++)
-        g_ptr_array_add (owned, g_strdup (g_ptr_array_index (group->paths, j)));
-
-      g_object_set_data_full (G_OBJECT (toggle), "lk-paths", owned,
-                              (GDestroyNotify) g_ptr_array_unref);
-      g_signal_connect (toggle, "notify::active", G_CALLBACK (lk_raster_group_toggled), settings);
-
-      gtk_box_append (GTK_BOX (row), toggle);
-      gtk_box_append (GTK_BOX (row), name);
-      gtk_box_append (GTK_BOX (row), files);
-      gtk_widget_set_margin_top (row, 6);
-      gtk_box_append (GTK_BOX (list), row);
-
-      for (guint j = 0; j < group->paths->len; j++)
-        {
-          const char *path = g_ptr_array_index (group->paths, j);
-          g_autofree char *base = g_path_get_basename (path);
-          gboolean on = lk_app_model_raster_enabled (settings->model, path);
-
-          GtkWidget *file_row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 10);
-          GtkWidget *file_toggle = lk_raster_switch (on);
-          GtkWidget *label = gtk_label_new (base);
-          GtkWidget *remove = gtk_button_new_from_icon_name ("list-remove-symbolic");
-
-          gtk_label_set_ellipsize (GTK_LABEL (label), PANGO_ELLIPSIZE_MIDDLE);
-          gtk_label_set_xalign (GTK_LABEL (label), 0.0);
-          gtk_widget_set_hexpand (label, TRUE);
-          gtk_widget_add_css_class (label, "caption");
-          if (!on)
-            gtk_widget_add_css_class (label, "dim-label");
-
-          gtk_button_set_has_frame (GTK_BUTTON (remove), FALSE);
-          gtk_widget_set_valign (remove, GTK_ALIGN_CENTER);
-          /* The engine cannot drop a chart from a live handle, so a removal
-           * switches the picture off now and the chart goes at the next open. */
-          gtk_widget_set_tooltip_text (remove, "Remove. The picture goes at once.");
-          gtk_accessible_update_property (GTK_ACCESSIBLE (remove),
-                                          GTK_ACCESSIBLE_PROPERTY_LABEL, "Remove raster chart", -1);
-
-          g_object_set_data_full (G_OBJECT (file_toggle), "lk-path", g_strdup (path), g_free);
-          g_object_set_data_full (G_OBJECT (remove), "lk-path", g_strdup (path), g_free);
-          g_signal_connect (file_toggle, "notify::active",
-                            G_CALLBACK (lk_raster_file_toggled), settings);
-          g_signal_connect (remove, "clicked", G_CALLBACK (lk_raster_remove_clicked), settings);
-
-          gtk_widget_set_margin_start (file_row, 22);
-          gtk_box_append (GTK_BOX (file_row), file_toggle);
-          gtk_box_append (GTK_BOX (file_row), label);
-          gtk_box_append (GTK_BOX (file_row), remove);
-          gtk_box_append (GTK_BOX (list), file_row);
-        }
-    }
-  settings->updating = FALSE;
-}
-
-/* A raster chart added or removed anywhere, this list included. */
-void
-lk_settings_raster_changed (LkAppModel *model, gpointer user_data)
-{
-  LkSettings *settings = g_object_get_data (G_OBJECT (user_data), "lk-settings");
-
-  if (settings != NULL)
-    lk_deferred_list_schedule (&settings->raster);
-}
-
-/* ---- charts by link ------------------------------------------------------ */
+/* Adding a chart by link, as a window the gallery's last tile raises.
+ *
+ * NOT A FIELD ON THE PAGE. A field standing open on every visit is a field
+ * most visits do not want, and the sentence saying what a chart link IS has to
+ * stand open with it: together they cost the pane a block of height that the
+ * mariner reads past every time. Both belong where the mariner has just asked
+ * to add one (apple/LookoutMarine/Charts/ChartsSection.swift, AddChartSheet).
+ */
 
 static void
-lk_link_radio_toggled (GtkCheckButton *button, gpointer user_data)
+lk_add_link_submit (LkSettings *settings, GtkWidget *entry)
 {
-  LkSettings *settings = user_data;
-  /* NULL data is the "Lookout chart" radio, and NULL is how the links object
-   * spells "lookout's own chart". */
-  const char *url = g_object_get_data (G_OBJECT (button), "lk-url");
-
-  if (settings->updating || !gtk_check_button_get_active (button))
-    return;
-  lk_chart_links_select (lk_app_model_get_chart_links (settings->model), url);
-}
-
-static void
-lk_link_refresh_clicked (GtkButton *button, gpointer user_data)
-{
-  LkSettings *settings = user_data;
-  const char *url = g_object_get_data (G_OBJECT (button), "lk-url");
-
-  lk_chart_links_refresh (lk_app_model_get_chart_links (settings->model), url);
-}
-
-static void
-lk_link_remove_clicked (GtkButton *button, gpointer user_data)
-{
-  LkSettings *settings = user_data;
-  const char *url = g_object_get_data (G_OBJECT (button), "lk-url");
-
-  lk_chart_links_remove (lk_app_model_get_chart_links (settings->model), url);
-}
-
-static void
-lk_link_add_from (LkSettings *settings, GtkEntry *entry)
-{
+  GtkWidget *window = gtk_widget_get_ancestor (entry, GTK_TYPE_WINDOW);
   const char *text = gtk_editable_get_text (GTK_EDITABLE (entry));
 
   if (text == NULL || text[0] == '\0')
     return;
   lk_chart_links_add (lk_app_model_get_chart_links (settings->model), text);
-  gtk_editable_set_text (GTK_EDITABLE (entry), "");
+  /* The window goes at once. What happens next — reading the style, or
+   * refusing it — is reported on the page, under the gallery. */
+  if (window != NULL)
+    gtk_window_destroy (GTK_WINDOW (window));
 }
 
 static void
-lk_link_entry_activated (GtkEntry *entry, gpointer user_data)
+lk_add_link_activated (GtkEntry *entry, gpointer user_data)
 {
-  lk_link_add_from (user_data, entry);
+  lk_add_link_submit (user_data, GTK_WIDGET (entry));
 }
 
 static void
-lk_link_add_clicked (GtkButton *button, gpointer user_data)
+lk_add_link_clicked (GtkButton *button, gpointer user_data)
 {
-  lk_link_add_from (user_data, g_object_get_data (G_OBJECT (button), "lk-entry"));
+  lk_add_link_submit (user_data, g_object_get_data (G_OBJECT (button), "lk-entry"));
 }
 
-/* The chart election: lookout's own chart, or one of the added links. One
- * radio group — a linked chart is an entire separate chart, not an overlay,
- * so exactly one of these is ever drawn. */
+static void
+lk_add_link_cancelled (GtkButton *button, gpointer user_data)
+{
+  GtkWidget *window = gtk_widget_get_ancestor (GTK_WIDGET (button), GTK_TYPE_WINDOW);
+
+  if (window != NULL)
+    gtk_window_destroy (GTK_WINDOW (window));
+}
+
+/* Add is the only thing this window is for, so it stays out of reach until
+ * there is something to add. */
+static void
+lk_add_link_typed (GtkEditable *entry, GParamSpec *pspec, gpointer user_data)
+{
+  const char *text = gtk_editable_get_text (entry);
+  g_autofree char *trimmed = g_strdup (text != NULL ? text : "");
+
+  gtk_widget_set_sensitive (GTK_WIDGET (user_data), g_strstrip (trimmed)[0] != '\0');
+}
+
+/* The gallery's last tile. */
+static void
+lk_charts_add_link_asked (gpointer user_data)
+{
+  LkSettings *settings = user_data;
+  /* The page's own widget is the way to the window this pane is in: the
+   * gallery asks without saying where from. */
+  GtkRoot *root = settings->links.box != NULL
+                      ? gtk_widget_get_root (settings->links.box)
+                      : NULL;
+  GtkWidget *window = gtk_window_new ();
+  GtkWidget *box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 14);
+  GtkWidget *blurb = gtk_label_new (
+      "An online map can be the chart. Paste its MapLibre style link, or a TileJSON "
+      "tile link. A style draws exactly what its publisher styled; bare tiles get a "
+      "plain generated look. Either way the content comes from whoever made it, "
+      "depths, symbols and warnings included.");
+  GtkWidget *entry = gtk_entry_new ();
+  GtkWidget *buttons = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
+  GtkWidget *cancel = gtk_button_new_with_label ("Cancel");
+  GtkWidget *add = gtk_button_new_with_label ("Add");
+
+  gtk_window_set_title (GTK_WINDOW (window), "Add a Chart");
+  gtk_window_set_default_size (GTK_WINDOW (window), 460, -1);
+  gtk_window_set_resizable (GTK_WINDOW (window), FALSE);
+  gtk_window_set_modal (GTK_WINDOW (window), TRUE);
+  gtk_window_set_destroy_with_parent (GTK_WINDOW (window), TRUE);
+  if (GTK_IS_WINDOW (root))
+    gtk_window_set_transient_for (GTK_WINDOW (window), GTK_WINDOW (root));
+  gtk_window_set_titlebar (GTK_WINDOW (window), gtk_header_bar_new ());
+
+  gtk_widget_add_css_class (blurb, "dim-label");
+  gtk_label_set_wrap (GTK_LABEL (blurb), TRUE);
+  gtk_label_set_xalign (GTK_LABEL (blurb), 0.0);
+  gtk_label_set_max_width_chars (GTK_LABEL (blurb), 52);
+
+  gtk_entry_set_placeholder_text (GTK_ENTRY (entry), "https://…/style.json");
+  gtk_entry_set_input_purpose (GTK_ENTRY (entry), GTK_INPUT_PURPOSE_URL);
+  gtk_entry_set_activates_default (GTK_ENTRY (entry), FALSE);
+  g_signal_connect (entry, "activate", G_CALLBACK (lk_add_link_activated), settings);
+
+  gtk_widget_add_css_class (add, "suggested-action");
+  gtk_widget_set_sensitive (add, FALSE);
+  g_object_set_data (G_OBJECT (add), "lk-entry", entry);
+  g_signal_connect (entry, "notify::text", G_CALLBACK (lk_add_link_typed), add);
+  g_signal_connect (add, "clicked", G_CALLBACK (lk_add_link_clicked), settings);
+  g_signal_connect (cancel, "clicked", G_CALLBACK (lk_add_link_cancelled), settings);
+
+  gtk_widget_set_hexpand (cancel, TRUE);
+  gtk_widget_set_halign (cancel, GTK_ALIGN_END);
+  gtk_box_append (GTK_BOX (buttons), cancel);
+  gtk_box_append (GTK_BOX (buttons), add);
+
+  gtk_widget_set_margin_start (box, 18);
+  gtk_widget_set_margin_end (box, 18);
+  gtk_widget_set_margin_top (box, 18);
+  gtk_widget_set_margin_bottom (box, 18);
+  gtk_box_append (GTK_BOX (box), blurb);
+  gtk_box_append (GTK_BOX (box), entry);
+  gtk_box_append (GTK_BOX (box), buttons);
+  gtk_window_set_child (GTK_WINDOW (window), box);
+
+  gtk_window_present (GTK_WINDOW (window));
+  gtk_widget_grab_focus (entry);
+}
+
+/* What the gallery cannot say for itself: that a resolve is in flight, why the
+ * last one failed, and that a linked chart takes the display settings out of
+ * the mariner's hands while it draws.
+ *
+ * The last of those is said only WHILE a link draws, because that is when the
+ * rest of this window stops shaping the chart and the mariner is owed a
+ * reason. That a tile draws when it is picked needs no saying. */
 static void
 lk_settings_fill_links_list (LkSettings *settings)
 {
   GtkWidget *list = settings->links.box;
-  GtkWidget *child;
   LkChartLinks *links = lk_app_model_get_chart_links (settings->model);
-  const char *active = lk_chart_links_active (links);
   const char *error = lk_chart_links_error (links);
-
-  /* Programming a radio must not read back as a mariner picking it. */
-  settings->updating = TRUE;
+  GtkWidget *child;
 
   while ((child = gtk_widget_get_first_child (list)) != NULL)
     gtk_box_remove (GTK_BOX (list), child);
 
-  GtkWidget *own = gtk_check_button_new_with_label ("Lookout chart");
-  gtk_check_button_set_active (GTK_CHECK_BUTTON (own), active == NULL);
-  g_signal_connect (own, "toggled", G_CALLBACK (lk_link_radio_toggled), settings);
-  gtk_box_append (GTK_BOX (list), own);
-
-  GPtrArray *all = lk_chart_links_list (links);
-  for (guint i = 0; i < all->len; i++)
-    {
-      const LkChartLink *link = g_ptr_array_index (all, i);
-      GtkWidget *row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 4);
-      GtkWidget *radio = gtk_check_button_new_with_label (link->name);
-      GtkWidget *refresh = gtk_button_new_from_icon_name ("view-refresh-symbolic");
-      GtkWidget *remove = gtk_button_new_from_icon_name ("list-remove-symbolic");
-
-      gtk_check_button_set_group (GTK_CHECK_BUTTON (radio), GTK_CHECK_BUTTON (own));
-      gtk_check_button_set_active (GTK_CHECK_BUTTON (radio),
-                                   g_strcmp0 (active, link->url) == 0);
-      gtk_widget_set_hexpand (radio, TRUE);
-      gtk_widget_set_tooltip_text (radio, link->url);
-      g_object_set_data_full (G_OBJECT (radio), "lk-url", g_strdup (link->url), g_free);
-      g_signal_connect (radio, "toggled", G_CALLBACK (lk_link_radio_toggled), settings);
-
-      gtk_button_set_has_frame (GTK_BUTTON (refresh), FALSE);
-      gtk_widget_set_valign (refresh, GTK_ALIGN_CENTER);
-      gtk_widget_set_tooltip_text (refresh,
-                                   "Re-read the link. A link that doesn't answer "
-                                   "leaves the chart as it is.");
-      g_object_set_data_full (G_OBJECT (refresh), "lk-url", g_strdup (link->url), g_free);
-      g_signal_connect (refresh, "clicked", G_CALLBACK (lk_link_refresh_clicked), settings);
-
-      gtk_button_set_has_frame (GTK_BUTTON (remove), FALSE);
-      gtk_widget_set_valign (remove, GTK_ALIGN_CENTER);
-      gtk_widget_set_tooltip_text (remove, "Forget this link");
-      gtk_accessible_update_property (GTK_ACCESSIBLE (remove),
-                                      GTK_ACCESSIBLE_PROPERTY_LABEL, "Forget this link", -1);
-      g_object_set_data_full (G_OBJECT (remove), "lk-url", g_strdup (link->url), g_free);
-      g_signal_connect (remove, "clicked", G_CALLBACK (lk_link_remove_clicked), settings);
-
-      gtk_box_append (GTK_BOX (row), radio);
-      gtk_box_append (GTK_BOX (row), refresh);
-      gtk_box_append (GTK_BOX (row), remove);
-      gtk_box_append (GTK_BOX (list), row);
-    }
-
-  /* A resolve is several fetches deep, so say so rather than leave the list
-   * looking as though the click did nothing. */
   if (lk_chart_links_busy (links))
     {
+      GtkWidget *row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
+      GtkWidget *spinner = gtk_spinner_new ();
       GtkWidget *label = gtk_label_new ("Reading the chart…");
+
+      gtk_spinner_set_spinning (GTK_SPINNER (spinner), TRUE);
+      gtk_widget_set_valign (spinner, GTK_ALIGN_CENTER);
       gtk_widget_add_css_class (label, "dim-label");
       gtk_widget_add_css_class (label, "caption");
       gtk_label_set_xalign (GTK_LABEL (label), 0.0);
-      gtk_box_append (GTK_BOX (list), label);
+      gtk_box_append (GTK_BOX (row), spinner);
+      gtk_box_append (GTK_BOX (row), label);
+      gtk_box_append (GTK_BOX (list), row);
     }
 
   if (error[0] != '\0')
     {
       GtkWidget *label = gtk_label_new (error);
+
       gtk_widget_add_css_class (label, "error");
       gtk_widget_add_css_class (label, "caption");
       gtk_label_set_wrap (GTK_LABEL (label), TRUE);
       gtk_label_set_xalign (GTK_LABEL (label), 0.0);
       gtk_box_append (GTK_BOX (list), label);
     }
-  settings->updating = FALSE;
+
+  if (lk_chart_links_active (links) != NULL)
+    {
+      GtkWidget *label = gtk_label_new (
+          "While a linked chart draws, the display, depth and symbol settings do not "
+          "shape it. You are seeing its publisher's own portrayal.");
+
+      gtk_widget_add_css_class (label, "dim-label");
+      gtk_widget_add_css_class (label, "caption");
+      gtk_label_set_wrap (GTK_LABEL (label), TRUE);
+      gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+      gtk_box_append (GTK_BOX (list), label);
+    }
 }
 
 /* A chart link resolving, failing, or being picked. */
@@ -432,19 +328,30 @@ lk_chart_set_remove_answered (GObject *source, GAsyncResult *result, gpointer us
   lk_set_remove_ask_free (ask);
 }
 
-/* Removing a set deletes the charts Lookout prepared from it, and re-adding it
- * rebuilds them, so the removal is asked about first — as the reference does. */
+/* Removing a set this app PREPARED deletes work that has to be done again, so
+ * that one is asked about first. A folder of the mariner's own files is a list
+ * entry, and taking it off the list touches nothing, so it goes without a
+ * question. */
 static void
 lk_chart_set_remove_clicked (GtkButton *button, gpointer user_data)
 {
+  LkSettings *settings = user_data;
   const char *path = g_object_get_data (G_OBJECT (button), "lk-path");
   const char *name = g_object_get_data (G_OBJECT (button), "lk-set-title");
   guint charts = GPOINTER_TO_UINT (g_object_get_data (G_OBJECT (button), "lk-set-charts"));
+  gboolean derived = g_object_get_data (G_OBJECT (button), "lk-set-derived") != NULL;
   GtkRoot *root = gtk_widget_get_root (GTK_WIDGET (button));
-  g_autofree char *question = g_strdup_printf ("Remove %s?", name != NULL ? name : "this set");
+  g_autofree char *question = NULL;
+  g_autofree char *detail = NULL;
   static const char *answers[] = { "Cancel", "Remove and delete prepared charts", NULL };
 
-  g_autofree char *detail = NULL;
+  if (!derived)
+    {
+      lk_app_model_remove_chart_set (settings->model, path);
+      return;
+    }
+
+  question = g_strdup_printf ("Remove %s?", name != NULL ? name : "this set");
   if (charts > 0)
     {
       g_autofree char *estimate = lk_rebuild_estimate (charts);
@@ -469,9 +376,165 @@ lk_chart_set_remove_clicked (GtkButton *button, gpointer user_data)
   g_object_unref (dialog);
 }
 
-/* What is installed, and what is being sailed on: a switch and a title per set,
- * the folder underneath so two sets from the same office are told apart, and
- * what the background scan counted once it has. */
+/* ---- the pictures, under the set they came in with ----------------------- */
+
+static void
+lk_raster_group_toggled (GtkSwitch *widget, GParamSpec *pspec, gpointer user_data)
+{
+  LkSettings *settings = user_data;
+  gboolean on = gtk_switch_get_active (widget);
+
+  if (settings->updating)
+    return;
+
+  /* The rebuild this starts frees the switch, and the switch owns the list. */
+  g_autoptr (GPtrArray) paths =
+      g_ptr_array_ref (g_object_get_data (G_OBJECT (widget), "lk-paths"));
+
+  /* A mariner turns off Navionics, not four files that happen to be Navionics. */
+  for (guint i = 0; i < paths->len; i++)
+    lk_app_model_set_raster_enabled (settings->model, g_ptr_array_index (paths, i), on);
+}
+
+static void
+lk_raster_remove_clicked (GtkButton *button, gpointer user_data)
+{
+  LkSettings *settings = user_data;
+  g_autoptr (GPtrArray) paths =
+      g_ptr_array_ref (g_object_get_data (G_OBJECT (button), "lk-paths"));
+
+  for (guint i = 0; i < paths->len; i++)
+    lk_app_model_remove_raster_chart (settings->model, g_ptr_array_index (paths, i));
+}
+
+static GtkWidget *
+lk_settings_switch (gboolean on)
+{
+  GtkWidget *widget = gtk_switch_new ();
+
+  gtk_switch_set_active (GTK_SWITCH (widget), on);
+  gtk_widget_set_valign (widget, GTK_ALIGN_CENTER);
+  return widget;
+}
+
+/* TRUE when this picture came in with this set: it lives in the folder the
+ * mariner added, or in the directory the bake prepared from it. */
+static gboolean
+lk_raster_belongs_to (const char *raster_path, const char *set_path)
+{
+  g_autofree char *prepared = lk_chart_bake_prepared_dir (set_path);
+
+  return g_str_has_prefix (raster_path, set_path) ||
+         (prepared != NULL && g_str_has_prefix (raster_path, prepared));
+}
+
+/* One provider's pictures: a switch, the name, and how many files. A provider
+ * is what covers a piece of water, so a folder of two hundred tiles from one
+ * survey is one decision. */
+static void
+lk_raster_group_row (LkSettings *settings, GtkWidget *list, const LkRasterGroup *group,
+                     gboolean nested)
+{
+  GtkWidget *row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
+  gboolean any_on = FALSE;
+  GPtrArray *owned = g_ptr_array_new_with_free_func (g_free);
+
+  for (guint i = 0; i < group->paths->len; i++)
+    {
+      const char *path = g_ptr_array_index (group->paths, i);
+
+      if (lk_app_model_raster_enabled (settings->model, path))
+        any_on = TRUE;
+      /* The switch owns its copies. The group's strings belong to the
+       * installed list, and a removal frees them while this row is still on
+       * the screen. */
+      g_ptr_array_add (owned, g_strdup (path));
+    }
+
+  GtkWidget *toggle = lk_settings_switch (any_on);
+  /* WHAT KIND OF CHART THIS IS, on the row. The list holds surveys and
+   * pictures together because they are added and switched on the same way,
+   * and the pill is how a mariner tells them apart without a heading
+   * splitting the list in two. */
+  GtkWidget *kind = gtk_label_new ("RASTER");
+  GtkWidget *name = gtk_label_new (group->name);
+  g_autofree char *count = g_strdup_printf (group->paths->len == 1 ? "%u file" : "%u files",
+                                            group->paths->len);
+  GtkWidget *files = gtk_label_new (count);
+  GtkWidget *remove = gtk_button_new_from_icon_name ("lk-remove-symbolic");
+
+  gtk_widget_add_css_class (kind, "lk-type-pill");
+  gtk_widget_add_css_class (kind, "dim-label");
+  gtk_widget_set_valign (kind, GTK_ALIGN_CENTER);
+  gtk_widget_add_css_class (name, "caption");
+  if (!any_on)
+    gtk_widget_add_css_class (name, "dim-label");
+  gtk_label_set_xalign (GTK_LABEL (name), 0.0);
+  gtk_label_set_ellipsize (GTK_LABEL (name), PANGO_ELLIPSIZE_END);
+  gtk_widget_add_css_class (files, "dim-label");
+  gtk_widget_add_css_class (files, "caption");
+
+  gtk_button_set_has_frame (GTK_BUTTON (remove), FALSE);
+  gtk_widget_set_valign (remove, GTK_ALIGN_CENTER);
+  /* The engine cannot drop a chart from a live handle, so a removal switches
+   * the picture off now and the chart goes at the next open. */
+  gtk_widget_set_tooltip_text (remove, "Remove. The picture goes at once.");
+  gtk_accessible_update_property (GTK_ACCESSIBLE (remove),
+                                  GTK_ACCESSIBLE_PROPERTY_LABEL, "Remove these pictures",
+                                  -1);
+
+  g_object_set_data_full (G_OBJECT (toggle), "lk-paths", g_ptr_array_ref (owned),
+                          (GDestroyNotify) g_ptr_array_unref);
+  g_object_set_data_full (G_OBJECT (remove), "lk-paths", owned,
+                          (GDestroyNotify) g_ptr_array_unref);
+  g_signal_connect (toggle, "notify::active", G_CALLBACK (lk_raster_group_toggled),
+                    settings);
+  g_signal_connect (remove, "clicked", G_CALLBACK (lk_raster_remove_clicked), settings);
+
+  /* The pill types the row, so it stands with the name and not out among the
+   * numbers. What is left of the row is the gap that pushes those right. */
+  GtkWidget *gap = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+  gtk_widget_set_hexpand (gap, TRUE);
+
+  gtk_box_append (GTK_BOX (row), toggle);
+  gtk_box_append (GTK_BOX (row), name);
+  gtk_box_append (GTK_BOX (row), kind);
+  gtk_box_append (GTK_BOX (row), gap);
+  gtk_box_append (GTK_BOX (row), files);
+  gtk_box_append (GTK_BOX (row), remove);
+  if (nested)
+    gtk_widget_set_margin_start (row, 30);
+  gtk_box_append (GTK_BOX (list), row);
+}
+
+/* ---- the set list -------------------------------------------------------- */
+
+/* What every installed set holds together, for the section header. */
+static char *
+lk_sets_summary (GPtrArray *rows)
+{
+  guint charts = 0;
+  gint64 bytes = 0;
+  gboolean scanned = FALSE;
+
+  for (guint i = 0; i < rows->len; i++)
+    {
+      const LkChartSetRow *set = g_ptr_array_index (rows, i);
+
+      charts += set->charts + set->unprepared + set->pictures;
+      bytes += set->bytes;
+      scanned |= set->scanned;
+    }
+
+  /* Nothing to say until a scan has read something. "0 charts" of a library
+   * that holds thousands is worse than saying nothing yet. */
+  if (!scanned || charts == 0)
+    return g_strdup ("");
+
+  g_autofree char *size = g_format_size (bytes);
+  return g_strdup_printf ("%u charts · %s", charts, size);
+}
+
 static void
 lk_settings_fill_sets_list (LkSettings *settings)
 {
@@ -483,9 +546,18 @@ lk_settings_fill_sets_list (LkSettings *settings)
     gtk_box_remove (GTK_BOX (list), child);
 
   g_autoptr (GPtrArray) rows = lk_app_model_get_chart_sets (settings->model);
-  if (rows->len == 0)
+  g_autoptr (GPtrArray) groups = lk_app_model_get_raster_groups (settings->model);
+
+  if (settings->sets_summary != NULL)
+    {
+      g_autofree char *summary = lk_sets_summary (rows);
+      gtk_label_set_text (GTK_LABEL (settings->sets_summary), summary);
+    }
+
+  if (rows->len == 0 && groups->len == 0)
     {
       GtkWidget *empty = gtk_label_new ("No chart sets yet");
+
       gtk_widget_add_css_class (empty, "dim-label");
       gtk_label_set_xalign (GTK_LABEL (empty), 0.0);
       gtk_box_append (GTK_BOX (list), empty);
@@ -493,61 +565,137 @@ lk_settings_fill_sets_list (LkSettings *settings)
       return;
     }
 
+  /* Which pictures have a set to sit under. What is left came in on its own. */
+  g_autoptr (GHashTable) placed = g_hash_table_new (g_direct_hash, g_direct_equal);
+
   for (guint i = 0; i < rows->len; i++)
     {
       const LkChartSetRow *set = g_ptr_array_index (rows, i);
+      /* One set is ONE block: its switch, its scale ramp, what it still has to
+       * prepare and the pictures it came in with. The parts sit closer to each
+       * other than the sets sit to one another, so a mariner reads where a set
+       * ends without a rule drawn between them. The reference groups it the
+       * same way (apple/LookoutMarine/Charts/ChartsSection.swift). */
+      GtkWidget *entry = gtk_box_new (GTK_ORIENTATION_VERTICAL, 8);
       GtkWidget *row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 10);
-      GtkWidget *toggle = lk_raster_switch (set->on);
-      GtkWidget *column = gtk_box_new (GTK_ORIENTATION_VERTICAL, 1);
+      GtkWidget *toggle = lk_settings_switch (set->on);
+      GtkWidget *column = gtk_box_new (GTK_ORIENTATION_VERTICAL, 2);
       GtkWidget *title = gtk_label_new (set->title);
-      g_autofree char *base = g_path_get_basename (set->path);
-      GtkWidget *where = gtk_label_new (base);
-      GtkWidget *remove = gtk_button_new_from_icon_name ("list-remove-symbolic");
+      GtkWidget *remove = gtk_button_new_from_icon_name ("lk-remove-symbolic");
 
       gtk_widget_add_css_class (title, "heading");
       gtk_label_set_xalign (GTK_LABEL (title), 0.0);
       gtk_label_set_ellipsize (GTK_LABEL (title), PANGO_ELLIPSIZE_END);
-      gtk_widget_add_css_class (where, "dim-label");
-      gtk_widget_add_css_class (where, "caption");
-      gtk_label_set_xalign (GTK_LABEL (where), 0.0);
-      gtk_label_set_ellipsize (GTK_LABEL (where), PANGO_ELLIPSIZE_MIDDLE);
+      gtk_box_append (GTK_BOX (column), title);
+
+      /* ONE line under the title, not two. Where it came from and what it
+       * holds are both about the same set, and stacking them made a row three
+       * lines deep that read as three facts. The folder shows only when the
+       * agency title has replaced it (apple/…/ChartsSection.swift). */
+      g_autofree char *under = NULL;
+
+      if (g_strcmp0 (set->title, set->name) != 0 && set->detail[0] != '\0')
+        under = g_strdup_printf ("%s · %s", set->name, set->detail);
+      else if (g_strcmp0 (set->title, set->name) != 0)
+        under = g_strdup (set->name);
+      else if (set->detail[0] != '\0')
+        under = g_strdup (set->detail);
+
+      if (under != NULL)
+        {
+          GtkWidget *caption = gtk_label_new (under);
+
+          gtk_widget_add_css_class (caption, "dim-label");
+          gtk_widget_add_css_class (caption, "caption");
+          gtk_label_set_xalign (GTK_LABEL (caption), 0.0);
+          gtk_label_set_ellipsize (GTK_LABEL (caption), PANGO_ELLIPSIZE_MIDDLE);
+          gtk_box_append (GTK_BOX (column), caption);
+        }
+      gtk_widget_set_hexpand (column, TRUE);
+
       /* The agency title can hide the folder name; the tooltip keeps the
        * whole path reachable. */
       gtk_widget_set_tooltip_text (row, set->path);
 
-      gtk_box_append (GTK_BOX (column), title);
-      gtk_box_append (GTK_BOX (column), where);
-      if (set->detail[0] != '\0')
-        {
-          GtkWidget *detail = gtk_label_new (set->detail);
-          gtk_widget_add_css_class (detail, "dim-label");
-          gtk_widget_add_css_class (detail, "caption");
-          gtk_label_set_xalign (GTK_LABEL (detail), 0.0);
-          gtk_label_set_ellipsize (GTK_LABEL (detail), PANGO_ELLIPSIZE_END);
-          gtk_box_append (GTK_BOX (column), detail);
-        }
-      gtk_widget_set_hexpand (column, TRUE);
-
       gtk_button_set_has_frame (GTK_BUTTON (remove), FALSE);
       gtk_widget_set_valign (remove, GTK_ALIGN_CENTER);
       gtk_widget_set_tooltip_text (remove,
-                                   "Remove from the library. Charts Lookout prepared "
-                                   "from it are deleted; your folder is not touched.");
+                                   set->derived
+                                       ? "Remove from the library. Charts Lookout prepared "
+                                         "from it are deleted; your folder is not touched."
+                                       : "Take these charts out of the list. Your files "
+                                         "stay where they are.");
       gtk_accessible_update_property (GTK_ACCESSIBLE (remove),
                                       GTK_ACCESSIBLE_PROPERTY_LABEL, "Remove chart set", -1);
 
       g_object_set_data_full (G_OBJECT (toggle), "lk-path", g_strdup (set->path), g_free);
       g_object_set_data_full (G_OBJECT (remove), "lk-path", g_strdup (set->path), g_free);
-      g_object_set_data_full (G_OBJECT (remove), "lk-set-title", g_strdup (set->title), g_free);
+      g_object_set_data_full (G_OBJECT (remove), "lk-set-title", g_strdup (set->title),
+                              g_free);
       g_object_set_data (G_OBJECT (remove), "lk-set-charts", GUINT_TO_POINTER (set->charts));
-      g_signal_connect (toggle, "notify::active", G_CALLBACK (lk_chart_set_toggled), settings);
-      g_signal_connect (remove, "clicked", G_CALLBACK (lk_chart_set_remove_clicked), settings);
+      if (set->derived)
+        g_object_set_data (G_OBJECT (remove), "lk-set-derived", GINT_TO_POINTER (1));
+      g_signal_connect (toggle, "notify::active", G_CALLBACK (lk_chart_set_toggled),
+                        settings);
+      g_signal_connect (remove, "clicked", G_CALLBACK (lk_chart_set_remove_clicked),
+                        settings);
 
       gtk_box_append (GTK_BOX (row), toggle);
       gtk_box_append (GTK_BOX (row), column);
       gtk_box_append (GTK_BOX (row), remove);
-      gtk_box_append (GTK_BOX (list), row);
+      gtk_box_append (GTK_BOX (entry), row);
+      gtk_box_append (GTK_BOX (list), entry);
+
+      /* What scales it holds. A set that stops at Coastal does not draw the
+       * harbour a passage ends in. */
+      if (lk_band_ramp_count (set->bands) > 0)
+        {
+          GtkWidget *ramp = lk_band_ramp_new (set->bands);
+
+          gtk_widget_set_margin_start (ramp, 30);
+          gtk_widget_set_opacity (ramp, set->on ? 1.0 : 0.5);
+          gtk_box_append (GTK_BOX (entry), ramp);
+        }
+
+      /* What is still to prepare. */
+      if (set->unprepared > 0)
+        {
+          g_autofree char *text = g_strdup_printf ("%u to prepare", set->unprepared);
+          GtkWidget *label = gtk_label_new (text);
+
+          gtk_widget_add_css_class (label, "dim-label");
+          gtk_widget_add_css_class (label, "caption");
+          gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+          gtk_widget_set_margin_start (label, 30);
+          gtk_box_append (GTK_BOX (entry), label);
+        }
+
+      /* The pictures this set came in with. */
+      for (guint g = 0; g < groups->len; g++)
+        {
+          const LkRasterGroup *group = g_ptr_array_index (groups, g);
+
+          if (group->paths->len == 0 ||
+              !lk_raster_belongs_to (g_ptr_array_index (group->paths, 0), set->path))
+            continue;
+          g_hash_table_add (placed, (gpointer) group);
+          lk_raster_group_row (settings, entry, group, TRUE);
+        }
     }
+
+  /* A picture the mariner added on its own belongs to no set, and still has to
+   * be switchable and removable. It goes in the list as itself: the row says
+   * it is a raster, so nothing has to be filed under a heading that split the
+   * library into two lists again. */
+  for (guint g = 0; g < groups->len; g++)
+    {
+      const LkRasterGroup *group = g_ptr_array_index (groups, g);
+
+      if (g_hash_table_contains (placed, group))
+        continue;
+      lk_raster_group_row (settings, list, group, FALSE);
+    }
+
   settings->updating = FALSE;
 }
 
@@ -561,121 +709,423 @@ lk_settings_sets_changed (LkAppModel *model, gpointer user_data)
     lk_deferred_list_schedule (&settings->sets);
 }
 
+/* A raster chart added or removed anywhere. The pictures are rows of the set
+ * list now, so one list answers both. */
+void
+lk_settings_raster_changed (LkAppModel *model, gpointer user_data)
+{
+  LkSettings *settings = g_object_get_data (G_OBJECT (user_data), "lk-settings");
+
+  if (settings != NULL)
+    lk_deferred_list_schedule (&settings->sets);
+}
+
+/* ---- what is arriving now ------------------------------------------------ */
+
+static void
+lk_noaa_cancel_clicked (GtkButton *button, gpointer user_data)
+{
+  LkSettings *settings = user_data;
+
+  lk_noaa_cancel (lk_app_model_get_noaa (settings->model));
+}
+
+static void
+lk_bake_cancel_clicked (GtkButton *button, gpointer user_data)
+{
+  LkSettings *settings = user_data;
+
+  lk_app_model_cancel_bake (settings->model);
+}
+
+/* A NOAA download and a bake, each shown only while it runs.
+ *
+ * THIS WINDOW STANDS OVER THE CHART, so a transfer begun here otherwise runs
+ * behind it with nothing to say where it got to. */
+static void
+lk_settings_fill_work_list (LkSettings *settings)
+{
+  GtkWidget *list = settings->work.box;
+  const LkNoaaState *noaa = lk_noaa_state (lk_app_model_get_noaa (settings->model));
+  const LkBakeProgress *bake = lk_app_model_get_bake_progress (settings->model);
+  const LkBakeProgress *gone = lk_app_model_get_remove_progress (settings->model);
+  GtkWidget *child;
+
+  while ((child = gtk_widget_get_first_child (list)) != NULL)
+    gtk_box_remove (GTK_BOX (list), child);
+
+  if (noaa->phase == LK_NOAA_DOWNLOADING)
+    {
+      GtkWidget *head = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 10);
+      g_autofree char *counts = g_strdup_printf ("Downloading from NOAA · %u of %u charts",
+                                                 noaa->done, noaa->total);
+      GtkWidget *label = gtk_label_new (counts);
+      GtkWidget *cancel = gtk_button_new_with_label ("Cancel");
+      GtkWidget *bar = gtk_progress_bar_new ();
+
+      gtk_widget_add_css_class (label, "caption");
+      gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+      gtk_widget_set_hexpand (label, TRUE);
+      gtk_box_append (GTK_BOX (head), label);
+
+      if (noaa->failed > 0)
+        {
+          g_autofree char *failed = g_strdup_printf ("%u failed", noaa->failed);
+          GtkWidget *bad = gtk_label_new (failed);
+
+          gtk_widget_add_css_class (bad, "error");
+          gtk_widget_add_css_class (bad, "caption");
+          gtk_box_append (GTK_BOX (head), bad);
+        }
+
+      gtk_widget_set_valign (cancel, GTK_ALIGN_CENTER);
+      g_signal_connect (cancel, "clicked", G_CALLBACK (lk_noaa_cancel_clicked), settings);
+      gtk_box_append (GTK_BOX (head), cancel);
+
+      gtk_progress_bar_set_fraction (GTK_PROGRESS_BAR (bar),
+                                     noaa->total > 0 ? (double) noaa->done / noaa->total
+                                                     : 0.0);
+      gtk_box_append (GTK_BOX (list), head);
+      gtk_box_append (GTK_BOX (list), bar);
+    }
+
+  if (bake != NULL)
+    {
+      GtkWidget *head = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 10);
+      g_autofree char *title = lk_bake_progress_title (bake);
+      g_autofree char *left = lk_bake_progress_remaining (bake);
+      GtkWidget *label = gtk_label_new (title);
+      GtkWidget *cancel = gtk_button_new_with_label ("Stop");
+      GtkWidget *bar = gtk_progress_bar_new ();
+
+      gtk_widget_add_css_class (label, "caption");
+      gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+      gtk_label_set_ellipsize (GTK_LABEL (label), PANGO_ELLIPSIZE_END);
+      gtk_widget_set_hexpand (label, TRUE);
+      gtk_box_append (GTK_BOX (head), label);
+
+      if (left != NULL)
+        {
+          GtkWidget *remaining = gtk_label_new (left);
+
+          gtk_widget_add_css_class (remaining, "dim-label");
+          gtk_widget_add_css_class (remaining, "caption");
+          gtk_box_append (GTK_BOX (head), remaining);
+        }
+
+      gtk_widget_set_valign (cancel, GTK_ALIGN_CENTER);
+      gtk_widget_set_tooltip_text (cancel,
+                                   "Whatever has been prepared stays. Coarse charts are "
+                                   "prepared first, so a passage is covered even if this "
+                                   "is stopped part way.");
+      g_signal_connect (cancel, "clicked", G_CALLBACK (lk_bake_cancel_clicked), settings);
+      gtk_box_append (GTK_BOX (head), cancel);
+
+      gtk_progress_bar_set_fraction (GTK_PROGRESS_BAR (bar),
+                                     lk_bake_progress_fraction (bake));
+      gtk_box_append (GTK_BOX (list), head);
+      gtk_box_append (GTK_BOX (list), bar);
+    }
+
+  /* A removal, the same way. Deleting a library is thousands of files and it
+   * runs behind the app: without this the panel says nothing at all while the
+   * charts go, which reads as the removal having done nothing. It offers no
+   * Cancel — the set is already off the list, and half a deleted library is
+   * not a state to stop in. */
+  if (gone != NULL)
+    {
+      GtkWidget *head = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 10);
+      g_autofree char *title = lk_bake_progress_title (gone);
+      GtkWidget *label = gtk_label_new (title);
+      GtkWidget *bar = gtk_progress_bar_new ();
+
+      gtk_widget_add_css_class (label, "caption");
+      gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+      gtk_label_set_ellipsize (GTK_LABEL (label), PANGO_ELLIPSIZE_MIDDLE);
+      gtk_widget_set_hexpand (label, TRUE);
+      gtk_box_append (GTK_BOX (head), label);
+
+      if (gone->total > 0)
+        {
+          g_autofree char *counts = g_strdup_printf ("%d of %d", gone->done, gone->total);
+          GtkWidget *count = gtk_label_new (counts);
+
+          gtk_widget_add_css_class (count, "dim-label");
+          gtk_widget_add_css_class (count, "caption");
+          gtk_box_append (GTK_BOX (head), count);
+        }
+
+      gtk_progress_bar_set_fraction (GTK_PROGRESS_BAR (bar),
+                                     lk_bake_progress_fraction (gone));
+      gtk_box_append (GTK_BOX (list), head);
+      gtk_box_append (GTK_BOX (list), bar);
+    }
+
+  /* A section with nothing in it is a heading over empty space. */
+  if (settings->work_section != NULL)
+    gtk_widget_set_visible (settings->work_section,
+                            noaa->phase == LK_NOAA_DOWNLOADING || bake != NULL ||
+                                gone != NULL);
+}
+
+/* The NOAA service moving. */
+void
+lk_settings_work_changed (gpointer subject, gpointer user_data)
+{
+  LkSettings *settings = g_object_get_data (G_OBJECT (user_data), "lk-settings");
+
+  if (settings != NULL)
+    lk_deferred_list_schedule (&settings->work);
+}
+
+/* The bake starting or stopping. A ::notify carries the property between the
+ * subject and the data, so it cannot share the handler above. */
+void
+lk_settings_baking_changed (GObject *object, GParamSpec *pspec, gpointer user_data)
+{
+  lk_settings_work_changed (object, user_data);
+}
+
+/* ---- the page ------------------------------------------------------------ */
+
+/* When NOAA's catalog was last read, for the row that offers it. */
+static char *
+lk_noaa_checked_text (LkNoaa *noaa)
+{
+  const LkNoaaState *state = lk_noaa_state (noaa);
+  g_autoptr (GDateTime) when = NULL;
+  g_autoptr (GDateTime) now = NULL;
+
+  if (state->checked_at == 0)
+    return g_strdup ("");
+
+  when = g_date_time_new_from_unix_local (state->checked_at);
+  now = g_date_time_new_now_local ();
+  if (when == NULL || now == NULL)
+    return g_strdup ("");
+
+  if (g_date_time_get_year (when) == g_date_time_get_year (now) &&
+      g_date_time_get_day_of_year (when) == g_date_time_get_day_of_year (now))
+    {
+      g_autofree char *clock = g_date_time_format (when, "%H:%M");
+      return g_strdup_printf ("Checked today %s", clock);
+    }
+
+  g_autofree char *date = g_date_time_format (when, "%e %b %H:%M");
+  return g_strdup_printf ("Checked %s", g_strstrip (date));
+}
+
+/* One way to add charts: what it does, and what it costs to find out.
+ *
+ * The detail line is not decoration. A mariner choosing between NOAA and a
+ * folder they already have is choosing between free official cover and their
+ * own files, and this row is where that choice is made. */
+static GtkWidget *
+lk_add_chart_face (const char *icon_name, const char *title, const char *detail,
+                   const char *trailing, GtkWidget *holder)
+{
+  GtkWidget *row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 13);
+  GtkWidget *icon = gtk_image_new_from_icon_name (icon_name);
+  GtkWidget *column = gtk_box_new (GTK_ORIENTATION_VERTICAL, 3);
+  GtkWidget *name = gtk_label_new (title);
+  GtkWidget *blurb = gtk_label_new (detail);
+  GtkWidget *chevron = gtk_image_new_from_icon_name ("go-next-symbolic");
+
+  gtk_image_set_pixel_size (GTK_IMAGE (icon), 17);
+  gtk_widget_add_css_class (icon, "lk-accent");
+  gtk_widget_set_valign (icon, GTK_ALIGN_CENTER);
+
+  gtk_widget_add_css_class (name, "heading");
+  gtk_label_set_xalign (GTK_LABEL (name), 0.0);
+  gtk_widget_add_css_class (blurb, "dim-label");
+  gtk_widget_add_css_class (blurb, "caption");
+  gtk_label_set_xalign (GTK_LABEL (blurb), 0.0);
+  gtk_label_set_wrap (GTK_LABEL (blurb), TRUE);
+  /* A GtkMenuButton measures its child at no width, so a line that wraps
+   * reports one line's height and the second line is clipped. A cap on the
+   * natural width makes the label report the wrapped height. */
+  gtk_label_set_max_width_chars (GTK_LABEL (blurb), 64);
+  gtk_box_append (GTK_BOX (column), name);
+  gtk_box_append (GTK_BOX (column), blurb);
+  gtk_widget_set_hexpand (column, TRUE);
+
+  gtk_box_append (GTK_BOX (row), icon);
+  gtk_box_append (GTK_BOX (row), column);
+
+  if (trailing != NULL)
+    {
+      GtkWidget *when = gtk_label_new (trailing);
+
+      gtk_widget_add_css_class (when, "dim-label");
+      gtk_widget_add_css_class (when, "caption");
+      gtk_widget_set_valign (when, GTK_ALIGN_CENTER);
+      gtk_widget_set_visible (when, trailing[0] != '\0');
+      gtk_box_append (GTK_BOX (row), when);
+      g_object_set_data (G_OBJECT (holder), "lk-trailing", when);
+    }
+
+  gtk_image_set_pixel_size (GTK_IMAGE (chevron), 12);
+  gtk_widget_add_css_class (chevron, "dim-label");
+  gtk_widget_set_valign (chevron, GTK_ALIGN_CENTER);
+  gtk_box_append (GTK_BOX (row), chevron);
+  return row;
+}
+
+static GtkWidget *
+lk_add_chart_row (GtkWidget *section, const char *icon_name, const char *title,
+                  const char *detail, const char *trailing,
+                  GCallback clicked, LkSettings *settings)
+{
+  GtkWidget *button = gtk_button_new ();
+
+  gtk_button_set_child (GTK_BUTTON (button),
+                        lk_add_chart_face (icon_name, title, detail, trailing, button));
+  gtk_widget_add_css_class (button, "flat");
+  g_signal_connect (button, "clicked", clicked, settings);
+  gtk_box_append (GTK_BOX (section), button);
+  return button;
+}
+
+static void
+lk_add_chart_popped (GtkButton *button, gpointer user_data)
+{
+  gtk_popover_popup (GTK_POPOVER (user_data));
+}
+
+/* A popover parented by hand is a child of the button, and a widget must have
+ * none left when it is disposed. */
+static void
+lk_add_chart_unparent (GtkWidget *button, gpointer user_data)
+{
+  gtk_widget_unparent (GTK_WIDGET (user_data));
+}
+
+/* The same row, opening a popover of its own.
+ *
+ * ONE GtkFileDialog PICKS FILES OR FOLDERS AND NEVER BOTH, and the mariner's
+ * charts arrive as either: a folder of cells, an archive an agency published,
+ * a prepared chart, a picture. macOS asks for all of them in one panel. Here
+ * the row is one entry that offers the two pickers.
+ *
+ * A PLAIN BUTTON WITH THE POPOVER PARENTED TO IT, not a GtkMenuButton. A menu
+ * button does not pass the width it is given down to what it measures, so a
+ * detail line that wraps to three lines in a narrow pane reported the height
+ * of two, and the third line was drawn outside the row and over the shelf. */
+static GtkWidget *
+lk_add_chart_menu_row (GtkWidget *section, const char *icon_name, const char *title,
+                       const char *detail, LkSettings *settings)
+{
+  GtkWidget *menu = gtk_button_new ();
+  GtkWidget *popover = gtk_popover_new ();
+  GtkWidget *box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 2);
+  GtkWidget *folder = gtk_button_new_with_label ("Choose a Folder…");
+  GtkWidget *file = gtk_button_new_with_label ("Choose a File…");
+
+  gtk_widget_add_css_class (folder, "flat");
+  gtk_widget_add_css_class (file, "flat");
+  gtk_widget_set_halign (gtk_button_get_child (GTK_BUTTON (folder)), GTK_ALIGN_START);
+  gtk_widget_set_halign (gtk_button_get_child (GTK_BUTTON (file)), GTK_ALIGN_START);
+  g_signal_connect (folder, "clicked", G_CALLBACK (lk_charts_folder_clicked), settings);
+  g_signal_connect (file, "clicked", G_CALLBACK (lk_charts_file_clicked), settings);
+
+  gtk_box_append (GTK_BOX (box), folder);
+  gtk_box_append (GTK_BOX (box), file);
+  gtk_popover_set_child (GTK_POPOVER (popover), box);
+
+  gtk_button_set_child (GTK_BUTTON (menu),
+                        lk_add_chart_face (icon_name, title, detail, NULL, menu));
+  gtk_widget_add_css_class (menu, "flat");
+  gtk_widget_set_parent (popover, menu);
+  gtk_popover_set_position (GTK_POPOVER (popover), GTK_POS_BOTTOM);
+  gtk_popover_set_has_arrow (GTK_POPOVER (popover), FALSE);
+  gtk_widget_set_halign (popover, GTK_ALIGN_START);
+  g_signal_connect (menu, "clicked", G_CALLBACK (lk_add_chart_popped), popover);
+  g_signal_connect (menu, "destroy", G_CALLBACK (lk_add_chart_unparent), popover);
+  gtk_box_append (GTK_BOX (section), menu);
+  return menu;
+}
+
 void
 lk_build_charts_page (LkSettings *settings)
 {
-  GtkWidget *page = lk_page_new (settings, "charts", "Charts",
-                                 "lk-charts-symbolic");
+  GtkWidget *page = lk_page_new (settings, "charts", "Charts", "lk-charts-symbolic");
+  LkNoaa *noaa = lk_app_model_get_noaa (settings->model);
+  g_autofree char *checked = NULL;
 
-  /* WHICH chart is drawn, before where to get more of them. A chart by link
-   * is a different kind again — a publisher's live map drawn AS the chart —
-   * and picking one replaces the whole portrayal, so the election stands
-   * first, as it does on the other shells. */
-  GtkWidget *chart = lk_section (page, "Chart");
+  /* WHICH chart is drawn, before where to get more of them. One chart draws at
+   * a time: Lookout's own, built from the sets below, or a publisher's style
+   * drawn instead of it. */
+  GtkWidget *chart = lk_section (page, "Active chart");
+  GtkWidget *chart_group = lk_group (chart, LK_GAP_ROW);
+
+  gtk_box_append (GTK_BOX (chart_group),
+                  lk_chart_gallery_new (settings->model, lk_charts_add_link_asked,
+                                        settings));
   lk_deferred_list_bind (&settings->links, settings,
-                         gtk_box_new (GTK_ORIENTATION_VERTICAL, 4),
+                         gtk_box_new (GTK_ORIENTATION_VERTICAL, 6),
                          lk_settings_fill_links_list);
-  gtk_box_append (GTK_BOX (chart), settings->links.box);
+  gtk_box_append (GTK_BOX (chart_group), settings->links.box);
   lk_settings_fill_links_list (settings);
 
-  GtkWidget *link_row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
-  GtkWidget *link_entry = gtk_entry_new ();
-  GtkWidget *link_add = gtk_button_new_with_label ("Add Chart Link");
+  /* What the chart is built from. */
+  GtkWidget *library = lk_section_hinted (page, "Your chart sets", "",
+                                          &settings->sets_summary);
+  GtkWidget *library_group = lk_group (library, 0);
 
-  gtk_entry_set_placeholder_text (GTK_ENTRY (link_entry),
-                                  "Link to a MapLibre style or TileJSON…");
-  gtk_widget_set_hexpand (link_entry, TRUE);
-  g_signal_connect (link_entry, "activate", G_CALLBACK (lk_link_entry_activated), settings);
-  g_object_set_data (G_OBJECT (link_add), "lk-entry", link_entry);
-  g_signal_connect (link_add, "clicked", G_CALLBACK (lk_link_add_clicked), settings);
-  gtk_widget_set_margin_top (link_row, 6);
-  gtk_box_append (GTK_BOX (link_row), link_entry);
-  gtk_box_append (GTK_BOX (link_row), link_add);
-  gtk_box_append (GTK_BOX (chart), link_row);
-
-  lk_footer (chart,
-             "A chart by link is an online map drawn as the chart: paste the "
-             "style link a publisher shares and sail on their portrayal, tiles "
-             "fetched live. The Lookout chart and its display settings stand "
-             "aside while one is picked.");
-
-  GtkWidget *open = lk_section (page, "Open");
-  const char *path = lk_app_model_get_chart_path (settings->model);
-  if (path != NULL)
-    {
-      g_autofree char *name = g_path_get_basename (path);
-      GtkWidget *label = gtk_label_new (name);
-      gtk_label_set_ellipsize (GTK_LABEL (label), PANGO_ELLIPSIZE_MIDDLE);
-      gtk_label_set_xalign (GTK_LABEL (label), 0.0);
-      gtk_box_append (GTK_BOX (open), label);
-    }
-  else
-    {
-      GtkWidget *label = gtk_label_new ("No chart open");
-      gtk_widget_add_css_class (label, "dim-label");
-      gtk_label_set_xalign (GTK_LABEL (label), 0.0);
-      gtk_box_append (GTK_BOX (open), label);
-    }
-
-  /* The library: the installed sets, each with its switch. This is what decides
-   * the chart; Open above only reports what is on screen now. */
-  GtkWidget *library = lk_section (page, "Chart library");
+  /* Wider than the 8 inside a set, so the gap between two sets reads as a
+   * boundary and the gap inside one reads as one block. */
   lk_deferred_list_bind (&settings->sets, settings,
-                         gtk_box_new (GTK_ORIENTATION_VERTICAL, 8),
+                         gtk_box_new (GTK_ORIENTATION_VERTICAL, 16),
                          lk_settings_fill_sets_list);
-  gtk_box_append (GTK_BOX (library), settings->sets.box);
+  gtk_box_append (GTK_BOX (library_group), settings->sets.box);
   lk_settings_fill_sets_list (settings);
   lk_footer (library,
-             "Each folder or archive added is a set. The chart is every set "
-             "switched on, drawn as one seamless library; a set switched off "
-             "stays installed and out of the chart.");
+             "Each folder or archive added is a set. The chart is every set switched "
+             "on, drawn as one seamless library; a set switched off stays installed "
+             "and out of the chart. The ENC draws over a picture and drops its depth "
+             "and land shading only where the picture covers.");
 
-  GtkWidget *add = lk_section (page, NULL);
-  GtkWidget *add_buttons = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
-  GtkWidget *button = gtk_button_new_with_label ("Add Folder…");
-  GtkWidget *archive = gtk_button_new_with_label ("Add Archive…");
+  /* What is arriving now. Hidden when nothing is. */
+  settings->work_section = lk_section (page, "Arriving now");
+  GtkWidget *work_group = lk_group (settings->work_section, 0);
 
-  g_signal_connect (button, "clicked", G_CALLBACK (lk_charts_open_clicked), settings);
-  g_signal_connect (archive, "clicked", G_CALLBACK (lk_charts_archive_clicked), settings);
-  gtk_box_append (GTK_BOX (add_buttons), button);
-  gtk_box_append (GTK_BOX (add_buttons), archive);
-  gtk_widget_set_halign (add_buttons, GTK_ALIGN_START);
-  gtk_box_append (GTK_BOX (add), add_buttons);
+  lk_deferred_list_bind (&settings->work, settings,
+                         gtk_box_new (GTK_ORIENTATION_VERTICAL, 6),
+                         lk_settings_fill_work_list);
+  gtk_box_append (GTK_BOX (work_group), settings->work.box);
+  lk_settings_fill_work_list (settings);
+
+  /* Where to get more. */
+  GtkWidget *add = lk_section (page, "Add charts");
+  GtkWidget *add_group = lk_group (add, 0);
+
+  checked = lk_noaa_checked_text (noaa);
+  settings->noaa_row =
+      lk_add_chart_row (add_group, "weather-overcast-symbolic", "Get charts from NOAA…",
+                        "Pick the waters you sail. Lookout downloads the cells and "
+                        "prepares them. Free.",
+                        checked, G_CALLBACK (lk_charts_noaa_clicked), settings);
+  /* ONE ROW FOR EVERYTHING ON THE DISK. A folder of cells, the .zip an agency
+   * publishes, a chart already prepared, and a picture are all the mariner's
+   * own files, added the same way and switched on the same way. Three rows
+   * made them remember which row a file had gone in by. */
+  /* A rule between the two ways in, as the reference draws it: they are two
+   * choices on one shelf, not one block of text. */
+  gtk_box_append (GTK_BOX (add_group),
+                  gtk_separator_new (GTK_ORIENTATION_HORIZONTAL));
+
+  lk_add_chart_menu_row (add_group, "folder-open-symbolic", "Add charts from this computer…",
+                         "A folder of cells, an archive, a prepared chart, or "
+                         "pictures. Or drop any of them anywhere in the chart window.",
+                         settings);
+
   lk_footer (add,
-             "A folder of cells, or the .zip a chart agency publishes, opens as one "
-             "seamless library. Cells that arrive as raw S-57 survey data are prepared "
-             "first, coarse charts before harbour detail, so a passage is covered even "
-             "if the import is stopped part way. An archive is read where it lies: "
-             "nothing is unpacked.");
-
-  /* A raster chart is a different KIND of chart, so it gets its own section
-   * rather than a mixed list: one is the survey, the other is a picture of the
-   * water, and a mariner must never lose track of which is which. */
-  GtkWidget *raster = lk_section (page, "Raster charts");
-  lk_deferred_list_bind (&settings->raster, settings,
-                         gtk_box_new (GTK_ORIENTATION_VERTICAL, 4),
-                         lk_settings_fill_raster_list);
-  gtk_box_append (GTK_BOX (raster), settings->raster.box);
-  lk_settings_fill_raster_list (settings);
-
-  GtkWidget *raster_buttons = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
-  GtkWidget *add_files = gtk_button_new_with_label ("Add Raster Charts…");
-  GtkWidget *add_folder = gtk_button_new_with_label ("Add Folder…");
-
-  g_signal_connect (add_files, "clicked", G_CALLBACK (lk_raster_add_clicked), settings);
-  g_signal_connect (add_folder, "clicked", G_CALLBACK (lk_raster_add_folder_clicked), settings);
-  gtk_box_append (GTK_BOX (raster_buttons), add_files);
-  gtk_box_append (GTK_BOX (raster_buttons), add_folder);
-  gtk_widget_set_halign (raster_buttons, GTK_ALIGN_START);
-  gtk_widget_set_margin_top (raster_buttons, 6);
-  gtk_box_append (GTK_BOX (raster), raster_buttons);
-
-  lk_footer (raster,
-             "Charts made of pictures: MBTiles of satellite imagery or another "
-             "vendor's charts, and BSB/KAP raster nautical charts baked with tile57. "
-             "The ENC draws over them and drops its depth and land shading only "
-             "where they cover. Switch one off to keep it installed without "
-             "drawing it.");
+             "S-57 and S-101 cells (.000 with their updates) · charts Lookout has "
+             "already prepared (.pmtiles) · imagery and vendor charts (.mbtiles) · "
+             "BSB/KAP raster sheets (.kap, .bsb). Cells and raster sheets are "
+             "converted once on the way in, coarse charts before harbour detail, so a "
+             "passage is covered even if the import is stopped part way. Encrypted "
+             "S-63 cells are not supported.");
 
   lk_plugin_fill_tab (page, settings, "charts");
 }

@@ -47,17 +47,24 @@ struct ScannedCell: Identifiable, Hashable {
     /// comes from ChartSet.bandName, so a set and a cell cannot disagree.
     let band: Int
     let bytes: Int64
+    /// The dataset edition and update number, from DSID. Both 0 when the file
+    /// states no identity: a chart prepared before Lookout recorded one, or a
+    /// set whose source cells have been deleted. An update check skips those.
+    var edition: UInt32 = 0
+    var update: UInt32 = 0
     /// True when `path` is a name INSIDE an archive rather than a file. Such a
     /// chart cannot be opened, whatever it is: it has to come out first.
     var archived: Bool = false
 
     init(path: String, name: String, kind: Kind, band: Int, bytes: Int64,
-         archived: Bool = false) {
+         edition: UInt32 = 0, update: UInt32 = 0, archived: Bool = false) {
         self.path = path
         self.name = name
         self.kind = kind
         self.band = band
         self.bytes = bytes
+        self.edition = edition
+        self.update = update
         self.archived = archived
     }
 
@@ -67,6 +74,8 @@ struct ScannedCell: Identifiable, Hashable {
                   kind: Kind(f.kind),
                   band: Int(f.band),
                   bytes: Int64(f.bytes),
+                  edition: f.edition,
+                  update: f.update,
                   archived: archived)
     }
 
@@ -109,6 +118,9 @@ struct ChartSet: Identifiable, Hashable {
     var rasters: [ScannedCell]
     /// False when the mariner switched this set off. It stays installed.
     var on: Bool
+    /// True when the NOAA downloader owns this set. The row says so, and the
+    /// charts are added and removed in the downloader.
+    var managed: Bool = false
 
     var id: String { path }
     /// What the folder or archive is called. The identity, and the fallback
@@ -155,7 +167,16 @@ struct ChartSet: Identifiable, Hashable {
     var isDerived: Bool { preparedPath != nil }
     var bytes: Int64 { (cells + rasters).reduce(0) { $0 + $1.bytes } }
     /// Everything in this set that must be prepared before it draws.
-    var toPrepare: [ScannedCell] { (cells + rasters).filter(\.needsPrepare) }
+    ///
+    /// A cell that has already been prepared is done, and what was made from
+    /// it sits in the same set under the same stem. Reading only the kind of
+    /// each file counted every source cell in the folder on every import, so
+    /// downloading one region reported the whole library.
+    var toPrepare: [ScannedCell] {
+        let all = cells + rasters
+        let ready = Set(all.filter { !$0.needsPrepare }.map(\.stem))
+        return all.filter { $0.needsPrepare && !ready.contains($0.stem) }
+    }
     var needsBake: Int { toPrepare.count }
     /// What is left over after a prepare has already run for this set: files
     /// the engine would not read. Offering to prepare them again says the work
@@ -422,6 +443,20 @@ enum ChartSetStore {
         return path.withCString { lookout_chart_sets_remove(h, $0) != 0 }
     }
 
+    /// Mark a set as the NOAA downloader's. The core keeps the mark across
+    /// launches and gives a managed set precedence for a cell name two sets
+    /// hold.
+    @discardableResult
+    static func setManaged(_ path: String, _ managed: Bool) -> Bool {
+        guard let h = handle else { return false }
+        return path.withCString { lookout_chart_sets_set_managed(h, $0, managed ? 1 : 0) != 0 }
+    }
+
+    static func isManaged(_ path: String) -> Bool {
+        guard let h = handle else { return false }
+        return path.withCString { lookout_chart_sets_is_managed(h, $0) != 0 }
+    }
+
     static func setOff(_ path: String, _ off: Bool) {
         guard let h = handle else { return }
         _ = path.withCString { lookout_chart_sets_set_on(h, $0, off ? 0 : 1) }
@@ -452,6 +487,9 @@ struct CoreChartSet: Identifiable, Hashable {
     /// The two-character producer code. Empty when the charts disagree.
     let producer: String
     let on: Bool
+    /// True when the NOAA downloader owns this set. Its charts are added and
+    /// removed there, and it wins a cell name a hand-added set also holds.
+    let managed: Bool
     /// False until the background scan has read this folder. Every count below
     /// is 0 until then.
     let scanned: Bool
@@ -471,6 +509,7 @@ struct CoreChartSet: Identifiable, Hashable {
         title = String(cString: s.title)
         producer = String(cString: s.producer)
         on = s.on != 0
+        managed = s.managed != 0
         scanned = s.scanned != 0
         charts = s.charts
         pictures = s.pictures

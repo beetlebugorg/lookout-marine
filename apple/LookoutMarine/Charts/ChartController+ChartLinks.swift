@@ -5,6 +5,7 @@
 //  ChartLinkFetch is the door they fetch through.
 
 import Foundation
+import SwiftUI
 
 @MainActor
 extension ChartController {
@@ -60,6 +61,80 @@ extension ChartController {
     /// Everything the chart list shows, or nil when nothing changed since the
     /// last poll. The flag has ONE consumer, so this is called from exactly one
     /// place: pushReadouts.
+    /// Read every link's style for the tile its picture comes from. The core
+    /// keeps the template with the link and raises its changed flag.
+    func previewChartLinks() {
+        guard let h = handle else { return }
+        lookout_chart_links_preview(h)
+        kick()
+    }
+
+    func chartLinkPreviewURL(_ url: String, lon: Double, lat: Double, zoom: Int) -> String? {
+        guard let h = handle else { return nil }
+        var buf = [CChar](repeating: 0, count: 2048)
+        let ok = url.withCString { u in
+            buf.withUnsafeMutableBufferPointer {
+                lookout_chart_link_preview_url(h, u, lon, lat, Int32(zoom),
+                                               $0.baseAddress, $0.count)
+            }
+        }
+        guard ok != 0 else { return nil }
+        return String(cString: buf)
+    }
+
+    /// True while the engine still has drawing to do: the view moved, a build
+    /// is filling in, or tiles are still arriving. The read is one flag, so a
+    /// poll on it costs far less than a snapshot.
+    func chartIsDrawing() -> Bool {
+        guard let h = handle else { return false }
+        return lookout_needs_redraw(h) != 0
+    }
+
+    /// The chart as it is drawing, as a picture.
+    ///
+    /// The engine draws one chart at a time, so this is the only true picture
+    /// of a publisher's portrayal: their own style, rendered by the engine,
+    /// at the water the mariner is on.
+    func snapshot() -> Image? {
+        guard let h = handle, let view else { return nil }
+        let scale = Platform.backingScale(of: view)
+        let w = Int((view.bounds.width * scale).rounded())
+        let h_px = Int((view.bounds.height * scale).rounded())
+        guard w > 0, h_px > 0 else { return nil }
+        var pixels = [UInt8](repeating: 0, count: w * h_px * 4)
+        // 0 is success here, unlike the rest of this ABI.
+        let ok = pixels.withUnsafeMutableBufferPointer {
+            lookout_snapshot_rgba(h, $0.baseAddress, $0.count)
+        }
+        guard ok == 0 else { return nil }
+        return Self.image(w: w, h: h_px, rgba: pixels)
+    }
+
+    private static func image(w: Int, h: Int, rgba: [UInt8]) -> Image? {
+        let space = CGColorSpaceCreateDeviceRGB()
+        let info = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)
+        guard let provider = CGDataProvider(data: Data(rgba) as CFData),
+              let cg = CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32,
+                               bytesPerRow: w * 4, space: space, bitmapInfo: info,
+                               provider: provider, decode: nil, shouldInterpolate: true,
+                               intent: .defaultIntent)
+        else { return nil }
+        #if os(macOS)
+        return Image(nsImage: NSImage(cgImage: cg, size: NSSize(width: w, height: h)))
+        #else
+        return Image(uiImage: UIImage(cgImage: cg))
+        #endif
+    }
+
+    /// Where the chart is now. Every tile pictures the same water, so the
+    /// styles are what differ between them.
+    func viewCenter() -> (lon: Double, lat: Double)? {
+        guard let h = handle else { return nil }
+        var v = lookout_view()
+        lookout_get_view(h, &v)
+        return (v.lon, v.lat)
+    }
+
     func chartLinksSnapshot() -> ChartLinkSnapshot? {
         guard let h = handle, lookout_chart_links_changed(h) != 0 else { return nil }
         guard let read = lookout_links_read(h), let st = lookout_links_state(read) else { return nil }

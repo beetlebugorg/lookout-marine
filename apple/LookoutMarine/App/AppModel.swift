@@ -20,6 +20,7 @@ final class AppModel {
             // ChartEngine.swift.
             charts.engine = controller
             chartLinks.engine = controller
+            noaa.engine = controller
             raster.engine = controller
             readouts.engine = controller
             plugins.engine = controller
@@ -32,11 +33,22 @@ final class AppModel {
     // One per subject, each holding its own state and the calls that act on it.
 
     let chartLinks = ChartLinksModel()
+    /// NOAA's catalog, the regions a mariner picks, and the downloads run from
+    /// them. See src/noaa.zig for what a region selects.
+    let noaa = NoaaModel()
+    /// Follows a NOAA download to its end. Cancelled when a new one starts.
+    private var noaaWatch: Task<Void, Never>?
+    /// True once the update check has run in this session. A chart reopens
+    /// whenever the set list changes, and the check is a launch question.
+    private var noaaChecked = false
     let raster = RasterModel()
     let plugins = PluginsModel()
     let overlay = OverlayModel()
     let readouts = ReadoutsModel()
     let chrome = ChromeModel()
+    /// Setup. It runs over an app that has settled on having no chart to
+    /// draw, on every launch that finds one. See FirstRunModel.shouldRun.
+    let firstRun = FirstRunModel()
     /// Adding a set installs the pictures it carries, so this one is built
     /// with the raster model rather than beside it.
     let charts: ChartsModel
@@ -52,6 +64,99 @@ final class AppModel {
             return
         }
         plugins.begin(path)
+    }
+
+    /// Download the picked NOAA regions, then bake what arrives.
+    ///
+    /// The core writes one zip per cell into a single directory, so the whole
+    /// download bakes as one chart set once the transfers finish.
+    func startNoaaDownload(again: Bool = false) {
+        guard let dest = NoaaModel.downloadDirectory else {
+            charts.openError = "Couldn't find a place to download charts to."
+            return
+        }
+        noaa.download(to: dest, again: again)
+        watchNoaaDownload(dest)
+    }
+
+    /// Follow a download to its end and bake the directory it filled.
+    ///
+    /// A poll rather than a callback, because the core reports progress and
+    /// accepts no callback across the C ABI. It ends when the download ends, so
+    /// an idle app runs no timer.
+    private func watchNoaaDownload(_ dest: String) {
+        noaaWatch?.cancel()
+        noaaWatch = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(500))
+                guard let self else { return }
+                self.noaa.poll()
+                guard self.noaa.state.phase != .downloading else { continue }
+                // Bake only when something arrived. A download that failed
+                // every cell leaves an empty directory and its own error.
+                if self.noaa.state.done > 0 { self.charts.openChartDirectory(dest) }
+                return
+            }
+        }
+    }
+
+    /// Look for reissued charts, when the cadence says to and there is
+    /// something to look for.
+    ///
+    /// Once per launch, from the first chart that opens: every NOAA call goes
+    /// through a chart handle. Daily means the last check was over a day ago,
+    /// which an app left running for a week satisfies once a day, so nothing
+    /// here wakes on a clock.
+    private func considerNoaaUpdateCheck() {
+        guard !noaaChecked, noaa.shouldCheck() else { return }
+        noaaChecked = true
+        Task { [weak self] in
+            guard let self else { return }
+            // The scan at launch fills the set list on a worker of its own, and
+            // an empty list has no editions to ask about.
+            for _ in 0..<40 {
+                if !self.charts.installedCells.isEmpty { break }
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+            let have = self.charts.installedCells
+            guard !have.isEmpty else { return }
+            await self.noaa.checkForUpdates(have)
+        }
+    }
+
+    /// Raise setup on a first run with no chart to draw.
+    ///
+    /// Called from the overlay whenever the answer can have changed, rather
+    /// than once at launch. `nothingToDraw` is false for the first moment of
+    /// every launch while the scan reads the library, and raising the flow on
+    /// that puts it over a mariner's own charts.
+    func considerFirstRun() {
+        guard !firstRun.showing,
+              firstRun.shouldRun(charts: charts, links: chartLinks) else { return }
+        firstRun.begin()
+        showWholeCountry()
+    }
+
+    /// The three views the coverage picker photographs.
+    ///
+    /// One view cannot hold the lower 48, Alaska and Hawaii. The three need
+    /// 128 degrees of longitude, and at that scale their latitude span is
+    /// taller than the window. An atlas prints Alaska and Hawaii as insets for
+    /// the same reason.
+    static let countryView = lookout_view(lon: -96, lat: 38, zoom: 5.0, rotation_deg: 0)
+    static let alaskaView = lookout_view(lon: -152, lat: 63, zoom: 4.6, rotation_deg: 0)
+    static let hawaiiView = lookout_view(lon: -157.3, lat: 20.5, zoom: 7.0, rotation_deg: 0)
+
+    /// Frame the lower 48 behind setup, so the chart under the sheet shows the
+    /// coastline the mariner is choosing from.
+    func showWholeCountry() {
+        guard let controller else { return }
+        controller.setView(Self.countryView)
+        // United States charts label depths in feet, and setup is the one
+        // moment the unit can be chosen before the first sounding draws.
+        var mariner = controller.getMariner()
+        mariner.depth_unit = tile57_depth_unit(UInt32(MarinerDepthUnit.feet.rawValue))
+        controller.setMariner(mariner)
     }
 
     /// A .lkplug that arrived before the chart did, now that the chart is up.
@@ -79,6 +184,9 @@ final class AppModel {
         // only while a chart is open. Open a chart of no cells so a link
         // picked with no charts installed has a core to run through.
         chartLinks.openChartForLink = { [weak self] in self?.charts.openEmpty() }
+        // The same for NOAA's catalog, which setup reads before the mariner
+        // has a single chart.
+        noaa.openChartForCatalog = { [weak self] in self?.charts.openEmpty() }
     }
 
     /// A chart handle has just been created. The core reads its chart-link
@@ -86,6 +194,11 @@ final class AppModel {
     /// its fetcher, so nothing has to be replayed here — only the mariner's old
     /// UserDefaults list handed over, once.
     func chartDidOpen() {
+        // Setup frames the country and reads NOAA's catalog. Both go through
+        // the chart handle, which exists only now.
+        if firstRun.showing { showWholeCountry() }
+        noaa.chartDidOpen()
+        considerNoaaUpdateCheck()
         chartLinks.migrate()
         // The chart-link calls held while no chart was open.
         chartLinks.chartDidOpen()

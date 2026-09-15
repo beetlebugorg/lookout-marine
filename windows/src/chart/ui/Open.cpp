@@ -75,7 +75,10 @@ namespace winrt::LookoutMarine::implementation
             lk_store_free_recents(recents);
             if (paths.empty())
             {
-                EmptyState().Visibility(Visibility::Visible);
+                // Nothing configured to open. Setup is where an empty chart
+                // area goes, on this launch and every later one that finds it
+                // empty (T-005), with the basemap drawing behind it.
+                OpenBasemapForSetup();
                 return;
             }
             // Name the set by who made the charts ("NOAA"), not by where the
@@ -114,16 +117,8 @@ namespace winrt::LookoutMarine::implementation
         defer->Start();
     }
 
-    void MainWindow::DoOpenPaths(std::vector<std::string> const &paths, std::string const &recent,
-                                 std::string const &label)
+    void MainWindow::CloseChartHandle()
     {
-        if (!recent.empty())
-            lk_store_note_recent(recent.c_str());
-        // What Settings ▸ Charts names as open: the office whose charts these
-        // are when the caller worked that out ("NOAA"), else the folder or
-        // file the user chose, else the first cell (a startup open).
-        open_chart_label = !label.empty() ? label : !recent.empty() ? recent : paths.front();
-
         StopAlertWatch();     // the alerts belong to the handle this close destroys
         CloseVesselWindows(); // so do the tables
         ChartLinksDetach();   // and the chart-link fetcher
@@ -136,6 +131,52 @@ namespace winrt::LookoutMarine::implementation
                 Root().Children().RemoveAt(idx);
             chart_panel = nullptr;
         }
+    }
+
+    // Open what the switched-on sets compose. With nothing composed the chart
+    // comes OFF the display: it was drawn from charts that are no longer
+    // installed, and leaving it up says they still are.
+    //
+    // A set of pictures with no survey in it still draws, so what decides
+    // whether setup comes up is whether anything at all is installed.
+    void MainWindow::ReopenChartSets(std::string const &recent)
+    {
+        auto paths = ChartSetOpenPaths();
+        if (!paths.empty())
+        {
+            OpenPaths(paths, recent.empty() ? paths.front() : recent,
+                      lkw::AgencyForCells(paths));
+            return;
+        }
+
+        CloseChartHandle();
+        open_chart_label.clear();
+        if (OpenChart({}))
+        {
+            ChartLinksAttach();
+            InstallStoredRasters(); // the pictures, when they are what is left
+            RestoreRasterShown();
+            StartAlertWatch();
+            StartRenderThread();
+        }
+        if (raster_paths.empty())
+        {
+            readout_timer.Stop(); // a basemap under a setup card reads out nothing
+            FirstRunBegin();
+        }
+    }
+
+    void MainWindow::DoOpenPaths(std::vector<std::string> const &paths, std::string const &recent,
+                                 std::string const &label)
+    {
+        if (!recent.empty())
+            lk_store_note_recent(recent.c_str());
+        // What Settings ▸ Charts names as open: the office whose charts these
+        // are when the caller worked that out ("NOAA"), else the folder or
+        // file the user chose, else the first cell (a startup open).
+        open_chart_label = !label.empty() ? label : !recent.empty() ? recent : paths.front();
+
+        CloseChartHandle();
 
         if (OpenChart(paths))
         {
@@ -167,7 +208,14 @@ namespace winrt::LookoutMarine::implementation
                     AddChartLink(spec);
             }
             RefreshPluginTables();  // the Vessels menu follows the declarations
-            EmptyState().Visibility(Visibility::Collapsed);
+            // A chart opened. Setup is still up when this is the handover at
+            // the end of its own download, and down otherwise. The chart
+            // controls follow it either way: hiding them for setup and not
+            // restoring them here left the mariner with a drawn chart and no
+            // search, menu, zoom, gear or readout.
+            FirstRunPane().Visibility(first_run.showing() ? Visibility::Visible
+                                                          : Visibility::Collapsed);
+            FirstRunChartChrome(!first_run.showing());
             SetLoaderTessellating(); // the loader stands until the first build
             warmup_frames.store(30);
             StartRenderThread();
@@ -184,10 +232,55 @@ namespace winrt::LookoutMarine::implementation
         else
         {
             HideStartupLoader();
-            EmptyState().Visibility(Visibility::Visible);
+            // The open failed or found nothing. Same page as a fresh install:
+            // the source step is where a mariner re-points at their charts.
+            OpenBasemapForSetup();
             // Nothing to read out, so nothing to poll for.
             readout_timer.Stop();
         }
+    }
+
+    // No chart to draw, for any reason: a fresh install, or an open that
+    // returned nothing. Open the engine with no cells so the basemap draws
+    // from the first frame, then put setup over it.
+    //
+    // Without this the mariner meets a flat empty window behind the welcome
+    // card and reads the app as broken. The other shells warn about opening
+    // at a chart-scale zoom over empty water. Opening nothing at all puts
+    // even less on screen.
+    //
+    // An open with n 0 is supported. Apple uses the same path when its list
+    // is empty (ChartController.swift), and the core draws its own basemap
+    // on the handle it hands back.
+    void MainWindow::OpenBasemapForSetup()
+    {
+        bool const opened = OpenChart({});
+        if (!opened)
+        {
+            // The basemap failed to open, so setup stands over an empty view.
+            // The mariner can still answer every question, and the difference
+            // is a chart under the card, so log it.
+            fprintf(stderr, "shell: basemap-only open failed; setup stands over an empty view\n");
+        }
+        if (opened)
+        {
+            // The fetcher, before setup can need it: the coverage step prices
+            // regions from NOAA s catalog and the online step resolves a style,
+            // and both go through this door.
+            ChartLinksAttach();
+            lk_controller_noaa_refresh(controller);
+            StartRenderThread();
+        }
+        // Either way the loader comes down: there is no chart coming, and a
+        // spinner over the welcome card says one is.
+        HideStartupLoader();
+        readout_timer.Stop(); // nothing to read out
+        // The screenshot hooks apply here as well as after a chart opens.
+        // $LOOKOUT_WINDOW is what makes a capture the same size on any
+        // machine, and setup is a page that needs capturing. It is the page a
+        // mariner with no charts sees.
+        ApplyDevHooks();
+        FirstRunBegin();
     }
 
     // The core makes its own D3D12 device and composition swapchain; the shell
@@ -258,10 +351,26 @@ namespace winrt::LookoutMarine::implementation
         // in without ever being unpacked.
         picker.FileTypeFilter().Append(L".zip");
         picker.FileTypeFilter().Append(L".000");
+        // A picture is a chart to the mariner who holds it, and the Charts
+        // page offers one way in for everything on the disk.
+        picker.FileTypeFilter().Append(L".mbtiles");
+        picker.FileTypeFilter().Append(L".kap");
+        picker.FileTypeFilter().Append(L".bsb");
         auto file = co_await picker.PickSingleFileAsync();
         if (file != nullptr)
         {
             std::string path = winrt::to_string(file.Path());
+            // Pictures go to the underlay, which bakes a BSB/KAP sheet and
+            // installs an .mbtiles as it is. The vector open has no use for
+            // either.
+            std::string ext = std::filesystem::path(path).extension().string();
+            for (auto &c : ext)
+                c = (char)tolower((unsigned char)c);
+            if (ext == ".mbtiles" || lkw::IsRasterSource(path))
+            {
+                AddRasterPaths({ path });
+                co_return;
+            }
             // A .pmtiles is already a chart; a .zip or a raw cell has to bake.
             // ImportCharts tells them apart by scanning, so both routes are one.
             ImportCharts(path);

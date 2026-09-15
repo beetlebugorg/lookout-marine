@@ -1,0 +1,430 @@
+/* test-library.c — what the app opens on its own, and what counts as drawable.
+ *
+ * The decision behind the first-run page. An app with an empty library must
+ * open a chart of no charts and say so, and it must not reach for a cell some
+ * other program left in a cache: a chart the mariner never installed keeps
+ * setup down on the one run that needs it.
+ *
+ * No display. This is the model's answer, read directly.
+ */
+
+#include "library/bake.h"
+#include "library/scan.h"
+#include "library/sets.h"
+#include "model/app-model.h"
+
+static char *home;
+
+/* A file that exists and is not a directory, which is all the path decision
+ * asks of a chart. */
+static char *
+touch (const char *relative)
+{
+  char *path = g_build_filename (home, relative, NULL);
+  g_autofree char *dir = g_path_get_dirname (path);
+
+  g_assert_cmpint (g_mkdir_with_parents (dir, 0700), ==, 0);
+  g_assert_true (g_file_set_contents (path, "", 0, NULL));
+  return path;
+}
+
+/* Nothing installed, and a demo cell sitting in the cache where an older
+ * build's default pointed. The answer is still nothing: the app opens the
+ * basemap and setup runs over it. */
+static void
+test_nothing_installed_opens_nothing (void)
+{
+  g_autoptr (LkAppModel) model = lk_app_model_new ();
+  g_autofree char *demo = touch (".cache/chartplotter/NOAA/tiles/d5/US5MD1MC.pmtiles");
+
+  g_assert_true (g_file_test (demo, G_FILE_TEST_EXISTS));
+
+  g_auto (GStrv) paths = lk_app_model_initial_chart_paths (model);
+  g_assert_nonnull (paths);
+  g_assert_null (paths[0]);
+
+  g_autofree char *source = lk_app_model_initial_source (model);
+  g_assert_null (source);
+}
+
+/* $LOOKOUT_OPEN still wins, so a screenshot run and a dev run open what they
+ * name. */
+static void
+test_env_open_wins (void)
+{
+  g_autoptr (LkAppModel) model = lk_app_model_new ();
+  g_autofree char *cell = touch ("charts/US5MD1MC.pmtiles");
+
+  g_setenv ("LOOKOUT_OPEN", cell, TRUE);
+
+  g_auto (GStrv) paths = lk_app_model_initial_chart_paths (model);
+  g_assert_cmpuint (g_strv_length (paths), ==, 1);
+  g_assert_cmpstr (paths[0], ==, cell);
+
+  g_autofree char *source = lk_app_model_initial_source (model);
+  g_assert_cmpstr (source, ==, cell);
+
+  g_unsetenv ("LOOKOUT_OPEN");
+}
+
+/* With nothing installed there is nothing to draw, and with no handle a chart
+ * reads as holding no charts. Both are what the page stands on. */
+static void
+test_nothing_to_draw (void)
+{
+  g_autoptr (LkAppModel) model = lk_app_model_new ();
+
+  g_assert_false (lk_app_model_get_has_chart (model));
+  g_assert_false (lk_app_model_get_chart_is_empty (model));
+  g_assert_true (lk_app_model_get_nothing_to_draw (model));
+
+  /* A chart reported open that holds no charts is the basemap. Still nothing
+   * to draw. */
+  lk_app_model_set_chart_open (model, TRUE, NULL);
+  g_assert_true (lk_app_model_get_chart_is_empty (model));
+  g_assert_true (lk_app_model_get_nothing_to_draw (model));
+
+  /* An open, a scan or a bake in flight is not an empty library. */
+  lk_app_model_set_opening (model, TRUE, FALSE);
+  g_assert_false (lk_app_model_get_nothing_to_draw (model));
+  lk_app_model_set_opening (model, FALSE, FALSE);
+  g_assert_true (lk_app_model_get_nothing_to_draw (model));
+}
+
+/* The cell names NOAA is told about, off a set the scan has read.
+ *
+ * This is what stops a mariner paying twice for water they already hold, so
+ * what counts and what does not is the whole point: a cell counts once
+ * however many folders hold it, and a picture is not a cell at all.
+ *
+ * Real cells. The scan reads the surveys themselves, so a dataset name on an
+ * empty file reports no chart, which is right and proves nothing.
+ */
+static void
+noop_changed (GObject *owner)
+{
+}
+
+/* Copy one of the repository's test cells into `dir`. */
+static void
+place_cell (const char *dir, const char *name)
+{
+  g_autofree char *from = g_build_filename (LK_TEST_CELLS, name, NULL);
+  g_autofree char *to = g_build_filename (dir, name, NULL);
+  g_autofree char *bytes = NULL;
+  gsize len = 0;
+
+  g_assert_cmpint (g_mkdir_with_parents (dir, 0700), ==, 0);
+  g_assert_true (g_file_get_contents (from, &bytes, &len, NULL));
+  g_assert_cmpuint (len, >, 0);
+  g_assert_true (g_file_set_contents (to, bytes, (gssize) len, NULL));
+}
+
+/* The names off one set, once the scan has landed. Bounded: the scan runs on
+ * the core's own thread. */
+static char **
+wait_for_names (LkChartSets *sets)
+{
+  char **names = NULL;
+
+  for (int i = 0; i < 400; i++)
+    {
+      g_strfreev (names);
+      names = lk_chart_sets_cell_names (sets);
+      if (g_strv_length (names) > 0)
+        return names;
+      g_main_context_iteration (NULL, FALSE);
+      g_usleep (5000);
+    }
+  return names;
+}
+
+static void
+test_installed_cell_names (void)
+{
+  g_autoptr (GObject) owner = g_object_new (G_TYPE_OBJECT, NULL);
+  LkChartSets *sets = lk_chart_sets_new (noop_changed, owner);
+  g_autofree char *dir = g_build_filename (home, "enc", "ENC_ROOT", NULL);
+  g_autofree char *nested = g_build_filename (dir, "US3CU1EF", NULL);
+
+  place_cell (dir, "US3CU1EF.000");
+  place_cell (dir, "US4TE3W0.000");
+  /* The same cell again, one directory down. A library that holds a cell
+   * twice holds it once. */
+  place_cell (nested, "US3CU1EF.000");
+
+  /* Not cells: a picture and a readme. NOAA publishes neither. */
+  g_autofree char *picture = g_build_filename (dir, "imagery.mbtiles", NULL);
+  g_autofree char *readme = g_build_filename (dir, "README.TXT", NULL);
+  g_assert_true (g_file_set_contents (picture, "", 0, NULL));
+  g_assert_true (g_file_set_contents (readme, "not a chart", -1, NULL));
+
+  g_assert_true (lk_chart_sets_note (sets, dir));
+
+  g_auto (GStrv) names = wait_for_names (sets);
+
+  g_assert_cmpuint (g_strv_length (names), ==, 2);
+  g_assert_true (g_strv_contains ((const char *const *) names, "US3CU1EF"));
+  g_assert_true (g_strv_contains ((const char *const *) names, "US4TE3W0"));
+
+  lk_chart_sets_free (sets);
+}
+
+/* A pick holds a survey and a picture together, and only the pictures go to
+ * the raster chart list. A BSB sheet bakes into a chart, and a picture inside
+ * an archive has no file at its path yet, so neither belongs on that list. */
+static void
+test_pictures_in_a_pick (void)
+{
+  LkScannedCell cells[] = {
+    { .path = (char *) "/set/US5MD1MC.000", .kind = LOOKOUT_FILE_SOURCE },
+    { .path = (char *) "/set/imagery.mbtiles", .kind = LOOKOUT_FILE_RASTER },
+    { .path = (char *) "/set/US5MD1MC.pmtiles", .kind = LOOKOUT_FILE_BAKED },
+    { .path = (char *) "/set/sheet.kap", .kind = LOOKOUT_FILE_RASTER_SOURCE },
+    { .path = (char *) "inside.mbtiles", .kind = LOOKOUT_FILE_RASTER, .archived = TRUE },
+    { .path = (char *) "/set/notes.txt", .kind = LOOKOUT_FILE_OTHER },
+    { .path = (char *) "/set/other.mbtiles", .kind = LOOKOUT_FILE_RASTER },
+  };
+  g_autoptr (GPtrArray) list = g_ptr_array_new ();
+  LkChartSet set = { .cells = list };
+
+  for (guint i = 0; i < G_N_ELEMENTS (cells); i++)
+    g_ptr_array_add (list, &cells[i]);
+
+  g_auto (GStrv) pictures = lk_chart_set_picture_paths (&set);
+
+  g_assert_cmpuint (g_strv_length (pictures), ==, 2);
+  g_assert_cmpstr (pictures[0], ==, "/set/imagery.mbtiles");
+  g_assert_cmpstr (pictures[1], ==, "/set/other.mbtiles");
+
+  /* A pick with no pictures answers an empty list, never NULL: the caller
+   * counts it. */
+  g_ptr_array_set_size (list, 1);
+  g_auto (GStrv) none = lk_chart_set_picture_paths (&set);
+  g_assert_nonnull (none);
+  g_assert_cmpuint (g_strv_length (none), ==, 0);
+
+  g_auto (GStrv) empty = lk_chart_set_picture_paths (NULL);
+  g_assert_nonnull (empty);
+  g_assert_cmpuint (g_strv_length (empty), ==, 0);
+}
+
+/* A chart the bake has already written. An empty file is enough, because
+ * lk_chart_bake_to_prepare tests for a file at a path. */
+static void
+place_at (const char *path)
+{
+  g_autofree char *dir = g_path_get_dirname (path);
+
+  g_assert_cmpint (g_mkdir_with_parents (dir, 0700), ==, 0);
+  g_assert_true (g_file_set_contents (path, "", 0, NULL));
+}
+
+/* The same, at `relative` under the prepared folder. */
+static void
+place_prepared (const char *prepared, const char *relative)
+{
+  g_autofree char *path = g_build_filename (prepared, relative, NULL);
+
+  place_at (path);
+}
+
+/* A cell with its prepared chart on disk counts as done.
+ *
+ * An S-57 cell keeps the kind LOOKOUT_FILE_SOURCE after the bake writes its
+ * chart. A count from the kind alone therefore reported the whole folder on
+ * every import, so a mariner who downloaded one region into a folder of
+ * charts saw the size of the folder on the import page. */
+static void
+test_prepared_cells_are_not_work (void)
+{
+  g_autofree char *source = g_build_filename (home, "noaa", NULL);
+  LkScannedCell cells[] = {
+    { .path = (char *) "/noaa/US5MD1MC.000", .name = (char *) "US5MD1MC",
+      .kind = LOOKOUT_FILE_SOURCE },
+    { .path = (char *) "/noaa/US4TE3W0.000", .name = (char *) "US4TE3W0",
+      .kind = LOOKOUT_FILE_SOURCE },
+    { .path = (char *) "/noaa/sheet.kap", .name = (char *) "sheet.kap",
+      .kind = LOOKOUT_FILE_RASTER_SOURCE },
+    /* Already drawable, so it stays out of the work whatever else is true. */
+    { .path = (char *) "/noaa/imagery.mbtiles", .name = (char *) "imagery.mbtiles",
+      .kind = LOOKOUT_FILE_RASTER },
+  };
+  g_autoptr (GPtrArray) list = g_ptr_array_new ();
+  LkChartSet set = { .cells = list };
+
+  for (guint i = 0; i < G_N_ELEMENTS (cells); i++)
+    g_ptr_array_add (list, &cells[i]);
+  g_assert_cmpint (g_mkdir_with_parents (source, 0700), ==, 0);
+
+  /* Before any import: the two cells and the sheet all need preparing. */
+  g_autoptr (GPtrArray) all = lk_chart_bake_to_prepare (source, &set);
+  g_assert_cmpuint (all->len, ==, 3);
+
+  /* Prepare two of the three. The bake writes each chart in a directory of
+     the cell's name. */
+  g_autofree char *prepared = lk_chart_bake_prepared_dir (source);
+  g_assert_nonnull (prepared);
+  place_prepared (prepared, "US5MD1MC/US5MD1MC.pmtiles");
+  place_prepared (prepared, "sheet/sheet.pmtiles");
+
+  g_autoptr (GPtrArray) left = lk_chart_bake_to_prepare (source, &set);
+  g_assert_cmpuint (left->len, ==, 1);
+  g_assert_cmpstr (((const LkScannedCell *) g_ptr_array_index (left, 0))->name,
+                   ==, "US4TE3W0");
+
+  /* lk_scanned_cell_needs_prepare still reads the kind alone.
+     lk_chart_set_picture_paths and the openable paths use it that way. */
+  g_assert_true (lk_scanned_cell_needs_prepare (&cells[0]));
+  g_assert_false (lk_scanned_cell_needs_prepare (&cells[3]));
+
+  /* With the last one prepared the folder is done, and the pick opens
+     straight into the chart. */
+  place_prepared (prepared, "US4TE3W0/US4TE3W0.pmtiles");
+  g_autoptr (GPtrArray) none = lk_chart_bake_to_prepare (source, &set);
+  g_assert_cmpuint (none->len, ==, 0);
+}
+
+/* Every chart entry in an archive needs preparing, because each one has to be
+ * extracted. An entry with its prepared file on disk counts as done.
+ *
+ * A cell and a picture are prepared into different paths. A cell goes in a
+ * directory of its own name, and a lifted picture keeps the name it has in the
+ * archive. The test calls lookout_bake_output_path for each path, because
+ * agreement with that function is what lk_chart_bake_to_prepare is for. */
+static void
+test_prepared_archive_is_not_work (void)
+{
+  g_autofree char *source = g_build_filename (home, "ENC.zip", NULL);
+  LkScannedCell cells[] = {
+    { .path = (char *) "US5MD1MC.000", .name = (char *) "US5MD1MC",
+      .kind = LOOKOUT_FILE_SOURCE, .archived = TRUE },
+    /* Already baked, and still inside the archive, so it has to be lifted. */
+    { .path = (char *) "US4TE3W0.pmtiles", .name = (char *) "US4TE3W0",
+      .kind = LOOKOUT_FILE_BAKED, .archived = TRUE },
+    { .path = (char *) "imagery.mbtiles", .name = (char *) "imagery.mbtiles",
+      .kind = LOOKOUT_FILE_RASTER, .archived = TRUE },
+    { .path = (char *) "notes.txt", .name = (char *) "notes.txt",
+      .kind = LOOKOUT_FILE_OTHER },
+  };
+  g_autoptr (GPtrArray) list = g_ptr_array_new ();
+  LkChartSet set = { .cells = list, .archive = TRUE };
+
+  for (guint i = 0; i < G_N_ELEMENTS (cells); i++)
+    g_ptr_array_add (list, &cells[i]);
+  g_assert_true (g_file_set_contents (source, "", 0, NULL));
+
+  /* Three chart entries out of the four files. */
+  g_autoptr (GPtrArray) all = lk_chart_bake_to_prepare (source, &set);
+  g_assert_cmpuint (all->len, ==, 3);
+
+  g_autofree char *prepared = lk_chart_bake_prepared_dir (source);
+  g_assert_nonnull (prepared);
+
+  /* Prepare them one at a time. The count drops by one each time. */
+  for (guint i = 0; i < 3; i++)
+    {
+      g_autoptr (GPtrArray) left = lk_chart_bake_to_prepare (source, &set);
+      g_assert_cmpuint (left->len, ==, 3 - i);
+
+      const LkScannedCell *next = g_ptr_array_index (left, 0);
+      lookout_bake_item item = { .path = next->path, .name = next->name,
+                                 .work = next->kind == LOOKOUT_FILE_SOURCE
+                                             ? LOOKOUT_PREPARE_CELL
+                                             : LOOKOUT_PREPARE_LIFT };
+      char path[2048];
+
+      g_assert_cmpuint (lookout_bake_output_path (prepared, source, &item, path,
+                                                  sizeof path), >, 0);
+      place_at (path);
+    }
+
+  g_autoptr (GPtrArray) none = lk_chart_bake_to_prepare (source, &set);
+  g_assert_cmpuint (none->len, ==, 0);
+
+  /* A NULL set returns an empty array, so the caller can count it. */
+  g_autoptr (GPtrArray) empty = lk_chart_bake_to_prepare (source, NULL);
+  g_assert_nonnull (empty);
+  g_assert_cmpuint (empty->len, ==, 0);
+}
+
+/* A set is "derived" when REMOVING IT DELETES WORK.
+ *
+ * That is the question the remove button asks before it puts up its warning,
+ * and the removal deletes the set's PREPARED directory — which a folder in the
+ * mariner's own home has just as much as a lifted archive does. Reading the
+ * set's own path instead answered no for every folder a mariner added, so a
+ * gigabyte of prepared charts went with no warning at all, under a tooltip
+ * that promised their files stayed where they were. */
+/* Whether one set on the list would delete work if it were removed. Other
+ * tests in this run leave sets of their own on the list, so this finds the
+ * row by path rather than taking the only one. */
+static gboolean
+derived_row (LkChartSets *sets, const char *path)
+{
+  g_autoptr (GPtrArray) rows = lk_chart_sets_rows (sets);
+
+  for (guint i = 0; i < rows->len; i++)
+    {
+      const LkChartSetRow *row = g_ptr_array_index (rows, i);
+
+      if (g_strcmp0 (row->path, path) == 0)
+        return row->derived;
+    }
+  g_assert_not_reached ();
+}
+
+static void
+test_a_set_with_prepared_charts_is_derived (void)
+{
+  g_autoptr (GObject) owner = g_object_new (G_TYPE_OBJECT, NULL);
+  LkChartSets *sets = lk_chart_sets_new (noop_changed, owner);
+  g_autofree char *dir = g_build_filename (home, "own-cells", NULL);
+
+  place_cell (dir, "US3CU1EF.000");
+  g_assert_true (lk_chart_sets_note (sets, dir));
+
+  /* Nothing prepared from it yet: removing it takes a list entry off a list
+   * and touches nothing on the disk. No question to ask. */
+  g_assert_false (derived_row (sets, dir));
+
+  /* Now Lookout has prepared a chart from it. Removing it deletes that. */
+  g_autofree char *prepared = lk_chart_bake_prepared_dir (dir);
+  g_assert_nonnull (prepared);
+  place_prepared (prepared, "US3CU1EF/US3CU1EF.pmtiles");
+
+  g_assert_true (derived_row (sets, dir));
+
+  lk_chart_sets_free (sets);
+}
+
+int
+main (int argc, char *argv[])
+{
+  /* Before anything asks GLib for a directory: the store, the recents and the
+   * set list must land where this run can throw them away. */
+  home = g_dir_make_tmp ("lk-library-test-XXXXXX", NULL);
+  g_assert_nonnull (home);
+  g_setenv ("HOME", home, TRUE);
+  g_setenv ("XDG_CONFIG_HOME", g_build_filename (home, ".config", NULL), TRUE);
+  g_setenv ("XDG_DATA_HOME", g_build_filename (home, ".local", "share", NULL), TRUE);
+  g_setenv ("XDG_CACHE_HOME", g_build_filename (home, ".cache", NULL), TRUE);
+  g_unsetenv ("LOOKOUT_OPEN");
+
+  g_test_init (&argc, &argv, NULL);
+
+  g_test_add_func ("/library/nothing-installed-opens-nothing",
+                   test_nothing_installed_opens_nothing);
+  g_test_add_func ("/library/env-open-wins", test_env_open_wins);
+  g_test_add_func ("/library/nothing-to-draw", test_nothing_to_draw);
+  g_test_add_func ("/library/installed-cell-names", test_installed_cell_names);
+  g_test_add_func ("/library/pictures-in-a-pick", test_pictures_in_a_pick);
+  g_test_add_func ("/library/prepared-cells-are-not-work",
+                   test_prepared_cells_are_not_work);
+  g_test_add_func ("/library/prepared-archive-is-not-work",
+                   test_prepared_archive_is_not_work);
+  g_test_add_func ("/library/a-set-with-prepared-charts-is-derived",
+                   test_a_set_with_prepared_charts_is_derived);
+
+  return g_test_run ();
+}

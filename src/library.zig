@@ -135,12 +135,17 @@ pub fn cellName(basename: []const u8) ?[]const u8 {
 
 // ---- scanning a folder ------------------------------------------------------
 
-/// What tile57 reports about a baked archive.
+/// What tile57 reports about one chart file.
 pub const Facts = struct {
-    /// The compilation scale the bake embedded. 0 when the archive carries none.
+    /// The compilation scale the bake embedded. 0 when the archive states none.
     scale: i32 = 0,
-    /// West, south, east, north. Null when the archive carries no bounds.
+    /// West, south, east, north. Null when the archive states no bounds.
     bounds: ?[4]f64 = null,
+    /// DSID EDTN and UPDN, after the update chain is applied. Both 0 for a
+    /// file that states no dataset identity: a baked archive, a picture, or an
+    /// entry read from a zip listing.
+    edition: u32 = 0,
+    update: u32 = 0,
 };
 
 /// What a baked archive turned out to hold.
@@ -172,6 +177,9 @@ pub const InventoryRow = struct {
     bytes: u64 = 0,
     scale: i32 = 0,
     bounds: ?[4]f64 = null,
+    /// DSID EDTN and UPDN. 0 when the file states neither.
+    edition: u32 = 0,
+    update: u32 = 0,
 };
 
 /// What a path holds. Appends a row per file that looks like a chart and
@@ -347,7 +355,12 @@ pub fn scanWith(
                     // states none.
                     .band = usageBand(name) orelse 0,
                     .bytes = r.bytes,
-                    .facts = .{ .scale = r.scale, .bounds = r.bounds },
+                    .facts = .{
+                        .scale = r.scale,
+                        .bounds = r.bounds,
+                        .edition = r.edition,
+                        .update = r.update,
+                    },
                 };
                 if (r.kind == .raster) try raster.append(alloc, cell) else try cells.append(alloc, cell);
             }
@@ -624,6 +637,10 @@ pub const File = extern struct {
     south: f64,
     east: f64,
     north: f64,
+    /// The dataset edition and update number from DSID. Both 0 when the file
+    /// states no identity.
+    edition: u32,
+    update: u32,
 };
 
 /// What one folder or archive holds.
@@ -710,6 +727,8 @@ pub fn fileOf(a: std.mem.Allocator, c: Cell) !File {
         .south = if (c.facts.bounds) |b| b[1] else 0,
         .east = if (c.facts.bounds) |b| b[2] else 0,
         .north = if (c.facts.bounds) |b| b[3] else 0,
+        .edition = c.facts.edition,
+        .update = c.facts.update,
     };
 }
 
@@ -959,6 +978,66 @@ test "the engine's facts reach the cell" {
     try t.expectEqual(@as(i32, 12000), s.cells[0].facts.scale);
     try t.expectEqual(@as(f64, -76.6), s.cells[0].facts.bounds.?[0]);
     try t.expectEqual(@as(usize, 0), s.refused);
+}
+
+/// An inventory of one source cell that states a DSID edition and update.
+fn oneEdition(
+    _: ?*anyopaque,
+    alloc: std.mem.Allocator,
+    _: []const u8,
+    out: *std.ArrayList(InventoryRow),
+) bool {
+    out.append(alloc, .{
+        .path = alloc.dupe(u8, "/Charts/ENC_ROOT/US5MD1MC/US5MD1MC.000") catch return false,
+        .name = alloc.dupe(u8, "US5MD1MC") catch return false,
+        .kind = .source,
+        .bytes = 4096,
+        .edition = 27,
+        .update = 3,
+    }) catch return false;
+    return true;
+}
+
+test "the dataset edition reaches the cell and the C struct" {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var s = try scanWith(t.allocator, io, "/Charts", null, null, oneEdition, null);
+    defer s.deinit();
+
+    try t.expectEqual(@as(usize, 1), s.cells.len);
+    try t.expectEqual(@as(u32, 27), s.cells[0].facts.edition);
+    try t.expectEqual(@as(u32, 3), s.cells[0].facts.update);
+
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const f = try fileOf(arena.allocator(), s.cells[0]);
+    try t.expectEqual(@as(u32, 27), f.edition);
+    try t.expectEqual(@as(u32, 3), f.update);
+}
+
+test "a file that states no identity reports edition 0" {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var s = try scanWith(t.allocator, io, "/Charts", null, null, oneBaked, null);
+    defer s.deinit();
+
+    try t.expectEqual(@as(usize, 1), s.cells.len);
+    try t.expectEqual(@as(u32, 0), s.cells[0].facts.edition);
+    try t.expectEqual(@as(u32, 0), s.cells[0].facts.update);
+}
+
+/// An inventory of one baked archive, which states no DSID.
+fn oneBaked(
+    _: ?*anyopaque,
+    alloc: std.mem.Allocator,
+    _: []const u8,
+    out: *std.ArrayList(InventoryRow),
+) bool {
+    out.append(alloc, .{
+        .path = alloc.dupe(u8, "/Charts/US5MD1MC/US5MD1MC.pmtiles") catch return false,
+        .name = alloc.dupe(u8, "US5MD1MC") catch return false,
+        .kind = .baked,
+        .bytes = 900,
+    }) catch return false;
+    return true;
 }
 
 test "a single file scans as itself" {

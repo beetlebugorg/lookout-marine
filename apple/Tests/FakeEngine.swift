@@ -9,6 +9,7 @@
 //  a change (the raster election, say), the test sets what comes back.
 
 import Foundation
+import SwiftUI
 @testable import LookoutMarine
 
 @MainActor
@@ -85,6 +86,24 @@ final class FakeEngine: RasterEngine, ChartLinkEngine, PluginEngine,
     func importChartLinks(_ json: String) { note("importChartLinks") }
     func chartLinksSnapshot() -> ChartLinkSnapshot? { links }
 
+    /// What chartIsDrawing returns. A test that wants a preview captured
+    /// leaves it false, the way a chart that has settled reads.
+    var drawing = false
+    func chartIsDrawing() -> Bool { drawing }
+
+    /// The pictures. A test sets what the core can name: `previewTiles` maps a
+    /// link's url to the tile url for it, and an absent entry stands for a
+    /// style that names no raster tiles.
+    var previewTiles: [String: String] = [:]
+    var viewCentre: (lon: Double, lat: Double)? = (lon: -76.0, lat: 39.0)
+    func previewChartLinks() { note("previewChartLinks") }
+    func chartLinkPreviewURL(_ url: String, lon: Double, lat: Double, zoom: Int) -> String? {
+        note("chartLinkPreviewURL(\(url))")
+        return previewTiles[url]
+    }
+    func viewCenter() -> (lon: Double, lat: Double)? { viewCentre }
+    func snapshot() -> Image? { nil }
+
     // MARK: Plugins
     var specs: [PluginTableSpec] = []
     var alerts: (seq: Int, alerts: [PluginAlert])?
@@ -102,7 +121,7 @@ final class FakeEngine: RasterEngine, ChartLinkEngine, PluginEngine,
 
     // MARK: Opening
     var reopenSucceeds = true
-    func reopen(charts: [String]) -> Bool {
+    func reopen(charts: [String], requestID: Int) -> Bool {
         note("reopen(\(charts.count))")
         return reopenSucceeds
     }

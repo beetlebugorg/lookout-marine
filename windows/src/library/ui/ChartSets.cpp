@@ -16,7 +16,9 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <thread>
 
+#include "lk_firstrun.h" // Thousands and PrepareEstimate, for the question
 #include "lk_paths.h"
 #include "lk_store.h"
 
@@ -53,6 +55,8 @@ namespace winrt::LookoutMarine::implementation
                 row.title = all[i]->title;
                 row.on = all[i]->on != 0;
                 row.scanned = all[i]->scanned != 0;
+                row.unprepared = all[i]->unprepared;
+                row.bytes = all[i]->bytes;
                 // What the row says it holds. The engine's own counts split a
                 // file that bakes first out of both halves, and this line has
                 // always counted a picture waiting to be baked as a picture.
@@ -64,7 +68,11 @@ namespace winrt::LookoutMarine::implementation
                     {
                     case LOOKOUT_FILE_RASTER:
                     case LOOKOUT_FILE_RASTER_SOURCE: row.pictures++; break;
-                    case LOOKOUT_FILE_BAKED:         row.charts++; break;
+                    case LOOKOUT_FILE_BAKED:
+                        row.charts++;
+                        if (found[f]->band >= 1 && found[f]->band <= 6)
+                            ++row.bands[found[f]->band];
+                        break;
                     default:                         break;
                     }
                 }
@@ -83,8 +91,9 @@ namespace winrt::LookoutMarine::implementation
         if (chart_sets_model == nullptr || !lookout_chart_sets_changed(chart_sets_model))
             return;
         LoadChartSets([this] {
-            if (SettingsOpen())
-                BuildSettingsPage();
+            // Only when a row on the page changed. A rescan that finds what it
+            // found before raises the same flag.
+            RefreshChartsPageOnChange();
         });
     }
 
@@ -129,40 +138,147 @@ namespace winrt::LookoutMarine::implementation
         if (path.empty() || !std::filesystem::is_directory(path, ec))
             return;
         lookout_chart_sets *model = ChartSetsModel();
-        if (model == nullptr || !lookout_chart_sets_add(model, path.c_str()))
+        if (model == nullptr)
             return;
+        // add() scans a path new to the list and returns 0 for one already on
+        // it. A path already on the list needs a rescan instead: a bake writes
+        // into prepared_root after the last scan, and the row keeps its
+        // pre-bake counts until the folder is read again. Returning early on
+        // that 0 left a set reading 0 charts with the charts on disk, and
+        // nothing else asks for a scan (lookout_chart_sets_rescan,
+        // lookout-library.h:386).
+        if (!lookout_chart_sets_add(model, path.c_str()))
+            lookout_chart_sets_rescan(model, path.c_str());
         LoadChartSets([this] {
             if (SettingsOpen())
                 BuildSettingsPage();
         });
     }
 
-    // The switch: reopen on the union that results. Switching the LAST set
-    // off keeps the chart on screen — a blank sea helps nobody — but the
-    // next launch honors the switches.
+    // The switch: open the union that results. Switching the last set off
+    // takes the chart off the display, because the charts behind it are not
+    // drawing any more.
     void MainWindow::SetChartSetOn(std::string const &path, bool on)
     {
         lookout_chart_sets *model = ChartSetsModel();
         if (model == nullptr || !lookout_chart_sets_set_on(model, path.c_str(), on ? 1 : 0))
             return;
         LoadChartSets(nullptr);
-        auto paths = ChartSetOpenPaths();
-        if (!paths.empty())
-            OpenPaths(paths, path, lkw::AgencyForCells(paths));
+        // In place: the switch the mariner just moved is already showing its
+        // new state, and rebuilding the page under their pointer would take
+        // the switch away mid-gesture. What the row says and what Lookout's
+        // own tile is built from follow here.
         if (SettingsOpen())
-            BuildSettingsPage();
+            RefreshChartsPageInPlace();
+        ReopenChartSets(path);
     }
 
+    // Whether Lookout made the charts in this set.
+    //
+    // The bake writes into the chart library and the shell adopts that
+    // directory as a set, so a set at or under the library holds work this app
+    // did and can do again. Every other set is the mariner's own files, and
+    // removing one of those only takes it off the list.
+    bool MainWindow::ChartSetIsDerived(std::string const &path)
+    {
+        std::error_code ec;
+        auto lib = std::filesystem::weakly_canonical(lkw::ChartLibraryDir(), ec);
+        if (ec)
+            return false;
+        auto p = std::filesystem::weakly_canonical(std::filesystem::path(path), ec);
+        if (ec)
+            return false;
+        auto shared = std::mismatch(lib.begin(), lib.end(), p.begin(), p.end());
+        return shared.first == lib.end();
+    }
+
+    // Delete the charts Lookout prepared for one set.
+    //
+    // Renamed first and deleted behind. A NOAA library is thousands of
+    // directories, and this runs on the UI thread: the rename is one step, so
+    // the charts are gone from where anything looks for them before this
+    // returns, and a set added straight back writes into a fresh directory
+    // rather than racing the delete.
+    void MainWindow::DeletePreparedCharts(std::string const &path)
+    {
+        if (!ChartSetIsDerived(path))
+            return;
+        std::error_code ec;
+        std::filesystem::path lib = lkw::ChartLibraryDir();
+        // The name a delete in flight goes under. Skipped by the sweep below,
+        // so two removals in a row do not fight over each other's work.
+        std::string const prefix = ".removing-";
+        std::filesystem::path trash =
+            lib / (prefix + std::to_string(GetCurrentProcessId()) + "-" +
+                   std::to_string(++remove_seq));
+        std::filesystem::create_directories(trash, ec);
+        if (ec)
+            return;
+
+        if (std::filesystem::equivalent(std::filesystem::path(path), lib, ec))
+        {
+            // The set IS the library. Its children are the charts; the
+            // directory itself stays, because the next import writes into it.
+            for (auto const &entry : std::filesystem::directory_iterator(lib, ec))
+            {
+                std::string name = entry.path().filename().string();
+                if (name.rfind(prefix, 0) == 0)
+                    continue;
+                std::error_code one;
+                std::filesystem::rename(entry.path(), trash / entry.path().filename(), one);
+            }
+        }
+        else
+        {
+            std::filesystem::path p{ path };
+            std::filesystem::rename(p, trash / p.filename(), ec);
+        }
+
+        // Behind the rename, off this thread. Nothing waits for it: every
+        // chart it holds is already out of the library.
+        std::thread([trash] {
+            std::error_code gone;
+            std::filesystem::remove_all(trash, gone);
+        }).detach();
+    }
+
+    // Take a set off the list.
+    //
+    // Charts this app prepared go with it: they were made from the mariner's
+    // cells and can be made again, and a library left behind by a set the
+    // mariner removed is the app hoarding on their disk. The question is asked
+    // before any of that, in ConfirmRemoveChartSet.
     void MainWindow::RemoveChartSet(std::string const &path)
     {
         lookout_chart_sets *model = ChartSetsModel();
         if (model == nullptr || !lookout_chart_sets_remove(model, path.c_str()))
             return;
         LoadChartSets(nullptr);
-        auto paths = ChartSetOpenPaths();
-        if (!paths.empty())
-            OpenPaths(paths, paths.front(), lkw::AgencyForCells(paths));
+        // Before the delete: the handle holds every chart file open, and
+        // Windows refuses to rename a directory under an open file.
+        ReopenChartSets({});
+        DeletePreparedCharts(path);
         if (SettingsOpen())
             BuildSettingsPage();
+    }
+
+    fire_and_forget MainWindow::ConfirmRemoveChartSet(std::string path, std::string name,
+                                                      size_t charts)
+    {
+        auto lifetime = get_strong();
+        Controls::ContentDialog dialog;
+        dialog.XamlRoot(DialogRoot());
+        dialog.Title(winrt::box_value(winrt::to_hstring("Remove " + name + "?")));
+        dialog.Content(winrt::box_value(
+            winrt::hstring{ L"Lookout deletes the " + lkw::Thousands(charts) + L" charts it "
+                            L"prepared from this folder. Your original files stay where they "
+                            L"are, and you can add the folder again, which takes " +
+                            lkw::PrepareEstimate(charts) + L"." }));
+        dialog.PrimaryButtonText(L"Remove and delete prepared charts");
+        dialog.CloseButtonText(L"Cancel");
+        auto result = co_await dialog.ShowAsync();
+        if (result != Controls::ContentDialogResult::Primary)
+            co_return;
+        RemoveChartSet(path);
     }
 }

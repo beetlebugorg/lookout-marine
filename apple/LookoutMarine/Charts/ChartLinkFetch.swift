@@ -35,7 +35,12 @@ final class ChartLinkFetch: @unchecked Sendable {
     private var wake: (() -> Void)?
     /// Tasks by request id, so a cancel can reach the transfer.
     private var inFlight: [UInt64: URLSessionTask] = [:]
-    private let session: URLSession
+    /// Request id and final status by task, for the delegate that hands the
+    /// body over a piece at a time.
+    private var byTask: [Int: UInt64] = [:]
+    private var statusByTask: [Int: Int32] = [:]
+    private var session: URLSession!
+    private let proxy = FetchProxy()
 
     init() {
         let cfg = URLSessionConfiguration.default
@@ -58,7 +63,12 @@ final class ChartLinkFetch: @unchecked Sendable {
             "User-Agent": ChartLinkFetch.userAgent,
             "Referer": ChartLinkFetch.referer,
         ]
-        session = URLSession(configuration: cfg)
+        // A delegate rather than a completion handler: it hands over the body
+        // as it arrives. A NOAA district downloads as one zip of a couple of
+        // hundred megabytes, and a data task holds that whole thing in memory
+        // before anyone sees a byte of it.
+        session = URLSession(configuration: cfg, delegate: proxy, delegateQueue: nil)
+        proxy.owner = self
     }
 
     /// Attach to a chart handle and start answering. Call once per handle.
@@ -82,6 +92,8 @@ final class ChartLinkFetch: @unchecked Sendable {
         let h = handle
         let tasks = inFlight
         inFlight = [:]
+        byTask = [:]
+        statusByTask = [:]
         if let h {
             for (id, _) in tasks { lookout_http_respond(h, id, nil, 0, 0) }
         }
@@ -112,18 +124,12 @@ final class ChartLinkFetch: @unchecked Sendable {
             readFile(id: id, url: url.isFileURL ? url : URL(fileURLWithPath: raw))
             return
         }
-        let task = session.dataTask(with: URLRequest(url: url)) { [weak self] data, resp, err in
-            guard let self else { return }
-            self.done(id)
-            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
-            if err != nil {
-                self.answer(id, nil, 0)
-            } else {
-                self.answer(id, data, Int32(code))
-            }
-        }
+        let task = session.dataTask(with: URLRequest(url: url))
         lock.lock()
-        if handle != nil { inFlight[id] = task }
+        if handle != nil {
+            inFlight[id] = task
+            byTask[task.taskIdentifier] = id
+        }
         let live = handle != nil
         lock.unlock()
         if live { task.resume() } else { answer(id, nil, 0) }
@@ -155,8 +161,54 @@ final class ChartLinkFetch: @unchecked Sendable {
 
     private func done(_ id: UInt64) {
         lock.lock()
-        inFlight.removeValue(forKey: id)
+        if let t = inFlight.removeValue(forKey: id) {
+            byTask.removeValue(forKey: t.taskIdentifier)
+            statusByTask.removeValue(forKey: t.taskIdentifier)
+        }
         lock.unlock()
+    }
+
+    // ---- the delegate's side ------------------------------------------------
+
+    /// The status a task's pieces carry. Kept until the task finishes.
+    fileprivate func noteStatus(_ task: Int, _ status: Int32) {
+        lock.lock()
+        statusByTask[task] = status
+        lock.unlock()
+    }
+
+    /// One piece of a body. Passed straight through, with no buffer here.
+    fileprivate func piece(_ task: Int, _ data: Data) {
+        lock.lock()
+        let h = handle
+        let id = byTask[task]
+        let status = statusByTask[task] ?? 0
+        if let h, let id {
+            // Data may hold several buffers. Each region is contiguous, and
+            // lookout reads pieces in order, so they go one after another
+            // rather than through a flattening copy.
+            for region in data.regions where !region.isEmpty {
+                region.withUnsafeBytes { raw in
+                    lookout_http_respond_chunk(h, id, raw.baseAddress, raw.count, status, 0)
+                }
+            }
+        }
+        lock.unlock()
+    }
+
+    /// A task that ended. `err` nil finishes the body; anything else fails it.
+    fileprivate func finish(_ task: Int, err: Error?) {
+        lock.lock()
+        let h = handle
+        let wake = self.wake
+        let id = byTask.removeValue(forKey: task)
+        let status = statusByTask.removeValue(forKey: task) ?? 0
+        if let id { inFlight.removeValue(forKey: id) }
+        if let h, let id {
+            lookout_http_respond_chunk(h, id, nil, 0, err == nil ? status : 0, 1)
+        }
+        lock.unlock()
+        if h != nil, id != nil, let wake { DispatchQueue.main.async(execute: wake) }
     }
 
     private func answer(_ id: UInt64, _ bytes: Data?, _ status: Int32) {
@@ -177,6 +229,29 @@ final class ChartLinkFetch: @unchecked Sendable {
         }
         lock.unlock()
         if h != nil, let wake { DispatchQueue.main.async(execute: wake) }
+    }
+}
+
+/// URLSession's side of a streamed body. Separate from the fetcher because
+/// URLSession keeps a strong reference to its delegate, and the fetcher owns
+/// the session.
+private final class FetchProxy: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    weak var owner: ChartLinkFetch?
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask,
+                    didReceive response: URLResponse,
+                    completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+        owner?.noteStatus(dataTask.taskIdentifier, Int32(code))
+        completionHandler(.allow)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        owner?.piece(dataTask.taskIdentifier, data)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        owner?.finish(task.taskIdentifier, err: error)
     }
 }
 

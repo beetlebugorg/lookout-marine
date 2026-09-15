@@ -24,6 +24,9 @@ import androidx.compose.runtime.setValue
  */
 class ChartLinkController(appContext: Context, private val access: EngineAccess) {
 
+    private val appFiles = appContext.filesDir
+    private val resolver = appContext.contentResolver
+
     //
     // One chart added by link: a MapLibre style url. Picking it renders that
     // style INSTEAD of the built-in chart — Lookout's own chart is just the
@@ -133,6 +136,35 @@ class ChartLinkController(appContext: Context, private val access: EngineAccess)
                 Store.setFlag(Store.Group.CHARTLINKS, LINK_ACTIVE_HINT, hint)
             }
         }
+    }
+
+    /**
+     * Add a style the mariner has on this device.
+     *
+     * The core tells a path from a url and reads the file itself, but it needs
+     * a path to open: a document picker hands back a content uri, which is not
+     * one. The bytes are copied into the app's own folder and that path is
+     * added. A style document is a few kilobytes, and the copy is what makes it
+     * survive the picker's permission going away.
+     */
+    fun addStyleFile(uri: android.net.Uri) {
+        chartLinkError = null
+        chartLinkBusy = true
+        val name = uri.lastPathSegment?.substringAfterLast('/')?.ifEmpty { null } ?: "style.json"
+        val dir = java.io.File(appFiles, "styles").apply { mkdirs() }
+        val out = java.io.File(dir, if (name.endsWith(".json")) name else "$name.json")
+        try {
+            resolver.openInputStream(uri).use { input ->
+                if (input == null) throw java.io.IOException("no bytes")
+                out.outputStream().use { input.copyTo(it) }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "style file: $e")
+            chartLinkBusy = false
+            chartLinkError = "That file could not be read."
+            return
+        }
+        access.onEngine { l -> l.chartLinkAdd(out.absolutePath) }
     }
 
     /**

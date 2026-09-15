@@ -1,10 +1,12 @@
 /* ui/startup-view.c — what the window shows before a chart is open.
  *
  * Two pages, both overlays the window hides once the chart draws: the loader
- * with its three steps while a chart opens, and the first-run page that says
- * where charts come from. The list of sets the mariner switched off belongs to
- * the second one, because that is the one case where charts are installed and the
- * chart is still blank.
+ * with its three steps while a chart opens, and the page for the one case
+ * where charts ARE installed and the chart is still blank, which is every set
+ * switched off.
+ *
+ * A mariner with NOTHING installed gets neither of these. They get setup
+ * (ui/firstrun/), which is a flow rather than a page.
  */
 #include "ui/startup-view.h"
 
@@ -21,13 +23,13 @@ lk_switched_off_toggled (GtkSwitch *sw, GParamSpec *pspec, gpointer user_data)
     lk_app_model_set_chart_set_on (self->model, path, TRUE);
 }
 
-/* The "Switched off" list on the empty page: the installed sets when every one is
- * off, each with a switch to bring it back. When any set is on the chart draws
- * and this page is not showing, so the list stays hidden. */
+/* The list this page is for: the installed sets when every one is off, each
+ * with a switch to bring it back. When any set is on the chart draws and this
+ * page is not showing, so the list stays hidden. */
 void
 lk_window_refresh_switched_off (LkWindow *self)
 {
-  GtkWidget *box = g_object_get_data (G_OBJECT (self->empty_state), "lk-switched-off");
+  GtkWidget *box = g_object_get_data (G_OBJECT (self->switched_off_page), "lk-switched-off");
   GtkWidget *child;
 
   while ((child = gtk_widget_get_first_child (box)) != NULL)
@@ -219,49 +221,25 @@ lk_window_build_loader (void)
   return box;
 }
 
-/* One fact under the first-run panel's buttons: an icon and a line. */
-static void
-lk_empty_state_note (GtkWidget *box, const char *icon_name, const char *markup)
-{
-  GtkWidget *row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
-  GtkWidget *icon = gtk_image_new_from_icon_name (icon_name);
-  GtkWidget *text = gtk_label_new (NULL);
-
-  gtk_image_set_pixel_size (GTK_IMAGE (icon), 13);
-  gtk_widget_add_css_class (icon, "dim-label");
-  gtk_widget_set_valign (icon, GTK_ALIGN_START);
-  gtk_widget_set_margin_top (icon, 2);
-  gtk_label_set_markup (GTK_LABEL (text), markup);
-  gtk_widget_add_css_class (text, "dim-label");
-  gtk_widget_add_css_class (text, "caption");
-  gtk_label_set_wrap (GTK_LABEL (text), TRUE);
-  gtk_label_set_xalign (GTK_LABEL (text), 0.0);
-  gtk_widget_set_hexpand (text, TRUE);
-
-  gtk_box_append (GTK_BOX (row), icon);
-  gtk_box_append (GTK_BOX (row), text);
-  gtk_box_append (GTK_BOX (box), row);
-}
-
-/* The first thing a mariner sees, before any chart is installed.
+/* Every chart set switched off.
  *
- * It answers three questions in the order they are asked: what is this
- * program for, why is it empty, what do I do now — and it closes with the one
- * block that is not about getting started, which a mariner must not skim.
- * The twin of EmptyChartState (macOS); the words are the reference's. */
+ * The one state where the library is not empty and the chart is still blank.
+ * A mariner here does not need setup and does not need to be told where
+ * charts come from: they need the switch they turned off, so this page is
+ * that switch and nothing else.
+ */
 GtkWidget *
-lk_window_build_empty_state (void)
+lk_window_build_switched_off_page (void)
 {
   GtkWidget *box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
-  GtkWidget *icon = gtk_image_new_from_icon_name ("mark-location-symbolic");
-  GtkWidget *title = gtk_label_new ("No charts yet");
-  GtkWidget *body = gtk_label_new ("Lookout draws official S-57 and S-101 ENC charts. "
-                                   "It does not come with any, so point it at yours.");
+  GtkWidget *icon = gtk_image_new_from_icon_name ("lk-charts-symbolic");
+  GtkWidget *title = gtk_label_new ("Every chart set is switched off");
+  GtkWidget *body = gtk_label_new ("Your charts are still installed. Switch one back "
+                                   "on to draw it.");
   GtkWidget *error = gtk_label_new ("");
   GtkWidget *buttons = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 10);
-  GtkWidget *button = gtk_button_new_with_label ("Choose Charts…");
-  GtkWidget *archive = gtk_button_new_with_label ("Choose an Archive…");
-  GtkWidget *drop_hint = gtk_label_new ("or drop them anywhere in this window");
+  GtkWidget *button = gtk_button_new_with_label ("Add More Charts…");
+  GtkWidget *drop_hint = gtk_label_new ("or drop a folder anywhere in this window");
 
   gtk_image_set_pixel_size (GTK_IMAGE (icon), 26);
   gtk_widget_add_css_class (icon, "lk-accent");
@@ -269,6 +247,7 @@ lk_window_build_empty_state (void)
   gtk_widget_set_margin_bottom (icon, 12);
 
   gtk_widget_add_css_class (title, "title-2");
+  gtk_label_set_wrap (GTK_LABEL (title), TRUE);
   gtk_label_set_xalign (GTK_LABEL (title), 0.0);
   gtk_widget_set_margin_bottom (title, 6);
 
@@ -285,83 +264,27 @@ lk_window_build_empty_state (void)
   gtk_widget_set_margin_bottom (error, 10);
   gtk_widget_set_visible (error, FALSE);
 
-  gtk_widget_add_css_class (button, "suggested-action");
+  /* The sets, each with its switch, ahead of anything about adding more: the
+   * charts the mariner already has are the answer here. Filled from the model
+   * on chart-sets-changed. */
+  GtkWidget *switched_off = gtk_box_new (GTK_ORIENTATION_VERTICAL, 6);
+  gtk_widget_set_visible (switched_off, FALSE);
+  gtk_widget_set_margin_bottom (switched_off, 18);
+
   gtk_widget_add_css_class (button, "pill");
   gtk_actionable_set_action_name (GTK_ACTIONABLE (button), "win.open");
-  gtk_widget_add_css_class (archive, "pill");
-  gtk_actionable_set_action_name (GTK_ACTIONABLE (archive), "win.open-archive");
   gtk_widget_add_css_class (drop_hint, "dim-label");
   gtk_widget_add_css_class (drop_hint, "caption");
   gtk_box_append (GTK_BOX (buttons), button);
-  gtk_box_append (GTK_BOX (buttons), archive);
   gtk_box_append (GTK_BOX (buttons), drop_hint);
   gtk_widget_set_halign (buttons, GTK_ALIGN_START);
-  gtk_widget_set_margin_bottom (buttons, 14);
-
-  /* The sets that are installed but switched off. When every set is off the chart
-     is empty, so this page shows instead — with a switch to bring each back,
-     rather than sending the mariner to settings to find them. Filled from the
-     model on chart-sets-changed. */
-  GtkWidget *switched_off = gtk_box_new (GTK_ORIENTATION_VERTICAL, 6);
-  gtk_widget_set_visible (switched_off, FALSE);
-  gtk_widget_set_margin_bottom (switched_off, 14);
 
   gtk_box_append (GTK_BOX (box), icon);
   gtk_box_append (GTK_BOX (box), title);
   gtk_box_append (GTK_BOX (box), body);
   gtk_box_append (GTK_BOX (box), error);
-  gtk_box_append (GTK_BOX (box), buttons);
   gtk_box_append (GTK_BOX (box), switched_off);
-
-  /* What actually works, in the words of what the mariner has in hand. Where
-   * the charts come from goes first: a mariner with none needs that before a
-   * list of file extensions. */
-  lk_empty_state_note (box, "web-browser-symbolic",
-                       "NOAA publishes every United States chart at no cost, at "
-                       "<a href=\"https://www.charts.noaa.gov/ENCs/ENCs.shtml\">"
-                       "charts.noaa.gov</a>. Most other offices sell theirs.");
-  lk_empty_state_note (box, "folder-open-symbolic",
-                       "A folder of cells (.000), prepared charts (.pmtiles), imagery "
-                       "(.mbtiles) or BSB/KAP sheets. Cells and sheets are converted "
-                       "once on the way in, a few seconds each.");
-
-  /* Last, and set apart. */
-  GtkWidget *warn = gtk_box_new (GTK_ORIENTATION_VERTICAL, 4);
-  GtkWidget *warn_title = gtk_label_new ("NOT FOR NAVIGATION");
-  GtkWidget *warn_body = gtk_label_new (
-      "By importing charts you accept that Lookout is a prototype and not a "
-      "certified navigation system, and that the charts it prepares are processed "
-      "for display and are not the official ENC. They do not meet chart carriage "
-      "regulations. You remain responsible for the safe navigation of your vessel "
-      "and for keeping clear of every danger. Verify everything shown here against "
-      "official, up-to-date charts and publications, and keep a paper backup.");
-  GtkWidget *warn_noaa = gtk_label_new (NULL);
-
-  gtk_widget_add_css_class (warn, "lk-not-nav");
-  gtk_widget_add_css_class (warn_title, "lk-not-nav-title");
-  gtk_label_set_xalign (GTK_LABEL (warn_title), 0.0);
-  gtk_label_set_wrap (GTK_LABEL (warn_body), TRUE);
-  gtk_label_set_xalign (GTK_LABEL (warn_body), 0.0);
-  gtk_widget_add_css_class (warn_body, "caption");
-  /* NOAA's own terms, in their words. They apply to their charts whoever
-   * prepared them. */
-  gtk_label_set_markup (GTK_LABEL (warn_noaa),
-                        "NOAA ENC\xC2\xAE charts come from the NOAA Office of Coast "
-                        "Survey and are updated weekly on a best-efforts basis; you "
-                        "are responsible for holding the current edition and the "
-                        "latest updates. NOAA makes no warranty and assumes no "
-                        "liability for their use. See the <a href=\""
-                        "https://www.charts.noaa.gov/ENCs/ENC_Agreement.shtml\">"
-                        "NOAA ENC User Agreement</a>.");
-  gtk_label_set_wrap (GTK_LABEL (warn_noaa), TRUE);
-  gtk_label_set_xalign (GTK_LABEL (warn_noaa), 0.0);
-  gtk_widget_add_css_class (warn_noaa, "caption");
-  gtk_widget_add_css_class (warn_noaa, "dim-label");
-  gtk_box_append (GTK_BOX (warn), warn_title);
-  gtk_box_append (GTK_BOX (warn), warn_body);
-  gtk_box_append (GTK_BOX (warn), warn_noaa);
-  gtk_widget_set_margin_top (warn, 10);
-  gtk_box_append (GTK_BOX (box), warn);
+  gtk_box_append (GTK_BOX (box), buttons);
 
   /* No surface, for the reason lk_window_build_loader gives. 430 is the
      reference's content width (EmptyChartState, maxWidth 430). */
