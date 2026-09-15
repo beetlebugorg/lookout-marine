@@ -1,6 +1,7 @@
 // Model code: no WinRT, so the flow is reachable from a test.
 #include "lk_firstrun.h"
 
+#include <cmath>
 #include <cwchar>
 #include <map>
 
@@ -9,6 +10,18 @@ namespace
     // A chart with no usage band sorts after band 6, so it goes last in the
     // bake and last in the list. Sorting it as band 0 puts it first.
     constexpr int kNoBand = 7;
+
+    // A depth rounded to a tenth, with no trailing zero on a whole number.
+    std::wstring DepthText(double v)
+    {
+        double const rounded = std::round(v * 10) / 10;
+        wchar_t buf[32];
+        if (rounded == std::round(rounded))
+            std::swprintf(buf, 32, L"%d", (int)std::llround(rounded));
+        else
+            std::swprintf(buf, 32, L"%.1f", rounded);
+        return buf;
+    }
 }
 
 namespace lkw
@@ -35,6 +48,110 @@ namespace lkw
         else
             std::swprintf(buf, 64, L"%.1f MB", (double)bytes / (double)(1u << 20));
         return buf;
+    }
+
+    std::vector<double> DepthChoice::Clearances() const
+    {
+        if (feet_)
+            return { 1, 2, 3, 5 };
+        return { 0.3, 0.6, 1, 1.5 };
+    }
+
+    std::vector<double> DepthChoice::Ladder() const
+    {
+        if (feet_)
+            return { 6, 12, 18, 30, 60, 90, 120, 180, 240, 300 };
+        return { 2, 5, 10, 20, 30, 50, 75, 100 };
+    }
+
+    double DepthChoice::SafetyDepth() const { return std::ceil(draft_ + clearance_); }
+
+    double DepthChoice::SafetyContour() const
+    {
+        auto const ladder = Ladder();
+        double const want = SafetyDepth();
+        for (double rung : ladder)
+            if (rung >= want)
+                return rung;
+        return ladder.back();
+    }
+
+    double DepthChoice::DeepContour() const
+    {
+        auto const ladder = Ladder();
+        double const want = SafetyContour() * 2;
+        for (double rung : ladder)
+            if (rung >= want)
+                return rung;
+        return ladder.back();
+    }
+
+    double DepthChoice::Reach(double depth) const
+    {
+        // Where the shore stands, and how steeply the slope falls away.
+        // Shallow water gets most of the panel, because that is where both
+        // contours fall.
+        constexpr double kShoreAt = 0.14;
+        constexpr double kSlopeK = 2.07;
+        double const floor = Floor();
+        if (floor <= 0)
+            return kShoreAt;
+        double const share = std::max(0.0, std::min(1.0, depth / floor));
+        return kShoreAt + (1 - kShoreAt) * std::pow(share, 1 / kSlopeK);
+    }
+
+    void DepthChoice::Step(int by)
+    {
+        double const step = StepSize();
+        double const most = feet_ ? 100.0 : 30.0;
+        draft_ = std::max(step, std::min(most, draft_ + step * by));
+    }
+
+    bool DepthChoice::ReadDraft(std::wstring const &text)
+    {
+        try
+        {
+            size_t used = 0;
+            double v = std::stod(text, &used);
+            if (v <= 0)
+                return false;
+            draft_ = std::min(feet_ ? 100.0 : 30.0, v);
+            return true;
+        }
+        catch (std::exception const &)
+        {
+            return false;
+        }
+    }
+
+    void DepthChoice::SetUnit(bool feet)
+    {
+        if (feet == feet_)
+            return;
+        double const f = feet ? 3.28084 : 1 / 3.28084;
+        feet_ = feet;
+        draft_ = std::round(draft_ * f * 2) / 2;
+        double const want = clearance_ * f;
+        auto const offered = Clearances();
+        double best = offered.front();
+        for (double c : offered)
+            if (std::abs(c - want) < std::abs(best - want))
+                best = c;
+        clearance_ = best;
+    }
+
+    std::wstring DepthChoice::Measure(double v) const
+    {
+        return DepthText(v) + L" " + unit();
+    }
+
+    std::wstring DepthChoice::DraftText() const { return DepthText(draft_); }
+
+    std::vector<DepthChoice::Spot> DepthChoice::Spots()
+    {
+        return { { 0.12, 0.28 }, { 0.30, 0.68 }, { 0.45, 0.14 }, { 0.62, 0.50 },
+                 { 0.80, 0.84 }, { 1.00, 0.32 }, { 1.22, 0.62 }, { 1.48, 0.20 },
+                 { 1.78, 0.44 }, { 2.12, 0.78 }, { 2.50, 0.34 }, { 2.85, 0.58 } };
     }
 
     bool RegionPicked(std::string const &list, std::string const &id)

@@ -16,6 +16,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <cwchar>
 #include <filesystem>
 #include <limits>
 #include <set>
@@ -164,6 +166,78 @@ namespace
         h.Inlines().Append(r);
         t.Inlines().Append(h);
         return t;
+    }
+
+    // The depth step's illustration, at the size the card gives it.
+    constexpr double kSeabedW = 286;
+    constexpr double kSeabedH = 210;
+
+    // One colour out of the engine's own palette, in the scheme on screen, so
+    // a legend and the chart cannot drift apart. The fallbacks are the day
+    // scheme's own values, for a token the engine does not answer for.
+    Windows::UI::Color S52Color(wchar_t const *token, uint32_t scheme)
+    {
+        struct Fallback
+        {
+            wchar_t const       *token;
+            Windows::UI::Color   color;
+        };
+        static Fallback const kFallbacks[] = {
+            { L"DEPVS", { 0xFF, 0x61, 0xB8, 0xFF } }, { L"DEPMS", { 0xFF, 0x82, 0xC9, 0xFF } },
+            { L"DEPMD", { 0xFF, 0xA6, 0xD9, 0xFA } }, { L"DEPDW", { 0xFF, 0xC9, 0xED, 0xFF } },
+            { L"LANDA", { 0xFF, 0xBF, 0xBF, 0x8F } }, { L"DEPCN", { 0xFF, 0x75, 0x8C, 0x96 } },
+        };
+        Windows::UI::Color out{ 0xFF, 0x80, 0x80, 0x80 };
+        for (auto const &f : kFallbacks)
+            if (wcscmp(f.token, token) == 0)
+                out = f.color;
+
+        char narrow[16]{};
+        for (size_t i = 0; i < 15 && token[i] != 0; ++i)
+            narrow[i] = (char)token[i];
+        float rgba[4]{ 0, 0, 0, 1 };
+        if (lookout_s52_color(narrow, scheme, rgba) != 0)
+            out = { (uint8_t)(rgba[3] * 255.0f + 0.5f), (uint8_t)(rgba[0] * 255.0f + 0.5f),
+                    (uint8_t)(rgba[1] * 255.0f + 0.5f), (uint8_t)(rgba[2] * 255.0f + 0.5f) };
+        return out;
+    }
+
+    uint32_t SchemeOf(lk_controller *c)
+    {
+        tile57_mariner m{};
+        if (c != nullptr)
+            lk_controller_get_mariner(c, &m);
+        return (uint32_t)m.scheme;
+    }
+
+    // A pill or a segment wearing the pick.
+    void PaintPicked(Button const &b, bool on)
+    {
+        b.BorderThickness({ 1, 1, 1, 1 });
+        if (on)
+        {
+            b.Background(AccentBrush());
+            b.BorderBrush(SolidColorBrush{ Windows::UI::Colors::Transparent() });
+            b.Foreground(SolidColorBrush{ Windows::UI::Colors::White() });
+            b.FontWeight(Windows::UI::Text::FontWeights::SemiBold());
+        }
+        else
+        {
+            b.Background(SolidColorBrush{ Windows::UI::Colors::Transparent() });
+            b.BorderBrush(HairlineBrush());
+            // Back to the theme's own ink rather than a colour of this file's.
+            b.ClearValue(Controls::Control::ForegroundProperty());
+            b.FontWeight(Windows::UI::Text::FontWeights::Normal());
+        }
+    }
+
+    // A point on one depth line, `u` of the way across. The wave and the rise
+    // to the right are the same for every line, so the lines never cross and
+    // the bands never pinch.
+    Windows::Foundation::Point SeabedPoint(double t, double u)
+    {
+        double const wave = 0.055 * std::sin(u * 3.14159265358979 * 1.7 + 0.4) + 0.045 * u;
+        return { (float)(u * kSeabedW), (float)(kSeabedH - kSeabedH * t + kSeabedH * wave) };
     }
 
     // One region as a pill: a capsule the mariner picks, ticked and filled
@@ -1610,23 +1684,522 @@ namespace winrt::LookoutMarine::implementation
         first_run_phase_ui.push_back({ label, tail, tick, ring });
     }
 
+    // The depth step: two questions about the boat, the four numbers they come
+    // to, and a picture of the water they shade.
     void MainWindow::FirstRunDepths(Controls::StackPanel const &body)
     {
+        depth_pills.clear();
+        depth_units.clear();
+        depth_rows.clear();
+        depth_key.clear();
+        depth_draft = nullptr;
+        depth_badge = nullptr;
+        depth_seabed = nullptr;
+
         body.Children().Append(
             Heading(L"How deep does your boat sit?",
                     L"Lookout shades water your boat cannot cross. It needs one number to do "
                     L"that, and everything else follows from it."));
 
+        // The boat on the left, the water it makes on the right.
+        Grid columns;
+        ColumnDefinition left, right;
+        left.Width({ 334, GridUnitType::Pixel });
+        right.Width({ 1, GridUnitType::Star });
+        columns.ColumnDefinitions().Append(left);
+        columns.ColumnDefinitions().Append(right);
+        columns.ColumnSpacing(26);
+        columns.Margin({ 0, 10, 0, 0 });
+
+        StackPanel boat;
+        Grid::SetColumn(boat, 0);
+        columns.Children().Append(boat);
+
+        // ---- the draft ----------------------------------------------------
+        {
+            Grid row;
+            ColumnDefinition c0, c1;
+            c0.Width({ 62, GridUnitType::Pixel });
+            c1.Width({ 1, GridUnitType::Star });
+            row.ColumnDefinitions().Append(c0);
+            row.ColumnDefinitions().Append(c1);
+            row.Margin({ 0, 0, 0, 9 });
+
+            auto label = Line(L"Draft", 14, true);
+            label.VerticalAlignment(VerticalAlignment::Center);
+            row.Children().Append(label);
+
+            // The number, the unit, and a pair of steppers. The field commits
+            // on Enter and on losing focus: a commit per keystroke would
+            // renumber the water under the mariner's hands.
+            Grid field;
+            ColumnDefinition f0, f1, f2;
+            f0.Width({ 1, GridUnitType::Star });
+            f1.Width({ 0, GridUnitType::Auto });
+            f2.Width({ 0, GridUnitType::Auto });
+            field.ColumnDefinitions().Append(f0);
+            field.ColumnDefinitions().Append(f1);
+            field.ColumnDefinitions().Append(f2);
+            field.Height(44);
+
+            depth_draft = TextBox{};
+            depth_draft.Text(winrt::hstring{ depth_choice.DraftText() });
+            depth_draft.FontSize(22);
+            depth_draft.FontWeight(Windows::UI::Text::FontWeights::SemiBold());
+            depth_draft.TextAlignment(TextAlignment::Right);
+            depth_draft.BorderThickness({ 0, 0, 0, 0 });
+            depth_draft.Background(SolidColorBrush{ Windows::UI::Colors::Transparent() });
+            depth_draft.VerticalAlignment(VerticalAlignment::Center);
+            auto commit = [this] {
+                // Text that is not a depth leaves the draft alone. The field
+                // is written back either way, so it reads what the step uses.
+                (void)depth_choice.ReadDraft(std::wstring{ depth_draft.Text() });
+                depth_draft.Text(winrt::hstring{ depth_choice.DraftText() });
+                FirstRunDepthsApply();
+                FirstRunDepthsRestate();
+            };
+            depth_draft.KeyDown([commit](auto &&, auto &&e) {
+                if (e.Key() == Windows::System::VirtualKey::Enter)
+                    commit();
+            });
+            depth_draft.LostFocus([commit](auto &&, auto &&) { commit(); });
+            field.Children().Append(depth_draft);
+
+            auto unit_label = Muted(depth_choice.unit(), 15);
+            unit_label.VerticalAlignment(VerticalAlignment::Center);
+            unit_label.Margin({ 8, 0, 8, 0 });
+            Grid::SetColumn(unit_label, 1);
+            field.Children().Append(unit_label);
+
+            StackPanel steppers;
+            steppers.Margin({ 0, 0, 8, 0 });
+            steppers.VerticalAlignment(VerticalAlignment::Center);
+            auto stepper = [this](wchar_t const *glyph, int by) {
+                FontIcon mark;
+                mark.Glyph(glyph);
+                mark.FontSize(9);
+                Button b;
+                b.Content(mark);
+                b.Padding({ 6, 1, 6, 1 });
+                b.MinWidth(0);
+                b.Click([this, by](auto &&, auto &&) {
+                    depth_choice.Step(by);
+                    depth_draft.Text(winrt::hstring{ depth_choice.DraftText() });
+                    FirstRunDepthsApply();
+                    FirstRunDepthsRestate();
+                });
+                return b;
+            };
+            steppers.Children().Append(stepper(L"", 1));   // ChevronUp
+            steppers.Children().Append(stepper(L"", -1));  // ChevronDown
+            Grid::SetColumn(steppers, 2);
+            field.Children().Append(steppers);
+
+            Border frame;
+            frame.CornerRadius({ 9, 9, 9, 9 });
+            frame.BorderThickness({ 1.5, 1.5, 1.5, 1.5 });
+            frame.BorderBrush(AccentBrush());
+            frame.Child(field);
+            Grid::SetColumn(frame, 1);
+            row.Children().Append(frame);
+            boat.Children().Append(row);
+        }
+
+        // ---- the unit -----------------------------------------------------
+        {
+            Grid row;
+            ColumnDefinition c0, c1;
+            c0.Width({ 62, GridUnitType::Pixel });
+            c1.Width({ 1, GridUnitType::Star });
+            row.ColumnDefinitions().Append(c0);
+            row.ColumnDefinitions().Append(c1);
+            row.Margin({ 0, 0, 0, 8 });
+
+            auto label = Muted(L"Units", 13);
+            label.VerticalAlignment(VerticalAlignment::Center);
+            row.Children().Append(label);
+
+            StackPanel pair;
+            pair.Orientation(Orientation::Horizontal);
+            pair.Spacing(6);
+            pair.HorizontalAlignment(HorizontalAlignment::Left);
+            auto unit_button = [this](wchar_t const *name, bool feet) {
+                Button b;
+                b.Content(box_value(winrt::hstring{ name }));
+                b.MinWidth(56);
+                b.Padding({ 12, 4, 12, 4 });
+                b.CornerRadius({ 7, 7, 7, 7 });
+                b.Click([this, feet](auto &&, auto &&) {
+                    if (depth_choice.feet() == feet)
+                        return;
+                    depth_choice.SetUnit(feet);
+                    // The unit is the mariner's, and the chart reads it too.
+                    tile57_mariner m{};
+                    lk_controller_get_mariner(controller, &m);
+                    m.depth_unit = feet ? (tile57_depth_unit)1 : (tile57_depth_unit)0;
+                    lk_controller_set_mariner(controller, &m);
+                    // Every label on the step carries the unit, so this one
+                    // change is a rebuild.
+                    FirstRunDepthsApply();
+                    FirstRunRender();
+                });
+                depth_units.push_back(b);
+                return b;
+            };
+            pair.Children().Append(unit_button(L"Meters", false));
+            pair.Children().Append(unit_button(L"Feet", true));
+            Grid::SetColumn(pair, 1);
+            row.Children().Append(pair);
+            boat.Children().Append(row);
+        }
+
+        auto caption = [](std::wstring const &text) {
+            auto t = Muted(text, 11.5);
+            return t;
+        };
+        {
+            auto c = caption(L"Deepest point of the hull below the waterline, keel included.");
+            c.Margin({ 0, 0, 0, 18 });
+            boat.Children().Append(c);
+        }
+
+        // ---- the clearance ------------------------------------------------
+        {
+            auto head = Line(L"Clearance under the keel", 13, true);
+            head.Margin({ 0, 0, 0, 9 });
+            boat.Children().Append(head);
+
+            StackPanel pills;
+            pills.Orientation(Orientation::Horizontal);
+            pills.Spacing(8);
+            for (double c : depth_choice.Clearances())
+            {
+                Button b;
+                b.Content(box_value(winrt::hstring{ depth_choice.Measure(c) }));
+                b.Height(34);
+                b.MinWidth(0);
+                b.Padding({ 15, 0, 15, 0 });
+                b.CornerRadius({ 17, 17, 17, 17 });
+                b.Click([this, c](auto &&, auto &&) {
+                    depth_choice.set_clearance(c);
+                    FirstRunDepthsApply();
+                    FirstRunDepthsRestate();
+                });
+                depth_pills.push_back(b);
+                pills.Children().Append(b);
+            }
+            boat.Children().Append(pills);
+
+            auto c = caption(L"How much water you want left under the keel at the shallowest "
+                             L"point of a passage.");
+            c.Margin({ 0, 9, 0, 0 });
+            boat.Children().Append(c);
+        }
+
+        // ---- what the answers come to -------------------------------------
+        {
+            StackPanel derived;
+            derived.Margin({ 0, 16, 0, 0 });
+            wchar_t const *names[] = { L"Safety depth", L"Safety contour", L"Deep contour" };
+            for (auto const *name : names)
+            {
+                Border rule;
+                rule.Height(1);
+                rule.Background(HairlineBrush());
+                derived.Children().Append(rule);
+
+                Grid row;
+                ColumnDefinition c0, c1;
+                c0.Width({ 1, GridUnitType::Star });
+                c1.Width({ 0, GridUnitType::Auto });
+                row.ColumnDefinitions().Append(c0);
+                row.ColumnDefinitions().Append(c1);
+                row.Margin({ 0, 11, 0, 0 });
+                auto label = Muted(name, 13);
+                row.Children().Append(label);
+                auto value = Line(std::wstring{}, 14, true);
+                Grid::SetColumn(value, 1);
+                row.Children().Append(value);
+
+                StackPanel cell;
+                cell.Spacing(5);
+                cell.Margin({ 0, 0, 0, 11 });
+                cell.Children().Append(row);
+                auto blurb = caption(std::wstring{});
+                cell.Children().Append(blurb);
+                derived.Children().Append(cell);
+                depth_rows.push_back({ value, blurb });
+            }
+            boat.Children().Append(derived);
+        }
+
+        // ---- the water ----------------------------------------------------
+        {
+            StackPanel water;
+            Grid::SetColumn(water, 1);
+            water.VerticalAlignment(VerticalAlignment::Top);
+
+            Grid panel;
+            depth_seabed = Controls::Canvas{};
+            depth_seabed.Width(kSeabedW);
+            depth_seabed.Height(kSeabedH);
+            panel.Children().Append(depth_seabed);
+
+            depth_badge = Line(std::wstring{}, 11.5, true);
+            Border badge;
+            badge.Child(depth_badge);
+            badge.CornerRadius({ 6, 6, 6, 6 });
+            badge.Padding({ 10, 3, 10, 3 });
+            badge.Margin({ 12, 12, 12, 12 });
+            badge.HorizontalAlignment(HorizontalAlignment::Left);
+            badge.VerticalAlignment(VerticalAlignment::Top);
+            badge.Background(SolidColorBrush{ g_dark
+                                                  ? Windows::UI::Color{ 0xEB, 0x20, 0x24, 0x28 }
+                                                  : Windows::UI::Color{ 0xEB, 0xF8, 0xF8, 0xF8 } });
+            panel.Children().Append(badge);
+            water.Children().Append(panel);
+
+            Border rule;
+            rule.Height(1);
+            rule.Background(HairlineBrush());
+            water.Children().Append(rule);
+
+            // The four shades, with the water each one covers.
+            Grid keys;
+            wchar_t const *names[] = { L"Unsafe", L"Shallow", L"Medium", L"Deep" };
+            wchar_t const *tokens[] = { L"DEPVS", L"DEPMS", L"DEPMD", L"DEPDW" };
+            for (int i = 0; i < 4; ++i)
+            {
+                ColumnDefinition c;
+                c.Width({ 1, GridUnitType::Star });
+                keys.ColumnDefinitions().Append(c);
+
+                StackPanel cell;
+                cell.Spacing(6);
+                cell.Padding({ 8, 11, 8, 11 });
+
+                StackPanel top;
+                top.Orientation(Orientation::Horizontal);
+                top.Spacing(7);
+                Border swatch;
+                swatch.Width(11);
+                swatch.Height(11);
+                swatch.CornerRadius({ 3, 3, 3, 3 });
+                swatch.Background(SolidColorBrush{ S52Color(tokens[i], SchemeOf(controller)) });
+                swatch.BorderThickness({ 1, 1, 1, 1 });
+                swatch.BorderBrush(HairlineBrush());
+                swatch.VerticalAlignment(VerticalAlignment::Center);
+                top.Children().Append(swatch);
+                top.Children().Append(Line(names[i], 12, true));
+                cell.Children().Append(top);
+
+                auto range = Muted(std::wstring{}, 11.5);
+                range.TextWrapping(TextWrapping::NoWrap);
+                cell.Children().Append(range);
+                depth_key.push_back(range);
+
+                Grid::SetColumn(cell, i);
+                keys.Children().Append(cell);
+            }
+            water.Children().Append(keys);
+
+            Border round;
+            round.CornerRadius({ 12, 12, 12, 12 });
+            round.BorderThickness({ 1, 1, 1, 1 });
+            round.BorderBrush(HairlineBrush());
+            round.Child(water);
+            Grid::SetColumn(round, 1);
+            columns.Children().Append(round);
+        }
+
+        body.Children().Append(columns);
+
+        // ---- the warning --------------------------------------------------
+        {
+            StackPanel row;
+            row.Orientation(Orientation::Horizontal);
+            row.Spacing(10);
+            FontIcon mark;
+            mark.Glyph(L""); // Warning
+            mark.FontSize(13);
+            mark.Foreground(SolidColorBrush{ Windows::UI::Color{ 0xFF, 0xF5, 0x9E, 0x0B } });
+            mark.VerticalAlignment(VerticalAlignment::Top);
+            row.Children().Append(mark);
+
+            TextBlock says;
+            says.FontSize(12);
+            says.TextWrapping(TextWrapping::Wrap);
+            Run bold;
+            bold.Text(L"Shading is not a depth sounder. ");
+            bold.FontWeight(Windows::UI::Text::FontWeights::SemiBold());
+            says.Inlines().Append(bold);
+            Run rest;
+            rest.Text(L"Soundings are not corrected for tide, surge or squat, and a survey can "
+                      L"be decades old. Keep your own margin.");
+            says.Inlines().Append(rest);
+            says.Opacity(0.85);
+            row.Children().Append(says);
+
+            Border panel;
+            panel.CornerRadius({ 9, 9, 9, 9 });
+            panel.Padding({ 14, 12, 14, 12 });
+            panel.Margin({ 0, 18, 0, 0 });
+            panel.Background(SolidColorBrush{ Windows::UI::Color{ 0x1A, 0xF5, 0x9E, 0x0B } });
+            panel.Child(row);
+            body.Children().Append(panel);
+        }
+
+        FirstRunDepthsApply();
+        FirstRunDepthsRestate();
+    }
+
+    // The four numbers the engine draws with. The shallow contour follows the
+    // safety depth, which makes the first shade the water the boat cannot
+    // cross.
+    void MainWindow::FirstRunDepthsApply()
+    {
+        if (controller == nullptr)
+            return;
         tile57_mariner m{};
         lk_controller_get_mariner(controller, &m);
-        bool const feet = m.depth_unit == 1;
-        wchar_t const *unit = feet ? L"ft" : L"m";
+        m.safety_depth = depth_choice.Metres(depth_choice.SafetyDepth());
+        m.shallow_contour = depth_choice.Metres(depth_choice.SafetyDepth());
+        m.safety_contour = depth_choice.Metres(depth_choice.SafetyContour());
+        m.deep_contour = depth_choice.Metres(depth_choice.DeepContour());
+        m.four_shade_water = true;
+        lk_controller_set_mariner(controller, &m);
+    }
 
-        body.Children().Append(
-            Muted(std::wstring(L"Safety depth ") + std::to_wstring((int)m.safety_depth) + unit +
-                  L" · safety contour " + std::to_wstring((int)m.safety_contour) + unit +
-                  L" · deep contour " + std::to_wstring((int)m.deep_contour) + unit));
-        body.Children().Append(
-            Muted(L"You can change these at any time, in Depths in Mariner settings.", 12));
+    void MainWindow::FirstRunDepthsRestate()
+    {
+        auto const &d = depth_choice;
+        std::wstring const depth = d.Measure(d.SafetyDepth());
+        std::wstring const safety = d.Measure(d.SafetyContour());
+        std::wstring const deep = d.Measure(d.DeepContour());
+
+        if (depth_rows.size() == 3)
+        {
+            depth_rows[0].value.Text(winrt::hstring{ depth });
+            depth_rows[0].blurb.Text(L"Soundings at or shallower than this print bold. It does "
+                                     L"not shade water.");
+            depth_rows[1].value.Text(winrt::hstring{ safety });
+            depth_rows[1].blurb.Text(
+                winrt::hstring{ L"Water shallower than this shades as unsafe. Rounded up to a "
+                                L"contour the survey draws, so " +
+                                depth + L" reads as " + safety + L"." });
+            depth_rows[2].value.Text(winrt::hstring{ deep });
+            depth_rows[2].blurb.Text(L"Water deeper than this draws in the lightest shade. Twice "
+                                     L"the safety contour, up the same ladder the safety contour "
+                                     L"came off.");
+        }
+        if (depth_badge != nullptr)
+            depth_badge.Text(winrt::hstring{ L"Your water at " + depth });
+        if (depth_key.size() == 4)
+        {
+            depth_key[0].Text(winrt::hstring{ L"0 – " + depth });
+            depth_key[1].Text(winrt::hstring{ depth + L" – " + safety });
+            depth_key[2].Text(winrt::hstring{ safety + L" – " + deep });
+            depth_key[3].Text(winrt::hstring{ deep + L" +" });
+        }
+
+        // The pills and the unit pair wear the pick.
+        auto const clearances = d.Clearances();
+        for (size_t i = 0; i < depth_pills.size() && i < clearances.size(); ++i)
+            PaintPicked(depth_pills[i], clearances[i] == d.clearance());
+        for (size_t i = 0; i < depth_units.size(); ++i)
+            PaintPicked(depth_units[i], (i == 1) == d.feet());
+
+        FirstRunDrawSeabed();
+    }
+
+    // The seabed: a slope from a shore to deep water, shaded at the derived
+    // contours, with spot depths on it.
+    //
+    // The soundings are the seabed and hold still; the shading is the
+    // mariner's and moves over them. Their depths are read off this slope, so
+    // they change only when the contour steps to the next one the survey
+    // draws. A chart behaves the same way when a boat changes.
+    void MainWindow::FirstRunDrawSeabed()
+    {
+        if (depth_seabed == nullptr)
+            return;
+        depth_seabed.Children().Clear();
+        auto const &d = depth_choice;
+        uint32_t const scheme = SchemeOf(controller);
+        auto shade = [scheme](wchar_t const *token) {
+            return SolidColorBrush{ S52Color(token, scheme) };
+        };
+        auto ink = [](uint8_t alpha) {
+            return SolidColorBrush{ Windows::UI::Color{ alpha, 0, 0, 0 } };
+        };
+
+        Shapes::Rectangle back;
+        back.Width(kSeabedW);
+        back.Height(kSeabedH);
+        back.Fill(shade(L"DEPDW"));
+        depth_seabed.Children().Append(back);
+
+        // Every line is the same shape, moved up by its depth, so each band
+        // keeps its share of the panel from edge to edge.
+        auto shoal = [](double t) {
+            Media::PathFigure fig;
+            fig.StartPoint({ 0, (float)kSeabedH });
+            fig.IsClosed(true);
+            fig.IsFilled(true);
+            auto step = [&fig](Windows::Foundation::Point const &p) {
+                Media::LineSegment seg;
+                seg.Point(p);
+                fig.Segments().Append(seg);
+            };
+            constexpr int kSteps = 48;
+            for (int i = 0; i <= kSteps; ++i)
+                step(SeabedPoint(t, (double)i / kSteps));
+            step({ (float)kSeabedW, (float)kSeabedH });
+            Media::PathGeometry geo;
+            geo.FillRule(Media::FillRule::Nonzero);
+            geo.Figures().Append(fig);
+            Shapes::Path p;
+            p.Data(geo);
+            return p;
+        };
+
+        constexpr double kShoreAt = 0.14;
+        auto fill = [&](double t, wchar_t const *token) {
+            auto p = shoal(t);
+            p.Fill(shade(token));
+            depth_seabed.Children().Append(p);
+        };
+        fill(d.Reach(d.DeepContour()), L"DEPMD");
+        fill(d.Reach(d.SafetyContour()), L"DEPMS");
+        fill(d.Reach(d.SafetyDepth()), L"DEPVS");
+
+        // The safety contour drawn bold, the way S-52 draws the contour a boat
+        // is measured against.
+        auto line = [&](double t, uint8_t alpha, double thick) {
+            auto p = shoal(t);
+            p.Stroke(ink(alpha));
+            p.StrokeThickness(thick);
+            depth_seabed.Children().Append(p);
+        };
+        line(d.Reach(d.SafetyContour()), 0x73, 1.8);
+        line(d.Reach(d.DeepContour()), 0x2E, 0.8);
+
+        fill(kShoreAt, L"LANDA");
+        line(kShoreAt, 0x73, 1.0);
+
+        // Spot depths, bold at or shallower than the safety depth. That is
+        // what the safety depth does to a chart.
+        for (auto const &spot : lkw::DepthChoice::Spots())
+        {
+            double const depth = d.SafetyContour() * spot.of_contour;
+            auto const at = SeabedPoint(d.Reach(depth), spot.across);
+            bool const bold = depth <= d.SafetyDepth();
+            auto label = Line(std::to_wstring((long long)std::ceil(depth)), 10.5, bold);
+            label.Foreground(ink(bold ? 0xCC : 0x8C));
+            label.TextWrapping(TextWrapping::NoWrap);
+            Controls::Canvas::SetLeft(label, at.X - 6);
+            Controls::Canvas::SetTop(label, at.Y - 7);
+            depth_seabed.Children().Append(label);
+        }
     }
 }

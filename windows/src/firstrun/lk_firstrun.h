@@ -68,6 +68,87 @@ namespace lkw
     std::wstring SizeText(uint64_t bytes);
     std::wstring Thousands(uint64_t n);
 
+    // The depth step's two questions, and the four numbers the engine draws
+    // with that follow from them.
+    //
+    // The draft and the clearance are held in the unit on screen so every
+    // number displays round. A metric list converted into feet gives a 4.9 ft
+    // clearance and a 16.4 ft contour.
+    class DepthChoice
+    {
+    public:
+        // A small keelboat. The stored safety depth is no help as a start: it
+        // begins at the engine's 10 m, and a draft read back out of that is
+        // 9.7 m.
+        explicit DepthChoice(bool feet = false)
+            : feet_(feet), draft_(feet ? 5.5 : 1.7), clearance_(feet ? 2.0 : 0.6)
+        {
+        }
+
+        bool feet() const { return feet_; }
+        double draft() const { return draft_; }
+        double clearance() const { return clearance_; }
+        wchar_t const *unit() const { return feet_ ? L"ft" : L"m"; }
+
+        // The clearances offered, round in both units.
+        std::vector<double> Clearances() const;
+        // The contours an S-57 survey draws. The safety contour is the first
+        // of these at or past the safety depth, because the chart shades on a
+        // contour the survey has.
+        std::vector<double> Ladder() const;
+
+        // Draft plus clearance, rounded up to a whole foot or metre. A chart
+        // names its depths in whole numbers, and the fraction belongs to the
+        // keel rather than to the water.
+        double SafetyDepth() const;
+        double SafetyContour() const;
+        // Twice the safety contour, up the same ladder. The step does not ask
+        // for it.
+        double DeepContour() const;
+        // The deepest water the illustration draws, half again past the deep
+        // contour so the last shade has water in it.
+        double Floor() const { return DeepContour() * 1.5; }
+
+        // How far out a depth lies, as a fraction of the illustration. The
+        // slope is measured in contours rather than metres because the
+        // answers span a dinghy and a ship.
+        double Reach(double depth) const;
+
+        // One step of the draft field: half a foot, or a tenth of a metre.
+        double StepSize() const { return feet_ ? 0.5 : 0.1; }
+        void Step(int by);
+        // Read a draft the mariner typed. False when it is not a depth, in
+        // which case the draft stands.
+        bool ReadDraft(std::wstring const &text);
+        void set_clearance(double c) { clearance_ = c; }
+        // Change the unit: convert the draft, and snap the clearance to one of
+        // the choices the new unit offers.
+        void SetUnit(bool feet);
+
+        // A depth on screen with its unit on it, and the draft alone for the
+        // field.
+        std::wstring Measure(double v) const;
+        std::wstring DraftText() const;
+        // A depth on screen in metres, which is what the engine is given.
+        double Metres(double v) const { return feet_ ? v / 3.28084 : v; }
+
+        // The spot depths the illustration draws: a depth as a multiple of
+        // the safety contour, and how far along its line it stands. Multiples
+        // hold a sounding in place while the mariner works, so it moves only
+        // when the contour steps to the next one the survey draws.
+        struct Spot
+        {
+            double of_contour;
+            double across;
+        };
+        static std::vector<Spot> Spots();
+
+    private:
+        bool   feet_{ false };
+        double draft_{ 1.7 };
+        double clearance_{ 0.6 };
+    };
+
     // The regions a download covers, as the core's own comma separated list
     // ("d5,d8"). A mariner picks several: lookout_noaa_cost and
     // lookout_noaa_download both take the list and answer for the union, which

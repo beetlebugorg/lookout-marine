@@ -456,6 +456,133 @@ void TestFirstRun()
         LK_EQ(PrepareEstimate(0), std::wstring(L"under a minute"));
     }
 
+    /* The depth step's two questions and the four numbers the engine draws
+     * with. A mariner reads these as the water their boat can cross, so each
+     * derivation is checked against the reference's own rules. */
+    Suite("lk_firstrun: the depths a boat asks for");
+    {
+        Case("a small keelboat to start, in metres");
+        DepthChoice d;
+        LK_EQ(d.feet(), false);
+        LK_EQ(d.draft(), 1.7);
+        LK_EQ(d.clearance(), 0.6);
+
+        /* Draft plus clearance, rounded UP to a whole metre: a chart names
+         * its depths in whole numbers. */
+        Case("the safety depth rounds up");
+        LK_EQ(d.SafetyDepth(), 3.0);
+
+        /* The contour is the first rung the survey draws at or past it. */
+        Case("the safety contour is a rung of the ladder");
+        LK_EQ(d.SafetyContour(), 5.0);
+
+        Case("the deep contour is twice that, up the same ladder");
+        LK_EQ(d.DeepContour(), 10.0);
+
+        Case("a deep draft walks up the ladder");
+        DepthChoice ship;
+        ship.ReadDraft(L"11");
+        ship.set_clearance(1.5);
+        LK_EQ(ship.SafetyDepth(), 13.0);
+        LK_EQ(ship.SafetyContour(), 20.0);
+        LK_EQ(ship.DeepContour(), 50.0);
+
+        /* Past the last rung, the last rung stands. */
+        Case("a draft past the ladder stops at its top");
+        DepthChoice deep;
+        deep.ReadDraft(L"30");
+        deep.set_clearance(1.5);
+        LK_EQ(deep.SafetyContour(), 50.0);
+        LK_EQ(deep.DeepContour(), 100.0);
+
+        Case("feet have their own ladder and clearances");
+        DepthChoice f{ true };
+        LK_EQ(f.draft(), 5.5);
+        LK_EQ(f.clearance(), 2.0);
+        LK_EQ(f.SafetyDepth(), 8.0);
+        LK_EQ(f.SafetyContour(), 12.0);
+        LK_EQ(f.DeepContour(), 30.0);
+        LK_EQ(f.Clearances().size(), size_t{ 4 });
+        LK_EQ(f.Clearances()[3], 5.0);
+
+        /* The unit changes the numbers on screen, and the clearance snaps to
+         * one the new unit offers. */
+        Case("changing unit converts the boat");
+        DepthChoice u;
+        u.SetUnit(true);
+        LK_EQ(u.feet(), true);
+        LK_EQ(u.draft(), 5.5);      // 1.7 m is 5.577 ft, to the nearest half
+        LK_EQ(u.clearance(), 2.0);  // 0.6 m is 1.97 ft, snapped to 2
+        u.SetUnit(false);
+        LK_EQ(u.feet(), false);
+        LK_EQ(u.draft(), 1.5);      // 5.5 ft is 1.676 m, to the nearest half
+        LK_EQ(u.clearance(), 0.6);
+
+        Case("the same unit twice changes nothing");
+        DepthChoice same;
+        same.SetUnit(false);
+        LK_EQ(same.draft(), 1.7);
+
+        Case("the field steps by a tenth, or half a foot");
+        DepthChoice s;
+        s.Step(1);
+        LK_EQ(s.DraftText(), std::wstring(L"1.8"));
+        s.Step(-1);
+        LK_EQ(s.DraftText(), std::wstring(L"1.7"));
+        DepthChoice sf{ true };
+        sf.Step(1);
+        LK_EQ(sf.DraftText(), std::wstring(L"6"));
+
+        /* A draft cannot step below one step or past the deepest hull the
+         * step allows. */
+        Case("stepping stops at both ends");
+        DepthChoice edge;
+        for (int i = 0; i < 40; ++i)
+            edge.Step(-1);
+        LK_EQ(edge.draft(), 0.1);
+        for (int i = 0; i < 400; ++i)
+            edge.Step(1);
+        LK_EQ(edge.draft(), 30.0);
+
+        Case("what a mariner types");
+        DepthChoice t;
+        LK_EQ(t.ReadDraft(L"2.4"), true);
+        LK_EQ(t.draft(), 2.4);
+        LK_EQ(t.ReadDraft(L"deep"), false);
+        LK_EQ(t.draft(), 2.4); // the draft stands
+        LK_EQ(t.ReadDraft(L"0"), false);
+        LK_EQ(t.ReadDraft(L"-3"), false);
+        LK_EQ(t.ReadDraft(L"99"), true);
+        LK_EQ(t.draft(), 30.0); // clamped to the deepest hull in metres
+
+        Case("a depth reads with its unit and no trailing zero");
+        LK_EQ(d.Measure(5.0), std::wstring(L"5 m"));
+        LK_EQ(d.Measure(1.75), std::wstring(L"1.8 m"));
+        LK_EQ(f.Measure(12.0), std::wstring(L"12 ft"));
+
+        /* The illustration's slope: the shore stands at 0.14, the floor is
+         * half again past the deep contour, and a depth past the floor
+         * reaches the far edge. */
+        Case("how far out a depth lies");
+        LK_EQ(d.Floor(), 15.0);
+        LK_EQ(d.Reach(0.0), 0.14);
+        LK_EQ(d.Reach(15.0), 1.0);
+        LK_EQ(d.Reach(100.0), 1.0); // past the floor, still the far edge
+        LK_EQ(d.Reach(5.0) > d.Reach(2.0), true);
+        LK_EQ(d.Reach(5.0) < d.Reach(10.0), true);
+
+        Case("the soundings are twelve, and they climb");
+        auto spots = DepthChoice::Spots();
+        LK_EQ(spots.size(), size_t{ 12 });
+        LK_EQ(spots.front().of_contour, 0.12);
+        LK_EQ(spots.back().of_contour, 2.85);
+
+        /* The engine is always given metres. */
+        Case("the engine is given metres");
+        LK_EQ(d.Metres(5.0), 5.0);
+        LK_EQ((int)(f.Metres(12.0) * 100 + 0.5), 366); // 12 ft is 3.66 m
+    }
+
     /* What the primary button can do on the step showing. */
     Suite("lk_firstrun: whether the primary action is ready");
     {

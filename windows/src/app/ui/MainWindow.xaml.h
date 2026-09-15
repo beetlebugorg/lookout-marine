@@ -393,6 +393,29 @@ namespace winrt::LookoutMarine::implementation
         /* Start or stop that poll by what there is to watch: a catalog read, a
          * transfer, a bake, or an import between its parts. */
         void FirstRunPollAsNeeded();
+
+        /* The depth step: the boat the mariner describes, and the parts of the
+         * step that restate themselves as the numbers move. Rebuilding the
+         * step on a keystroke would take the draft field's focus with it, so
+         * the field commits and everything else is written in place. */
+        lkw::DepthChoice depth_choice;
+        Microsoft::UI::Xaml::Controls::TextBox depth_draft{ nullptr };
+        std::vector<Microsoft::UI::Xaml::Controls::Button> depth_pills;
+        std::vector<Microsoft::UI::Xaml::Controls::Button> depth_units;
+        struct DepthRowUi
+        {
+            Microsoft::UI::Xaml::Controls::TextBlock value{ nullptr };
+            Microsoft::UI::Xaml::Controls::TextBlock blurb{ nullptr };
+        };
+        std::vector<DepthRowUi> depth_rows;
+        Microsoft::UI::Xaml::Controls::TextBlock depth_badge{ nullptr };
+        std::vector<Microsoft::UI::Xaml::Controls::TextBlock> depth_key;
+        Microsoft::UI::Xaml::Controls::Canvas depth_seabed{ nullptr };
+        void FirstRunDepthsRestate();
+        /* Write the four numbers the engine draws with. */
+        void FirstRunDepthsApply();
+        /* The seabed, drawn from the numbers. */
+        void FirstRunDrawSeabed();
         /* True when an import has nothing left to do and never will: the
          * transfer produced no charts. Without it the rule above would keep
          * the clock running over work that cannot start. Cleared when a
