@@ -614,6 +614,11 @@ namespace winrt::LookoutMarine::implementation
         std::string ChartsPageSignature();
         void RefreshChartsPageOnChange();
         std::string charts_page_sig;
+        /* Whether the page on screen draws what the network browse found. The
+         * browse is a plugin's, its answers come and go on their own, and only
+         * the page showing them has a reason to be built again for one. Set
+         * while that page is built; false on every other page. */
+        bool page_reads_discovery{ false };
 
         // wasm plugin settings. The schemas are read when the pane opens; only
         // the status lines are polled after that.

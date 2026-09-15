@@ -287,7 +287,10 @@ namespace winrt::LookoutMarine::implementation
                 UpdatePluginStatusUi();
 
             uint64_t generation = discovery.Generation();
-            if (generation != discovery_drawn)
+            // Only the page that draws what the browse found. A gateway
+            // appearing and going while the mariner reads the Charts page
+            // rebuilt that page every second or two, which reads as flicker.
+            if (generation != discovery_drawn && SettingsOpen() && page_reads_discovery)
             {
                 // A find is a row that is not on the page yet, so this one does
                 // need the page built again. Not under a mariner typing an
@@ -664,6 +667,11 @@ namespace winrt::LookoutMarine::implementation
                 // mariner should not have to find its address to use it.
                 // Nothing found draws nothing: at a desk that is the ordinary
                 // case, and an empty heading is a question nobody asked.
+                //
+                // This page draws what the browse finds, so a find is a reason
+                // to build it again. The poll reads the flag: every other page
+                // leaves it false and is left alone.
+                page_reads_discovery = true;
                 for (auto const &found : NearbyFor(p, list))
                 {
                     Controls::Grid line;

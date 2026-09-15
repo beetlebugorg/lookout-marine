@@ -1022,6 +1022,8 @@ namespace winrt::LookoutMarine::implementation
         // The controls the status poll updates in place died with that Clear.
         plugin_status_ui.clear();
         band_preview = nullptr; // died with the Clear too; depths re-makes it
+        // Set again by whatever this page draws that a poll feeds.
+        page_reads_discovery = false;
         noaa_pane_count = nullptr;
         noaa_pane_bar = nullptr;
         bake_pane_count = nullptr;
