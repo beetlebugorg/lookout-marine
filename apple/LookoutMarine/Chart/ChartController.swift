@@ -330,6 +330,13 @@ final class ChartController: NSObject {
     @discardableResult
     func reopen(charts paths: [String], requestID: Int) -> Bool {
         guard let view else { return false }
+        // Before the first layout the view reports no usable size and
+        // pointSize falls back to 1280x800, so the engine gets an aspect the
+        // window never has and the chart draws stretched. A library of
+        // pictures alone keeps that open for the whole session, because no
+        // second open follows to correct it. Leaving the request unserved
+        // hands it to maybeAutoOpen, which runs at the first real size.
+        guard Self.hasRealSize(view) else { return false }
         // Already open for this request. The view's update path and the
         // model's direct drive both answer it, and the second open destroys
         // the handle the first one made along with the work running through
@@ -859,6 +866,13 @@ final class ChartController: NSObject {
     }
 
     // MARK: - Helpers
+
+    /// True once the view has been laid out and reports a usable size.
+    /// pointSize substitutes a default below this.
+    static func hasRealSize(_ view: PlatformView) -> Bool {
+        let b = view.bounds.size
+        return b.width > 1 && b.height > 1
+    }
 
     /// Logical point size of a view (falls back to a sane default before layout).
     private static func pointSize(of view: PlatformView) -> (Double, Double) {

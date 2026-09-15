@@ -34,7 +34,12 @@ struct ChartView: NSViewRepresentable {
         // A pending open request the model couldn't service (no view attached
         // yet when it was made) — normally requestOpen drives the controller
         // directly; see AppModel.requestOpen.
-        if let req = model.charts.openRequest, req.id != controller.lastOpenId {
+        // SwiftUI updates before the first layout, where the view reports no
+        // usable size and the engine is handed the fallback 1280x800. The
+        // chart then draws to an aspect the window never has. maybeAutoOpen
+        // runs at the first real size, so the request waits for it.
+        if let req = model.charts.openRequest, req.id != controller.lastOpenId,
+           ChartController.hasRealSize(v) {
             controller.lastOpenId = req.id
             _ = controller.open(charts: req.paths, in: v)
             v.raiseOverlay()
@@ -238,7 +243,15 @@ final class ChartNSView: NSView {
         // under an empty library, which is what a mariner picking their first
         // chart should be looking at; returning here left the window grey
         // until something else asked for a chart.
-        let paths = model?.charts.openRequest?.paths ?? model?.charts.initialChartPaths() ?? []
+        // A request of NO paths is the launch one: pullChartSets runs before
+        // the background scan has read a folder, so compose is empty, and the
+        // pictures in the library carry it past requestOpen's guard. Preferring
+        // it threw away the walk below, which reads the prepared charts off the
+        // disk and had them all along. The chart then opened with no cells, at
+        // the fallback size this view reports before layout, and the picture
+        // drew alone and stretched to an aspect the window never had.
+        let requested = model?.charts.openRequest?.paths ?? []
+        let paths = requested.isEmpty ? (model?.charts.initialChartPaths() ?? []) : requested
         didAutoOpen = true
         // No frame restoration for this window: the chart reopens from our own
         // recents, and the fromServer frame restore is exactly the mid-load
