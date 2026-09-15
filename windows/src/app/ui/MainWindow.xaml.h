@@ -335,11 +335,13 @@ namespace winrt::LookoutMarine::implementation
         void PickChartTile(std::string const &url, bool mine);
         // The Active chart shelf: one tile per chart, the menu on a tile the
         // mariner added, and the tile that adds one (settings/ui/Settings.cpp).
+        /* One tile, registered in chart_tile_ui as it is built. `where` is its
+         * detail line at rest; which tile is drawing and which is being read
+         * is applied by RefreshChartsPageInPlace, so a pick never rebuilds. */
         Microsoft::UI::Xaml::Controls::Button ChartTile(std::string const &url,
                                                         std::wstring const &name,
-                                                        std::wstring const &detail,
-                                                        wchar_t const *art, bool active,
-                                                        bool mine);
+                                                        std::wstring const &where,
+                                                        wchar_t const *art, bool mine);
         Microsoft::UI::Xaml::Controls::Button ChartTileMenu(std::string const &url,
                                                             std::wstring const &name);
         Microsoft::UI::Xaml::Controls::Button AddChartTile();
@@ -611,7 +613,51 @@ namespace winrt::LookoutMarine::implementation
          * tile landing for a style that is drawing, a rescan finding what it
          * found before. Rebuilding for those tore down and rebuilt every
          * control ten times a second, which reads as flicker. */
-        std::string ChartsPageSignature();
+        /* The Charts page is built once and then updated in place.
+         *
+         * A rebuild destroys every control on the page. The pointer standing
+         * on a control loses the hover it was showing, because a fresh control
+         * only takes that state on the next pointer move; a press and its
+         * release land on two different controls, so the click is either lost
+         * or delivered to whatever now sits under the cursor. Both happen
+         * while a mariner is picking a chart, which is exactly when the links
+         * poll reports something. So a poll updates the page's VALUES and the
+         * page is rebuilt only when its STRUCTURE changes: a tile, a set, a
+         * raster group or a section coming or going.
+         *
+         * Every registry below is cleared and filled again by each build. */
+        struct ChartTileUi
+        {
+            std::string url;
+            Microsoft::UI::Xaml::Controls::Button button{ nullptr };
+            Microsoft::UI::Xaml::Controls::Border badge{ nullptr };
+            Microsoft::UI::Xaml::Controls::TextBlock detail{ nullptr };
+            /* What the detail line says when this chart is not being read. */
+            std::wstring where;
+        };
+        std::vector<ChartTileUi> chart_tile_ui;
+        struct ChartSetRowUi
+        {
+            std::string path;
+            Microsoft::UI::Xaml::Controls::TextBlock name{ nullptr };
+            Microsoft::UI::Xaml::Controls::TextBlock summary{ nullptr };
+            Microsoft::UI::Xaml::Controls::TextBlock prepare{ nullptr };
+            Microsoft::UI::Xaml::Controls::ToggleSwitch on{ nullptr };
+            Microsoft::UI::Xaml::Controls::StackPanel ramp{ nullptr };
+            /* The bands the ramp was drawn from, so it is redrawn only when
+             * they change. */
+            std::map<int, size_t> bands;
+        };
+        std::vector<ChartSetRowUi> chart_set_ui;
+        Microsoft::UI::Xaml::Controls::TextBlock chart_sets_total{ nullptr };
+        Microsoft::UI::Xaml::Controls::TextBlock chart_sets_none{ nullptr };
+        Microsoft::UI::Xaml::Controls::TextBlock chart_link_error_ui{ nullptr };
+        Microsoft::UI::Xaml::Controls::TextBlock chart_publisher_note{ nullptr };
+        /* What every line on the page now says. Cheap, and safe to call from a
+         * poll: it creates nothing and destroys nothing. */
+        void RefreshChartsPageInPlace();
+        /* The page's shape, as one string. A change here is a rebuild. */
+        std::string ChartsPageStructure();
         void RefreshChartsPageOnChange();
         std::string charts_page_sig;
         /* Whether the page on screen draws what the network browse found. The

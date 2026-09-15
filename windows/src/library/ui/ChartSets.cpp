@@ -164,9 +164,13 @@ namespace winrt::LookoutMarine::implementation
         if (model == nullptr || !lookout_chart_sets_set_on(model, path.c_str(), on ? 1 : 0))
             return;
         LoadChartSets(nullptr);
-        ReopenChartSets(path);
+        // In place: the switch the mariner just moved is already showing its
+        // new state, and rebuilding the page under their pointer would take
+        // the switch away mid-gesture. What the row says and what Lookout's
+        // own tile is built from follow here.
         if (SettingsOpen())
-            BuildSettingsPage();
+            RefreshChartsPageInPlace();
+        ReopenChartSets(path);
     }
 
     // Whether Lookout made the charts in this set.

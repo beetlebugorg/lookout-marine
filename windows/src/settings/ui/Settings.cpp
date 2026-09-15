@@ -309,7 +309,11 @@ namespace winrt::LookoutMarine::implementation
         chart_link_pending = url;
         chart_link_picked = true;
         chart_link_picking = true;
-        BuildSettingsPage();
+        // In place. Rebuilding the page here destroyed the tile whose click
+        // was still being handled: the pointer lost the hover it was showing,
+        // and a second pick landed on whatever control had taken that tile's
+        // place.
+        RefreshChartsPageInPlace();
         // At the queue's own priority. A low-priority call runs only once the
         // thread has nothing else to do, and this thread has a readout tick on
         // it, so the call was never made and the guard above stayed closed:
@@ -365,8 +369,8 @@ namespace winrt::LookoutMarine::implementation
     // empty is Lookout's own chart; `mine` marks a link on the mariner's own
     // list, which is the only kind with a menu.
     Controls::Button MainWindow::ChartTile(std::string const &url, std::wstring const &name,
-                                           std::wstring const &detail, wchar_t const *art,
-                                           bool active, bool mine)
+                                           std::wstring const &where, wchar_t const *art,
+                                           bool mine)
     {
         bool dark = DarkChrome();
 
@@ -405,23 +409,23 @@ namespace winrt::LookoutMarine::implementation
 
         Controls::Grid art_grid;
         art_grid.Children().Append(crop);
-        if (active)
-        {
-            Controls::TextBlock mark;
-            mark.Text(L"ACTIVE");
-            mark.FontSize(10);
-            mark.FontWeight(winrt::Windows::UI::Text::FontWeights::Bold());
-            mark.Foreground(lkw::Brush(0xFFFFFFFF));
-            Controls::Border badge;
-            badge.Child(mark);
-            badge.Background(lkw::Brush(lkw::chrome::Accent(dark)));
-            badge.CornerRadius({ 5, 5, 5, 5 });
-            badge.Padding({ 6, 3, 6, 3 });
-            badge.Margin({ 7, 7, 7, 7 });
-            badge.HorizontalAlignment(HorizontalAlignment::Left);
-            badge.VerticalAlignment(VerticalAlignment::Top);
-            art_grid.Children().Append(badge);
-        }
+        // Built whichever chart draws, and shown by the refresh. A badge that
+        // comes and going with a rebuild is a tile rebuilt under the pointer.
+        Controls::TextBlock mark;
+        mark.Text(L"ACTIVE");
+        mark.FontSize(10);
+        mark.FontWeight(winrt::Windows::UI::Text::FontWeights::Bold());
+        mark.Foreground(lkw::Brush(0xFFFFFFFF));
+        Controls::Border badge;
+        badge.Child(mark);
+        badge.Background(lkw::Brush(lkw::chrome::Accent(dark)));
+        badge.CornerRadius({ 5, 5, 5, 5 });
+        badge.Padding({ 6, 3, 6, 3 });
+        badge.Margin({ 7, 7, 7, 7 });
+        badge.HorizontalAlignment(HorizontalAlignment::Left);
+        badge.VerticalAlignment(VerticalAlignment::Top);
+        badge.Visibility(Visibility::Collapsed);
+        art_grid.Children().Append(badge);
         if (mine)
             art_grid.Children().Append(ChartTileMenu(url, name));
 
@@ -434,20 +438,20 @@ namespace winrt::LookoutMarine::implementation
         title.FontSize(13);
         title.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
         title.TextTrimming(TextTrimming::CharacterEllipsis);
-        Controls::TextBlock where;
+        Controls::TextBlock detail;
         // Elided in the middle, which keeps the publisher and the style file
         // and drops the path between them. 42 characters is what 11 point
         // text fits across a tile.
-        where.Text(winrt::hstring{ ElideMiddle(detail, 42) });
-        where.FontSize(11);
-        where.Foreground(lkw::Brush(lkw::chrome::Muted(dark)));
-        where.TextTrimming(TextTrimming::CharacterEllipsis);
+        detail.Text(winrt::hstring{ ElideMiddle(where, 42) });
+        detail.FontSize(11);
+        detail.Foreground(lkw::Brush(lkw::chrome::Muted(dark)));
+        detail.TextTrimming(TextTrimming::CharacterEllipsis);
 
         Controls::StackPanel words;
         words.Spacing(3);
         words.Margin({ 11, 9, 11, 11 });
         words.Children().Append(title);
-        words.Children().Append(where);
+        words.Children().Append(detail);
 
         Controls::StackPanel column;
         column.Children().Append(art_grid);
@@ -464,12 +468,14 @@ namespace winrt::LookoutMarine::implementation
         b.VerticalContentAlignment(VerticalAlignment::Top);
         // The ring is the same width whether or not this tile is the one
         // drawing, so the row does not shift by two points as the pick moves.
+        // Which tile wears the accent is the refresh's to say.
         b.BorderThickness({ 2, 2, 2, 2 });
-        b.BorderBrush(lkw::Brush(active ? lkw::chrome::Accent(dark) : lkw::chrome::kClear));
+        b.BorderBrush(lkw::Brush(lkw::chrome::kClear));
         if (!url.empty())
             Controls::ToolTipService::SetToolTip(b, winrt::box_value(winrt::to_hstring(url)));
         Automation::AutomationProperties::SetName(b, name);
         b.Click([this, url, mine](auto &&, auto &&) { PickChartTile(url, mine); });
+        chart_tile_ui.push_back({ url, b, badge, detail, where });
         return b;
     }
 
@@ -976,31 +982,167 @@ namespace winrt::LookoutMarine::implementation
         }
     }
 
-    // Everything the Charts page reads, in one string. The NOAA counters are
-    // left out: that line is updated in place, and a moving count would
-    // rebuild the page twice a second.
-    std::string MainWindow::ChartsPageSignature()
+    // The page's SHAPE: which tiles, which sets, which pictures, and which
+    // sections are on it. Nothing here moves on its own. Every count, every
+    // size, which chart draws and which is being read are values, and the
+    // refresh below states them without building a control.
+    std::string MainWindow::ChartsPageStructure()
     {
+        // A link's name is in here as well as its url: the core learns the
+        // publisher's name when the style resolves, and the tile's title is
+        // built rather than stated.
         std::string s;
         for (auto const &l : chart_links)
             s += l.url + "\x1f" + l.name + "\x1e";
-        s += active_chart_link + "\x1f" + chart_link_error + "\x1f" + chart_link_pending +
-             "\x1f" + (chart_link_picked ? "1" : "0") + (chart_link_busy ? "1" : "0") + "\x1f" +
-             (lk_controller_alt_style_active(controller) ? "1" : "0") + "\x1e";
         for (auto const &set : chart_sets)
-        {
-            s += set.path + "\x1f" + set.title + "\x1f" + (set.on ? "1" : "0") +
-                 (set.scanned ? "1" : "0") + "\x1f" + std::to_string(set.charts) + "\x1f" +
-                 std::to_string(set.pictures) + "\x1f" + std::to_string(set.unprepared) +
-                 "\x1f" + std::to_string(set.bytes);
-            for (auto const &[band, n] : set.bands)
-                s += "\x1f" + std::to_string(band) + ":" + std::to_string(n);
-            s += "\x1e";
-        }
+            s += set.path + "\x1f" + set.title + "\x1e";
         for (auto const &p : raster_paths)
             s += p + "\x1e";
-        s += bake_job != nullptr ? "baking" : "idle";
+        // The sections that come and go with work, and the row an empty list
+        // stands in for.
+        s += chart_sets.empty() ? "empty" : "sets";
+        s += bake_job != nullptr ? "|baking" : "|idle";
+        if (lk_controller_is_open(controller))
+        {
+            lookout_noaa_state nst{};
+            lk_controller_noaa_poll(controller, &nst);
+            s += nst.phase == 3 ? "|downloading" : "|quiet";
+        }
         return s;
+    }
+
+    // What every line on the page now says.
+    //
+    // This creates nothing and destroys nothing, so it is safe on a poll: the
+    // control the pointer is standing on keeps its hover, and a click in
+    // flight still lands on the control it was pressed on.
+    void MainWindow::RefreshChartsPageInPlace()
+    {
+        bool dark = DarkChrome();
+
+        // ---- the shelf ----------------------------------------------------
+        // A chart being read is the one the mariner picked, whatever the core
+        // still reports as drawing. Only that tile says so: that a tile draws
+        // once it is picked needs no saying.
+        bool reading = chart_link_picked || chart_link_busy;
+        std::string picked = chart_link_picked ? chart_link_pending : active_chart_link;
+        std::string drawing = ActiveChartUrl();
+        size_t cells = 0;
+        for (auto const &s : chart_sets)
+            if (s.on)
+                cells += s.charts;
+        for (auto const &t : chart_tile_ui)
+        {
+            if (t.button == nullptr)
+                continue;
+            bool being_read = reading && picked == t.url;
+            bool active = being_read || (!reading && drawing == t.url);
+            std::wstring where = t.where;
+            if (t.url.empty() && cells != 0)
+                where += L" · " + std::to_wstring(cells) + L" cells";
+            if (being_read)
+                where = L"Reading this chart…";
+            t.detail.Text(winrt::hstring{ ElideMiddle(where, 42) });
+            t.badge.Visibility(active ? Visibility::Visible : Visibility::Collapsed);
+            t.button.BorderBrush(
+                lkw::Brush(active ? lkw::chrome::Accent(dark) : lkw::chrome::kClear));
+        }
+        if (chart_link_error_ui != nullptr)
+        {
+            chart_link_error_ui.Text(winrt::to_hstring(chart_link_error));
+            chart_link_error_ui.Visibility(chart_link_error.empty() ? Visibility::Collapsed
+                                                                    : Visibility::Visible);
+        }
+        if (chart_publisher_note != nullptr)
+            chart_publisher_note.Visibility(lk_controller_alt_style_active(controller)
+                                                ? Visibility::Visible
+                                                : Visibility::Collapsed);
+
+        // ---- the sets -----------------------------------------------------
+        if (chart_sets_none != nullptr)
+        {
+            chart_sets_none.Text(ChartSetsScanning() ? L"Finding charts…" : L"No chart sets");
+            chart_sets_none.Visibility(chart_sets.empty() ? Visibility::Visible
+                                                          : Visibility::Collapsed);
+        }
+        if (chart_sets_total != nullptr)
+        {
+            size_t all_charts = 0;
+            uint64_t all_bytes = 0;
+            for (auto const &s : chart_sets)
+            {
+                all_charts += s.charts + s.pictures;
+                all_bytes += s.bytes;
+            }
+            chart_sets_total.Text(chart_sets.empty()
+                                      ? winrt::hstring{}
+                                      : winrt::hstring{ lkw::Thousands(all_charts) +
+                                                        L" charts · " +
+                                                        lkw::SizeText(all_bytes) });
+        }
+        for (auto &row : chart_set_ui)
+        {
+            auto it = std::find_if(chart_sets.begin(), chart_sets.end(),
+                                   [&](ChartSetRow const &s) { return s.path == row.path; });
+            if (it == chart_sets.end())
+                continue;
+            ChartSetRow const &set = *it;
+
+            std::string sum;
+            if (set.charts != 0)
+                sum = std::to_string(set.charts) + (set.charts == 1 ? " chart" : " charts");
+            if (set.pictures != 0)
+                sum += (sum.empty() ? "" : " \xC2\xB7 ") + std::to_string(set.pictures) +
+                       (set.pictures == 1 ? " picture" : " pictures");
+            // How far down the scales it goes, coarse to fine. The counts are
+            // on the ramp under the row.
+            if (!set.bands.empty())
+            {
+                int lo = set.bands.begin()->first;
+                int hi = set.bands.rbegin()->first;
+                std::string span = winrt::to_string(lkw::FirstRunBandName(lo));
+                if (hi != lo)
+                    span += " to " + winrt::to_string(lkw::FirstRunBandName(hi));
+                sum += (sum.empty() ? "" : " \xC2\xB7 ") + span;
+            }
+            // A row is listed before the scan has read its folder, and a
+            // folder still being read has not failed to answer.
+            if (sum.empty() && set.scanned)
+                sum = "not answering (drive unplugged?)";
+            else if (set.bytes != 0)
+                sum += (sum.empty() ? "" : " \xC2\xB7 ") +
+                       winrt::to_string(lkw::SizeText(set.bytes));
+            row.summary.Text(winrt::to_hstring(sum));
+
+            row.prepare.Text(winrt::hstring{ lkw::Thousands(set.unprepared) + L" to prepare" });
+            row.prepare.Visibility(set.unprepared == 0 ? Visibility::Collapsed
+                                                       : Visibility::Visible);
+            row.name.Opacity(set.on ? 1.0 : 0.6);
+            // The switch answers the mariner, not this. Setting it back would
+            // fight a toggle mid-animation, so it is written only when the
+            // core disagrees with what it shows.
+            if (row.on != nullptr && row.on.IsOn() != set.on)
+            {
+                bool was = settings_loading;
+                settings_loading = true; // the write is not a mariner's answer
+                row.on.IsOn(set.on);
+                settings_loading = was;
+            }
+            if (row.ramp != nullptr)
+            {
+                if (row.bands != set.bands)
+                {
+                    row.ramp.Children().Clear();
+                    if (!set.bands.empty())
+                        row.ramp.Children().Append(BandRamp(set.bands, dark));
+                    row.bands = set.bands;
+                }
+                row.ramp.Opacity(set.on ? 1.0 : 0.5);
+            }
+        }
+
+        // The download, which has its own line and its own poll.
+        PollNoaaPane();
     }
 
     void MainWindow::RefreshChartsPageOnChange()
@@ -1008,9 +1150,15 @@ namespace winrt::LookoutMarine::implementation
         bool charts_visible = SettingsOpen() && settings_tab >= 0 &&
                               settings_tab < (int)settings_tabs.size() &&
                               settings_tabs[settings_tab].id == "charts";
-        if (!charts_visible || ChartsPageSignature() == charts_page_sig)
+        if (!charts_visible)
             return;
-        BuildSettingsPage();
+        // A tile, a set, a picture or a section came or went: there is a
+        // control to make or unmake, so the page is built again. Anything else
+        // is a value.
+        if (ChartsPageStructure() != charts_page_sig)
+            BuildSettingsPage();
+        else
+            RefreshChartsPageInPlace();
     }
 
     void MainWindow::BuildSettingsPage()
@@ -1029,6 +1177,12 @@ namespace winrt::LookoutMarine::implementation
         bake_pane_count = nullptr;
         bake_pane_eta = nullptr;
         bake_pane_bar = nullptr;
+        chart_tile_ui.clear();
+        chart_set_ui.clear();
+        chart_sets_total = nullptr;
+        chart_sets_none = nullptr;
+        chart_link_error_ui = nullptr;
+        chart_publisher_note = nullptr;
 
         const double ft = 3.28084;
         bool feet = pending.depth_unit == 1;
@@ -1284,9 +1438,8 @@ namespace winrt::LookoutMarine::implementation
                 {
                     std::string url; // empty for Lookout's own
                     std::wstring name;
-                    std::wstring detail;
+                    std::wstring where; // its line at rest
                     wchar_t const *art;
-                    bool active;
                     bool mine;
                 };
                 struct Shipped
@@ -1307,35 +1460,16 @@ namespace winrt::LookoutMarine::implementation
                     return nullptr;
                 };
 
-                // A chart being read is the one the mariner picked, whatever
-                // the core still reports as drawing, and its line says what is
-                // happening. Only that tile has such a line: that a tile draws
-                // once it is picked needs no saying.
-                bool reading = chart_link_picked || chart_link_busy;
-                std::string picked = chart_link_picked ? chart_link_pending : active_chart_link;
-                std::string drawing = ActiveChartUrl();
-                auto line = [&](std::string const &url, std::wstring where) {
-                    bool being_read = reading && picked == url;
-                    return std::pair<std::wstring, bool>{
-                        being_read ? std::wstring{ L"Reading this chart…" } : where,
-                        being_read || (!reading && drawing == url)
-                    };
-                };
-
+                // The tiles are built at rest: what each one says about itself
+                // when nothing is happening. Which one is drawing, which is
+                // being read and what the Lookout tile is built from are all
+                // values, and RefreshChartsPageInPlace states them without
+                // building anything.
                 std::vector<Tile> tiles;
                 // Lookout's own chart first. It is built from the sets below
                 // and cannot be removed, so it has no menu.
-                size_t cells = 0;
-                for (auto const &s : chart_sets)
-                    if (s.on)
-                        cells += s.charts;
-                std::wstring from = cells == 0
-                                        ? std::wstring{ L"From your chart sets" }
-                                        : L"From your chart sets · " +
-                                              std::to_wstring(cells) + L" cells";
-                auto [own_detail, own_active] = line("", from);
-                tiles.push_back({ "", L"Lookout chart", own_detail, L"welcome-chart.png",
-                                  own_active, false });
+                tiles.push_back({ "", L"Lookout chart", L"From your chart sets",
+                                  L"welcome-chart.png", false });
 
                 // Then the charts the app ships, in their own order, so
                 // picking one does not move the tiles.
@@ -1345,8 +1479,8 @@ namespace winrt::LookoutMarine::implementation
                     std::wstring name = mine != nullptr && !mine->name.empty()
                                             ? std::wstring{ winrt::to_hstring(mine->name) }
                                             : std::wstring{ e.name };
-                    auto [detail, active] = line(e.url, std::wstring{ winrt::to_hstring(e.url) });
-                    tiles.push_back({ e.url, name, detail, nullptr, active, mine != nullptr });
+                    tiles.push_back({ e.url, name, std::wstring{ winrt::to_hstring(e.url) },
+                                      nullptr, mine != nullptr });
                 }
 
                 // Then the links the mariner added themselves.
@@ -1357,17 +1491,16 @@ namespace winrt::LookoutMarine::implementation
                         shipped = shipped || l.url == e.url;
                     if (shipped)
                         continue; // planned above, under the publisher's name
-                    auto [detail, active] = line(l.url, std::wstring{ winrt::to_hstring(l.url) });
                     std::wstring name{ winrt::to_hstring(l.name.empty() ? l.url : l.name) };
-                    tiles.push_back({ l.url, name, detail, nullptr, active, true });
+                    tiles.push_back({ l.url, name, std::wstring{ winrt::to_hstring(l.url) },
+                                      nullptr, true });
                 }
 
                 Controls::StackPanel shelf;
                 shelf.Orientation(Controls::Orientation::Horizontal);
                 shelf.Spacing(kTileGap);
                 for (auto const &t : tiles)
-                    shelf.Children().Append(
-                        ChartTile(t.url, t.name, t.detail, t.art, t.active, t.mine));
+                    shelf.Children().Append(ChartTile(t.url, t.name, t.where, t.art, t.mine));
                 shelf.Children().Append(AddChartTile());
 
                 Controls::ScrollViewer shelf_scroll;
@@ -1397,29 +1530,28 @@ namespace winrt::LookoutMarine::implementation
                 stack.Children().Append(shelf_card);
             }
 
-            if (!chart_link_error.empty())
-            {
-                Controls::TextBlock err;
-                err.Text(winrt::to_hstring(chart_link_error));
-                err.FontSize(11);
-                err.Foreground(lkw::Brush(lkw::chrome::kAmber));
-                err.TextWrapping(TextWrapping::Wrap);
-                stack.Children().Append(err);
-            }
+            // Both lines are built collapsed and shown by the refresh. A line
+            // that arrives by rebuilding the page moves everything under it
+            // and takes the pointer's hover with it.
+            chart_link_error_ui = Controls::TextBlock{};
+            chart_link_error_ui.FontSize(11);
+            chart_link_error_ui.Foreground(lkw::Brush(lkw::chrome::kAmber));
+            chart_link_error_ui.TextWrapping(TextWrapping::Wrap);
+            chart_link_error_ui.Visibility(Visibility::Collapsed);
+            stack.Children().Append(chart_link_error_ui);
+
             // Only while a linked chart draws. The mariner's display, depth
             // and symbol settings shape Lookout's own portrayal and have no
             // hold on a publisher's.
-            if (lk_controller_alt_style_active(controller))
-            {
-                Controls::TextBlock pub;
-                pub.Text(L"While a linked chart draws, the display, depth and symbol "
-                         L"settings do not shape it. You are seeing its publisher's own "
-                         L"portrayal.");
-                pub.FontSize(11);
-                pub.Opacity(0.7);
-                pub.TextWrapping(TextWrapping::Wrap);
-                stack.Children().Append(pub);
-            }
+            chart_publisher_note = Controls::TextBlock{};
+            chart_publisher_note.Text(L"While a linked chart draws, the display, depth and "
+                                      L"symbol settings do not shape it. You are seeing its "
+                                      L"publisher's own portrayal.");
+            chart_publisher_note.FontSize(11);
+            chart_publisher_note.Opacity(0.7);
+            chart_publisher_note.TextWrapping(TextWrapping::Wrap);
+            chart_publisher_note.Visibility(Visibility::Collapsed);
+            stack.Children().Append(chart_publisher_note);
 
             // ---- Your chart sets ----------------------------------------------
             // The installed sets: each folder of charts with its own switch.
@@ -1444,28 +1576,23 @@ namespace winrt::LookoutMarine::implementation
                 head_tb.Text(L"Your chart sets");
                 head_tb.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
                 head.Children().Append(head_tb);
-                if (!chart_sets.empty())
-                {
-                    Controls::TextBlock total;
-                    total.Text(winrt::hstring{ lkw::Thousands(all_charts) + L" charts · " +
-                                               lkw::SizeText(all_bytes) });
-                    total.FontSize(11);
-                    total.Opacity(0.7);
-                    total.VerticalAlignment(VerticalAlignment::Center);
-                    Controls::Grid::SetColumn(total, 1);
-                    head.Children().Append(total);
-                }
+                // What every set holds together. A count that moves as a scan
+                // lands is a value, so it is stated in place.
+                chart_sets_total = Controls::TextBlock{};
+                chart_sets_total.FontSize(11);
+                chart_sets_total.Opacity(0.7);
+                chart_sets_total.VerticalAlignment(VerticalAlignment::Center);
+                Controls::Grid::SetColumn(chart_sets_total, 1);
+                head.Children().Append(chart_sets_total);
                 stack.Children().Append(head);
 
-                // A library being read has not failed to answer.
-                if (chart_sets.empty())
-                {
-                    Controls::TextBlock none;
-                    none.Text(ChartSetsScanning() ? L"Finding charts…" : L"No chart sets");
-                    none.FontSize(12);
-                    none.Opacity(0.7);
-                    stack.Children().Append(none);
-                }
+                // A library being read has not failed to answer. Built either
+                // way: whether a scan is still running is a value.
+                chart_sets_none = Controls::TextBlock{};
+                chart_sets_none.FontSize(12);
+                chart_sets_none.Opacity(0.7);
+                chart_sets_none.Visibility(Visibility::Collapsed);
+                stack.Children().Append(chart_sets_none);
 
                 for (auto const &set : chart_sets)
                 {
@@ -1497,48 +1624,19 @@ namespace winrt::LookoutMarine::implementation
                     sname.Opacity(set.on ? 1.0 : 0.6);
                     sname.TextTrimming(TextTrimming::CharacterEllipsis);
                     stext.Children().Append(sname);
+                    // What it holds, and what of it has yet to be prepared.
+                    // Both are counts a scan moves, so the refresh states them
+                    // and the prepare line is built collapsed.
                     Controls::TextBlock ssum;
-                    std::string sum;
-                    if (set.charts != 0)
-                        sum = std::to_string(set.charts) + (set.charts == 1 ? " chart" : " charts");
-                    if (set.pictures != 0)
-                        sum += (sum.empty() ? "" : " \xC2\xB7 ") + std::to_string(set.pictures) +
-                               (set.pictures == 1 ? " picture" : " pictures");
-                    // How far down the scales it goes, coarse to fine. The
-                    // counts are on the ramp under the row.
-                    if (!set.bands.empty())
-                    {
-                        int lo = set.bands.begin()->first;
-                        int hi = set.bands.rbegin()->first;
-                        std::string span = winrt::to_string(lkw::FirstRunBandName(lo));
-                        if (hi != lo)
-                            span += " to " + winrt::to_string(lkw::FirstRunBandName(hi));
-                        sum += (sum.empty() ? "" : " \xC2\xB7 ") + span;
-                    }
-                    // A row is listed before the scan has read its folder, and
-                    // a folder still being read has not failed to answer.
-                    if (sum.empty() && set.scanned)
-                        sum = "not answering (drive unplugged?)";
-                    else if (set.bytes != 0)
-                        sum += (sum.empty() ? "" : " \xC2\xB7 ") +
-                               winrt::to_string(lkw::SizeText(set.bytes));
-                    ssum.Text(winrt::to_hstring(sum));
                     ssum.TextWrapping(TextWrapping::Wrap);
                     ssum.FontSize(11);
                     ssum.Opacity(0.7);
                     stext.Children().Append(ssum);
-                    // What in this set has yet to be prepared. A folder of the
-                    // mariner's own cells reports them until an import bakes
-                    // them.
-                    if (set.unprepared != 0)
-                    {
-                        Controls::TextBlock prep;
-                        prep.Text(winrt::hstring{ lkw::Thousands(set.unprepared) +
-                                                  L" to prepare" });
-                        prep.FontSize(11);
-                        prep.Opacity(0.7);
-                        stext.Children().Append(prep);
-                    }
+                    Controls::TextBlock prep;
+                    prep.FontSize(11);
+                    prep.Opacity(0.7);
+                    prep.Visibility(Visibility::Collapsed);
+                    stext.Children().Append(prep);
                     stext.VerticalAlignment(VerticalAlignment::Center);
                     Controls::Grid::SetColumn(stext, 1);
                     srow.Children().Append(stext);
@@ -1574,22 +1672,22 @@ namespace winrt::LookoutMarine::implementation
 
                     // The row, then what scales the set holds. The ramp reads
                     // from the whole width of the card, so it goes under the
-                    // switch rather than beside it.
+                    // switch rather than beside it. It is drawn into a host of
+                    // its own, which the refresh refills when the bands
+                    // change: they only change when a scan or a bake lands.
+                    Controls::StackPanel ramp_host;
+                    // Indented past the switch, so the bar starts under what
+                    // it describes.
+                    ramp_host.Margin({ 30, 0, 0, 0 });
                     Controls::StackPanel body;
                     body.Spacing(10);
                     body.Children().Append(srow);
-                    if (!set.bands.empty())
-                    {
-                        auto ramp = BandRamp(set.bands, DarkChrome());
-                        // Indented past the switch, so the bar starts under
-                        // what it describes.
-                        ramp.Margin({ 30, 0, 0, 0 });
-                        ramp.Opacity(set.on ? 1.0 : 0.5);
-                        body.Children().Append(ramp);
-                    }
+                    body.Children().Append(ramp_host);
                     auto card = Card(DarkChrome());
                     card.Child(body);
                     stack.Children().Append(card);
+
+                    chart_set_ui.push_back({ set.path, sname, ssum, prep, sts, ramp_host, {} });
                 }
             }
 
@@ -1657,9 +1755,19 @@ namespace winrt::LookoutMarine::implementation
                     ts.Toggled([this, set](auto &&s, auto &&) {
                         if (settings_loading)
                             return;
-                        set(s.template as<Controls::ToggleSwitch>().IsOn());
+                        bool const on = s.template as<Controls::ToggleSwitch>().IsOn();
+                        set(on);
                         UpdateReadouts();
-                        BuildSettingsPage();
+                        // The switch shows the answer already. Nothing on the
+                        // page changes shape, so nothing is rebuilt: a rebuild
+                        // here took the switch out from under the pointer.
+                        auto name = s.template as<Controls::ToggleSwitch>();
+                        if (auto row = name.Parent().try_as<Controls::Grid>())
+                        {
+                            for (auto const &child : row.Children())
+                                if (auto label = child.try_as<Controls::TextBlock>())
+                                    label.Opacity(on ? 1.0 : 0.6);
+                        }
                     });
                     return ts;
                 };
@@ -2146,9 +2254,13 @@ namespace winrt::LookoutMarine::implementation
         if (tab != "plugins")
             BuildPluginSections(tab);
 
-        // What the Charts page now draws, for the polls to compare against.
+        // The shape just built, for the polls to compare against, and then
+        // every value on it stated once.
         if (tab == "charts")
-            charts_page_sig = ChartsPageSignature();
+        {
+            charts_page_sig = ChartsPageStructure();
+            RefreshChartsPageInPlace();
+        }
 
         settings_loading = false;
     }

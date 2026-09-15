@@ -561,12 +561,13 @@ namespace winrt::LookoutMarine::implementation
 
     void MainWindow::SelectChartLink(std::string const &url)
     {
-        // Selecting the link that is already drawn is a no-op: a tile answers
-        // every click, and re-selecting would re-resolve the style and every
-        // sprite pack for nothing. A selection whose last resolve failed does
-        // retry.
-        if (!url.empty() && url == active_chart_link && chart_link_error.empty())
-            return;
+        // Every pick reaches the core. The core's list can name a chart as
+        // PICKED while something else DRAWS — a resolve that failed, or a list
+        // just loaded off the store — and this used to refuse the pick in
+        // exactly that state, which left the mariner tapping a tile that never
+        // drew. Asking for the chart already drawing is the only no-op, and
+        // the core makes that one cheap itself: it re-marks the pick, saves,
+        // and resolves nothing (src/chartlinks.zig, Links.select).
         lk_controller_chart_link_select(controller, url.empty() ? nullptr : url.c_str());
         PollChartLinks();
     }
