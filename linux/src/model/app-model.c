@@ -535,6 +535,20 @@ lk_app_model_initial_source (LkAppModel *self)
   if (env != NULL)
     return g_strdup (env);
 
+  /* The import runs in the run that downloads the charts. A run that ends
+   * first leaves the set on the list with its cells still raw, and later
+   * launches showed the setup step with the cells unprepared. 938 cells were
+   * in that state on this machine. Raw cells are a source to open, as the
+   * header above says: they bake first. */
+  g_autoptr (GPtrArray) rows = lk_chart_sets_rows (self->chart_sets);
+
+  for (guint i = 0; i < rows->len; i++)
+    {
+      const LkChartSetRow *row = g_ptr_array_index (rows, i);
+
+      if (row->on && row->scanned && row->unprepared > 0)
+        return g_strdup (row->path);
+    }
   return NULL;
 }
 
