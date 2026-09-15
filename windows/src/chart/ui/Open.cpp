@@ -97,7 +97,11 @@ namespace winrt::LookoutMarine::implementation
         if (paths.empty() || controller == nullptr || open_pending)
             return;
         open_pending = true;
-        ShowStartupLoader(paths.size());
+        // The loader stands over the setup card, which is up for the open that
+        // ends an import: the card went behind it and came back when the open
+        // finished. The Preparing step reports that work itself.
+        if (!first_run.showing())
+            ShowStartupLoader(paths.size());
 
         // The handler holds the timer so it survives this scope, and the
         // registration is REMOVED when it fires — Stop() alone leaves the

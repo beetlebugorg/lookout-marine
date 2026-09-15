@@ -275,7 +275,10 @@
              the length. -->
         <Grid x:Name="FirstRunPane" Background="{ThemeResource LkScrimBrush}"
               Visibility="Collapsed">
-            <Border MaxWidth="720" MaxHeight="720" Margin="24"
+            <!-- A floor under the height as well as a ceiling. The steps
+                 differ in length, and the card resized on every step and
+                 again as the Preparing step's bands arrived. -->
+            <Border MinHeight="520" MaxWidth="720" MaxHeight="720" Margin="24"
                     HorizontalAlignment="Center" VerticalAlignment="Center"
                     CornerRadius="12" Background="{ThemeResource LkPanelStrongBrush}"
                     BorderBrush="{ThemeResource LkHairlineBrush}" BorderThickness="1">
