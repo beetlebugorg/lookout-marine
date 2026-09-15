@@ -82,6 +82,14 @@ extension ChartController {
         return String(cString: buf)
     }
 
+    /// True while the engine still has drawing to do: the view moved, a build
+    /// is filling in, or tiles are still arriving. The read is one flag, so a
+    /// poll on it costs far less than a snapshot.
+    func chartIsDrawing() -> Bool {
+        guard let h = handle else { return false }
+        return lookout_needs_redraw(h) != 0
+    }
+
     /// The chart as it is drawing, as a picture.
     ///
     /// The engine draws one chart at a time, so this is the only true picture

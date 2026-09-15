@@ -74,6 +74,16 @@ void lk_app_model_remove_chart_set (LkAppModel *self, const char *path);
  * the window offers that instead. */
 gboolean lk_app_model_all_sets_off (LkAppModel *self);
 
+/* TRUE while a background scan has a set still to read. The library composes
+ * to the sets already read, so a chart opened now can be short or empty. Wait
+ * for ::chart-sets-changed and ask again. */
+gboolean lk_app_model_library_scanning (LkAppModel *self);
+
+/* The removal running behind the app, or NULL. Its own channel, not the
+ * bake's: a set can be removed while another is still importing, and a
+ * removal cannot be cancelled. ::removing says when to ask again. */
+const LkBakeProgress *lk_app_model_get_remove_progress (LkAppModel *self);
+
 /* ---- commands (headerbar / menu) ---------------------------------------- */
 
 void lk_app_model_zoom_in (LkAppModel *self);

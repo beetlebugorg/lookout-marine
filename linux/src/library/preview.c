@@ -18,9 +18,14 @@
 
 /* How long the chart being drawn is watched for, and how often. A style has
  * to resolve, fetch its sprites and fetch a screen of tiles before the frame
- * is its own. */
+ * is its own.
+ *
+ * A look costs nothing until the chart is settled, and the watch STOPS at the
+ * first picture it gets, so the count is the patience to wait out a slow style
+ * and not a number of snapshots. Ten looks ran out while a style was still
+ * fetching a five thousand cell sprite pack. */
 #define LK_PREVIEW_WATCH_MS 900
-#define LK_PREVIEW_WATCHES  10
+#define LK_PREVIEW_WATCHES  40
 
 /* Lookout's own chart has no url. This is what it is filed under. */
 #define LK_PREVIEW_OWN ""
@@ -228,11 +233,23 @@ lk_chart_previews_watch_tick (gpointer data)
 {
   LkChartPreviews *self = data;
 
-  lk_chart_previews_capture (self, self->watching_own ? NULL : self->watching);
-  if (--self->watches > 0)
+  /* ONLY A CHART THAT HAS FINISHED DRAWING. lookout_snapshot_rgba builds the
+   * scene before it reads the frame back, so a look taken while a linked style
+   * is still resolving costs SECONDS on the main thread — the whole app stops
+   * — and pictures a chart that is half drawn anyway. Eleven seconds a look,
+   * measured, with the app frozen for every one of them.
+   *
+   * One settled picture is the whole point of the watch, so the first one ends
+   * it. */
+  gboolean got = lk_chart_controller_settled (self->controller) &&
+                 lk_chart_previews_capture (self, self->watching_own ? NULL
+                                                                     : self->watching);
+
+  if (!got && --self->watches > 0)
     return G_SOURCE_CONTINUE;
 
   self->watch_id = 0;
+  self->watches = 0;
   g_clear_pointer (&self->watching, g_free);
   return G_SOURCE_REMOVE;
 }

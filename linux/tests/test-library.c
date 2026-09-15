@@ -348,6 +348,56 @@ test_prepared_archive_is_not_work (void)
   g_assert_cmpuint (empty->len, ==, 0);
 }
 
+/* A set is "derived" when REMOVING IT DELETES WORK.
+ *
+ * That is the question the remove button asks before it puts up its warning,
+ * and the removal deletes the set's PREPARED directory — which a folder in the
+ * mariner's own home has just as much as a lifted archive does. Reading the
+ * set's own path instead answered no for every folder a mariner added, so a
+ * gigabyte of prepared charts went with no warning at all, under a tooltip
+ * that promised their files stayed where they were. */
+/* Whether one set on the list would delete work if it were removed. Other
+ * tests in this run leave sets of their own on the list, so this finds the
+ * row by path rather than taking the only one. */
+static gboolean
+derived_row (LkChartSets *sets, const char *path)
+{
+  g_autoptr (GPtrArray) rows = lk_chart_sets_rows (sets);
+
+  for (guint i = 0; i < rows->len; i++)
+    {
+      const LkChartSetRow *row = g_ptr_array_index (rows, i);
+
+      if (g_strcmp0 (row->path, path) == 0)
+        return row->derived;
+    }
+  g_assert_not_reached ();
+}
+
+static void
+test_a_set_with_prepared_charts_is_derived (void)
+{
+  g_autoptr (GObject) owner = g_object_new (G_TYPE_OBJECT, NULL);
+  LkChartSets *sets = lk_chart_sets_new (noop_changed, owner);
+  g_autofree char *dir = g_build_filename (home, "own-cells", NULL);
+
+  place_cell (dir, "US3CU1EF.000");
+  g_assert_true (lk_chart_sets_note (sets, dir));
+
+  /* Nothing prepared from it yet: removing it takes a list entry off a list
+   * and touches nothing on the disk. No question to ask. */
+  g_assert_false (derived_row (sets, dir));
+
+  /* Now Lookout has prepared a chart from it. Removing it deletes that. */
+  g_autofree char *prepared = lk_chart_bake_prepared_dir (dir);
+  g_assert_nonnull (prepared);
+  place_prepared (prepared, "US3CU1EF/US3CU1EF.pmtiles");
+
+  g_assert_true (derived_row (sets, dir));
+
+  lk_chart_sets_free (sets);
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -373,6 +423,8 @@ main (int argc, char *argv[])
                    test_prepared_cells_are_not_work);
   g_test_add_func ("/library/prepared-archive-is-not-work",
                    test_prepared_archive_is_not_work);
+  g_test_add_func ("/library/a-set-with-prepared-charts-is-derived",
+                   test_a_set_with_prepared_charts_is_derived);
 
   return g_test_run ();
 }

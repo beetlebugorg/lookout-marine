@@ -199,7 +199,17 @@ lk_chart_sets_rows (LkChartSets *self)
       row->pictures = (guint) set->pictures;
       row->bytes = (gint64) set->bytes;
       row->scanned = set->scanned != 0;
-      row->derived = lk_chart_bake_is_derived (set->path);
+      /* TRUE when REMOVING THIS DELETES WORK — the charts Lookout prepared
+       * from it. That is the question the removal actually asks, and it is NOT
+       * the same as the set's own path sitting under the prepared root: a
+       * folder of the mariner's own cells lives in their home and still has a
+       * prepared directory of its own, which the removal deletes. Asking the
+       * other question took a gigabyte of prepared charts off the disk with no
+       * word, under a tooltip promising the mariner's files stayed where they
+       * were. The reference asks this one (ChartSets.swift, isDerived). */
+      g_autofree char *prepared = lk_chart_bake_prepared_dir (set->path);
+      row->derived = lk_chart_bake_is_derived (set->path) ||
+                     (prepared != NULL && g_file_test (prepared, G_FILE_TEST_IS_DIR));
       row->on = set->on != 0;
       lk_chart_set_count_bands (self, set->path, row->bands);
       g_ptr_array_add (rows, row);
@@ -214,18 +224,21 @@ lk_chart_sets_set_on (LkChartSets *self, const char *path, gboolean on)
 }
 
 gboolean
-lk_chart_sets_remove (LkChartSets *self, const char *path)
+lk_chart_sets_remove (LkChartSets *self, const char *path, char **out_prepared)
 {
+  if (out_prepared != NULL)
+    *out_prepared = NULL;
   if (!lookout_chart_sets_remove (self->sets, path))
     return FALSE;
   lk_chart_sets_sync_paths (self);
 
-  /* The core deletes nothing. What Lookout prepared from this set can be made
-   * again, so it goes; the mariner's own folder is never touched. The delete
-   * renames first and clears behind, so nothing here waits on the disk. */
-  g_autofree char *prepared = lk_chart_bake_prepared_dir (path);
-  if (prepared != NULL)
-    lk_chart_bake_delete_derived (prepared);
+  /* The core deletes nothing, and neither does this. What Lookout prepared
+   * from the set can be made again, so it goes — but the delete is thousands
+   * of files and says where it has got to, and this unit has nowhere to say
+   * it. The caller does the deleting. The mariner's own folder is never
+   * touched either way. */
+  if (out_prepared != NULL)
+    *out_prepared = lk_chart_bake_prepared_dir (path);
 
   return TRUE;
 }
@@ -253,6 +266,18 @@ lk_chart_sets_any_on_drawable (LkChartSets *self)
       if (!set->scanned || set->charts > 0 || set->pictures > 0)
         return TRUE;
     }
+  return FALSE;
+}
+
+gboolean
+lk_chart_sets_scanning (LkChartSets *self)
+{
+  size_t count = 0;
+  const lookout_chart_set *const *all = lookout_chart_sets_all (self->sets, &count);
+
+  for (size_t i = 0; i < count; i++)
+    if (all[i]->scanned == 0)
+      return TRUE;
   return FALSE;
 }
 
@@ -333,16 +358,21 @@ static gboolean
 lk_chart_sets_poll (gpointer data)
 {
   LkChartSets *self = data;
+  gboolean changed = lookout_chart_sets_changed (self->sets);
   size_t count = 0;
   const lookout_chart_set *const *all;
   gboolean waiting = FALSE;
 
-  if (lookout_chart_sets_changed (self->sets))
-    self->on_changed (self->owner);
-
   all = lookout_chart_sets_all (self->sets, &count);
   for (size_t i = 0; i < count && !waiting; i++)
     waiting = all[i]->scanned == 0;
+
+  /* The tick that settles the scan always reports, flag or no flag. The last
+   * scan can land between the flag read and the count read, and this timer
+   * stops here: there is no later tick for that landing to arrive on, and the
+   * chart the library composes to waits for it. */
+  if (changed || !waiting)
+    self->on_changed (self->owner);
 
   if (waiting)
     return G_SOURCE_CONTINUE;

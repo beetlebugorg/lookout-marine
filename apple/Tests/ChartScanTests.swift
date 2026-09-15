@@ -44,7 +44,8 @@ final class ChartScanTests: XCTestCase {
 
     /// A baked cell is ready to hand to the engine.
     func testABakedCellIsOpenable() throws {
-        let set = try XCTUnwrap(ChartScan.scan(try bakedChartDirectory()))
+        let dir = try bakedChartDirectory()
+        let set = try XCTUnwrap(ChartScan.scan(dir))
         XCTAssertEqual(set.openablePaths.count, 1)
         XCTAssertEqual(set.needsBake, 0)
         XCTAssertFalse(set.isDerived)
@@ -53,14 +54,16 @@ final class ChartScanTests: XCTestCase {
     /// The producer code comes from the charts, not the folder name, and names
     /// the office in the row.
     func testTheProducerNamesTheOffice() throws {
-        let set = try XCTUnwrap(ChartScan.scan(try bakedChartDirectory()))
+        let dir = try bakedChartDirectory()
+        let set = try XCTUnwrap(ChartScan.scan(dir))
         XCTAssertEqual(set.producer, "US")
         XCTAssertEqual(set.title, "NOAA")
         XCTAssertEqual(set.name, "charts")
     }
 
     func testASummaryOfWhatIsInstalled() throws {
-        let set = try XCTUnwrap(ChartScan.scan(try bakedChartDirectory()))
+        let dir = try bakedChartDirectory()
+        let set = try XCTUnwrap(ChartScan.scan(dir))
         XCTAssertTrue(set.summary.hasPrefix("1 chart · Harbor · "), set.summary)
         XCTAssertEqual(set.bandCounts.map(\.band), [5])
         XCTAssertEqual(set.bandCounts.map(\.name), ["Harbor"])

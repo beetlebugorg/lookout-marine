@@ -248,8 +248,8 @@ lk_band_ramp_new (const guint bands[7])
   gtk_flow_box_set_selection_mode (GTK_FLOW_BOX (legend), GTK_SELECTION_NONE);
   gtk_flow_box_set_homogeneous (GTK_FLOW_BOX (legend), FALSE);
   gtk_flow_box_set_max_children_per_line (GTK_FLOW_BOX (legend), 6);
-  gtk_flow_box_set_column_spacing (GTK_FLOW_BOX (legend), 12);
-  gtk_flow_box_set_row_spacing (GTK_FLOW_BOX (legend), 4);
+  gtk_flow_box_set_column_spacing (GTK_FLOW_BOX (legend), 14);
+  gtk_flow_box_set_row_spacing (GTK_FLOW_BOX (legend), 6);
 
   gtk_box_append (GTK_BOX (box), bar);
   gtk_box_append (GTK_BOX (box), legend);

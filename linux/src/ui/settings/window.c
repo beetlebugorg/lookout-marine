@@ -333,6 +333,9 @@ lk_settings_window_new (LkAppModel *model, GtkWindow *parent, const char *tab)
                            G_CALLBACK (lk_settings_work_changed), window, 0);
   g_signal_connect_object (model, "notify::baking",
                            G_CALLBACK (lk_settings_baking_changed), window, 0);
+  /* And a removal, which runs behind the app the same way. */
+  g_signal_connect_object (model, "notify::removing",
+                           G_CALLBACK (lk_settings_baking_changed), window, 0);
 
   /* A SIDEBAR OF SECTIONS beside the pane it chooses, as on the Mac. It is a
    * slot list, not a fixed menu: the four core sections, Plugins and Advanced

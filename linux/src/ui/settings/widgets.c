@@ -17,7 +17,7 @@ lk_binding_free (gpointer data, GClosure *closure)
 GtkWidget *
 lk_section_titled (GtkWidget *page, const char *title, GtkWidget **out_title)
 {
-  GtkWidget *box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 6);
+  GtkWidget *box = gtk_box_new (GTK_ORIENTATION_VERTICAL, LK_GAP_HEADING);
 
   if (title != NULL)
     {
@@ -29,7 +29,9 @@ lk_section_titled (GtkWidget *page, const char *title, GtkWidget **out_title)
         *out_title = label;
     }
 
-  gtk_widget_set_margin_top (box, 6);
+  /* Clear of the section above, title and all. A heading that sits as close to
+   * the last footer as its own rows sit to it reads as another row. */
+  gtk_widget_set_margin_top (box, LK_GAP_SECTION);
   gtk_box_append (GTK_BOX (page), box);
   return box;
 }
@@ -41,6 +43,16 @@ lk_section (GtkWidget *page, const char *title)
 }
 
 GtkWidget *
+lk_group (GtkWidget *section, int spacing)
+{
+  GtkWidget *box = gtk_box_new (GTK_ORIENTATION_VERTICAL, spacing);
+
+  gtk_widget_add_css_class (box, "lk-settings-group");
+  gtk_box_append (GTK_BOX (section), box);
+  return box;
+}
+
+GtkWidget *
 lk_footer (GtkWidget *section, const char *text)
 {
   GtkWidget *label = gtk_label_new (text);
@@ -49,11 +61,24 @@ lk_footer (GtkWidget *section, const char *text)
   gtk_widget_add_css_class (label, "caption");
   gtk_label_set_wrap (GTK_LABEL (label), TRUE);
   gtk_label_set_xalign (GTK_LABEL (label), 0.0);
-  /* Clear of the last row above it. A footer that runs straight on from a
-   * row's own second line reads as part of that row. */
-  gtk_widget_set_margin_top (label, 6);
-  gtk_widget_set_margin_bottom (label, 4);
+  /* Clear of the shelf or the last row above it. A note that runs straight on
+   * from the edge over it reads as part of that, and not as a note on the
+   * whole section. */
+  gtk_widget_set_margin_top (label, LK_GAP_FOOTER);
+  gtk_widget_set_margin_bottom (label, 0);
   gtk_box_append (GTK_BOX (section), label);
+  return label;
+}
+
+GtkWidget *
+lk_note (GtkWidget *section, const char *text)
+{
+  GtkWidget *label = lk_footer (section, text);
+
+  /* The section already spaces its children. This one leans on the control
+   * above and holds the next one off, so it is read with what it explains. */
+  gtk_widget_set_margin_top (label, 0);
+  gtk_widget_set_margin_bottom (label, LK_GAP_HEADING);
   return label;
 }
 
@@ -81,7 +106,7 @@ lk_row (GtkWidget *section, const char *title, GtkWidget *control)
 GtkWidget *
 lk_page_new (LkSettings *settings, const char *id, const char *title, const char *icon_name)
 {
-  GtkWidget *page = gtk_box_new (GTK_ORIENTATION_VERTICAL, 10);
+  GtkWidget *page = gtk_box_new (GTK_ORIENTATION_VERTICAL, LK_GAP_PAGE);
   GtkWidget *scroller = gtk_scrolled_window_new ();
 
   gtk_widget_set_margin_start (page, 16);

@@ -27,7 +27,7 @@ lk_plugin_desc (GtkWidget *section, const char *desc)
   if (desc == NULL || desc[0] == '\0')
     return;
 
-  GtkWidget *label = lk_footer (section, desc);
+  GtkWidget *label = lk_note (section, desc);
 
   /* Tucked under the row above rather than floating between two of them. */
   gtk_widget_set_margin_top (label, -2);

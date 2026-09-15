@@ -160,6 +160,17 @@ charts_pane (void)
   return settings;
 }
 
+/* The Charts PAGE, not the whole window: every page is in the one stack, so a
+ * search from the window reaches the controls of all of them. */
+static GtkWidget *
+charts_page (GtkWidget *pane)
+{
+  GtkWidget *stack = lk_test_find_type (pane, GTK_TYPE_STACK);
+
+  g_assert_nonnull (stack);
+  return gtk_stack_get_child_by_name (GTK_STACK (stack), "charts");
+}
+
 /* The sections, in the order a mariner asks: which chart is DRAWN, what it is
  * built from, what is arriving, and where to get more. */
 static void
@@ -270,6 +281,144 @@ test_a_pick_says_it_is_reading (void)
   lk_test_drain ();
 }
 
+/* The link field is NOT on the pane. It stood open on every visit with the
+ * sentence explaining what a chart link is beside it, and most visits add no
+ * link. The gallery's last tile raises both instead. */
+static void
+test_link_field_is_not_on_the_pane (void)
+{
+  GtkWidget *pane = charts_pane ();
+  GtkWidget *page = charts_page (pane);
+
+  g_assert_nonnull (page);
+  g_assert_null (lk_test_find_type (page, GTK_TYPE_ENTRY));
+  g_assert_null (lk_test_find_label (page, "Add Chart Link"));
+
+  gtk_window_destroy (GTK_WINDOW (pane));
+  lk_test_drain ();
+}
+
+/* The Add tile raises the form. Add stays out of reach until a link is typed:
+ * the window has one thing to do and nothing to do it with yet. */
+static void
+test_add_tile_raises_the_form (void)
+{
+  GtkWidget *pane = charts_pane ();
+  GtkWidget *tile = lk_test_find_button (pane, "Add a chart");
+  GtkWidget *entry, *add;
+  GtkWindow *form = NULL;
+
+  g_assert_nonnull (tile);
+  g_signal_emit_by_name (tile, "clicked");
+  lk_test_drain ();
+
+  g_autoptr (GList) windows = g_list_copy (gtk_window_list_toplevels ());
+  for (GList *l = windows; l != NULL; l = l->next)
+    if (g_strcmp0 (gtk_window_get_title (l->data), "Add a Chart") == 0)
+      form = l->data;
+  g_assert_nonnull (form);
+
+  entry = lk_test_find_type (GTK_WIDGET (form), GTK_TYPE_ENTRY);
+  add = lk_test_find_button (GTK_WIDGET (form), "Add");
+  g_assert_nonnull (entry);
+  g_assert_nonnull (add);
+  g_assert_false (gtk_widget_get_sensitive (add));
+
+  gtk_editable_set_text (GTK_EDITABLE (entry), "https://example.org/style.json");
+  g_assert_true (gtk_widget_get_sensitive (add));
+
+  /* And whitespace alone is not a link. */
+  gtk_editable_set_text (GTK_EDITABLE (entry), "   ");
+  g_assert_false (gtk_widget_get_sensitive (add));
+
+  gtk_window_destroy (form);
+  gtk_window_destroy (GTK_WINDOW (pane));
+  lk_test_drain ();
+}
+
+/* The row stays where the mariner scrolled it. A tile off the left edge cannot
+ * be picked if a rebuild puts the row home under the pointer, and a pick is
+ * exactly what rebuilds it. */
+static void
+test_pick_holds_the_scroll (void)
+{
+  GtkWidget *gallery = lk_chart_gallery_new (model, on_add, NULL);
+  GtkAdjustment *adjustment;
+  double room = 0;
+
+  /* Narrower than the tiles need, so the row can scroll at all. halign START
+   * holds it to the width asked for inside a much wider window. */
+  gtk_widget_set_size_request (gallery, 500, -1);
+  gtk_widget_set_halign (gallery, GTK_ALIGN_START);
+  gtk_window_set_child (GTK_WINDOW (window), gallery);
+  adjustment = gtk_scrolled_window_get_hadjustment (GTK_SCROLLED_WINDOW (gallery));
+
+  for (int i = 0; i < 400; i++)
+    {
+      room = gtk_adjustment_get_upper (adjustment) - gtk_adjustment_get_page_size (adjustment);
+      if (room > 60)
+        break;
+      g_main_context_iteration (NULL, FALSE);
+      g_usleep (5000);
+    }
+  g_assert_cmpfloat (room, >, 60);
+
+  gtk_adjustment_set_value (adjustment, 60);
+  lk_test_drain ();
+  g_assert_cmpfloat (gtk_adjustment_get_value (adjustment), ==, 60);
+
+  /* A pick rebuilds the row: the tile picked says it is being read. A real
+   * click focuses the button first, and the rebuild destroys what it focused. */
+  g_autoptr (GPtrArray) tiles = tiles_of (gallery);
+  gtk_widget_grab_focus (g_ptr_array_index (tiles, 1));
+  lk_test_drain ();
+  g_signal_emit_by_name (g_ptr_array_index (tiles, 1), "clicked");
+  for (int i = 0; i < 80; i++)
+    {
+      g_main_context_iteration (NULL, FALSE);
+      g_usleep (5000);
+    }
+
+  g_assert_cmpfloat (gtk_adjustment_get_value (adjustment), ==, 60);
+}
+
+/* The pick STAYS on the tile the mariner picked while the core reads it.
+ *
+ * An add does not set the core's active url until the style has landed, and no
+ * active url means Lookout's own chart — so a row that drops the pick the
+ * moment the core is told puts the ACTIVE ring straight back on the Lookout
+ * tile, which reads as the pick being refused. */
+static void
+test_pick_stays_on_the_tile (void)
+{
+  GtkWidget *gallery = hosted_gallery ();
+  g_autoptr (GPtrArray) tiles = tiles_of (gallery);
+  GtkWidget *own = g_ptr_array_index (tiles, 0);
+  GtkWidget *tile = g_ptr_array_index (tiles, 1);
+
+  g_signal_emit_by_name (tile, "clicked");
+
+  /* Past the frame the row waits for, so the core has been told. */
+  for (int i = 0; i < 40; i++)
+    {
+      g_main_context_iteration (NULL, FALSE);
+      g_usleep (5000);
+    }
+
+  /* And a rebuild after that, which is where the pick used to be lost. */
+  g_signal_emit_by_name (lk_app_model_get_chart_links (model), "changed");
+  lk_test_drain ();
+
+  g_autoptr (GPtrArray) after = tiles_of (gallery);
+  own = g_ptr_array_index (after, 0);
+  tile = g_ptr_array_index (after, 1);
+
+  g_assert_nonnull (lk_test_find_label (tile, "Reading this chart…"));
+  g_assert_true (gtk_widget_has_css_class (tile, "lk-chart-tile-active"));
+  g_assert_null (lk_test_find_label (own, "Reading this chart…"));
+  g_assert_false (gtk_widget_has_css_class (own, "lk-chart-tile-active"));
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -289,6 +438,10 @@ main (int argc, char *argv[])
   g_test_add_func ("/charts/add-rows", test_add_rows);
   g_test_add_func ("/charts/a-pick-says-it-is-reading", test_a_pick_says_it_is_reading);
   g_test_add_func ("/charts/empty-library", test_empty_library);
+  g_test_add_func ("/charts/pick-stays-on-the-tile", test_pick_stays_on_the_tile);
+  g_test_add_func ("/charts/pick-holds-the-scroll", test_pick_holds_the_scroll);
+  g_test_add_func ("/charts/link-field-off-the-pane", test_link_field_is_not_on_the_pane);
+  g_test_add_func ("/charts/add-tile-raises-the-form", test_add_tile_raises_the_form);
 
   return g_test_run ();
 }

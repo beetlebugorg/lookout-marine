@@ -27,6 +27,12 @@ struct _LkChartController {
   gboolean pending_empty_open;
 
   gint64 last_readouts_us;
+
+  /* What the last frame said. A snapshot BUILDS the scene before it reads the
+   * frame back, so whatever wants a picture of the chart has to know when the
+   * chart has nothing left to build. */
+  gboolean last_building;
+  gboolean last_render;
 };
 
 G_DEFINE_FINAL_TYPE (LkChartController, lk_chart_controller, G_TYPE_OBJECT)
@@ -161,6 +167,9 @@ lk_chart_controller_tick (GtkWidget     *widget,
     }
 
   lookout_frame_next (self->handle, &frame);
+
+  self->last_building = frame.building != 0;
+  self->last_render = frame.verdict == LOOKOUT_FRAME_RENDER;
 
   if (self->model != NULL)
     {
@@ -1054,6 +1063,14 @@ lk_chart_controller_chart_links_read (LkChartController *self)
 }
 
 /* ---- pictures of charts -------------------------------------------------- */
+
+gboolean
+lk_chart_controller_settled (LkChartController *self)
+{
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), FALSE);
+
+  return self->handle != NULL && !self->last_building && !self->last_render;
+}
 
 GdkTexture *
 lk_chart_controller_snapshot (LkChartController *self)

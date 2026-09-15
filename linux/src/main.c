@@ -412,6 +412,29 @@ static const char *LK_CSS =
     "}"
     ".lk-amber { color: #b5820a; }"
     /* One derived number on the depth step, with a rule above it. */
+    /* ---- the settings groups ----------------------------------------------
+     *
+     * A section's rows sit on a shaded rounded shelf, with the heading outside
+     * it and above. The reference's Form groups the same way, and it is what
+     * makes a page read as a handful of groups rather than one long column.
+     * The shelf carries the air, so the rows inside it need less of their own. */
+    ".lk-settings-group {"
+    "  background: alpha(@theme_fg_color, 0.04);"
+    "  border-radius: 12px;"
+    "  padding: 14px 16px;"
+    "}"
+    ".lk-settings-group separator { background: alpha(@borders, 0.55); }"
+    /* What KIND of chart a row holds. A picture and a survey sit in the same
+     * list and switch on the same way, so the row says which it is where the
+     * mariner is reading it. It used to be filed under a heading of its own,
+     * which made the list two lists again. */
+    ".lk-type-pill {"
+    "  background: alpha(@theme_fg_color, 0.10);"
+    "  border-radius: 5px;"
+    "  padding: 1px 6px;"
+    "  font-size: 76%;"
+    "  font-weight: bold;"
+    "}"
     /* The band panel on the import step: a shelf of its own, so the bands
      * read as one list rather than as more of the page. */
     ".lk-band-panel {"
