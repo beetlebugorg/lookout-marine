@@ -306,7 +306,15 @@ lk_app_model_recompose_library (LkAppModel *self)
     lk_chart_controller_reopen (self->controller, (const char *const *) all);
   else
     {
-      lk_chart_controller_close (self->controller);
+      static const char *const none[] = { NULL };
+
+      /* Reopen with no charts. Destroying the handle destroys the Vulkan
+       * device presenting into the window, and GTK's own GPU renderer then
+       * faults on its next frame: a segfault inside libnvidia-glcore under
+       * gsk_renderer_render, every time a set was removed, on the GL and the
+       * Vulkan renderer alike. A handle holding no charts keeps the device
+       * alive, and the app already draws that state. */
+      lk_chart_controller_reopen (self->controller, none);
       /* The readouts stop with the render loop, so the raster snapshot has
        * to be read back here — without this the pill keeps naming a set of
        * the chart that just closed. */
@@ -526,6 +534,7 @@ lk_app_model_initial_source (LkAppModel *self)
   const char *env = g_getenv ("LOOKOUT_OPEN");
   if (env != NULL)
     return g_strdup (env);
+
   return NULL;
 }
 
