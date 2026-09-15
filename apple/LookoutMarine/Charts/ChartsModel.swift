@@ -158,6 +158,24 @@ final class ChartsModel {
         return Array(best.values)
     }
 
+    /// The dataset names the NOAA downloader's own set holds.
+    ///
+    /// The picker states what it can add and what it can remove, and it can
+    /// only remove what it downloaded. installedCellNames counts every set,
+    /// switched off ones and archives that merely list their cells, so a
+    /// region reads as installed on the strength of a folder the downloader
+    /// never wrote, and unticking it then deletes no file.
+    var managedCellNames: [String] {
+        guard let dest = NoaaModel.downloadDirectory else { return [] }
+        var seen = Set<String>()
+        for set in sets where set.path == dest {
+            for cell in set.cells where !cell.isRaster {
+                seen.insert(cell.stem.uppercased())
+            }
+        }
+        return Array(seen)
+    }
+
     /// The installed folders of charts, in the order added. A set on this list has
     /// been looked through and holds charts, so it always opens.
     var sets: [ChartSet] = []

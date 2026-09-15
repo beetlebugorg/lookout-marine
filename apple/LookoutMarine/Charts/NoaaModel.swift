@@ -238,6 +238,16 @@ final class NoaaModel {
 
     /// Each region, priced on its own. Empty before a catalog is read.
     private(set) var regionState: [String: RegionState] = [:]
+    /// The cells the downloader's own set holds, by name.
+    private var managed: Set<String> = []
+
+    /// Name the cells the downloader's own set holds. The pills state what it
+    /// can remove, and a region is only removable where this app downloaded
+    /// it.
+    func noteManaged(_ names: [String]) {
+        managed = Set(names)
+        repriceRegions()
+    }
 
     /// Price every region on its own.
     ///
@@ -252,7 +262,16 @@ final class NoaaModel {
         var out: [String: RegionState] = [:]
         for r in regions {
             guard let c = engine.noaaCost(regionIDs: r.id) else { continue }
-            out[r.id] = RegionState(missing: c.cells, held: c.held, bytes: c.bytes)
+            // held counts against the downloader's own set. The core counts
+            // every installed copy. That sizes a download correctly and
+            // oversizes what unticking removes.
+            let cells = engine.noaaRegionCells(regionIDs: r.id)
+            var here: UInt32 = 0
+            for name in cells where managed.contains(name.uppercased()) { here += 1 }
+            let total = UInt32(cells.count)
+            out[r.id] = RegionState(missing: total > here ? total - here : 0,
+                                    held: here,
+                                    bytes: c.bytes)
         }
         regionState = out
     }

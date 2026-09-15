@@ -241,6 +241,7 @@ struct NoaaPickerSheet: View {
         .onAppear {
             noaa.poll()
             noaa.noteInstalled(model.charts.installedCellNames)
+            noaa.noteManaged(model.charts.managedCellNames)
             if !noaa.state.haveCatalog { noaa.refresh() } else { startFromInstalled() }
         }
         // The catalog is what prices a region, so what is held cannot be known
