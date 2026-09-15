@@ -388,7 +388,7 @@ final class ChartsModel {
     /// This stops on the first chart, and stops when every folder has been
     /// read, so it holds no clock open on a battery.
     private func watchLibraryUntilOpen() {
-        guard !watchingLibrary, !hasChart, scanning else { return }
+        guard !watchingLibrary, !hasChart || chartIsEmpty, scanning else { return }
         watchingLibrary = true
         tickLibraryWatch()
     }
@@ -396,9 +396,13 @@ final class ChartsModel {
     private func tickLibraryWatch() {
         guard watchingLibrary else { return }
         if ChartSetStore.changed() { pullChartSets() }
-        // A chart is up, or every folder has been read. Either way there is
-        // nothing further to poll for.
-        guard !hasChart, scanning else {
+        // A chart holding cells is up, or every folder has been read. Either
+        // way there is nothing further to poll for.
+        //
+        // A chart of NO cells keeps this running. The frame loop polls the
+        // same flag once per frame, and an empty chart over a picture goes
+        // idle, so the scan result stays unread until this timer reads it.
+        guard !hasChart || chartIsEmpty, scanning else {
             watchingLibrary = false
             return
         }
@@ -433,7 +437,20 @@ final class ChartsModel {
         // cells, and finds none. Open what the scan found once it knows, or a
         // mariner carrying only imagery gets the first-run page every time
         // with their charts sitting on the list.
-        if !hasChart && (!openPaths.isEmpty || !raster.paths.isEmpty) {
+        if !hasChart, !openPaths.isEmpty || !raster.paths.isEmpty {
+            requestOpen(openPaths)
+        } else if chartIsEmpty, !isOpening, !openPaths.isEmpty, openRequest?.paths != openPaths {
+            // The chart that opened holds no cells. pullChartSets runs at
+            // launch before the background scan finishes, so compose is empty,
+            // and a picture in the library passes that empty open through
+            // requestOpen's guard rather than closing the chart. hasChart is
+            // then true, and the survey the scan finds never reaches the
+            // engine: the picture draws alone with no ENC over it.
+            //
+            // The request is compared rather than tested for nil. requestOpen
+            // clears it only when the engine serves it, and at launch there is
+            // no engine yet: the chart view reads the request when it is built
+            // and leaves it set, so an empty open holds one for good.
             requestOpen(openPaths)
         }
     }
