@@ -441,6 +441,8 @@ namespace winrt::LookoutMarine::implementation
          * rendered again when this changes rather than on every tick. */
         std::string noaa_catalog_drawn;
         std::string NoaaCatalogSignature();
+        /* Whether the pick covers water this device already holds in full. */
+        bool NoaaAllHeld();
 
         /* The Preparing step's live parts. That step is polled four times a
          * second, and building it again restarted the progress bar's sweep and

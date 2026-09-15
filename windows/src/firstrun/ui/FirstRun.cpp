@@ -417,6 +417,14 @@ namespace winrt::LookoutMarine::implementation
         FirstRunBody().SizeChanged([this](auto &&, auto &&) { FirstRunUpdateFold(); });
         FirstRunPrimaryBtn().Click([this](auto &&, auto &&) { FirstRunPrimary(); });
         FirstRunBackBtn().Click([this](auto &&, auto &&) {
+            // One step opened on its own has nowhere to go back to, so the
+            // same button closes it and leaves the chart standing.
+            if (first_run.picker_only())
+            {
+                first_run.Finish();
+                FirstRunRender();
+                return;
+            }
             first_run.Back();
             FirstRunRender();
         });
@@ -509,8 +517,11 @@ namespace winrt::LookoutMarine::implementation
         FirstRunTitle().Visibility(first_run.step() == lkw::FirstRunStep::Welcome
                                        ? Visibility::Collapsed
                                        : Visibility::Visible);
-        FirstRunBackBtn().Visibility(first_run.CanGoBack() ? Visibility::Visible
-                                                           : Visibility::Collapsed);
+        // Back through the flow, or the way out of a step opened on its own.
+        bool const picker = first_run.picker_only();
+        FirstRunBackBtn().Content(box_value(picker ? L"Cancel" : L"Back"));
+        FirstRunBackBtn().Visibility(picker || first_run.CanGoBack() ? Visibility::Visible
+                                                                    : Visibility::Collapsed);
         FirstRunFooterShape(first_run.step() == lkw::FirstRunStep::Welcome);
         FirstRunPrimaryBtn().Content(box_value(first_run.PrimaryTitle(!chart_link_url.empty())));
 
@@ -658,8 +669,10 @@ namespace winrt::LookoutMarine::implementation
             std::filesystem::create_directories(dest, ec);
             noaa_dest_dir = dest.string();
 
+            // `again` fetches the cells this device already holds as well,
+            // which is what a pick of water that is wholly installed asks for.
             lk_controller_noaa_download(controller, noaa_region_id.c_str(),
-                                        noaa_dest_dir.c_str(), 0);
+                                        noaa_dest_dir.c_str(), NoaaAllHeld() ? 1 : 0);
             first_run_import_idle = false; // a fresh import has work to watch
             FirstRunPollStart();
             break;
@@ -848,6 +861,20 @@ namespace winrt::LookoutMarine::implementation
         }
         // Nothing left to watch: stop rather than tick over finished work.
         FirstRunPollAsNeeded();
+    }
+
+    // Whether every chart the pick covers is installed already. The cost call
+    // leaves held cells out, so it prices nothing when there is nothing new.
+    bool MainWindow::NoaaAllHeld()
+    {
+        if (noaa_region_id.empty() || controller == nullptr)
+            return false;
+        uint32_t cells = 0, held = 0;
+        uint64_t bytes = 0, held_bytes = 0;
+        if (!lk_controller_noaa_cost(controller, noaa_region_id.c_str(), &cells, &bytes, &held,
+                                     &held_bytes))
+            return false;
+        return cells == 0 && held > 0;
     }
 
     // What the coverage step draws from. The counters of a download are left
@@ -1592,6 +1619,13 @@ namespace winrt::LookoutMarine::implementation
         bool const chart_ready = lk_controller_is_open(controller) && chart_has_cells;
         FirstRunPrimaryBtn().IsEnabled(first_run.PrimaryEnabled(
             have_catalog, !noaa_region_id.empty(), chart_ready));
+
+        // Water the device already holds is fetched again rather than left
+        // with a dead button: that is how a mariner repairs a set, or gets the
+        // edition NOAA has reissued.
+        if (first_run.step() == lkw::FirstRunStep::Coverage)
+            FirstRunPrimaryBtn().Content(
+                box_value(NoaaAllHeld() ? L"Download Again" : L"Download"));
 
         if (first_run.step() != lkw::FirstRunStep::Importing)
             return;
