@@ -201,6 +201,31 @@ namespace lkw
     // what fetching it again would move instead.
     std::wstring CostLine(uint32_t cells, uint64_t bytes, uint32_t held, uint64_t held_bytes);
 
+    // ---- the picker's two halves ------------------------------------------
+    //
+    // A picker opened from the Charts pane states what the mariner HOLDS:
+    // water already downloaded opens ticked, unticking it gives that water
+    // back, and Apply does both halves at once. There was no way to give water
+    // back before except by removing a whole chart set.
+
+    // The regions ticked when the picker opened and unticked since, in the
+    // order they were held. These are the removals. A region that was never
+    // here and is unticked again is a mariner changing their mind.
+    std::vector<std::string> Removed(std::string const &held, std::string const &picked);
+
+    // What Apply is about to do, in the mariner's words. `removing` names the
+    // regions being given back. With nothing to do either way it states what
+    // the pick holds instead.
+    std::wstring PlanLine(uint32_t cells, uint64_t bytes, uint32_t held, uint64_t held_bytes,
+                          std::vector<std::wstring> const &removing);
+
+    // The question asked before charts are deleted.
+    std::wstring RemovalTitle(std::vector<std::wstring> const &removing);
+
+    // Whether Apply has anything to do: charts to fetch, or water to give
+    // back. Nothing to price from means nothing to apply.
+    bool ApplyEnabled(bool have_catalog, uint32_t cells, size_t removing);
+
     // About how long preparing this many charts takes, for the question asked
     // before a set's prepared charts are deleted: the mariner is deciding
     // whether to throw away work, so the size of that work is the fact they
@@ -341,6 +366,10 @@ namespace lkw
             uint64_t     held_bytes{ 0 };
             std::wstring credit;
             bool         have_charts{ false };
+            /* The regions being given back, by name. Only a picker opened
+             * from the Charts pane has any: setup has nothing to give back
+             * yet. */
+            std::vector<std::wstring> removing;
         };
         // The line beside the primary action: the coverage step prices the
         // pick there, the depths step says where its numbers live afterwards,

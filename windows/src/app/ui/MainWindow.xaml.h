@@ -318,6 +318,11 @@ namespace winrt::LookoutMarine::implementation
          * files open, and Windows refuses to rename a directory under one. */
         void DeletePreparedCharts(std::string const &path);
         int remove_seq{ 0 };
+        /* Give back the water a mariner has unticked in the picker: the
+         * prepared charts of these cells, deleted from the library. Returns
+         * how many were taken out. The handle is closed first, because the
+         * core holds every chart in the library open. */
+        size_t RemoveNoaaCells(std::set<std::string> const &names);
         /* Open what the switched-on sets compose, or take the chart off the
          * display when nothing is installed. */
         void ReopenChartSets(std::string const &recent);
@@ -453,6 +458,20 @@ namespace winrt::LookoutMarine::implementation
         std::string NoaaCatalogSignature();
         /* Whether the pick covers water this device already holds in full. */
         bool NoaaAllHeld();
+        /* Apply, in a picker opened from the Charts pane: the water unticked
+         * since it opened is given back and the water newly ticked is
+         * downloaded, in that order, so a mariner swapping one region for
+         * another never holds both on the disk at once. */
+        void FirstRunApply();
+        fire_and_forget FirstRunConfirmRemoval(std::vector<std::string> gone,
+                                               std::wstring title);
+        /* The regions ticked when the picker opened, as the core's list. */
+        std::string noaa_held_at_open;
+        /* Which regions are being given back, and the cells that means. */
+        std::vector<std::string> NoaaRemoving();
+        std::set<std::string> NoaaCellsToRemove(std::vector<std::string> const &gone);
+        /* Those regions by name, for a line a mariner reads. */
+        std::vector<std::wstring> NoaaRegionNames(std::vector<std::string> const &ids);
 
         /* The Preparing step's live parts. That step is polled four times a
          * second, and building it again restarted the progress bar's sweep and

@@ -448,7 +448,17 @@ namespace winrt::LookoutMarine::implementation
         FirstRunScroll().SizeChanged([this](auto &&, auto &&) { FirstRunUpdateFold(); });
         FirstRunScroll().ViewChanged([this](auto &&, auto &&) { FirstRunUpdateFold(); });
         FirstRunBody().SizeChanged([this](auto &&, auto &&) { FirstRunUpdateFold(); });
-        FirstRunPrimaryBtn().Click([this](auto &&, auto &&) { FirstRunPrimary(); });
+        // A picker opened from the Charts pane applies a plan: what was
+        // unticked is given back, what was ticked is fetched. Setup has
+        // nothing to give back, so its action is the flow's own.
+        FirstRunPrimaryBtn().Click([this](auto &&, auto &&) {
+            if (first_run.picker_only() && first_run.step() == lkw::FirstRunStep::Coverage)
+                FirstRunApply();
+            else
+                FirstRunPrimary();
+        });
+        // The repair: fetch the water already here again.
+        FirstRunAgainBtn().Click([this](auto &&, auto &&) { FirstRunPrimary(); });
         FirstRunBackBtn().Click([this](auto &&, auto &&) {
             // One step opened on its own has nowhere to go back to, so the
             // same button closes it and leaves the chart standing.
@@ -491,6 +501,7 @@ namespace winrt::LookoutMarine::implementation
         noaa_handed_over = false;
         noaa_region_id.clear();
         noaa_picked_seeded = false;
+        noaa_held_at_open.clear();
         lk_controller_noaa_refresh(controller);
         first_run.BeginAt(lkw::FirstRunStep::Coverage);
         FirstRunRender();
@@ -909,6 +920,124 @@ namespace winrt::LookoutMarine::implementation
                                      &held_bytes))
             return false;
         return cells == 0 && held > 0;
+    }
+
+    // ---- the picker's two halves ------------------------------------------
+
+    // The regions ticked when the picker opened and unticked since.
+    std::vector<std::string> MainWindow::NoaaRemoving()
+    {
+        if (!first_run.picker_only())
+            return {};
+        return lkw::Removed(noaa_held_at_open, noaa_region_id);
+    }
+
+    std::vector<std::wstring> MainWindow::NoaaRegionNames(std::vector<std::string> const &ids)
+    {
+        std::vector<std::wstring> out;
+        lookout_noaa_region const *regions = nullptr;
+        size_t const n = lk_controller_noaa_regions(&regions);
+        for (auto const &id : ids)
+            for (size_t i = 0; i < n && regions != nullptr; ++i)
+                if (id == regions[i].id)
+                    out.push_back(std::wstring{ winrt::to_hstring(regions[i].name) });
+        return out;
+    }
+
+    // The cells to delete: every one the unticked regions name, minus every
+    // one a region still ticked names.
+    //
+    // NOAA files a cell under one district that covers another's water, so
+    // deleting an unticked region's whole list takes charts out from under
+    // water the mariner is keeping.
+    std::set<std::string> MainWindow::NoaaCellsToRemove(std::vector<std::string> const &gone)
+    {
+        std::set<std::string> out;
+        if (gone.empty() || controller == nullptr)
+            return out;
+
+        // The core lends its strings until the next call, so each answer is
+        // copied before the next one is asked for.
+        auto cells = [this](std::string const &ids) {
+            std::vector<std::string> names;
+            if (ids.empty())
+                return names;
+            size_t const n = lk_controller_noaa_region_cells(controller, ids.c_str(), nullptr, 0);
+            if (n == 0)
+                return names;
+            std::vector<char const *> buf(n, nullptr);
+            size_t const got =
+                lk_controller_noaa_region_cells(controller, ids.c_str(), buf.data(), buf.size());
+            for (size_t i = 0; i < got && i < buf.size(); ++i)
+                if (buf[i] != nullptr)
+                {
+                    std::string one = buf[i];
+                    for (auto &ch : one)
+                        ch = (char)std::toupper((unsigned char)ch);
+                    names.push_back(std::move(one));
+                }
+            return names;
+        };
+
+        std::string ids;
+        for (auto const &g : gone)
+            ids += (ids.empty() ? "" : ",") + g;
+        for (auto const &name : cells(ids))
+            out.insert(name);
+        for (auto const &keep : cells(noaa_region_id))
+            out.erase(keep);
+        return out;
+    }
+
+    // Apply: give back what was unticked, then fetch what was ticked.
+    void MainWindow::FirstRunApply()
+    {
+        auto const gone = NoaaRemoving();
+        if (gone.empty())
+        {
+            FirstRunPrimary(); // adding only, which is the flow's own path
+            return;
+        }
+        // Deleting charts is asked about. Adding them is not: it costs time
+        // and disk, and the line beside the button says how much of both.
+        FirstRunConfirmRemoval(gone, lkw::RemovalTitle(NoaaRegionNames(gone)));
+    }
+
+    fire_and_forget MainWindow::FirstRunConfirmRemoval(std::vector<std::string> gone,
+                                                       std::wstring title)
+    {
+        auto lifetime = get_strong();
+        Controls::ContentDialog dialog;
+        dialog.XamlRoot(DialogRoot());
+        dialog.Title(box_value(winrt::hstring{ title }));
+        dialog.Content(box_value(winrt::hstring{
+            L"Lookout deletes the charts it downloaded for this water. Charts you added "
+            L"yourself stay where they are, and you can download this water again." }));
+        dialog.PrimaryButtonText(L"Remove");
+        dialog.CloseButtonText(L"Cancel");
+        auto result = co_await dialog.ShowAsync();
+        if (result != Controls::ContentDialogResult::Primary)
+            co_return;
+
+        RemoveNoaaCells(NoaaCellsToRemove(gone));
+        // The library has changed, so what a price leaves out has changed with
+        // it. Both halves read this.
+        FirstRunNoaaHave();
+        FirstRunRepriceRegions();
+        noaa_held_at_open = noaa_region_id; // the removal is done, not pending
+
+        uint32_t cells = 0;
+        if (!noaa_region_id.empty())
+            lk_controller_noaa_cost(controller, noaa_region_id.c_str(), &cells, nullptr, nullptr,
+                                    nullptr);
+        if (cells > 0)
+        {
+            FirstRunPrimary(); // and now the download half
+            co_return;
+        }
+        // Nothing to fetch: the picker has done what it was opened for.
+        first_run.Finish();
+        FirstRunRender();
     }
 
     // What the coverage step draws from. The counters of a download are left
@@ -1346,10 +1475,16 @@ namespace winrt::LookoutMarine::implementation
 
     void MainWindow::FirstRunCoverage(Controls::StackPanel const &body)
     {
-        body.Children().Append(
-            Heading(L"Which waters do you sail?",
-                    L"Pick the water you use. Lookout downloads those charts and prepares them. "
-                    L"You can add the rest later."));
+        // Setup asks a mariner what to download. A picker opened from the
+        // Charts pane asks what they want to hold, which includes giving water
+        // back, so it says so in the reference's own words.
+        body.Children().Append(Heading(
+            L"Which waters do you sail?",
+            first_run.picker_only()
+                ? L"NOAA publishes an ENC for every United States waterway at no cost. Tick "
+                  L"the water you sail. Unticking water you hold removes those charts."
+                : L"Pick the water you use. Lookout downloads those charts and prepares "
+                  L"them. You can add the rest later."));
 
         lookout_noaa_region const *regions = nullptr;
         size_t const n = lk_controller_noaa_regions(&regions);
@@ -1391,9 +1526,12 @@ namespace winrt::LookoutMarine::implementation
         if (st.have_catalog && first_run.picker_only() && !noaa_picked_seeded)
         {
             noaa_picked_seeded = true;
-            std::string const here = lkw::PickedFromHeld(noaa_region_hold);
-            if (!here.empty())
-                noaa_region_id = here;
+            // Ticked, and remembered: unticking one of these gives that water
+            // back, and unticking water that was never here is a mariner
+            // changing their mind before they press Apply.
+            noaa_held_at_open = lkw::PickedFromHeld(noaa_region_hold);
+            if (!noaa_held_at_open.empty())
+                noaa_region_id = noaa_held_at_open;
         }
 
         FirstRunCoverageMap(body);
@@ -1679,12 +1817,42 @@ namespace winrt::LookoutMarine::implementation
         FirstRunPrimaryBtn().IsEnabled(first_run.PrimaryEnabled(
             have_catalog, !noaa_region_id.empty(), chart_ready));
 
-        // Water the device already holds is fetched again rather than left
-        // with a dead button: that is how a mariner repairs a set, or gets the
-        // edition NOAA has reissued.
+        // The coverage step, which is two steps in one: setup downloads water,
+        // and a picker opened from the Charts pane applies a plan.
+        std::vector<std::string> removing;
         if (first_run.step() == lkw::FirstRunStep::Coverage)
-            FirstRunPrimaryBtn().Content(
-                box_value(NoaaAllHeld() ? L"Download Again" : L"Download"));
+        {
+            removing = NoaaRemoving();
+            if (first_run.picker_only())
+            {
+                // The model titles this Apply. What it can do is what the plan
+                // holds: charts to fetch, water to give back, or neither.
+                uint32_t cells = 0;
+                if (!noaa_region_id.empty())
+                    lk_controller_noaa_cost(controller, noaa_region_id.c_str(), &cells, nullptr,
+                                            nullptr, nullptr);
+                FirstRunPrimaryBtn().IsEnabled(
+                    lkw::ApplyEnabled(have_catalog, cells, removing.size()));
+                // Water wholly here has nothing to add and nothing to give
+                // back, and a mariner repairing a damaged download or taking
+                // the edition NOAA reissued still needs a way to fetch it.
+                FirstRunAgainBtn().Visibility(NoaaAllHeld() && removing.empty()
+                                                  ? Visibility::Visible
+                                                  : Visibility::Collapsed);
+            }
+            else
+            {
+                // Water the device already holds is fetched again rather than
+                // left with a dead button.
+                FirstRunPrimaryBtn().Content(
+                    box_value(NoaaAllHeld() ? L"Download Again" : L"Download"));
+                FirstRunAgainBtn().Visibility(Visibility::Collapsed);
+            }
+        }
+        else
+        {
+            FirstRunAgainBtn().Visibility(Visibility::Collapsed);
+        }
 
         // The line beside the action. The coverage step prices the pick
         // here, the way the reference does: at the end of the step the
@@ -1694,6 +1862,7 @@ namespace winrt::LookoutMarine::implementation
             f.have_catalog = have_catalog;
             f.have_charts = chart_has_cells;
             f.credit = std::wstring{ ScaleBarCredit().Text() };
+            f.removing = NoaaRegionNames(removing);
             if (first_run.step() == lkw::FirstRunStep::Coverage && !noaa_region_id.empty())
                 lk_controller_noaa_cost(controller, noaa_region_id.c_str(), &f.cells,
                                         &f.bytes, &f.held, &f.held_bytes);

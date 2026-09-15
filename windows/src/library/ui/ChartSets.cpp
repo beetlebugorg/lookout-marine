@@ -256,6 +256,92 @@ namespace winrt::LookoutMarine::implementation
         }).detach();
     }
 
+    // Give back the water a mariner unticked in the NOAA picker.
+    //
+    // Only the charts this app downloaded and prepared, and only inside its
+    // own library: a mariner's own folders are their files, and a set they
+    // added is removed a set at a time in the Charts pane. The library holds
+    // one directory per cell, named after it, so a cell is a directory to
+    // take out. A file sitting loose in the library counts as well, because
+    // an older import wrote them that way.
+    //
+    // Returns how many were taken out.
+    size_t MainWindow::RemoveNoaaCells(std::set<std::string> const &names)
+    {
+        if (names.empty())
+            return 0;
+        std::error_code ec;
+        std::filesystem::path lib = lkw::ChartLibraryDir();
+        if (!std::filesystem::is_directory(lib, ec))
+            return 0;
+
+        // The core holds every chart in the library open, and Windows refuses
+        // to move a directory out from under an open file. Nothing is drawn
+        // while this runs; the reopen at the end puts the rest back up.
+        CloseChartHandle();
+
+        std::string const prefix = ".removing-";
+        // BESIDE the library, not in it. A rename is instant and the delete
+        // behind it takes a while; with the trash inside the library the scan
+        // asked for below counted every chart still sitting in it, so the pane
+        // read 935 charts with 5 on disk.
+        std::filesystem::path const holding =
+            lib.has_parent_path() ? lib.parent_path() : lib;
+        std::filesystem::path trash =
+            holding / (prefix + std::to_string(GetCurrentProcessId()) + "-" +
+                       std::to_string(++remove_seq));
+        std::filesystem::create_directories(trash, ec);
+        if (ec)
+            return 0;
+
+        size_t gone = 0;
+        for (auto const &entry : std::filesystem::directory_iterator(lib, ec))
+        {
+            std::string const leaf = entry.path().filename().string();
+            if (leaf.rfind(prefix, 0) == 0)
+                continue;
+            std::string stem = entry.is_directory(ec) ? leaf
+                                                      : entry.path().stem().string();
+            for (auto &ch : stem)
+                ch = (char)std::toupper((unsigned char)ch);
+            if (names.find(stem) == names.end())
+                continue;
+            std::error_code one;
+            std::filesystem::rename(entry.path(), trash / entry.path().filename(), one);
+            if (!one)
+                ++gone;
+        }
+
+        // Behind the rename, off this thread. Every chart it holds is already
+        // out of the library.
+        std::thread([trash] {
+            std::error_code done;
+            std::filesystem::remove_all(trash, done);
+        }).detach();
+
+        if (gone != 0)
+        {
+            // Ask for a scan by the path the model itself reported, not by the
+            // library's name as this file spells it: the core knows a set by
+            // its own string. A rescan of a set that did not change raises the
+            // same flag rather than reporting a lie.
+            //
+            // The counts a row shows arrive with that scan, which is why the
+            // page follows lookout_chart_sets_changed (PollChartSets) as well
+            // as this immediate copy. Without the refresh the pane kept the
+            // charts it had before the removal.
+            if (lookout_chart_sets *model = ChartSetsModel())
+                for (auto const &row : chart_sets)
+                    lookout_chart_sets_rescan(model, row.path.c_str());
+            LoadChartSets([this] {
+                if (SettingsOpen())
+                    RefreshChartsPageOnChange();
+            });
+        }
+        ReopenChartSets({});
+        return gone;
+    }
+
     // Take a set off the list.
     //
     // Charts this app prepared go with it: they were made from the mariner's

@@ -243,6 +243,50 @@ namespace lkw
         return s;
     }
 
+    std::vector<std::string> Removed(std::string const &held, std::string const &picked)
+    {
+        std::vector<std::string> out;
+        for (size_t at = 0; at < held.size();)
+        {
+            size_t end = held.find(',', at);
+            if (end == std::string::npos)
+                end = held.size();
+            std::string one = held.substr(at, end - at);
+            at = end + 1;
+            if (!one.empty() && !RegionPicked(picked, one))
+                out.push_back(one);
+        }
+        return out;
+    }
+
+    std::wstring PlanLine(uint32_t cells, uint64_t bytes, uint32_t held, uint64_t held_bytes,
+                          std::vector<std::wstring> const &removing)
+    {
+        std::wstring s;
+        if (cells > 0)
+            s = L"Add " + Thousands(cells) + L" charts, " + SizeText(bytes);
+        if (!removing.empty())
+        {
+            std::wstring names;
+            for (auto const &n : removing)
+                names += (names.empty() ? L"" : L", ") + n;
+            s += (s.empty() ? L"" : L" · ") + (L"remove " + names);
+        }
+        return s.empty() ? CostLine(cells, bytes, held, held_bytes) : s;
+    }
+
+    std::wstring RemovalTitle(std::vector<std::wstring> const &removing)
+    {
+        if (removing.size() == 1)
+            return L"Remove " + removing[0] + L" charts?";
+        return L"Remove charts for " + Thousands(removing.size()) + L" regions?";
+    }
+
+    bool ApplyEnabled(bool have_catalog, uint32_t cells, size_t removing)
+    {
+        return have_catalog && (cells > 0 || removing > 0);
+    }
+
     std::wstring PrepareEstimate(size_t charts)
     {
         double seconds = (double)(charts < 1 ? 1 : charts) * 0.2;
@@ -397,7 +441,9 @@ namespace lkw
         {
         case FirstRunStep::Welcome:
         case FirstRunStep::Source:      return L"Continue";
-        case FirstRunStep::Coverage:    return L"Download";
+        // A picker opened from the Charts pane does both halves at once, so
+        // its action is Apply rather than Download.
+        case FirstRunStep::Coverage:    return picker_only_ ? L"Apply" : L"Download";
         case FirstRunStep::OnlineChart: return has_chart ? L"Continue" : L"Skip";
         case FirstRunStep::Importing:   return L"Continue";
         case FirstRunStep::Depths:      return L"Start Sailing";
@@ -416,6 +462,15 @@ namespace lkw
         case FirstRunStep::Coverage:
             if (!f.have_catalog)
                 return L"";
+            if (picker_only_)
+            {
+                // A picker states a plan: what is being fetched, what is being
+                // given back, or what the pick holds. With nothing ticked and
+                // nothing unticked it has nothing to say.
+                if (f.cells == 0 && f.held == 0 && f.removing.empty())
+                    return L"";
+                return PlanLine(f.cells, f.bytes, f.held, f.held_bytes, f.removing);
+            }
             // Water already here counts as picked, so a region wholly
             // installed prices as that rather than reading as an empty pick.
             if (f.cells == 0 && f.held == 0)

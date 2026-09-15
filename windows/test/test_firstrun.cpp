@@ -781,5 +781,79 @@ void TestFirstRun()
         LK_EQ(At(FirstRunStep::Welcome).Footnote(link), std::wstring(L""));
         LK_EQ(At(FirstRunStep::Source).Footnote(link), std::wstring(L""));
         LK_EQ(At(FirstRunStep::Importing).Footnote(link), std::wstring(L""));
+
+        /* The picker's other half: water given back. There was no way to
+         * unpick water once it was downloaded except by removing a whole
+         * chart set. */
+        Case("what was held and is no longer ticked");
+        LK_EQ(Removed("d1,d7", "d7").size(), 1u);
+        LK_EQ(Removed("d1,d7", "d7")[0], std::string("d1"));
+        LK_EQ(Removed("d1,d7", "d1,d7").size(), 0u);
+        LK_EQ(Removed("", "d5").size(), 0u);
+
+        /* Unticking water that was never on the device is a mariner changing
+         * their mind, not a removal. */
+        Case("a region never here is not a removal");
+        LK_EQ(Removed("d7", "d7,d5").size(), 0u);
+        LK_EQ(Removed("d7", "d5").size(), 1u);
+
+        Case("both halves in one line");
+        std::vector<std::wstring> gone{ L"Northeast" };
+        LK_EQ(PlanLine(930, 102760448, 0, 0, {}),
+              std::wstring(L"Add 930 charts, 98.0 MB"));
+        LK_EQ(PlanLine(930, 102760448, 0, 0, gone),
+              std::wstring(L"Add 930 charts, 98.0 MB · remove Northeast"));
+        gone.push_back(L"Southeast");
+        LK_EQ(PlanLine(0, 0, 0, 0, gone), std::wstring(L"remove Northeast, Southeast"));
+
+        /* With nothing to add and nothing to give back, the line states what
+         * the pick holds. */
+        Case("a plan with nothing in it prices the pick");
+        LK_EQ(PlanLine(0, 0, 930, 102760448, {}),
+              std::wstring(L"930 charts, all installed · 98.0 MB to fetch again"));
+
+        Case("the question asked before charts are deleted");
+        LK_EQ(RemovalTitle({ L"Northeast" }), std::wstring(L"Remove Northeast charts?"));
+        LK_EQ(RemovalTitle({ L"Northeast", L"Alaska" }),
+              std::wstring(L"Remove charts for 2 regions?"));
+
+        Case("what Apply has to do");
+        LK_EQ(ApplyEnabled(true, 930, 0), true);
+        LK_EQ(ApplyEnabled(true, 0, 1), true);
+        LK_EQ(ApplyEnabled(true, 0, 0), false);
+        LK_EQ(ApplyEnabled(false, 930, 1), false);
+
+        /* A picker opened from the Charts pane, which is the step on its own. */
+        Case("the picker's action does both halves");
+        FirstRun pick;
+        pick.BeginAt(FirstRunStep::Coverage);
+        LK_EQ(pick.picker_only(), true);
+        LK_EQ(pick.PrimaryTitle(false), std::wstring(L"Apply"));
+        LK_EQ(At(FirstRunStep::Coverage).PrimaryTitle(false), std::wstring(L"Download"));
+
+        Case("the picker's plan, beside its action");
+        FirstRun::Footnotes plan{};
+        plan.have_catalog = true;
+        plan.cells = 930;
+        plan.bytes = 102760448;
+        LK_EQ(pick.Footnote(plan), std::wstring(L"Add 930 charts, 98.0 MB"));
+        plan.removing = { L"Northeast" };
+        LK_EQ(pick.Footnote(plan),
+              std::wstring(L"Add 930 charts, 98.0 MB · remove Northeast"));
+
+        Case("a picker giving water back and fetching none");
+        FirstRun::Footnotes back{};
+        back.have_catalog = true;
+        back.removing = { L"Alaska" };
+        LK_EQ(pick.Footnote(back), std::wstring(L"remove Alaska"));
+
+        /* Setup asks for a region. A picker that opened on the water already
+         * here has nothing to ask for. */
+        Case("an untouched picker says nothing");
+        FirstRun::Footnotes idle{};
+        idle.have_catalog = true;
+        LK_EQ(pick.Footnote(idle), std::wstring(L""));
+        LK_EQ(At(FirstRunStep::Coverage).Footnote(idle),
+              std::wstring(L"Pick at least one region."));
     }
 }

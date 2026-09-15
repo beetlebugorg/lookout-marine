@@ -157,6 +157,12 @@ void   lk_controller_noaa_have(lk_controller *self, const char *const *names, si
 int    lk_controller_noaa_cost(lk_controller *self, const char *region_ids,
                                uint32_t *out_cells, uint64_t *out_bytes,
                                uint32_t *out_held, uint64_t *out_held_bytes);
+/* The dataset names of every cell covering these regions. Call with `out`
+ * NULL to size the buffer. The strings are borrowed until the next call.
+ * For removing water a mariner has unpicked: regions overlap, so the cells
+ * to delete are the unpicked ones minus every region still picked. */
+size_t lk_controller_noaa_region_cells(lk_controller *self, const char *region_ids,
+                                       const char **out, size_t cap);
 void   lk_controller_noaa_download(lk_controller *self, const char *region_ids,
                                    const char *dest_dir, int again);
 void   lk_controller_noaa_cancel(lk_controller *self);

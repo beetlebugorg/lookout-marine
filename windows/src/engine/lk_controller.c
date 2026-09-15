@@ -1022,6 +1022,15 @@ lk_controller_noaa_cost(lk_controller *self, const char *region_ids,
                              out_held, out_held_bytes);
 }
 
+size_t
+lk_controller_noaa_region_cells(lk_controller *self, const char *region_ids,
+                                const char **out, size_t cap)
+{
+    if (!lk_controller_is_open(self) || region_ids == NULL)
+        return 0;
+    return lookout_noaa_region_cells(self->handle, region_ids, out, cap);
+}
+
 void
 lk_controller_noaa_download(lk_controller *self, const char *region_ids,
                             const char *dest_dir, int again)

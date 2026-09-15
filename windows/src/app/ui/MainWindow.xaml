@@ -360,6 +360,14 @@
                                     HorizontalAlignment="Left" Visibility="Collapsed" />
                             <StackPanel x:Name="FirstRunActions" Orientation="Horizontal"
                                         Spacing="10" HorizontalAlignment="Right">
+                                <!-- Water wholly here has nothing to add and
+                                     nothing to give back. A mariner repairing a
+                                     damaged download still needs a way to fetch
+                                     it, so the picker offers this beside Apply.
+                                     -->
+                                <Button x:Name="FirstRunAgainBtn"
+                                        Content="Download Again"
+                                        Visibility="Collapsed" />
                                 <Button x:Name="FirstRunPrimaryBtn" Content="Continue"
                                         Style="{StaticResource AccentButtonStyle}" />
                             </StackPanel>
