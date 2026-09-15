@@ -242,6 +242,19 @@ namespace lkw
         return L"Continue";
     }
 
+    bool FirstRun::PrimaryEnabled(bool have_catalog, bool region_picked, bool chart_ready) const
+    {
+        switch (step_)
+        {
+        case FirstRunStep::Coverage: return have_catalog && region_picked;
+        case FirstRunStep::Importing:
+            // saw_bake separates an import that has yet to start from one
+            // that has finished: both report no work running.
+            return saw_bake_ && !shown_.downloading && !shown_.baking && chart_ready;
+        default: return true;
+        }
+    }
+
     void FirstRun::Observe(FirstRunLive const &live)
     {
         // Whether each service is working stays live. The spinners and the

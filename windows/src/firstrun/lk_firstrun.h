@@ -205,6 +205,15 @@ namespace lkw
         // a chart is chosen.
         std::wstring PrimaryTitle(bool has_chart) const;
 
+        // Whether the primary action has anything to do on the step showing.
+        //
+        // A download with nothing picked, or with no catalog to price it
+        // from, does nothing. While charts are still arriving there is
+        // nothing to continue TO: the shell opens the library when the bake
+        // ends, and `chart_ready` is how it says that has happened. Every
+        // other step is always ready to move on.
+        bool PrimaryEnabled(bool have_catalog, bool region_picked, bool chart_ready) const;
+
         // ---- the order, and the counts ------------------------------------
         std::optional<FirstRunOrder> const &order() const { return order_; }
         void set_order(FirstRunOrder o) { order_ = std::move(o); }

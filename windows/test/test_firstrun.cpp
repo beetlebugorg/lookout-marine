@@ -456,6 +456,48 @@ void TestFirstRun()
         LK_EQ(PrepareEstimate(0), std::wstring(L"under a minute"));
     }
 
+    /* What the primary button can do on the step showing. */
+    Suite("lk_firstrun: whether the primary action is ready");
+    {
+        Case("the early steps always are");
+        LK_EQ(At(FirstRunStep::Welcome).PrimaryEnabled(false, false, false), true);
+        LK_EQ(At(FirstRunStep::Source).PrimaryEnabled(false, false, false), true);
+
+        /* Download with nothing picked, or with no catalog to price it from,
+         * does nothing. */
+        Case("download waits for a catalog and a pick");
+        LK_EQ(At(FirstRunStep::Coverage).PrimaryEnabled(true, true, false), true);
+        LK_EQ(At(FirstRunStep::Coverage).PrimaryEnabled(true, false, false), false);
+        LK_EQ(At(FirstRunStep::Coverage).PrimaryEnabled(false, true, false), false);
+
+        /* While charts arrive there is nothing to continue to. */
+        Case("preparing holds the button until the charts are open");
+        FirstRun f = At(FirstRunStep::Importing);
+        LK_EQ(f.PrimaryEnabled(true, true, true), false); // no bake seen yet
+
+        FirstRunLive baking;
+        baking.baking = true;
+        f.Observe(baking);
+        LK_EQ(f.saw_bake(), true);
+        LK_EQ(f.PrimaryEnabled(true, true, true), false); // still baking
+
+        FirstRunLive done;
+        f.Observe(done);
+        LK_EQ(f.PrimaryEnabled(true, true, true), true);
+        Case("and until the library is open");
+        LK_EQ(f.PrimaryEnabled(true, true, false), false);
+
+        Case("a download still running holds it too");
+        FirstRun g = At(FirstRunStep::Importing);
+        FirstRunLive mid;
+        mid.baking = true;
+        g.Observe(mid);
+        FirstRunLive fetching;
+        fetching.downloading = true;
+        g.Observe(fetching);
+        LK_EQ(g.PrimaryEnabled(true, true, true), false);
+    }
+
     /* The picked regions, as the core's comma separated list. A pill toggles
      * one id in it and every other pick stands. */
     Suite("lk_firstrun: the regions picked");

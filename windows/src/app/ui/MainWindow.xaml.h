@@ -402,6 +402,32 @@ namespace winrt::LookoutMarine::implementation
          * rendered again when this changes rather than on every tick. */
         std::string noaa_catalog_drawn;
         std::string NoaaCatalogSignature();
+
+        /* The Preparing step's live parts. That step is polled four times a
+         * second, and building it again restarted the progress bar's sweep and
+         * every phase ring on each tick. The values are written here instead;
+         * the step is built again only when its shape changes, which
+         * FirstRunImportingShape names. */
+        struct FirstRunPhaseUi
+        {
+            Microsoft::UI::Xaml::Controls::TextBlock name{ nullptr };
+            Microsoft::UI::Xaml::Controls::TextBlock detail{ nullptr };
+            Microsoft::UI::Xaml::Controls::FontIcon tick{ nullptr };
+            Microsoft::UI::Xaml::Controls::ProgressRing ring{ nullptr };
+        };
+        std::vector<FirstRunPhaseUi> first_run_phase_ui;
+        struct FirstRunBandUi
+        {
+            Microsoft::UI::Xaml::Controls::TextBlock count{ nullptr };
+            Microsoft::UI::Xaml::Controls::FontIcon tick{ nullptr };
+        };
+        std::vector<FirstRunBandUi> first_run_band_ui;
+        Microsoft::UI::Xaml::Controls::ProgressBar first_run_bar{ nullptr };
+        std::string first_run_importing_shape;
+        std::string FirstRunImportingShape();
+        /* What the step on screen now says, and whether its action can be
+         * taken. Creates nothing, so a poll may call it. */
+        void FirstRunRestate();
         void FirstRunCoverage(Microsoft::UI::Xaml::Controls::StackPanel const &body);
         void FirstRunOnline(Microsoft::UI::Xaml::Controls::StackPanel const &body);
         void FirstRunImporting(Microsoft::UI::Xaml::Controls::StackPanel const &body);

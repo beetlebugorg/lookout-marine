@@ -178,7 +178,7 @@ namespace
         if (on)
         {
             FontIcon tick;
-            tick.Glyph(L"\uE73E"); // CheckMark
+            tick.Glyph(L""); // CheckMark
             tick.FontSize(10);
             tick.Foreground(SolidColorBrush{ Windows::UI::Colors::White() });
             row.Children().Append(tick);
@@ -426,6 +426,10 @@ namespace winrt::LookoutMarine::implementation
 
         auto body = FirstRunBody();
         body.Children().Clear();
+        // The controls the poll writes to died with that Clear.
+        first_run_phase_ui.clear();
+        first_run_band_ui.clear();
+        first_run_bar = nullptr;
 
         // The welcome hero runs to the top and side edges of the card, so the
         // body carries no inset and each step adds its own. The hero goes into
@@ -448,6 +452,10 @@ namespace winrt::LookoutMarine::implementation
         case lkw::FirstRunStep::Importing:   FirstRunImporting(inset); break;
         case lkw::FirstRunStep::Depths:      FirstRunDepths(inset); break;
         }
+        // What the step now says, and whether its action can be taken. Both
+        // are stated in one place, so a poll can restate them without
+        // building the step again.
+        FirstRunRestate();
         FirstRunUpdateFold();
     }
 
@@ -687,8 +695,16 @@ namespace winrt::LookoutMarine::implementation
             }
         }
 
+        // The Preparing step moves four times a second. Its values are
+        // restated; it is built again only when its shape changes, which is
+        // the bands arriving and the Stop button going.
         if (first_run.step() == lkw::FirstRunStep::Importing)
-            FirstRunRender();
+        {
+            if (FirstRunImportingShape() != first_run_importing_shape)
+                FirstRunRender();
+            else
+                FirstRunRestate();
+        }
 
         // The catalog lands on its own, and the coverage map's boxes, the
         // prices and whether a region can be picked at all come from it. So
@@ -965,6 +981,9 @@ namespace winrt::LookoutMarine::implementation
                 }
                 poly.Points(pts);
                 poly.Fill(fill);
+                // A ring simplified to 0.02 degrees can cross itself, and
+                // even-odd would drive a hole through the land there.
+                poly.FillRule(Media::FillRule::Nonzero);
                 canvas.Children().Append(poly);
             }
         };
@@ -995,7 +1014,13 @@ namespace winrt::LookoutMarine::implementation
                 boxes.push_back({ r.west, r.south, r.east, r.north });
             }
 
+            // Non-zero, not the even-odd a geometry defaults to. A region's
+            // cells overlap along their borders, and even-odd cancels the
+            // overlap: it drew holes through the Mid-Atlantic where the
+            // Chesapeake cells cross their neighbours. Every box below is
+            // wound the same way, so non-zero fills their union.
             Media::PathGeometry geo;
+            geo.FillRule(Media::FillRule::Nonzero);
             for (auto const &b : boxes)
             {
                 if (!win.Intersects(b.west, b.east, b.south, b.north))
@@ -1296,19 +1321,11 @@ namespace winrt::LookoutMarine::implementation
         // One bar for the whole job. A bar per phase reads as three jobs.
         ProgressBar bar;
         bar.HorizontalAlignment(HorizontalAlignment::Stretch);
-        double const f = first_run.Fraction();
-        if (f > 0.0)
-        {
-            bar.IsIndeterminate(false);
-            bar.Minimum(0);
-            bar.Maximum(1);
-            bar.Value(f);
-        }
-        else
-        {
-            bar.IsIndeterminate(true);
-        }
         body.Children().Append(bar);
+        // How far it has got is restated, not rebuilt: a fresh bar starts its
+        // sweep over, which on a step polled four times a second reads as a
+        // bar that never advances.
+        first_run_bar = bar;
 
         // Two columns. The phases on the left and the bands beside them. A
         // desktop window has the width for both, and the reference puts them
@@ -1386,23 +1403,21 @@ namespace winrt::LookoutMarine::implementation
                 auto name = Muted(b.name, 12.5);
                 row.Children().Append(name);
 
-                auto count = Muted(b.complete()
-                                       ? Thousands(b.total) + L" charts"
-                                       : Thousands(b.done) + L" of " + Thousands(b.total),
-                                   12.5);
+                // The count moves as the bake runs and the tick arrives when
+                // the band is done, so both are restated rather than rebuilt.
+                auto count = Muted(std::wstring{}, 12.5);
                 Grid::SetColumn(count, 1);
                 row.Children().Append(count);
 
-                if (b.complete())
-                {
-                    FontIcon tick;
-                    tick.Glyph(L""); /* check */
-                    tick.FontSize(13);
-                    tick.Foreground(AccentBrush());
-                    Grid::SetColumn(tick, 2);
-                    row.Children().Append(tick);
-                }
+                FontIcon tick;
+                tick.Glyph(L""); /* check */
+                tick.FontSize(13);
+                tick.Foreground(AccentBrush());
+                Grid::SetColumn(tick, 2);
+                row.Children().Append(tick);
+
                 bands.Children().Append(row);
+                first_run_band_ui.push_back({ count, tick });
             }
         }
 
@@ -1416,9 +1431,105 @@ namespace winrt::LookoutMarine::implementation
         Grid::SetColumn(panel, 1);
         columns.Children().Append(panel);
         body.Children().Append(columns);
+        // The shape just built, for the poll to compare against.
+        first_run_importing_shape = FirstRunImportingShape();
     }
 
     // One phase of the job: what it is, how far it got, and whether it ended.
+    // The shape of the Preparing step: how many bands it lists, and whether
+    // it holds a Stop button and an order line. Everything else on it is a
+    // value.
+    std::string MainWindow::FirstRunImportingShape()
+    {
+        auto const &shown = first_run.shown();
+        std::string s = std::to_string(shown.bands.size());
+        for (auto const &b : shown.bands)
+            s += "|" + winrt::to_string(b.name);
+        s += (shown.downloading || shown.baking) ? "|stop" : "|done";
+        s += first_run.order().has_value() ? "|order" : "|none";
+        return s;
+    }
+
+    // What the step on screen says now, and whether its action can be taken.
+    void MainWindow::FirstRunRestate()
+    {
+        // Whether the primary action has anything to do. The model decides;
+        // the shell answers the three questions it cannot see.
+        bool const have_catalog = [&] {
+            lookout_noaa_state st{};
+            lk_controller_noaa_poll(controller, &st);
+            return st.have_catalog != 0;
+        }();
+        bool const chart_ready = lk_controller_is_open(controller) &&
+                                 !ChartSetOpenPaths().empty();
+        FirstRunPrimaryBtn().IsEnabled(first_run.PrimaryEnabled(
+            have_catalog, !noaa_region_id.empty(), chart_ready));
+
+        if (first_run.step() != lkw::FirstRunStep::Importing)
+            return;
+
+        auto const &shown = first_run.shown();
+        if (first_run_bar != nullptr)
+        {
+            double const f = first_run.Fraction();
+            // Only when it changes. Writing IsIndeterminate restarts the
+            // sweep, which is the flicker this step had.
+            bool const want_sweep = f <= 0.0;
+            if (first_run_bar.IsIndeterminate() != want_sweep)
+                first_run_bar.IsIndeterminate(want_sweep);
+            if (!want_sweep)
+            {
+                first_run_bar.Minimum(0);
+                first_run_bar.Maximum(1);
+                first_run_bar.Value(f);
+            }
+        }
+
+        // The three phases, in the order they were built.
+        struct PhaseNow
+        {
+            std::wstring detail;
+            bool running;
+            bool done;
+        };
+        uint32_t const want = first_run.expected();
+        std::vector<PhaseNow> now;
+        now.push_back({ want > 0 ? Thousands(shown.fetched) + L" of " + Thousands(want)
+                                 : std::wstring{},
+                        shown.downloading,
+                        first_run.order().has_value() && !shown.downloading });
+        now.push_back({ shown.found > 0 ? Thousands(shown.found) + L" found" : std::wstring{},
+                        shown.baking && shown.found == 0, shown.found > 0 });
+        now.push_back({ shown.found > 0 ? Thousands(shown.baked) + L" of " + Thousands(shown.found)
+                                        : std::wstring{},
+                        shown.baking, first_run.saw_bake() && !shown.baking });
+        for (size_t i = 0; i < first_run_phase_ui.size() && i < now.size(); ++i)
+        {
+            auto const &ui = first_run_phase_ui[i];
+            auto const &p = now[i];
+            ui.detail.Text(winrt::hstring{ p.detail });
+            ui.tick.Visibility(p.done ? Visibility::Visible : Visibility::Collapsed);
+            ui.ring.Visibility(p.running && !p.done ? Visibility::Visible
+                                                    : Visibility::Collapsed);
+            // A phase not yet reached is muted. The one running and the ones
+            // done read at full strength.
+            ui.name.Opacity(!p.running && !p.done ? 0.7 : 1.0);
+            ui.name.FontWeight(p.running ? Windows::UI::Text::FontWeights::SemiBold()
+                                         : Windows::UI::Text::FontWeights::Normal());
+        }
+
+        for (size_t i = 0; i < first_run_band_ui.size() && i < shown.bands.size(); ++i)
+        {
+            auto const &b = shown.bands[i];
+            first_run_band_ui[i].count.Text(
+                winrt::hstring{ b.complete() ? Thousands(b.total) + L" charts"
+                                             : Thousands(b.done) + L" of " +
+                                                   Thousands(b.total) });
+            first_run_band_ui[i].tick.Visibility(b.complete() ? Visibility::Visible
+                                                              : Visibility::Collapsed);
+        }
+    }
+
     void MainWindow::FirstRunPhase(Controls::StackPanel const &body, std::wstring const &name,
                                    std::wstring const &detail, bool running, bool done)
     {
@@ -1431,30 +1542,25 @@ namespace winrt::LookoutMarine::implementation
         row.ColumnDefinitions().Append(c1);
         row.ColumnDefinitions().Append(c2);
 
-        if (done)
-        {
-            FontIcon tick;
-            tick.Glyph(L""); /* check */
-            tick.FontSize(14);
-            tick.Foreground(AccentBrush());
-            tick.HorizontalAlignment(HorizontalAlignment::Left);
-            row.Children().Append(tick);
-        }
-        else if (running)
-        {
-            ProgressRing ring;
-            ring.Width(14);
-            ring.Height(14);
-            ring.IsActive(true);
-            ring.HorizontalAlignment(HorizontalAlignment::Left);
-            row.Children().Append(ring);
-        }
+        // Both marks are built and one is shown. This row is restated four
+        // times a second, and making the mark by building the row again
+        // restarted the ring's sweep on every tick. What it says and which
+        // mark it wears is FirstRunRestate's.
+        FontIcon tick;
+        tick.Glyph(L""); /* check */
+        tick.FontSize(14);
+        tick.Foreground(AccentBrush());
+        tick.HorizontalAlignment(HorizontalAlignment::Left);
+        row.Children().Append(tick);
 
-        // A phase not yet reached is muted. The one running and the ones done
-        // read at full strength.
+        ProgressRing ring;
+        ring.Width(14);
+        ring.Height(14);
+        ring.IsActive(true);
+        ring.HorizontalAlignment(HorizontalAlignment::Left);
+        row.Children().Append(ring);
+
         auto label = Line(name, 13.5, running);
-        if (!running && !done)
-            label.Opacity(0.7);
         Grid::SetColumn(label, 1);
         row.Children().Append(label);
 
@@ -1463,6 +1569,7 @@ namespace winrt::LookoutMarine::implementation
         row.Children().Append(tail);
 
         body.Children().Append(row);
+        first_run_phase_ui.push_back({ label, tail, tick, ring });
     }
 
     void MainWindow::FirstRunDepths(Controls::StackPanel const &body)
