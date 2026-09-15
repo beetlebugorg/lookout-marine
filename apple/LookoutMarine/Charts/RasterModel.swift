@@ -123,6 +123,20 @@ final class RasterModel {
             : "Couldn't open \(failed.count) of \(picked.count) files:\n" + failed.joined(separator: "\n")
     }
 
+    /// Hand pictures to the chart that is already open.
+    ///
+    /// The engine takes a new source into a live handle, so a picture added to
+    /// a library that is already drawing needs none of its cells mapped again.
+    /// `paths` already holds these: the set list put them there, and a failure
+    /// here leaves the path to be replayed at the next open.
+    func attach(_ added: [String]) {
+        guard let c = engine, !added.isEmpty else { return }
+        for p in added { _ = c.addRaster(p) }
+        // The pill and the set list are built from the frame readouts, which
+        // never come while the chart sits idle behind the open panel.
+        refresh()
+    }
+
     /// Read the frame's values off the chart. Only what changed is assigned:
     /// see ReadoutsModel.pull.
     func pull() {

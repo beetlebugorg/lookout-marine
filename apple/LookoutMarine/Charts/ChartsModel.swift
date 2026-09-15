@@ -540,6 +540,7 @@ final class ChartsModel {
         if set.path == NoaaModel.downloadDirectory {
             ChartSetStore.setManaged(set.path, true)
         }
+        let heldBefore = Set(raster.paths)
         syncRasterFromSets()
         if reopen {
             // Both what the core composed and what this scan found. The core
@@ -548,7 +549,16 @@ final class ChartsModel {
             var paths = openPaths
             var seen = Set(paths)
             for p in set.openablePaths where seen.insert(p).inserted { paths.append(p) }
-            requestOpen(paths.sorted())
+            // A set of PICTURES adds no cell to map. The chart already open
+            // holds every cell this composes, and the engine takes a picture
+            // into a live handle, so reopening remapped the whole library to
+            // add one .mbtiles: the startup loader came up over a chart that
+            // was already drawing and every cell was read again.
+            if hasChart, !isOpening, set.openablePaths.isEmpty {
+                raster.attach(raster.paths.filter { !heldBefore.contains($0) })
+            } else {
+                requestOpen(paths.sorted())
+            }
         }
         // The rescan runs on a worker. With no chart open there is no frame
         // loop polling for the result.
