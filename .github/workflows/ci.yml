@@ -260,7 +260,12 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+      # The action installs "tools platform-tools" by default, and the SDK
+      # repository dropped "tools", so sdkmanager exits 1. The step below
+      # installs the NDK and CMake this build needs.
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
 
       # The versions android/app/build.gradle names. Gradle runs build-libs.sh
       # for the core before the CMake link.
