@@ -61,6 +61,7 @@ namespace winrt::LookoutMarine::implementation
                 // file that bakes first out of both halves, and this line has
                 // always counted a picture waiting to be baked as a picture.
                 size_t files = 0;
+                std::vector<std::string> names;
                 auto found = lookout_chart_set_files(model, all[i]->path, &files);
                 for (size_t f = 0; f < files; ++f)
                 {
@@ -70,11 +71,24 @@ namespace winrt::LookoutMarine::implementation
                     case LOOKOUT_FILE_RASTER_SOURCE: row.pictures++; break;
                     case LOOKOUT_FILE_BAKED:
                         row.charts++;
+                        names.push_back(found[f]->name);
                         if (found[f]->band >= 1 && found[f]->band <= 6)
                             ++row.bands[found[f]->band];
                         break;
                     default:                         break;
                     }
+                }
+                // The office whose charts these are, when the core fell back
+                // to the folder's own name. A NOAA library baked into the
+                // app's chart folder read as "Charts", which names where the
+                // files are rather than whose they are.
+                std::string const folder =
+                    std::filesystem::path(row.path).filename().string();
+                if (row.title == folder && !names.empty())
+                {
+                    std::string agency = lkw::AgencyForCells(names);
+                    if (!agency.empty())
+                        row.title = agency;
                 }
                 chart_sets.push_back(std::move(row));
             }
