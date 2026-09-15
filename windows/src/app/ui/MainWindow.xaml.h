@@ -265,6 +265,11 @@ namespace winrt::LookoutMarine::implementation
         // for it, so one opened at night opens dark.
         Microsoft::UI::Xaml::ElementTheme ChromeTheme();
         void ApplyChromeTheme(Microsoft::UI::Xaml::ElementTheme want);
+        /* The state fills for the markup buttons with no background of
+         * their own, in the scheme the chrome wears. See lkw::ButtonFills:
+         * a transparent button crosses a dark wash on its way to the
+         * theme's hover fill. */
+        void FlatChromeButtons();
         void ApplyTableTheme(Microsoft::UI::Xaml::ElementTheme want);   // plugins/ui/Tables.cpp
         void ThemeSettingsPane(Microsoft::UI::Xaml::ElementTheme want); // settings/ui/Settings.cpp
 

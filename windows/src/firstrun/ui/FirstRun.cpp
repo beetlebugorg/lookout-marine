@@ -26,6 +26,7 @@
 #include "lk_bake.h"
 #include "lk_coastline.h"
 #include "lk_firstrun.h"
+#include "lk_format.h"
 #include "lk_paths.h"
 
 using namespace winrt;
@@ -214,16 +215,20 @@ namespace
     void PaintPicked(Button const &b, bool on)
     {
         b.BorderThickness({ 1, 1, 1, 1 });
+        // A pill keeps one hue through the hover fade. See lkw::ButtonFills:
+        // a transparent button crosses through a dark wash on the way to the
+        // theme's own hover fill, and an accent one washes out to near white.
         if (on)
         {
-            b.Background(AccentBrush());
+            uint32_t const fill = g_dark ? 0xFF7EA1F5u : 0xFF1B49C4u;
+            lkw::ButtonFills(b, fill, fill, fill, 0x00000000u);
             b.BorderBrush(SolidColorBrush{ Windows::UI::Colors::Transparent() });
             b.Foreground(SolidColorBrush{ Windows::UI::Colors::White() });
             b.FontWeight(Windows::UI::Text::FontWeights::SemiBold());
         }
         else
         {
-            b.Background(SolidColorBrush{ Windows::UI::Colors::Transparent() });
+            lkw::FlatFills(b, g_dark, g_dark ? 0x33FFFFFFu : 0x33000000u);
             b.BorderBrush(HairlineBrush());
             // Back to the theme's own ink rather than a colour of this file's.
             b.ClearValue(Controls::Control::ForegroundProperty());
@@ -291,11 +296,21 @@ namespace
         b.BorderThickness({ 1, 1, 1, 1 });
         if (on)
         {
-            b.Background(AccentBrush());
+            // The pick stays the accent under the pointer, rather than fading
+            // to the theme's near-white hover fill. See lkw::ButtonFills.
+            uint32_t const fill = g_dark ? 0xFF7EA1F5u : 0xFF1B49C4u;
+            lkw::ButtonFills(b, fill, fill, fill, 0x00000000u);
             b.BorderBrush(SolidColorBrush{ Windows::UI::Colors::Transparent() });
         }
         else
         {
+            // The reference fills an unpicked pill with Chrome.surface, which
+            // is white by day and #16181C at night. Opaque, so the hover fade
+            // stays in that family.
+            lkw::ButtonFills(b, g_dark ? 0xFF16181Cu : 0xFFFFFFFFu,
+                             g_dark ? 0xFF1E2126u : 0xFFF2F2F2u,
+                             g_dark ? 0xFF23272Du : 0xFFE9E9E9u,
+                             g_dark ? 0x33FFFFFFu : 0x33000000u);
             b.BorderBrush(HairlineBrush());
         }
         b.IsEnabled(enabled);

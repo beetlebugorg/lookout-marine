@@ -528,7 +528,7 @@ namespace winrt::LookoutMarine::implementation
         b.Content(face);
         b.Padding({ 0, 0, 0, 0 });
         b.Width(kAddTileWidth);
-        b.Background(lkw::Brush(lkw::chrome::kClear));
+        lkw::FlatFills(b, DarkChrome());
         b.BorderThickness({ 0, 0, 0, 0 });
         b.VerticalAlignment(VerticalAlignment::Stretch);
         b.HorizontalContentAlignment(HorizontalAlignment::Stretch);
@@ -558,7 +558,7 @@ namespace winrt::LookoutMarine::implementation
         Controls::Button file;
         file.Content(winrt::box_value(L"Add a style file from this device…"));
         file.HorizontalAlignment(HorizontalAlignment::Left);
-        file.Background(lkw::Brush(lkw::chrome::kClear));
+        lkw::FlatFills(file, dark);
         file.BorderThickness({ 0, 0, 0, 0 });
         file.Padding({ 0, 4, 0, 4 });
         file.Foreground(lkw::Brush(lkw::chrome::Accent(dark)));
@@ -2096,7 +2096,7 @@ namespace winrt::LookoutMarine::implementation
                                   checked));
                 noaa.HorizontalAlignment(HorizontalAlignment::Stretch);
                 noaa.HorizontalContentAlignment(HorizontalAlignment::Stretch);
-                noaa.Background(lkw::Brush(lkw::chrome::kClear));
+                lkw::FlatFills(noaa, dark);
                 noaa.BorderThickness({ 0, 0, 0, 0 });
                 noaa.Padding({ 0, 6, 0, 6 });
                 noaa.IsEnabled(!working && noaa_pane_count == nullptr);
@@ -2132,7 +2132,7 @@ namespace winrt::LookoutMarine::implementation
                                   std::wstring{}));
                 disk.HorizontalAlignment(HorizontalAlignment::Stretch);
                 disk.HorizontalContentAlignment(HorizontalAlignment::Stretch);
-                disk.Background(lkw::Brush(lkw::chrome::kClear));
+                lkw::FlatFills(disk, dark);
                 disk.BorderThickness({ 0, 0, 0, 0 });
                 disk.Padding({ 0, 6, 0, 6 });
                 disk.IsEnabled(!working);

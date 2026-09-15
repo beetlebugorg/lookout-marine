@@ -19,4 +19,28 @@ namespace lkw
         c.A = (uint8_t)(alpha * 255.0 + 0.5);
         return c;
     }
+
+    void ButtonFills(winrt::Microsoft::UI::Xaml::Controls::Control const &c, uint32_t flat,
+                     uint32_t over, uint32_t down, uint32_t edge)
+    {
+        c.Background(Brush(flat));
+        auto put = [&](wchar_t const *key, uint32_t argb) {
+            c.Resources().Insert(winrt::box_value(winrt::hstring{ key }), Brush(argb));
+        };
+        put(L"ButtonBackground", flat);
+        put(L"ButtonBackgroundPointerOver", over);
+        put(L"ButtonBackgroundPressed", down);
+        put(L"ButtonBackgroundDisabled", flat);
+        put(L"ButtonBorderBrush", edge);
+        put(L"ButtonBorderBrushPointerOver", edge);
+        put(L"ButtonBorderBrushPressed", edge);
+        put(L"ButtonBorderBrushDisabled", edge);
+    }
+
+    void FlatFills(winrt::Microsoft::UI::Xaml::Controls::Control const &c, bool dark,
+                   uint32_t edge)
+    {
+        ButtonFills(c, dark ? 0x00FFFFFFu : 0x00000000u, dark ? 0x14FFFFFFu : 0x0F000000u,
+                    dark ? 0x1FFFFFFFu : 0x17000000u, edge);
+    }
 }

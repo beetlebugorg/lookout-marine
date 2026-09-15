@@ -347,6 +347,10 @@ namespace winrt::LookoutMarine::implementation
             });
             Root().KeyboardAccelerators().Append(f11);
         }
+
+        // The markup buttons drawn flat against their panel, in the scheme
+        // the chrome opens in. ApplyChromeTheme does this again on a change.
+        FlatChromeButtons();
     }
 
     void MainWindow::OnRendering(Windows::Foundation::IInspectable const &,
