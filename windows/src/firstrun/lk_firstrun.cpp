@@ -197,6 +197,52 @@ namespace lkw
         return out;
     }
 
+    std::wstring RegionBadge(RegionHold const &hold)
+    {
+        if (hold.Complete())
+            return L"installed";
+        if (hold.Partial())
+            return Thousands(hold.held) + L" of " + Thousands(hold.Total());
+        return L"";
+    }
+
+    std::wstring RegionLabel(std::wstring const &name, std::wstring const &blurb,
+                             RegionHold const &hold)
+    {
+        std::wstring s = name + L". " + blurb;
+        if (!hold.Known())
+            return s;
+        if (hold.Complete())
+            return s + L". All " + Thousands(hold.held) + L" charts installed.";
+        if (hold.Partial())
+            return s + L". " + Thousands(hold.held) + L" of " + Thousands(hold.Total()) +
+                   L" charts installed.";
+        return s + L". " + Thousands(hold.Total()) + L" charts, none installed.";
+    }
+
+    std::string PickedFromHeld(std::vector<std::pair<std::string, RegionHold>> const &holds)
+    {
+        std::string out;
+        for (auto const &one : holds)
+        {
+            if (!one.second.Complete())
+                continue;
+            out += (out.empty() ? "" : ",") + one.first;
+        }
+        return out;
+    }
+
+    std::wstring CostLine(uint32_t cells, uint64_t bytes, uint32_t held, uint64_t held_bytes)
+    {
+        if (cells == 0 && held > 0)
+            return Thousands(held) + L" charts, all installed · " + SizeText(held_bytes) +
+                   L" to fetch again";
+        std::wstring s = Thousands(cells) + L" charts, " + SizeText(bytes);
+        if (held > 0)
+            s += L" · " + Thousands(held) + L" already installed";
+        return s;
+    }
+
     std::wstring PrepareEstimate(size_t charts)
     {
         double seconds = (double)(charts < 1 ? 1 : charts) * 0.2;
@@ -357,6 +403,42 @@ namespace lkw
         case FirstRunStep::Depths:      return L"Start Sailing";
         }
         return L"Continue";
+    }
+
+    std::wstring FirstRun::Footnote(Footnotes const &f) const
+    {
+        switch (step_)
+        {
+        case FirstRunStep::Welcome:
+        case FirstRunStep::Source:
+        case FirstRunStep::Importing:
+            return L"";
+        case FirstRunStep::Coverage:
+            if (!f.have_catalog)
+                return L"";
+            // Water already here counts as picked, so a region wholly
+            // installed prices as that rather than reading as an empty pick.
+            if (f.cells == 0 && f.held == 0)
+                return L"Pick at least one region.";
+            return CostLine(f.cells, f.bytes, f.held, f.held_bytes);
+        case FirstRunStep::Depths:
+            return L"Change any of this later in Mariner settings, in Depths.";
+        case FirstRunStep::OnlineChart:
+        {
+            // The credit a public tile host makes a condition of service, and
+            // the thing a mariner about to pick a link most wants to know. An
+            // install with no charts has none to reassure them about.
+            std::wstring s = f.credit;
+            if (f.have_charts)
+            {
+                if (!s.empty())
+                    s += L" · ";
+                s += L"installed charts stay installed";
+            }
+            return s;
+        }
+        }
+        return L"";
     }
 
     bool FirstRun::PrimaryEnabled(bool have_catalog, bool region_picked, bool chart_ready) const

@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace lkw
@@ -157,6 +158,49 @@ namespace lkw
     bool RegionPicked(std::string const &list, std::string const &id);
     std::string RegionToggle(std::string const &list, std::string const &id);
 
+    // What of one region's water is on this device.
+    //
+    // The pick as a whole is priced by one cost call, and that total is what a
+    // download costs. These are separate calls, one for each region, and they
+    // state what the mariner already holds. The reference prices both, because
+    // a picker that shows only the price of a pick says nothing about the
+    // water a mariner downloaded last month.
+    struct RegionHold
+    {
+        uint32_t missing{ 0 };
+        uint32_t held{ 0 };
+
+        uint32_t Total() const { return missing + held; }
+        // Every cell covering this water is here.
+        bool Complete() const { return missing == 0 && held > 0; }
+        // Part of it is here. NOAA files a cell under one district that covers
+        // another's water, so a region is often partly held before it is ever
+        // picked.
+        bool Partial() const { return held > 0 && missing > 0; }
+        // Before a catalog is read every count is zero, and the pill says
+        // nothing.
+        bool Known() const { return Total() > 0; }
+    };
+
+    // What the pill says beside the region's name. Empty for water with none
+    // of it here, which is most of the map on a first run.
+    std::wstring RegionBadge(RegionHold const &hold);
+
+    // The pill's name for a screen reader, which states the counts the badge
+    // abbreviates to "installed".
+    std::wstring RegionLabel(std::wstring const &name, std::wstring const &blurb,
+                             RegionHold const &hold);
+
+    // The pick a picker opens with: every region whose water is wholly here.
+    // Opening with nothing ticked said the mariner held nothing, and ticking
+    // water they had already downloaded read as a second download of it.
+    std::string PickedFromHeld(std::vector<std::pair<std::string, RegionHold>> const &holds);
+
+    // What a pick costs, in the mariner's words. Water already here is left
+    // out of the price, so a pick wholly installed costs nothing and states
+    // what fetching it again would move instead.
+    std::wstring CostLine(uint32_t cells, uint64_t bytes, uint32_t held, uint64_t held_bytes);
+
     // About how long preparing this many charts takes, for the question asked
     // before a set's prepared charts are deleted: the mariner is deciding
     // whether to throw away work, so the size of that work is the fact they
@@ -285,6 +329,24 @@ namespace lkw
         // The last step names what it keeps. The online step offers Skip until
         // a chart is chosen.
         std::wstring PrimaryTitle(bool has_chart) const;
+
+        // The facts the line beside the primary action is composed from. The
+        // step decides which of them it uses.
+        struct Footnotes
+        {
+            bool         have_catalog{ false };
+            uint32_t     cells{ 0 };
+            uint64_t     bytes{ 0 };
+            uint32_t     held{ 0 };
+            uint64_t     held_bytes{ 0 };
+            std::wstring credit;
+            bool         have_charts{ false };
+        };
+        // The line beside the primary action: the coverage step prices the
+        // pick there, the depths step says where its numbers live afterwards,
+        // and the online step states the publisher's credit. Empty on the
+        // steps that have nothing to say.
+        std::wstring Footnote(Footnotes const &f) const;
 
         // Whether the primary action has anything to do on the step showing.
         //

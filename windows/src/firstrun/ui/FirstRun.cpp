@@ -243,7 +243,8 @@ namespace
     // One region as a pill: a capsule the mariner picks, ticked and filled
     // while it is in the pick. The reference draws the districts this way in
     // setup and in the settings picker alike.
-    Button RegionPill(std::wstring const &name, std::wstring const &blurb, bool on, bool enabled)
+    Button RegionPill(std::wstring const &name, std::wstring const &blurb,
+                      lkw::RegionHold const &hold, bool on, bool enabled)
     {
         StackPanel row;
         row.Orientation(Orientation::Horizontal);
@@ -267,6 +268,20 @@ namespace
         }
         row.Children().Append(t);
 
+        // What of this water is here, after the name. Water with none of it
+        // here says nothing, which is every region on a first run.
+        std::wstring const badge = lkw::RegionBadge(hold);
+        if (!badge.empty())
+        {
+            TextBlock note;
+            note.Text(badge);
+            note.FontSize(11);
+            note.Opacity(0.75);
+            if (on)
+                note.Foreground(SolidColorBrush{ Windows::UI::Colors::White() });
+            row.Children().Append(note);
+        }
+
         Button b;
         b.Content(row);
         b.Height(30);
@@ -286,7 +301,7 @@ namespace
         b.IsEnabled(enabled);
         b.Opacity(enabled ? 1.0 : 0.5);
         ToolTipService::SetToolTip(b, box_value(blurb));
-        Automation::AutomationProperties::SetName(b, name + L". " + blurb);
+        Automation::AutomationProperties::SetName(b, lkw::RegionLabel(name, blurb, hold));
         return b;
     }
 
@@ -294,10 +309,13 @@ namespace
     // panel that wraps, and the card is a fixed 720 points, so the rows are
     // worked out before anything is built: 12.5 point Segoe runs a little
     // under 7 points a character, and the capsule adds its padding, its border
-    // and the tick.
-    double RegionPillWidth(std::wstring const &name, bool on)
+    // and the tick. The badge is 11 point, at about six.
+    double RegionPillWidth(std::wstring const &name, std::wstring const &badge, bool on)
     {
-        return 28.0 + (on ? 16.0 : 0.0) + (double)name.size() * 7.0;
+        double wide = 28.0 + (on ? 16.0 : 0.0) + (double)name.size() * 7.0;
+        if (!badge.empty())
+            wide += 6.0 + (double)badge.size() * 6.2;
+        return wide;
     }
 
     // One pickable card: the source step's three, and the coverage step's
@@ -457,6 +475,7 @@ namespace winrt::LookoutMarine::implementation
         CloseSettings();
         noaa_handed_over = false;
         noaa_region_id.clear();
+        noaa_picked_seeded = false;
         lk_controller_noaa_refresh(controller);
         first_run.BeginAt(lkw::FirstRunStep::Coverage);
         FirstRunRender();
@@ -1069,6 +1088,33 @@ namespace winrt::LookoutMarine::implementation
         lk_controller_noaa_have(controller, cps.data(), cps.size());
     }
 
+    // Price every region on its own.
+    //
+    // The pick as a whole is priced where it is stated, and that total is
+    // what a download costs. These are one call each, answered off the
+    // catalog the core already holds, and they are what the pills state: a
+    // picker that priced only the pick said nothing about the water already
+    // on the device.
+    void MainWindow::FirstRunRepriceRegions()
+    {
+        noaa_region_hold.clear();
+        if (controller == nullptr)
+            return;
+        lookout_noaa_region const *regions = nullptr;
+        size_t const n = lk_controller_noaa_regions(&regions);
+        if (n == 0 || regions == nullptr)
+            return;
+        for (size_t i = 0; i < n; ++i)
+        {
+            uint32_t cells = 0, held = 0;
+            uint64_t bytes = 0, held_bytes = 0;
+            if (!lk_controller_noaa_cost(controller, regions[i].id, &cells, &bytes,
+                                         &held, &held_bytes))
+                continue;
+            noaa_region_hold.push_back({ regions[i].id, lkw::RegionHold{ cells, held } });
+        }
+    }
+
     // The coverage map, above the region list.
     //
     // The coastline is GSHHG, read once from data\\firstrun\\coastline.bin and
@@ -1322,6 +1368,19 @@ namespace winrt::LookoutMarine::implementation
         // catalog moves.
         noaa_catalog_drawn = NoaaCatalogSignature();
 
+        // What of each region is already here, before anything draws from
+        // it. The pills state it, and a picker opened from the Charts pane
+        // opens ticked on the water the mariner holds: opening it with
+        // nothing ticked said they held none.
+        FirstRunRepriceRegions();
+        if (st.have_catalog && first_run.picker_only() && !noaa_picked_seeded)
+        {
+            noaa_picked_seeded = true;
+            std::string const here = lkw::PickedFromHeld(noaa_region_hold);
+            if (!here.empty())
+                noaa_region_id = here;
+        }
+
         FirstRunCoverageMap(body);
 
         // Where the catalog stands. The price comes from it, so a region can
@@ -1380,12 +1439,21 @@ namespace winrt::LookoutMarine::implementation
             row.Orientation(Orientation::Horizontal);
             row.Spacing(kGap);
             double used = 0;
+            // What of each region is here, by the core's id.
+            auto hold_of = [this](std::string const &id) {
+                for (auto const &one : noaa_region_hold)
+                    if (one.first == id)
+                        return one.second;
+                return lkw::RegionHold{};
+            };
             for (size_t i = 0; i < n; ++i)
             {
                 auto const &r = regions[i];
                 bool const picked = lkw::RegionPicked(noaa_region_id, r.id);
                 std::wstring name{ winrt::to_hstring(r.name) };
-                double const wide = RegionPillWidth(name, picked);
+                lkw::RegionHold const hold = hold_of(r.id);
+                std::wstring const badge = lkw::RegionBadge(hold);
+                double const wide = RegionPillWidth(name, badge, picked);
                 if (used > 0 && used + kGap + wide > kRoom)
                 {
                     rows.Children().Append(row);
@@ -1394,8 +1462,8 @@ namespace winrt::LookoutMarine::implementation
                     row.Spacing(kGap);
                     used = 0;
                 }
-                auto pill = RegionPill(name, winrt::to_hstring(r.blurb).c_str(), picked,
-                                       st.have_catalog);
+                auto pill = RegionPill(name, winrt::to_hstring(r.blurb).c_str(), hold,
+                                       picked, st.have_catalog);
                 std::string const rid = r.id;
                 pill.Click([this, rid](auto &&, auto &&) {
                     noaa_region_id = lkw::RegionToggle(noaa_region_id, rid);
@@ -1407,30 +1475,6 @@ namespace winrt::LookoutMarine::implementation
             if (row.Children().Size() > 0)
                 rows.Children().Append(row);
             body.Children().Append(rows);
-        }
-
-        // ONE total for the whole pick. The core counts every cell covering
-        // the water, including the ones NOAA files under the district next
-        // door, so per-region prices overlap and do not sum to it.
-        if (st.have_catalog && !noaa_region_id.empty())
-        {
-            uint32_t cells = 0, held = 0;
-            uint64_t bytes = 0, held_bytes = 0;
-            if (lk_controller_noaa_cost(controller, noaa_region_id.c_str(), &cells, &bytes,
-                                        &held, &held_bytes))
-            {
-                std::wstring line;
-                if (cells == 0 && held > 0)
-                    line = Thousands(held) + L" charts, all installed · " +
-                           SizeText(held_bytes) + L" to fetch again";
-                else
-                {
-                    line = Thousands(cells) + L" charts, " + SizeText(bytes);
-                    if (held > 0)
-                        line += L" · " + Thousands(held) + L" already installed";
-                }
-                body.Children().Append(Line(line, 12.5, true));
-            }
         }
     }
 
@@ -1626,6 +1670,23 @@ namespace winrt::LookoutMarine::implementation
         if (first_run.step() == lkw::FirstRunStep::Coverage)
             FirstRunPrimaryBtn().Content(
                 box_value(NoaaAllHeld() ? L"Download Again" : L"Download"));
+
+        // The line beside the action. The coverage step prices the pick
+        // here, the way the reference does: at the end of the step the
+        // footer bar covered it.
+        {
+            lkw::FirstRun::Footnotes f;
+            f.have_catalog = have_catalog;
+            f.have_charts = chart_has_cells;
+            f.credit = std::wstring{ ScaleBarCredit().Text() };
+            if (first_run.step() == lkw::FirstRunStep::Coverage && !noaa_region_id.empty())
+                lk_controller_noaa_cost(controller, noaa_region_id.c_str(), &f.cells,
+                                        &f.bytes, &f.held, &f.held_bytes);
+            std::wstring const note = first_run.Footnote(f);
+            FirstRunFootnote().Text(winrt::hstring{ note });
+            FirstRunFootnote().Visibility(note.empty() ? Visibility::Collapsed
+                                                       : Visibility::Visible);
+        }
 
         if (first_run.step() != lkw::FirstRunStep::Importing)
             return;

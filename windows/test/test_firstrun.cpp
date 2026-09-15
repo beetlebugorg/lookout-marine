@@ -655,5 +655,131 @@ void TestFirstRun()
         LK_EQ(RegionPicked("d11", "d1"), false);
         LK_EQ(RegionPicked("d1,d11", "d1"), true);
         LK_EQ(RegionToggle("d11", "d1"), std::string("d11,d1"));
+
+        /* What a mariner holds, region by region. The picker priced only the
+         * pick, so water already downloaded looked the same as water that was
+         * not here. */
+        Case("a region wholly here reads installed");
+        RegionHold all{ 0, 930 };
+        LK_EQ(all.Total(), 930u);
+        LK_EQ(all.Complete(), true);
+        LK_EQ(all.Partial(), false);
+        LK_EQ(RegionBadge(all), std::wstring(L"installed"));
+
+        Case("a region partly here counts both");
+        RegionHold some{ 9, 3 };
+        LK_EQ(some.Total(), 12u);
+        LK_EQ(some.Complete(), false);
+        LK_EQ(some.Partial(), true);
+        LK_EQ(RegionBadge(some), std::wstring(L"3 of 12"));
+
+        Case("water none of which is here says nothing");
+        RegionHold none{ 412, 0 };
+        LK_EQ(none.Complete(), false);
+        LK_EQ(none.Partial(), false);
+        LK_EQ(RegionBadge(none), std::wstring(L""));
+
+        /* Before a catalog is read every count is zero, which is not the same
+         * fact as a region with nothing downloaded. */
+        Case("an unpriced region is not a region with nothing");
+        RegionHold blank{};
+        LK_EQ(blank.Known(), false);
+        LK_EQ(none.Known(), true);
+        LK_EQ(RegionBadge(blank), std::wstring(L""));
+
+        Case("the counts a screen reader hears");
+        LK_EQ(RegionLabel(L"Mid-Atlantic", L"Delaware to Cape Hatteras", all),
+              std::wstring(L"Mid-Atlantic. Delaware to Cape Hatteras. All 930 charts "
+                           L"installed."));
+        LK_EQ(RegionLabel(L"Mid-Atlantic", L"Delaware to Cape Hatteras", some),
+              std::wstring(L"Mid-Atlantic. Delaware to Cape Hatteras. 3 of 12 charts "
+                           L"installed."));
+        LK_EQ(RegionLabel(L"Alaska", L"Dixon Entrance to the Beaufort Sea", none),
+              std::wstring(L"Alaska. Dixon Entrance to the Beaufort Sea. 412 charts, none "
+                           L"installed."));
+        LK_EQ(RegionLabel(L"Alaska", L"Dixon Entrance to the Beaufort Sea", blank),
+              std::wstring(L"Alaska. Dixon Entrance to the Beaufort Sea"));
+
+        /* Opening the picker with nothing ticked stated that the mariner held
+         * nothing. */
+        Case("the picker opens on the water already here");
+        std::vector<std::pair<std::string, RegionHold>> holds{
+            { "d1", RegionHold{ 0, 44 } },
+            { "d5", RegionHold{ 9, 3 } },
+            { "d7", RegionHold{ 0, 930 } },
+            { "d17", RegionHold{ 412, 0 } },
+        };
+        LK_EQ(PickedFromHeld(holds), std::string("d1,d7"));
+
+        Case("held nothing, ticked nothing");
+        LK_EQ(PickedFromHeld({ { "d5", RegionHold{ 9, 0 } } }), std::string(""));
+        LK_EQ(PickedFromHeld({}), std::string(""));
+
+        /* The pick it opens with is the list the toggle and the cost call
+         * read, so it has to be their format. */
+        Case("that pick is a list the rest of the step understands");
+        LK_EQ(RegionPicked(PickedFromHeld(holds), "d7"), true);
+        LK_EQ(RegionPicked(PickedFromHeld(holds), "d5"), false);
+        LK_EQ(RegionToggle(PickedFromHeld(holds), "d1"), std::string("d7"));
+
+        /* The line beside the primary action. It stated the price of a pick
+         * at the end of the step, where the footer bar covered it. */
+        Case("what a pick costs, in the mariner's words");
+        LK_EQ(CostLine(930, 102760448, 0, 0), std::wstring(L"930 charts, 98.0 MB"));
+        LK_EQ(CostLine(27, 3145728, 864, 90177536),
+              std::wstring(L"27 charts, 3.0 MB · 864 already installed"));
+        LK_EQ(CostLine(0, 0, 930, 102760448),
+              std::wstring(L"930 charts, all installed · 98.0 MB to fetch again"));
+
+        Case("the coverage step prices the pick beside the action");
+        FirstRun::Footnotes cov{};
+        cov.have_catalog = true;
+        cov.cells = 930;
+        cov.bytes = 102760448;
+        LK_EQ(At(FirstRunStep::Coverage).Footnote(cov), std::wstring(L"930 charts, 98.0 MB"));
+
+        /* Water already here counts as picked: a region wholly installed
+         * prices as nothing, which read as an empty pick. */
+        Case("a pick wholly installed is not an empty pick");
+        FirstRun::Footnotes whole{};
+        whole.have_catalog = true;
+        whole.held = 930;
+        whole.held_bytes = 102760448;
+        LK_EQ(At(FirstRunStep::Coverage).Footnote(whole),
+              std::wstring(L"930 charts, all installed · 98.0 MB to fetch again"));
+
+        Case("nothing picked asks for a region");
+        FirstRun::Footnotes bare{};
+        bare.have_catalog = true;
+        LK_EQ(At(FirstRunStep::Coverage).Footnote(bare), std::wstring(L"Pick at least one region."));
+
+        Case("no catalog, nothing to say");
+        FirstRun::Footnotes unread{};
+        LK_EQ(At(FirstRunStep::Coverage).Footnote(unread), std::wstring(L""));
+
+        Case("the depths step says where its numbers live afterwards");
+        LK_EQ(At(FirstRunStep::Depths).Footnote(unread),
+              std::wstring(L"Change any of this later in Mariner settings, in Depths."));
+
+        Case("the online step states the credit, and what is kept");
+        FirstRun::Footnotes link{};
+        link.credit = L"© OpenStreetMap contributors";
+        link.have_charts = true;
+        LK_EQ(At(FirstRunStep::OnlineChart, ChartSource::Online).Footnote(link),
+              std::wstring(L"© OpenStreetMap contributors · installed charts stay installed"));
+        link.have_charts = false;
+        LK_EQ(At(FirstRunStep::OnlineChart, ChartSource::Online).Footnote(link),
+              std::wstring(L"© OpenStreetMap contributors"));
+
+        /* An install with no charts has none to reassure a mariner about. */
+        Case("a link with no credit and nothing installed says nothing");
+        FirstRun::Footnotes plain{};
+        LK_EQ(At(FirstRunStep::OnlineChart, ChartSource::Online).Footnote(plain),
+              std::wstring(L""));
+
+        Case("the steps with nothing to say");
+        LK_EQ(At(FirstRunStep::Welcome).Footnote(link), std::wstring(L""));
+        LK_EQ(At(FirstRunStep::Source).Footnote(link), std::wstring(L""));
+        LK_EQ(At(FirstRunStep::Importing).Footnote(link), std::wstring(L""));
     }
 }

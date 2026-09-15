@@ -389,6 +389,11 @@ namespace winrt::LookoutMarine::implementation
         // Hand the core the cells this device holds, so a cost and a download
         // leave them out.
         void FirstRunNoaaHave();
+        /* Price each region on its own, into noaa_region_hold. The pick's own
+         * total is what a download costs; these are what the device already
+         * holds, which the pills state. One cost call per region, answered off
+         * the catalog the core holds. */
+        void FirstRunRepriceRegions();
         void FirstRunPollStart();
         /* Start or stop that poll by what there is to watch: a catalog read, a
          * transfer, a bake, or an import between its parts. */
@@ -484,6 +489,13 @@ namespace winrt::LookoutMarine::implementation
         // lookout_noaa_cost and lookout_noaa_download both take it as it
         // stands (lkw::RegionPicked, lkw::RegionToggle).
         std::string noaa_region_id;
+        /* What of each region is on this device, in the order the core lists
+         * the regions. Empty before a catalog is read. */
+        std::vector<std::pair<std::string, lkw::RegionHold>> noaa_region_hold;
+        /* Whether the pick has been seeded from the water already here. The
+         * picker opens ticked on what the mariner holds, once, so their own
+         * unticking stands. */
+        bool noaa_picked_seeded{ false };
         // Whether the coverage step has asked for the catalog. It asks once
         // per page, so a read that failed is not asked for again on every
         // render; the step's Try Again is what asks after that.
