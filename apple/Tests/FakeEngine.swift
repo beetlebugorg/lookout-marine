@@ -86,6 +86,11 @@ final class FakeEngine: RasterEngine, ChartLinkEngine, PluginEngine,
     func importChartLinks(_ json: String) { note("importChartLinks") }
     func chartLinksSnapshot() -> ChartLinkSnapshot? { links }
 
+    /// What chartIsDrawing returns. A test that wants a preview captured
+    /// leaves it false, the way a chart that has settled reads.
+    var drawing = false
+    func chartIsDrawing() -> Bool { drawing }
+
     /// The pictures. A test sets what the core can name: `previewTiles` maps a
     /// link's url to the tile url for it, and an absent entry stands for a
     /// style that names no raster tiles.

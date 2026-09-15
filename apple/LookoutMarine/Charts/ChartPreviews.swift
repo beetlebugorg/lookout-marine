@@ -65,13 +65,23 @@ final class ChartPreviews {
     /// the core refuses drops the pick, and the frame then holds whatever came
     /// back: filing it under the link that failed puts another chart's picture
     /// under its name.
+    /// A capture is a full offscreen render of the window at its backing
+    /// scale, read back to the CPU, and it runs on the main thread. Ten of
+    /// them at 900ms held the pointer through nine seconds of a pick. The
+    /// engine states when it has finished drawing, and that read is one flag,
+    /// so the poll is on the flag and the render happens once.
     func watch(active: String?, drawing: @escaping () -> Bool) async {
-        for _ in 0..<10 {
-            try? await Task.sleep(for: .milliseconds(900))
+        for _ in 0..<60 {
+            try? await Task.sleep(for: .milliseconds(150))
             if Task.isCancelled { return }
             guard drawing() else { return }
+            guard engine?.chartIsDrawing() == false else { continue }
             capture(active: active)
+            return
         }
+        // Nine seconds and the chart is still filling in. Take the picture it
+        // has, so a slow style leaves a tile rather than a blank.
+        if drawing() { capture(active: active) }
     }
 
     /// Draw every chart that has no picture, one at a time, on an engine of

@@ -45,6 +45,8 @@ protocol ChartLinkEngine: AnyObject {
     @discardableResult func selectChartLink(_ url: String?) -> Bool
     func importChartLinks(_ json: String)
     func chartLinksSnapshot() -> ChartLinkSnapshot?
+    /// True while the engine still has drawing to do.
+    func chartIsDrawing() -> Bool
     /// Read every link's style for the tile its picture comes from.
     func previewChartLinks()
     /// The tile url that pictures one chart at a point, or nil when the style
