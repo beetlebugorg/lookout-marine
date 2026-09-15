@@ -1980,6 +1980,7 @@ namespace winrt::LookoutMarine::implementation
                 noaa.BorderThickness({ 0, 0, 0, 0 });
                 noaa.Padding({ 0, 6, 0, 6 });
                 noaa.IsEnabled(!working && noaa_pane_count == nullptr);
+                Automation::AutomationProperties::SetName(noaa, L"Get charts from NOAA");
                 // Hand it to the next tick. ShowNoaaPicker closes the settings
                 // window, and closing the window that owns this button from
                 // inside its own Click handler destroys the button while the
@@ -2016,6 +2017,8 @@ namespace winrt::LookoutMarine::implementation
                 disk.Padding({ 0, 6, 0, 6 });
                 disk.IsEnabled(!working);
                 disk.Flyout(ways);
+                Automation::AutomationProperties::SetName(disk,
+                                                          L"Add charts from this computer");
 
                 // Both rows in one card, with a hairline between them.
                 Controls::Border divider;
