@@ -305,13 +305,19 @@
                              fades the bottom edge while there is more below,
                              and FirstRunUpdateFold keeps the scrollbar up with
                              it. Both go when the step fits. -->
-                        <Rectangle x:Name="FirstRunFade" Height="28"
+                        <!-- The fade goes to the card's own colour, so the
+                             text runs out rather than passing under a grey
+                             smear. FirstRunUpdateFold sets the stops for the
+                             scheme on screen. -->
+                        <Rectangle x:Name="FirstRunFade" Height="24"
                                    VerticalAlignment="Bottom" IsHitTestVisible="False"
                                    Visibility="Collapsed">
                             <Rectangle.Fill>
                                 <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                                    <GradientStop Offset="0" Color="#00000000" />
-                                    <GradientStop Offset="1" Color="#40000000" />
+                                    <GradientStop x:Name="FirstRunFadeTop" Offset="0"
+                                                  Color="#00F8F8F8" />
+                                    <GradientStop x:Name="FirstRunFadeBottom" Offset="1"
+                                                  Color="#F2F8F8F8" />
                                 </LinearGradientBrush>
                             </Rectangle.Fill>
                         </Rectangle>
@@ -322,7 +328,12 @@
                          later step puts Back on the left and the primary action
                          on the right. FirstRunPrimaryBtn moves between the two
                          containers, so there is one of it. -->
-                    <Grid Grid.Row="2" Margin="24,0,24,20">
+                    <StackPanel Grid.Row="2">
+                      <!-- The bar reads as a bar by having an edge, the way
+                           the reference's footer does. -->
+                      <Border x:Name="FirstRunFooterRule" Height="1"
+                              Background="{ThemeResource LkHairlineBrush}" />
+                      <Grid Margin="24,14,24,16">
                         <StackPanel x:Name="FirstRunColumn" Spacing="12"
                                     HorizontalAlignment="Center" Visibility="Collapsed">
                             <Button x:Name="FirstRunLaterBtn" Content="Set Up Later"
@@ -338,7 +349,8 @@
                                         Style="{StaticResource AccentButtonStyle}" />
                             </StackPanel>
                         </Grid>
-                    </Grid>
+                      </Grid>
+                    </StackPanel>
                 </Grid>
             </Border>
         </Grid>

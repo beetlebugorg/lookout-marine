@@ -398,7 +398,8 @@ namespace winrt::LookoutMarine::implementation
          * step that restate themselves as the numbers move. Rebuilding the
          * step on a keystroke would take the draft field's focus with it, so
          * the field commits and everything else is written in place. */
-        lkw::DepthChoice depth_choice;
+        lkw::DepthChoice depth_choice{ true };
+        bool depth_seeded{ false };
         Microsoft::UI::Xaml::Controls::TextBox depth_draft{ nullptr };
         std::vector<Microsoft::UI::Xaml::Controls::Button> depth_pills;
         std::vector<Microsoft::UI::Xaml::Controls::Button> depth_units;

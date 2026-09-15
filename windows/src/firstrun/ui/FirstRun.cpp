@@ -459,12 +459,19 @@ namespace winrt::LookoutMarine::implementation
     void MainWindow::FirstRunUpdateFold()
     {
         auto scroll = FirstRunScroll();
-        // One pixel of slack: a step that fits exactly reports an extent a
+        // Two pixels of slack: a step that fits exactly reports an extent a
         // fraction over the viewport on some scales.
-        bool const more = scroll.ExtentHeight() > scroll.ViewportHeight() + 1.0;
+        bool const more = scroll.ExtentHeight() > scroll.ViewportHeight() + 2.0;
         FirstRunFade().Visibility(more ? Visibility::Visible : Visibility::Collapsed);
-        scroll.VerticalScrollBarVisibility(more ? Controls::ScrollBarVisibility::Visible
-                                                : Controls::ScrollBarVisibility::Auto);
+        // The scrollbar's own mode is left alone. Asking for it to stand open
+        // narrows the viewport, which makes the content taller, which keeps
+        // this test true: the fade then stayed up on a step that fits.
+
+        // The fade goes to the card's colour, which follows the scheme.
+        auto const panel = g_dark ? Windows::UI::Color{ 0xF2, 0x12, 0x1C, 0x24 }
+                                  : Windows::UI::Color{ 0xF2, 0xF8, 0xF8, 0xF8 };
+        FirstRunFadeTop().Color({ 0, panel.R, panel.G, panel.B });
+        FirstRunFadeBottom().Color(panel);
     }
 
     void MainWindow::FirstRunBegin()
@@ -481,6 +488,15 @@ namespace winrt::LookoutMarine::implementation
             FirstRunChartChrome(true);
             if (first_run_timer != nullptr)
                 first_run_timer.Stop();
+            // Setup stood over the basemap, and putting the card away leaves
+            // that blank sea on screen. The charts installed while it was up
+            // are opened here.
+            if (lk_controller_is_open(controller) && !chart_has_cells)
+            {
+                auto paths = ChartSetOpenPaths();
+                if (!paths.empty())
+                    OpenPaths(paths, lkw::ChartLibraryDir(), lkw::AgencyForCells(paths));
+            }
             return;
         }
         // The search, menu, north, zoom, settings and scale bar steer a chart.
@@ -1688,6 +1704,14 @@ namespace winrt::LookoutMarine::implementation
     // to, and a picture of the water they shade.
     void MainWindow::FirstRunDepths(Controls::StackPanel const &body)
     {
+        // Feet to start with, the unit most of the boats this is for measure
+        // in. The mariner's own answer stands for the rest of the session and
+        // goes to the store with the numbers.
+        if (!depth_seeded)
+        {
+            depth_seeded = true;
+            depth_choice = lkw::DepthChoice{ true };
+        }
         depth_pills.clear();
         depth_units.clear();
         depth_rows.clear();
@@ -2008,6 +2032,9 @@ namespace winrt::LookoutMarine::implementation
             round.BorderThickness({ 1, 1, 1, 1 });
             round.BorderBrush(HairlineBrush());
             round.Child(water);
+            // As tall as the water it holds. Stretched, it ran the length of
+            // the questions beside it and left an empty panel under the key.
+            round.VerticalAlignment(VerticalAlignment::Top);
             Grid::SetColumn(round, 1);
             columns.Children().Append(round);
         }
@@ -2067,6 +2094,8 @@ namespace winrt::LookoutMarine::implementation
         m.safety_contour = depth_choice.Metres(depth_choice.SafetyContour());
         m.deep_contour = depth_choice.Metres(depth_choice.DeepContour());
         m.four_shade_water = true;
+        // The unit the step is answered in is the unit the readouts use.
+        m.depth_unit = depth_choice.feet() ? (tile57_depth_unit)1 : (tile57_depth_unit)0;
         lk_controller_set_mariner(controller, &m);
     }
 
