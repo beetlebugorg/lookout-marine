@@ -151,6 +151,7 @@ namespace winrt::LookoutMarine::implementation
 
         CloseChartHandle();
         open_chart_label.clear();
+        chart_has_cells = false; // the basemap draws, and no cells with it
         if (OpenChart({}))
         {
             ChartLinksAttach();
@@ -180,6 +181,7 @@ namespace winrt::LookoutMarine::implementation
 
         if (OpenChart(paths))
         {
+            chart_has_cells = !paths.empty();
             InstallStoredRasters(); // the open destroyed the handle they rode on
             RestoreRasterShown();   // which sets were drawn, and the ENC-hidden switch
             StartAlertWatch();      // a collision alarm must not need a pane open
@@ -216,6 +218,12 @@ namespace winrt::LookoutMarine::implementation
             FirstRunPane().Visibility(first_run.showing() ? Visibility::Visible
                                                           : Visibility::Collapsed);
             FirstRunChartChrome(!first_run.showing());
+            // This open is what the Preparing step was waiting for, and it
+            // lands 50 ms after the step was last stated: the open is
+            // deferred, so the step said "nothing to continue to" and the
+            // clock that would have said otherwise had already stopped.
+            if (first_run.showing())
+                FirstRunRestate();
             SetLoaderTessellating(); // the loader stands until the first build
             warmup_frames.store(30);
             StartRenderThread();
@@ -254,6 +262,7 @@ namespace winrt::LookoutMarine::implementation
     // on the handle it hands back.
     void MainWindow::OpenBasemapForSetup()
     {
+        chart_has_cells = false;
         bool const opened = OpenChart({});
         if (!opened)
         {

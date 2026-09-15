@@ -1499,8 +1499,7 @@ namespace winrt::LookoutMarine::implementation
             lk_controller_noaa_poll(controller, &st);
             return st.have_catalog != 0;
         }();
-        bool const chart_ready = lk_controller_is_open(controller) &&
-                                 !ChartSetOpenPaths().empty();
+        bool const chart_ready = lk_controller_is_open(controller) && chart_has_cells;
         FirstRunPrimaryBtn().IsEnabled(first_run.PrimaryEnabled(
             have_catalog, !noaa_region_id.empty(), chart_ready));
 

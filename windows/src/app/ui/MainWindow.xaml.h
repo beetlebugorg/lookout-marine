@@ -136,6 +136,13 @@ namespace winrt::LookoutMarine::implementation
                          std::string const &label = {});
         /* Everything that belongs to the handle about to be destroyed. */
         void CloseChartHandle();
+        /* Whether the chart open now was given cells, rather than being the
+         * basemap-only open a setup card stands over. Setup asks it to know
+         * whether there is anything to continue TO, and it has to be an
+         * answer the shell holds itself: composing the sets reads a scan that
+         * lands later, so asking that question at the moment of the open
+         * answered "nothing yet" and left Continue dead. */
+        bool chart_has_cells{ false };
         // startup loader (hud/ui/Loader.cpp)
         void ShowStartupLoader(size_t cells);
         void SetLoaderTessellating();
