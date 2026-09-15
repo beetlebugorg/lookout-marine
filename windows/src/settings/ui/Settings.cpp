@@ -475,7 +475,7 @@ namespace winrt::LookoutMarine::implementation
             Controls::ToolTipService::SetToolTip(b, winrt::box_value(winrt::to_hstring(url)));
         Automation::AutomationProperties::SetName(b, name);
         b.Click([this, url, mine](auto &&, auto &&) { PickChartTile(url, mine); });
-        chart_tile_ui.push_back({ url, b, badge, detail, where });
+        chart_tile_ui.push_back({ url, b, badge, detail, where, title, mine });
         return b;
     }
 
@@ -988,14 +988,16 @@ namespace winrt::LookoutMarine::implementation
     // refresh below states them without building a control.
     std::string MainWindow::ChartsPageStructure()
     {
-        // A link's name is in here as well as its url: the core learns the
-        // publisher's name when the style resolves, and the tile's title is
-        // built rather than stated.
+        // Identities only. A name is a value: the core learns a publisher's
+        // name when a style resolves, and a set's title moves between the
+        // folder's name and the office's while a scan of it is in flight.
+        // Both were in here, and each change tore the page down under the
+        // pointer.
         std::string s;
         for (auto const &l : chart_links)
-            s += l.url + "\x1f" + l.name + "\x1e";
+            s += l.url + "\x1e";
         for (auto const &set : chart_sets)
-            s += set.path + "\x1f" + set.title + "\x1e";
+            s += set.path + "\x1e";
         for (auto const &p : raster_paths)
             s += p + "\x1e";
         // The sections that come and go with work, and the row an empty list
@@ -1044,6 +1046,12 @@ namespace winrt::LookoutMarine::implementation
                 where = L"Reading this chart…";
             t.detail.Text(winrt::hstring{ ElideMiddle(where, 42) });
             t.badge.Visibility(active ? Visibility::Visible : Visibility::Collapsed);
+            // The name the core learned for a link the mariner added. A
+            // shipped tile keeps its publisher's name.
+            if (t.mine && t.title != nullptr)
+                for (auto const &l : chart_links)
+                    if (l.url == t.url)
+                        t.title.Text(winrt::to_hstring(l.name.empty() ? l.url : l.name));
             t.button.BorderBrush(
                 lkw::Brush(active ? lkw::chrome::Accent(dark) : lkw::chrome::kClear));
         }
@@ -1117,6 +1125,10 @@ namespace winrt::LookoutMarine::implementation
             row.prepare.Text(winrt::hstring{ lkw::Thousands(set.unprepared) + L" to prepare" });
             row.prepare.Visibility(set.unprepared == 0 ? Visibility::Collapsed
                                                        : Visibility::Visible);
+            // The set's title. The core names a set after the office whose
+            // charts it holds once the scan has read them, and after the folder
+            // until then, so this changes under a page that is already up.
+            row.name.Text(winrt::to_hstring(set.title));
             row.name.Opacity(set.on ? 1.0 : 0.6);
             // The switch answers the mariner, not this. Setting it back would
             // fight a toggle mid-animation, so it is written only when the

@@ -712,6 +712,12 @@ namespace winrt::LookoutMarine::implementation
             Microsoft::UI::Xaml::Controls::TextBlock detail{ nullptr };
             /* What the detail line says when this chart is not being read. */
             std::wstring where;
+            /* The title, and whether this is a link the mariner added. The
+             * core learns a publisher's name after the tile is built, and a
+             * name is a value rather than a reason to build the page again. A
+             * shipped tile keeps the name it ships with. */
+            Microsoft::UI::Xaml::Controls::TextBlock title{ nullptr };
+            bool mine{ false };
         };
         std::vector<ChartTileUi> chart_tile_ui;
         struct ChartSetRowUi
