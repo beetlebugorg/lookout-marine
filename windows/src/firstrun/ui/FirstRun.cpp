@@ -570,6 +570,7 @@ namespace winrt::LookoutMarine::implementation
 
             lk_controller_noaa_download(controller, noaa_region_id.c_str(),
                                         noaa_dest_dir.c_str(), 0);
+            first_run_import_idle = false; // a fresh import has work to watch
             FirstRunPollStart();
             break;
         }
@@ -605,9 +606,16 @@ namespace winrt::LookoutMarine::implementation
         {
             lookout_noaa_state st{};
             lk_controller_noaa_poll(controller, &st);
-            want = st.phase == 1 || st.phase == 3 ||
-                   (bake_job != nullptr && bake_job->Running()) ||
-                   (first_run.saw_bake() && !noaa_handed_over);
+            want = st.phase == 1 ||                                 // a catalog read
+                   st.phase == 3 ||                                 // a transfer
+                   (bake_job != nullptr && bake_job->Running()) ||  // a bake
+                   // An import between its parts. The bake is STARTED by the
+                   // poll itself, from the tick that finds the transfer over,
+                   // so the clock has to outlive the transfer: stopping it on
+                   // the tick the download ended left the step saying
+                   // "Downloading charts" with nothing to start the bake.
+                   (first_run.step() == lkw::FirstRunStep::Importing &&
+                    !noaa_handed_over && !first_run_import_idle);
         }
         if (want)
             FirstRunPollStart();
@@ -717,9 +725,9 @@ namespace winrt::LookoutMarine::implementation
             }
             else
             {
-                // The transfer produced no charts. Stop polling rather than
-                // spinning over work that will not start.
-                first_run_timer.Stop();
+                // The transfer produced no charts. There is no work left to
+                // watch, and saying so is what lets the clock stop.
+                first_run_import_idle = true;
             }
         }
 

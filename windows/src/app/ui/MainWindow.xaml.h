@@ -384,8 +384,13 @@ namespace winrt::LookoutMarine::implementation
         void FirstRunNoaaHave();
         void FirstRunPollStart();
         /* Start or stop that poll by what there is to watch: a catalog read, a
-         * transfer, a bake, or a bake waiting to be handed over. */
+         * transfer, a bake, or an import between its parts. */
         void FirstRunPollAsNeeded();
+        /* True when an import has nothing left to do and never will: the
+         * transfer produced no charts. Without it the rule above would keep
+         * the clock running over work that cannot start. Cleared when a
+         * download begins. */
+        bool first_run_import_idle{ false };
         void FirstRunPoll();
 
         // The welcome picture, outside the step inset so it meets the edges.
