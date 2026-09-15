@@ -14,6 +14,7 @@
 
 #include <winrt/Microsoft.UI.Xaml.Documents.h>
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <limits>
@@ -81,13 +82,23 @@ namespace
                                        : Windows::UI::Color{ 0x33, 0x00, 0x00, 0x00 } };
     }
 
-    // A step's title and the one line under it.
+    // A step's title and the one line under it, centered in the card the way
+    // the reference centers them. The blurb is held to 470 points: a line of
+    // prose the full width of the card has no shorter line to center against.
     StackPanel Heading(std::wstring const &title, std::wstring const &blurb)
     {
         StackPanel s;
-        s.Spacing(6);
-        s.Children().Append(Line(title, 21, true));
-        s.Children().Append(Muted(blurb, 13));
+        s.Spacing(9);
+        auto head = Line(title, 24, true);
+        head.CharacterSpacing(-13); // the reference's -0.3 points at 24
+        head.TextAlignment(TextAlignment::Center);
+        head.HorizontalAlignment(HorizontalAlignment::Center);
+        s.Children().Append(head);
+        auto says = Muted(blurb, 13.5);
+        says.TextAlignment(TextAlignment::Center);
+        says.HorizontalAlignment(HorizontalAlignment::Center);
+        says.MaxWidth(470);
+        s.Children().Append(says);
         return s;
     }
 
@@ -678,6 +689,30 @@ namespace winrt::LookoutMarine::implementation
 
         if (first_run.step() == lkw::FirstRunStep::Importing)
             FirstRunRender();
+
+        // The catalog lands on its own, and the coverage map's boxes, the
+        // prices and whether a region can be picked at all come from it. So
+        // the step follows it — once, when it changes. Rendering on every tick
+        // would rebuild the map four times a second.
+        if (first_run.step() == lkw::FirstRunStep::Coverage)
+        {
+            std::string now = NoaaCatalogSignature();
+            if (now != noaa_catalog_drawn)
+            {
+                noaa_catalog_drawn = now;
+                FirstRunRender();
+            }
+        }
+    }
+
+    // What the coverage step draws from. The counters of a download are left
+    // out: they move every tick and the step states them from its own poll.
+    std::string MainWindow::NoaaCatalogSignature()
+    {
+        lookout_noaa_state st{};
+        lk_controller_noaa_poll(controller, &st);
+        return std::to_string(st.phase) + "|" + std::to_string(st.have_catalog) + "|" +
+               std::to_string(st.catalog_cells) + "|" + st.date + "|" + st.error;
     }
 
     // ---- NOAA's terms -----------------------------------------------------
@@ -757,23 +792,11 @@ namespace winrt::LookoutMarine::implementation
 
     void MainWindow::FirstRunWelcome(Controls::StackPanel const &body)
     {
-        // The title and the line under it center. The rows below them stay
-        // left aligned, so the step holds two alignments rather than one.
-        {
-            StackPanel head;
-            head.Spacing(6);
-            head.HorizontalAlignment(HorizontalAlignment::Stretch);
-
-            auto title = Line(L"Welcome to Lookout Marine", 21, true);
-            title.TextAlignment(TextAlignment::Center);
-            head.Children().Append(title);
-
-            auto promise = Muted(L"Official charts, rendered live on your PC.", 13);
-            promise.TextAlignment(TextAlignment::Center);
-            head.Children().Append(promise);
-
-            body.Children().Append(head);
-        }
+        // The title and the line under it center, as they do on every step.
+        // The rows below them stay left aligned, so the step holds two
+        // alignments rather than one.
+        body.Children().Append(Heading(L"Welcome to Lookout Marine",
+                                       L"Official charts, rendered live on your PC."));
         body.Children().Append(Fact(L"" /* map pin */,
                                     L"Official ENC charts, drawn live",
                                     L"Lookout renders S-57 and S-101 cells itself. NOAA publishes "
@@ -783,8 +806,10 @@ namespace winrt::LookoutMarine::implementation
                                     L"A published chart style renders straight away, worldwide, "
                                     L"with nothing to download and nothing stored."));
         body.Children().Append(Fact(L"" /* folder */, L"Bring charts you already have",
-                                    L"A prepared .pmtiles chart, or a folder of S-57 cells, from "
-                                    L"this device."));
+                                    // A window that takes a drop says so, the
+                                    // way the Mac's does.
+                                    L"A prepared .pmtiles chart, or a folder of S-57 cells. Or "
+                                    L"drop either anywhere in this window."));
         body.Children().Append(
             Muted(L"Lookout is a prototype and is not a certified navigation system. It does not "
                   L"meet chart carriage regulations. Always carry official charts aboard.",
@@ -883,32 +908,33 @@ namespace winrt::LookoutMarine::implementation
     // download would fetch. One rectangle per region claims water it does not
     // cover: district 8 runs Texas to the Keys around the Florida peninsula,
     // and its bounding box paints across Miami.
-    void MainWindow::FirstRunCoverageMap(Controls::StackPanel const &body)
+    // One panel of the picker: the ground it covers, and the regions drawn on
+    // it as the water they cover.
+    //
+    // A region is ONE path rather than a box per cell. Outlining every cell
+    // draws a mesh over the coast; filled and unstroked, a region reads as one
+    // piece of water, and overlapping cells do not stack their fill. The tap
+    // goes on that path, so it lands on the region's own water rather than on
+    // a rectangle around it.
+    Border MainWindow::FirstRunCoveragePanel(lkw::MapWindow const &win,
+                                             std::vector<std::string> const &ids, double width,
+                                             double radius, bool enabled)
     {
-        if (coastline_.empty())
-            coastline_ = lkw::LoadCoastline((FirstRunDataDir() / L"coastline.bin").string());
-        if (coastline_.empty())
-            return;
-
-        // The waters the picker shows, wide enough for Alaska, Hawaii and the
-        // Virgin Islands at once.
-        lkw::MapWindow const win{ -190.0, -60.0, 5.0, 73.0 };
-        constexpr double kMapW = 620.0;
-        double const kMapH = kMapW / win.Aspect();
+        double const height = width / win.Aspect();
 
         Controls::Canvas canvas;
-        canvas.Width(kMapW);
-        canvas.Height(kMapH);
+        canvas.Width(width);
+        canvas.Height(height);
 
-        auto sea  = SolidColorBrush{ g_dark ? Windows::UI::Color{ 0xFF, 0x10, 0x1B, 0x24 }
-                                            : Windows::UI::Color{ 0xFF, 0xD6, 0xE9, 0xF5 } };
-        auto land = SolidColorBrush{ g_dark ? Windows::UI::Color{ 0xFF, 0x2A, 0x2F, 0x33 }
-                                            : Windows::UI::Color{ 0xFF, 0xE3, 0xDF, 0xD2 } };
+        // S-52 shallow blue and GSHHG land, so the picker sits in the app's
+        // own palette. The same pair the reference uses.
+        auto water = SolidColorBrush{ Windows::UI::Color{ 0x8C, 0xAD, 0xD6, 0xFF } };
+        auto land = SolidColorBrush{ Windows::UI::Color{ 0x8C, 0xA3, 0x96, 0x54 } };
 
         Shapes::Rectangle back;
-        back.Width(kMapW);
-        back.Height(kMapH);
-        back.Fill(sea);
+        back.Width(width);
+        back.Height(height);
+        back.Fill(water);
         canvas.Children().Append(back);
 
         auto add_rings = [&](uint8_t level, Media::Brush const &fill) {
@@ -916,12 +942,25 @@ namespace winrt::LookoutMarine::implementation
             {
                 if (ring.level != level || ring.points.size() < 3)
                     continue;
+                double w = 180, e = -180, s = 90, nn = -90;
+                for (auto const &p : ring.points)
+                {
+                    w = std::min(w, (double)p.lon);
+                    e = std::max(e, (double)p.lon);
+                    s = std::min(s, (double)p.lat);
+                    nn = std::max(nn, (double)p.lat);
+                }
+                // A ring spanning more than 180 degrees crosses the
+                // antimeridian: an Aleutian island with points at +172 and
+                // -179 draws as a band across the whole panel.
+                if (e - w > 180 || !win.Intersects(w, e, s, nn))
+                    continue;
                 Shapes::Polygon poly;
                 Media::PointCollection pts;
                 for (auto const &p : ring.points)
                 {
                     double x = 0, y = 0;
-                    win.Point(p.lon, p.lat, kMapW, kMapH, &x, &y);
+                    win.Point(p.lon, p.lat, width, height, &x, &y);
                     pts.Append(Windows::Foundation::Point{ (float)x, (float)y });
                 }
                 poly.Points(pts);
@@ -930,17 +969,20 @@ namespace winrt::LookoutMarine::implementation
             }
         };
         add_rings(1, land);
-        add_rings(2, sea); // a lake is water drawn back over the land
+        add_rings(2, water); // a lake is water drawn back over the land
 
-        // The regions. The picked one is filled and outlined, the rest a faint
-        // outline, so the map reads as a chooser rather than a picture.
         lookout_noaa_region const *regions = nullptr;
         size_t const n = lk_controller_noaa_regions(&regions);
         for (size_t i = 0; i < n && regions != nullptr; ++i)
         {
             auto const &r = regions[i];
-            bool const picked = lkw::RegionPicked(noaa_region_id, r.id);
+            std::string const rid = r.id;
+            if (std::find(ids.begin(), ids.end(), rid) == ids.end())
+                continue;
+            bool const picked = lkw::RegionPicked(noaa_region_id, rid);
 
+            // The catalog's boxes, or the region's rough extent until the
+            // catalog is in. What downloads is the catalog's either way.
             std::vector<lookout_noaa_box> boxes;
             size_t const have = lk_controller_noaa_region_coverage(controller, r.id, nullptr, 0);
             if (have > 0)
@@ -950,57 +992,122 @@ namespace winrt::LookoutMarine::implementation
             }
             else
             {
-                // Before a catalog is read the region states a rough extent for
-                // display. The catalog decides what downloads either way.
                 boxes.push_back({ r.west, r.south, r.east, r.north });
             }
 
+            Media::PathGeometry geo;
             for (auto const &b : boxes)
             {
                 if (!win.Intersects(b.west, b.east, b.south, b.north))
                     continue;
                 double x0 = 0, y0 = 0, x1 = 0, y1 = 0;
-                win.Point(b.west, b.north, kMapW, kMapH, &x0, &y0);
-                win.Point(b.east, b.south, kMapW, kMapH, &x1, &y1);
+                win.Point(b.west, b.north, width, height, &x0, &y0);
+                win.Point(b.east, b.south, width, height, &x1, &y1);
                 if (x1 <= x0 || y1 <= y0)
                     continue;
-                Shapes::Rectangle box;
-                box.Width(x1 - x0);
-                box.Height(y1 - y0);
-                box.Stroke(AccentBrush());
-                box.StrokeThickness(picked ? 1.6 : 0.6);
-                if (picked)
-                {
-                    auto c = AccentColor(g_dark);
-                    box.Fill(SolidColorBrush{ Windows::UI::Color{ 0x4D, c.R, c.G, c.B } });
-                }
-                else
-                {
-                    box.Opacity(0.45);
-                }
-                Controls::Canvas::SetLeft(box, x0);
-                Controls::Canvas::SetTop(box, y0);
-                canvas.Children().Append(box);
+                Media::PathFigure fig;
+                fig.StartPoint({ (float)x0, (float)y0 });
+                fig.IsClosed(true);
+                fig.IsFilled(true);
+                auto corner = [&](double x, double y) {
+                    Media::LineSegment seg;
+                    seg.Point({ (float)x, (float)y });
+                    fig.Segments().Append(seg);
+                };
+                corner(x1, y0);
+                corner(x1, y1);
+                corner(x0, y1);
+                geo.Figures().Append(fig);
             }
+            if (geo.Figures().Size() == 0)
+                continue;
+
+            auto c = AccentColor(g_dark);
+            Shapes::Path shape;
+            shape.Data(geo);
+            shape.Fill(SolidColorBrush{
+                Windows::UI::Color{ (uint8_t)(picked ? 0x80 : 0x29), c.R, c.G, c.B } });
+            if (enabled)
+                shape.Tapped([this, rid](auto &&, auto &&e) {
+                    noaa_region_id = lkw::RegionToggle(noaa_region_id, rid);
+                    e.Handled(true);
+                    FirstRunRender(); // re-prices the pick and restates the map
+                });
+            Automation::AutomationProperties::SetName(
+                shape, winrt::hstring{ std::wstring{ winrt::to_hstring(r.name) } + L". " +
+                                       std::wstring{ winrt::to_hstring(r.blurb) } });
+            canvas.Children().Append(shape);
         }
 
         Border frame;
-        frame.CornerRadius({ 8, 8, 8, 8 });
+        frame.CornerRadius({ radius, radius, radius, radius });
         frame.BorderThickness({ 1, 1, 1, 1 });
         frame.BorderBrush(HairlineBrush());
-        frame.HorizontalAlignment(HorizontalAlignment::Center);
         frame.Child(canvas);
-        Automation::AutomationProperties::SetName(frame, L"Coverage map");
-        body.Children().Append(frame);
+        return frame;
+    }
+
+    void MainWindow::FirstRunCoverageMap(Controls::StackPanel const &body)
+    {
+        if (coastline_.empty())
+            coastline_ = lkw::LoadCoastline((FirstRunDataDir() / L"coastline.bin").string());
+        if (coastline_.empty())
+            return;
+
+        lookout_noaa_state st{};
+        lk_controller_noaa_poll(controller, &st);
+        bool const enabled = st.have_catalog != 0;
+
+        // The lower 48, with Alaska and Hawaii inset. One view cannot hold all
+        // three: they span 128 degrees of longitude, and at that scale their
+        // latitude span is taller than the card. An atlas prints them as
+        // insets for the same reason.
+        // west, east, south, north — the order the struct declares, not the
+        // labelled order the reference writes them in.
+        lkw::MapWindow const lower48{ -132.0, -64.0, 20.0, 52.0 };
+        lkw::MapWindow const alaska{ -172.0, -128.0, 50.5, 72.0 };
+        lkw::MapWindow const hawaii{ -161.0, -154.0, 18.3, 22.6 };
+        constexpr double kMapW = 620.0;
+        constexpr double kInsetW = 134.0;
+
+        auto inset = [&](lkw::MapWindow const &win, std::vector<std::string> const &ids,
+                         double width, wchar_t const *label) {
+            // Its own frame, so each reads as itself rather than as something
+            // floating off the coast of Oregon.
+            StackPanel column;
+            column.Spacing(2);
+            auto title = Line(label, 9, false);
+            title.Opacity(0.7);
+            column.Children().Append(title);
+            column.Children().Append(FirstRunCoveragePanel(win, ids, width, 5, enabled));
+            return column;
+        };
+
+        StackPanel corners;
+        corners.Orientation(Orientation::Horizontal);
+        corners.Spacing(8);
+        corners.Margin({ 8, 8, 8, 8 });
+        corners.HorizontalAlignment(HorizontalAlignment::Left);
+        corners.VerticalAlignment(VerticalAlignment::Bottom);
+        corners.Children().Append(inset(alaska, { "d17" }, kInsetW, L"Alaska"));
+        corners.Children().Append(inset(hawaii, { "d14" }, kInsetW * 0.54, L"Hawaii"));
+
+        Controls::Grid map;
+        map.HorizontalAlignment(HorizontalAlignment::Center);
+        map.Children().Append(FirstRunCoveragePanel(
+            lower48, { "d1", "d5", "d7", "d8", "d9", "d11", "d13" }, kMapW, 10, enabled));
+        // In the Pacific, where they reach no coast.
+        map.Children().Append(corners);
+        Automation::AutomationProperties::SetName(map, L"Coverage map");
+        body.Children().Append(map);
     }
 
     void MainWindow::FirstRunCoverage(Controls::StackPanel const &body)
     {
         body.Children().Append(
-            Heading(L"Which waters?",
-                    L"Pick the Coast Guard district you sail. A region includes the cells filed "
-                    L"under it and every cell that overlaps them, so it never draws with a hole "
-                    L"at its edge."));
+            Heading(L"Which waters do you sail?",
+                    L"Pick the water you use. Lookout downloads those charts and prepares them. "
+                    L"You can add the rest later."));
 
         lookout_noaa_region const *regions = nullptr;
         size_t const n = lk_controller_noaa_regions(&regions);
@@ -1030,6 +1137,9 @@ namespace winrt::LookoutMarine::implementation
         }
         if (st.have_catalog)
             noaa_catalog_asked = false; // a later failure may ask again
+        // What this build drew from, so the poll renders again only when the
+        // catalog moves.
+        noaa_catalog_drawn = NoaaCatalogSignature();
 
         FirstRunCoverageMap(body);
 
@@ -1146,12 +1256,12 @@ namespace winrt::LookoutMarine::implementation
     void MainWindow::FirstRunOnline(Controls::StackPanel const &body)
     {
         body.Children().Append(
-            Heading(L"Draw a published chart",
-                    L"A style renders straight away, worldwide, and stores nothing on this "
-                    L"device."));
-        body.Children().Append(
-            Muted(L"Paste the address of a MapLibre style, or a TileJSON, and Lookout will draw "
-                  L"it as the chart."));
+            Heading(L"Choose an online chart",
+                    L"An online chart renders straight away, worldwide, and stores nothing. One "
+                    L"shows at a time, and while it is on it is the chart."));
+        // The reference's shelf of charts belongs here. Until it is built,
+        // the link field stands alone under the same two lines it has there.
+        body.Children().Append(Line(L"Another link", 13, true));
 
         TextBox box;
         box.PlaceholderText(L"https://…/style.json");
@@ -1163,6 +1273,7 @@ namespace winrt::LookoutMarine::implementation
                 box_value(first_run.PrimaryTitle(!chart_link_url.empty())));
         });
         body.Children().Append(box);
+        body.Children().Append(Muted(L"MapLibre style or TileJSON link", 11.5));
     }
 
     void MainWindow::FirstRunImporting(Controls::StackPanel const &body)
@@ -1357,9 +1468,9 @@ namespace winrt::LookoutMarine::implementation
     void MainWindow::FirstRunDepths(Controls::StackPanel const &body)
     {
         body.Children().Append(
-            Heading(L"Your draft",
-                    L"The safety contour is the line you must not cross. Lookout draws it from "
-                    L"your draft and the water you want under the keel."));
+            Heading(L"How deep does your boat sit?",
+                    L"Lookout shades water your boat cannot cross. It needs one number to do "
+                    L"that, and everything else follows from it."));
 
         tile57_mariner m{};
         lk_controller_get_mariner(controller, &m);
