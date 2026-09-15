@@ -104,6 +104,38 @@ namespace winrt::LookoutMarine::implementation
             }
         }
 
+        // $LOOKOUT_FIRSTRUN=<step> opens one setup step over the chart:
+        // welcome, source, coverage, online, importing or depths. Every step
+        // but the first two is otherwise reachable only by walking a download
+        // through, which leaves the later pages with no way to be captured or
+        // looked at on a machine that already holds charts.
+        {
+            char step[32];
+            DWORD step_n = GetEnvironmentVariableA("LOOKOUT_FIRSTRUN", step, sizeof step);
+            if (step_n > 0 && step_n < sizeof step)
+            {
+                std::string want = step;
+                auto at = lkw::FirstRunStep::Welcome;
+                bool known = true;
+                if (want == "welcome")        at = lkw::FirstRunStep::Welcome;
+                else if (want == "source")    at = lkw::FirstRunStep::Source;
+                else if (want == "coverage")  at = lkw::FirstRunStep::Coverage;
+                else if (want == "online")    at = lkw::FirstRunStep::OnlineChart;
+                else if (want == "importing") at = lkw::FirstRunStep::Importing;
+                else if (want == "depths")    at = lkw::FirstRunStep::Depths;
+                else
+                {
+                    known = false;
+                    fprintf(stderr, "shell: ignoring LOOKOUT_FIRSTRUN '%s'\n", step);
+                }
+                if (known)
+                {
+                    first_run.BeginAt(at);
+                    FirstRunRender();
+                }
+            }
+        }
+
         // The cross-host screenshot protocol's LOOKOUT_SHOW: "pick" or
         // "pick:0.5x0.85" (a view fraction; 'x' because commas split the
         // list elsewhere), "scale",
