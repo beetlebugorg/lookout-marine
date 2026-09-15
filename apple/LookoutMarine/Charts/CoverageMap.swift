@@ -241,18 +241,18 @@ struct NoaaRegionPills: View {
 
     /// What of this region is here, in the pill. Nothing before the catalog is
     /// read, and nothing for water with none of it on the device.
+    /// Only the whole of a region is stated. NOAA files cells across district
+    /// lines, so downloading one region installs some of its neighbour's, and
+    /// a count of those read as a transfer that had stopped part way.
     private func badge(_ r: NoaaRegion) -> String? {
-        guard let st = state[r.id] else { return nil }
-        if st.complete { return "installed" }
-        if st.partial { return "\(st.held) of \(st.total)" }
-        return nil
+        guard let st = state[r.id], st.complete else { return nil }
+        return "installed"
     }
 
     private func label(_ r: NoaaRegion) -> String {
         guard let st = state[r.id] else { return "\(r.name). \(r.blurb)" }
         if st.complete { return "\(r.name). \(r.blurb). All \(st.held) charts installed." }
-        if st.partial { return "\(r.name). \(r.blurb). \(st.held) of \(st.total) charts installed." }
-        return "\(r.name). \(r.blurb). \(st.total) charts, none installed."
+        return "\(r.name). \(r.blurb). \(st.total) charts to download."
     }
 
     #if os(macOS)

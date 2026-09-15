@@ -245,6 +245,84 @@ enum ChartBake {
     /// chart, so removing one is a chart gone, and the panel counts the same
     /// things coming out that it counted going in. Finding them costs one
     /// listing, not a walk of all 36,000 files.
+    /// Delete the charts the NOAA downloader fetched for `names`, and return
+    /// how many directories were taken out of the library.
+    ///
+    /// BOTH halves go: the chart prepared under the charts root, and the cell
+    /// it was prepared from under the download directory. A prepared chart
+    /// stands in for its source everywhere else, so a caller working from the
+    /// chart set's file list sees one entry per cell and leaves every .000
+    /// behind. The next scan then reports those cells again and the water
+    /// comes back.
+    ///
+    /// Each target is renamed into one trash directory. The rename is atomic
+    /// and leaves the library correct before this returns. The disk work runs off
+    /// the main thread, reporting through `progress` as emptyAndRemove does
+    /// for a whole set.
+    @discardableResult
+    static func deleteNoaaCells(_ names: Set<String>, from dest: String,
+                                progress: ((BakeProgress) -> Void)? = nil) -> Int {
+        guard !names.isEmpty, let root = chartsRoot else { return 0 }
+        let fm = FileManager.default
+        var targets: [String] = []
+
+        // The prepared half: one directory per cell, named for it.
+        if let prepared = preparedDirectory(for: dest) {
+            for name in names {
+                let dir = (prepared as NSString).appendingPathComponent(name)
+                if fm.fileExists(atPath: dir) { targets.append(dir) }
+            }
+        }
+        // The source half. An exchange set unpacks under its own ENC_ROOT, so
+        // the cell directories are a level down. Both shapes are read rather
+        // than the name assumed.
+        for parent in [dest] + childDirectories(of: dest) {
+            for name in names {
+                let dir = (parent as NSString).appendingPathComponent(name)
+                var isDir: ObjCBool = false
+                guard fm.fileExists(atPath: dir, isDirectory: &isDir), isDir.boolValue else { continue }
+                targets.append(dir)
+            }
+        }
+        guard !targets.isEmpty else { return 0 }
+
+        let trash = (root as NSString).appendingPathComponent(trashPrefix + UUID().uuidString)
+        guard (try? fm.createDirectory(atPath: trash, withIntermediateDirectories: true)) != nil
+        else {
+            DispatchQueue.global(qos: .utility).async {
+                for t in targets { try? fm.removeItem(atPath: t) }
+            }
+            return targets.count
+        }
+
+        var moved = 0
+        for (i, t) in targets.enumerated() {
+            let into = (trash as NSString).appendingPathComponent("\(i)-\((t as NSString).lastPathComponent)")
+            do {
+                try fm.moveItem(atPath: t, toPath: into)
+                moved += 1
+            } catch {
+                // A rename across volumes fails. Delete in place instead.
+                DispatchQueue.global(qos: .utility).async { try? fm.removeItem(atPath: t) }
+                moved += 1
+            }
+        }
+        DispatchQueue.global(qos: .utility).async { emptyAndRemove(trash, progress: progress) }
+        return moved
+    }
+
+    /// The directories directly inside `dir`, in name order.
+    private static func childDirectories(of dir: String) -> [String] {
+        let fm = FileManager.default
+        guard let names = try? fm.contentsOfDirectory(atPath: dir) else { return [] }
+        return names.sorted().compactMap { n in
+            let p = (dir as NSString).appendingPathComponent(n)
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: p, isDirectory: &isDir), isDir.boolValue else { return nil }
+            return p
+        }
+    }
+
     private static func emptyAndRemove(_ dir: String, progress: ((BakeProgress) -> Void)?) {
         let fm = FileManager.default
         // Descend past any skeleton the source's own shape left behind — an

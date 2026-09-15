@@ -833,22 +833,19 @@ final class ChartsModel {
     /// Each cell is a directory of its own, both where it was unpacked and
     /// where it was prepared, and the directory holds the text and pictures the
     /// chart references. Deleting the chart file alone leaves those behind.
-    func removeNoaaCells(_ names: Set<String>) {
+    func removeNoaaWater(named names: Set<String>) {
         guard !names.isEmpty, let dest = NoaaModel.downloadDirectory else { return }
-        let fm = FileManager.default
-        var gone = Set<String>()
-        for file in ChartSetStore.files(of: dest) {
-            let stem = file.stem.uppercased()
-            guard names.contains(stem) else { continue }
-            // The enclosing directory when it is the cell's own, else the file.
-            let dir = (file.path as NSString).deletingLastPathComponent
-            let target = (dir as NSString).lastPathComponent.uppercased() == stem
-                ? dir : file.path
-            guard !gone.contains(target) else { continue }
-            gone.insert(target)
-            try? fm.removeItem(atPath: target)
+        // The rename is synchronous, so the charts are out of the library
+        // before this returns and the rescan below reads what is left. The
+        // delete behind it reports through `removing`, which the charts page
+        // draws under the set.
+        let moved = ChartBake.deleteNoaaCells(names, from: dest) { [weak self] p in
+            self?.removing = p.name.isEmpty ? nil : p
         }
-        guard !gone.isEmpty else { return }
+        guard moved > 0 else {
+            openError = "Lookout found no downloaded charts for that water."
+            return
+        }
         ChartSetStore.rescan(dest)
         // The set stays on the list with the water that is left. A download
         // whose every cell was unticked leaves an empty folder, and the next

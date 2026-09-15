@@ -139,7 +139,11 @@ struct NoaaPickerSheet: View {
     @State private var seeded = false
 
     private func shut() {
-        if let close { close() } else { dismiss() }
+        // The confirmation is a sheet on this window, and a window holding one
+        // ignores performClose. The hop puts the close after the sheet has
+        // gone, so Apply closes the window instead of leaving it up with the
+        // button still live.
+        if let close { DispatchQueue.main.async { close() } } else { dismiss() }
     }
 
     /// The regions being given back.
@@ -162,7 +166,7 @@ struct NoaaPickerSheet: View {
     private func apply() {
         let gone = removing
         if !gone.isEmpty {
-            model.charts.removeNoaaCells(noaa.cellsToRemove(unpicking: gone))
+            model.charts.removeNoaaWater(named: noaa.cellsToRemove(unpicking: gone))
         }
         if adding { model.startNoaaDownload() }
         shut()
