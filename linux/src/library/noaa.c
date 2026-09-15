@@ -32,6 +32,13 @@ struct _LkNoaa {
   guint32 cells, held;
   guint64 bytes, held_bytes;
 
+  /* How much of each region is already installed, indexed as `regions`. Read
+   * when the catalog lands and when what is installed changes, because each
+   * region costs a walk of the catalog and the pick does not move it. */
+  guint32 *region_cells;
+  guint32 *region_held;
+  gboolean regions_costed;
+
   /* A read asked for before a chart was open. Every call here runs through a
    * chart handle, so a read asked for at launch had nothing to run through. */
   gboolean wants_catalog;
@@ -56,6 +63,7 @@ static guint signals[N_SIGNALS];
 G_DEFINE_FINAL_TYPE (LkNoaa, lk_noaa, G_TYPE_OBJECT)
 
 static void lk_noaa_recost (LkNoaa *self);
+static void lk_noaa_recost_regions (LkNoaa *self);
 static void lk_noaa_watch (LkNoaa *self);
 
 /* ---- the region table ---------------------------------------------------- */
@@ -279,6 +287,7 @@ lk_noaa_take_snapshot (LkNoaa *self)
   self->state = next;
   if (gained)
     {
+      lk_noaa_recost_regions (self);
       lk_noaa_recost (self);
       lk_noaa_load_coverage (self);
     }
@@ -356,6 +365,62 @@ lk_noaa_chart_did_open (LkNoaa *self)
 
 /* ---- what a pick costs --------------------------------------------------- */
 
+/* What each region holds, one catalog walk per region. */
+static void
+lk_noaa_recost_regions (LkNoaa *self)
+{
+  self->regions_costed = FALSE;
+  if (self->regions == NULL || self->n_regions == 0)
+    return;
+
+  if (self->region_cells == NULL)
+    {
+      self->region_cells = g_new0 (guint32, self->n_regions);
+      self->region_held = g_new0 (guint32, self->n_regions);
+    }
+  memset (self->region_cells, 0, self->n_regions * sizeof *self->region_cells);
+  memset (self->region_held, 0, self->n_regions * sizeof *self->region_held);
+
+  if (!self->state.have_catalog)
+    return;
+
+  for (guint i = 0; i < self->n_regions; i++)
+    {
+      guint64 bytes = 0, held_bytes = 0;
+
+      lk_chart_controller_noaa_cost (self->controller, self->regions[i].id,
+                                     &self->region_cells[i], &bytes,
+                                     &self->region_held[i], &held_bytes);
+    }
+  self->regions_costed = TRUE;
+}
+
+gboolean
+lk_noaa_region_held (LkNoaa *self, const char *id, guint32 *out_cells, guint32 *out_held)
+{
+  if (out_cells != NULL)
+    *out_cells = 0;
+  if (out_held != NULL)
+    *out_held = 0;
+
+  g_return_val_if_fail (LK_IS_NOAA (self), FALSE);
+
+  if (!self->regions_costed || id == NULL)
+    return FALSE;
+
+  for (guint i = 0; i < self->n_regions; i++)
+    {
+      if (g_strcmp0 (self->regions[i].id, id) != 0)
+        continue;
+      if (out_cells != NULL)
+        *out_cells = self->region_cells[i];
+      if (out_held != NULL)
+        *out_held = self->region_held[i];
+      return TRUE;
+    }
+  return FALSE;
+}
+
 static void
 lk_noaa_recost (LkNoaa *self)
 {
@@ -427,6 +492,7 @@ lk_noaa_note_installed (LkNoaa *self, const char *const *names)
   g_return_if_fail (LK_IS_NOAA (self));
 
   lk_chart_controller_noaa_have (self->controller, names);
+  lk_noaa_recost_regions (self);
   lk_noaa_recost (self);
   g_signal_emit (self, signals[SIGNAL_CHANGED], 0);
 }
@@ -538,6 +604,8 @@ lk_noaa_dispose (GObject *object)
   g_clear_pointer (&self->picked, g_hash_table_unref);
   g_clear_pointer (&self->coverage, g_hash_table_unref);
   g_clear_pointer (&self->regions, g_free);
+  g_clear_pointer (&self->region_cells, g_free);
+  g_clear_pointer (&self->region_held, g_free);
   self->n_regions = 0;
 
   G_OBJECT_CLASS (lk_noaa_parent_class)->dispose (object);

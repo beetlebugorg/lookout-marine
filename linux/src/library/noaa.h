@@ -130,6 +130,17 @@ guint64 lk_noaa_held_bytes (LkNoaa *self);
  * then repairs or refreshes them rather than adding any. */
 gboolean lk_noaa_all_installed (LkNoaa *self);
 
+/* How much of ONE region this device already holds: `out_cells` is every cell
+ * covering its water and `out_held` the ones installed. FALSE before the
+ * catalog is in, with both set to 0.
+ *
+ * Region totals overlap, as the header says, so this reports how far one
+ * region is covered and never feeds a sum. Each region costs a walk of the
+ * catalog, so it is read when the catalog lands and when the installed list
+ * changes. */
+gboolean lk_noaa_region_held (LkNoaa *self, const char *id, guint32 *out_cells,
+                              guint32 *out_held);
+
 /* What the pick costs, in the mariner's words. Free with g_free. */
 char *lk_noaa_cost_line (LkNoaa *self);
 

@@ -133,6 +133,7 @@ lk_noaa_window_present (GtkWindow *parent, LkAppModel *model)
   gtk_box_append (GTK_BOX (page), blurb);
   gtk_box_append (GTK_BOX (page), lk_noaa_catalog_line_new (noaa));
   gtk_box_append (GTK_BOX (page), lk_coverage_map_new (noaa));
+  gtk_box_append (GTK_BOX (page), lk_coverage_key_new ());
   gtk_box_append (GTK_BOX (page), lk_noaa_region_pills_new (noaa));
 
   gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scroller), page);

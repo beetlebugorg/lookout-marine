@@ -33,6 +33,10 @@ GtkWidget *lk_coverage_map_new (LkNoaa *noaa);
  * The same selection the map drives. */
 GtkWidget *lk_noaa_region_pills_new (LkNoaa *noaa);
 
+/* The words for the two fills on the map: water already downloaded, and water
+ * picked to download. */
+GtkWidget *lk_coverage_key_new (void);
+
 /* Where NOAA's catalog stands: a spinner while it is read, the failure and a
  * way to try again, or what the catalog holds once it has landed. */
 GtkWidget *lk_noaa_catalog_line_new (LkNoaa *noaa);

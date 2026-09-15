@@ -235,8 +235,11 @@ test_picker_window (void)
   g_assert_cmpint (width, >=, 1040);
   g_assert_cmpint (height, >=, 760);
 
-  /* The map, its regions, and the two answers. */
-  g_assert_cmpuint (count (picker, match_drawing_area), ==, 3);
+  /* Three map panels (the lower 48, Alaska, Hawaii) and the key's two
+   * swatches, which say what the fills on them mean. */
+  g_assert_cmpuint (count (picker, match_drawing_area), ==, 5);
+  g_assert_nonnull (lk_test_find_label (picker, "Already downloaded"));
+  g_assert_nonnull (lk_test_find_label (picker, "Picked to download"));
   g_assert_nonnull (lk_test_find_button (picker, "Cancel"));
   download = lk_test_find_button (picker, "Download");
   g_assert_nonnull (download);

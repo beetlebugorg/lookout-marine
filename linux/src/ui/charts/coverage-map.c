@@ -45,6 +45,11 @@ static const LkPanel lk_panel_hawaii = {
 #define LK_ACCENT_R 0.039
 #define LK_ACCENT_G 0.357
 #define LK_ACCENT_B 0.710
+/* Water already on the device. It has a hue of its own, because a mariner
+ * reads the map before reading any number under it. */
+#define LK_HELD_R 0.106
+#define LK_HELD_G 0.522
+#define LK_HELD_B 0.329
 
 /* The inset widths. Small enough to sit in the Pacific without reaching the
  * coast at the width a sheet gives the map. */
@@ -200,9 +205,30 @@ lk_panel_draw (GtkDrawingArea *area, cairo_t *cr, int width, int height, gpointe
       if (!lk_panel_draws (state->panel, region->id))
         continue;
 
-      alpha = lk_noaa_is_picked (state->noaa, region->id) ? 0.50 : 0.16;
       lk_region_boxes (cr, state->noaa, region, window, width, height);
-      cairo_set_source_rgba (cr, LK_ACCENT_R, LK_ACCENT_G, LK_ACCENT_B, alpha);
+
+      /* A picked region draws in the accent whatever is installed under it,
+       * because that is the choice being made now. Water already held draws in
+       * the held hue, deeper as more of the region is held. */
+      if (lk_noaa_is_picked (state->noaa, region->id))
+        {
+          cairo_set_source_rgba (cr, LK_ACCENT_R, LK_ACCENT_G, LK_ACCENT_B, 0.50);
+        }
+      else
+        {
+          guint32 cells = 0, held = 0;
+
+          lk_noaa_region_held (state->noaa, region->id, &cells, &held);
+          if (held > 0 && cells > 0)
+            {
+              alpha = 0.18 + (0.28 * (double) held / (double) cells);
+              cairo_set_source_rgba (cr, LK_HELD_R, LK_HELD_G, LK_HELD_B, alpha);
+            }
+          else
+            {
+              cairo_set_source_rgba (cr, LK_ACCENT_R, LK_ACCENT_G, LK_ACCENT_B, 0.16);
+            }
+        }
       cairo_fill (cr);
     }
 
@@ -210,6 +236,55 @@ lk_panel_draw (GtkDrawingArea *area, cairo_t *cr, int width, int height, gpointe
   cairo_set_source_rgba (cr, LK_EDGE_RGBA);
   cairo_set_line_width (cr, 1.0);
   cairo_stroke (cr);
+}
+
+/* ---- the key -------------------------------------------------------------- */
+
+static void
+lk_key_swatch_draw (GtkDrawingArea *area, cairo_t *cr, int width, int height,
+                    gpointer user_data)
+{
+  const double *rgba = user_data;
+
+  cairo_set_source_rgba (cr, rgba[0], rgba[1], rgba[2], rgba[3]);
+  cairo_rectangle (cr, 0, 0, width, height);
+  cairo_fill (cr);
+  cairo_set_source_rgba (cr, 0, 0, 0, 0.25);
+  cairo_set_line_width (cr, 1.0);
+  cairo_rectangle (cr, 0.5, 0.5, width - 1.0, height - 1.0);
+  cairo_stroke (cr);
+}
+
+/* One swatch beside the words for it. */
+static void
+lk_key_item (GtkWidget *row, double r, double g, double b, double a, const char *text)
+{
+  GtkWidget *swatch = gtk_drawing_area_new ();
+  GtkWidget *label = gtk_label_new (text);
+  double *rgba = g_new0 (double, 4);
+
+  rgba[0] = r; rgba[1] = g; rgba[2] = b; rgba[3] = a;
+  gtk_widget_set_size_request (swatch, 10, 10);
+  gtk_widget_set_valign (swatch, GTK_ALIGN_CENTER);
+  gtk_drawing_area_set_draw_func (GTK_DRAWING_AREA (swatch), lk_key_swatch_draw,
+                                  rgba, g_free);
+  gtk_widget_add_css_class (label, "caption");
+  gtk_widget_add_css_class (label, "dim-label");
+  gtk_box_append (GTK_BOX (row), swatch);
+  gtk_box_append (GTK_BOX (row), label);
+}
+
+GtkWidget *
+lk_coverage_key_new (void)
+{
+  GtkWidget *row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
+
+  lk_key_item (row, LK_HELD_R, LK_HELD_G, LK_HELD_B, 0.46, "Already downloaded");
+  GtkWidget *gap = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+  gtk_widget_set_size_request (gap, 10, -1);
+  gtk_box_append (GTK_BOX (row), gap);
+  lk_key_item (row, LK_ACCENT_R, LK_ACCENT_G, LK_ACCENT_B, 0.50, "Picked to download");
+  return row;
 }
 
 /* ---- the click ----------------------------------------------------------- */
@@ -393,6 +468,40 @@ lk_pill_toggled (GtkToggleButton *button, gpointer user_data)
 
 /* Put every pill back to what the model says, and enable them once there is a
  * catalog to price a pick against. */
+/* What of this region is already on the device, on the pill that picks it.
+ *
+ * A mariner coming back to add more water reads what they already hold before
+ * picking. The cost line reports it only after a pick, and only as one number
+ * for the whole selection. */
+static void
+lk_pill_mark_held (GtkWidget *pill, LkNoaa *noaa, const char *id)
+{
+  GtkWidget *mark = g_object_get_data (G_OBJECT (pill), "lk-held-mark");
+  const char *blurb = g_object_get_data (G_OBJECT (pill), "lk-blurb");
+  const char *name = g_object_get_data (G_OBJECT (pill), "lk-name");
+  guint32 cells = 0, held = 0;
+  gboolean known = lk_noaa_region_held (noaa, id, &cells, &held);
+  gboolean all = known && cells > 0 && held >= cells;
+
+  gtk_widget_set_visible (mark, held > 0);
+  if (all)
+    gtk_widget_add_css_class (pill, "lk-region-held");
+  else
+    gtk_widget_remove_css_class (pill, "lk-region-held");
+
+  g_autofree char *have = NULL;
+  if (all)
+    have = g_strdup_printf ("%s. Every chart installed. %s", name, blurb);
+  else if (held > 0)
+    have = g_strdup_printf ("%s. %u of %u charts installed. %s", name, held, cells, blurb);
+  else
+    have = g_strdup_printf ("%s. %s", name, blurb);
+
+  gtk_widget_set_tooltip_text (pill, have);
+  gtk_accessible_update_property (GTK_ACCESSIBLE (pill),
+                                  GTK_ACCESSIBLE_PROPERTY_LABEL, have, -1);
+}
+
 static void
 lk_pills_sync (LkNoaa *noaa, gpointer user_data)
 {
@@ -423,6 +532,8 @@ lk_pills_sync (LkNoaa *noaa, gpointer user_data)
         gtk_widget_add_css_class (pill, "suggested-action");
       else
         gtk_widget_remove_css_class (pill, "suggested-action");
+
+      lk_pill_mark_held (pill, noaa, id);
     }
 }
 
@@ -447,15 +558,23 @@ lk_noaa_region_pills_new (LkNoaa *noaa)
   for (guint i = 0; i < n; i++)
     {
       const LkNoaaRegion *region = &regions[i];
-      GtkWidget *pill = gtk_toggle_button_new_with_label (region->name);
+      GtkWidget *pill = gtk_toggle_button_new ();
+      GtkWidget *face = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 5);
+      GtkWidget *mark = gtk_image_new_from_icon_name ("object-select-symbolic");
+
+      gtk_image_set_pixel_size (GTK_IMAGE (mark), 12);
+      gtk_widget_set_visible (mark, FALSE);
+      gtk_box_append (GTK_BOX (face), mark);
+      gtk_box_append (GTK_BOX (face), gtk_label_new (region->name));
+      gtk_button_set_child (GTK_BUTTON (pill), face);
 
       gtk_widget_add_css_class (pill, "pill");
-      gtk_widget_set_tooltip_text (pill, region->blurb);
       /* The name alone says little to a reader who cannot see the map, so the
-       * accessible name carries the water the region covers. */
-      g_autofree char *described = g_strdup_printf ("%s. %s", region->name, region->blurb);
-      gtk_accessible_update_property (GTK_ACCESSIBLE (pill),
-                                      GTK_ACCESSIBLE_PROPERTY_LABEL, described, -1);
+       * accessible name gives the water the region covers, and what of it is
+       * already installed. lk_pill_mark_held writes both. */
+      g_object_set_data (G_OBJECT (pill), "lk-held-mark", mark);
+      g_object_set_data (G_OBJECT (pill), "lk-name", (gpointer) region->name);
+      g_object_set_data (G_OBJECT (pill), "lk-blurb", (gpointer) region->blurb);
       g_object_set_data (G_OBJECT (pill), "lk-region", (gpointer) region->id);
       g_signal_connect (pill, "toggled", G_CALLBACK (lk_pill_toggled), noaa);
       gtk_flow_box_append (GTK_FLOW_BOX (box), pill);

@@ -424,6 +424,12 @@ static const char *LK_CSS =
     "  padding: 14px 16px;"
     "}"
     ".lk-settings-group separator { background: alpha(@borders, 0.55); }"
+    /* A NOAA region whose every chart is already on the device. The pill
+     * has a tick as well, so the state does not rest on colour alone. */
+    ".lk-region-held {"
+    "  background: alpha(#1b8554, 0.16);"
+    "  box-shadow: inset 0 0 0 1px alpha(#1b8554, 0.55);"
+    "}"
     /* What KIND of chart a row holds. A picture and a survey sit in the same
      * list and switch on the same way, so the row says which it is where the
      * mariner is reading it. It used to be filed under a heading of its own,
