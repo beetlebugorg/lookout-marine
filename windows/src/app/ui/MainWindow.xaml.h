@@ -383,6 +383,9 @@ namespace winrt::LookoutMarine::implementation
         // leave them out.
         void FirstRunNoaaHave();
         void FirstRunPollStart();
+        /* Start or stop that poll by what there is to watch: a catalog read, a
+         * transfer, a bake, or a bake waiting to be handed over. */
+        void FirstRunPollAsNeeded();
         void FirstRunPoll();
 
         // The welcome picture, outside the step inset so it meets the edges.

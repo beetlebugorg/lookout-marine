@@ -456,6 +456,8 @@ namespace winrt::LookoutMarine::implementation
         // are stated in one place, so a poll can restate them without
         // building the step again.
         FirstRunRestate();
+        // A step that waits on something gets the clock that watches it.
+        FirstRunPollAsNeeded();
         FirstRunUpdateFold();
     }
 
@@ -587,6 +589,32 @@ namespace winrt::LookoutMarine::implementation
 
     // ---- the two services, on a timer -------------------------------------
 
+    // Whether there is anything to watch, and the timer started or stopped to
+    // match.
+    //
+    // It used to be started in one place only, when a download began, so the
+    // coverage step never noticed its catalog read finish: the line said
+    // "Reading NOAA's chart catalog…" for as long as the step was up, and the
+    // map kept the rough extents it was built with. A read, a transfer, a bake
+    // and a bake waiting to be handed over are the four things worth a tick;
+    // with none of them the timer stops, so an idle card keeps no clock.
+    void MainWindow::FirstRunPollAsNeeded()
+    {
+        bool want = false;
+        if (first_run.showing() && controller != nullptr)
+        {
+            lookout_noaa_state st{};
+            lk_controller_noaa_poll(controller, &st);
+            want = st.phase == 1 || st.phase == 3 ||
+                   (bake_job != nullptr && bake_job->Running()) ||
+                   (first_run.saw_bake() && !noaa_handed_over);
+        }
+        if (want)
+            FirstRunPollStart();
+        else if (first_run_timer != nullptr)
+            first_run_timer.Stop();
+    }
+
     void MainWindow::FirstRunPollStart()
     {
         if (first_run_timer == nullptr)
@@ -716,9 +744,12 @@ namespace winrt::LookoutMarine::implementation
             if (now != noaa_catalog_drawn)
             {
                 noaa_catalog_drawn = now;
-                FirstRunRender();
+                FirstRunRender(); // which sets the clock again
+                return;
             }
         }
+        // Nothing left to watch: stop rather than tick over finished work.
+        FirstRunPollAsNeeded();
     }
 
     // What the coverage step draws from. The counters of a download are left
