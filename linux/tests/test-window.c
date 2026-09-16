@@ -71,23 +71,21 @@ test_activate_no_chart_safe (void)
   lk_test_drain ();
 }
 
-/* With nothing installed the mariner gets SETUP, not a page: there is a
- * decision to make, and the flow is what asks it.
+/* With nothing installed the mariner gets SETUP. There is a decision to make,
+ * and the flow is what asks it.
  *
- * The switched-off page stands for the one other case, where charts ARE
- * installed and every set is off, and it stays down here. */
+ * A library whose sets are all switched off gets the basemap with the chrome
+ * over it, so no page stands for that state. */
 static void
 test_setup_runs_over_an_empty_library (void)
 {
   GtkWidget *setup = lk_test_find_label (window, "Welcome to Lookout Marine");
-  GtkWidget *switched_off = lk_test_find_label (window, "Every chart set is switched off");
   GtkWidget *capsule = lk_test_find_css (window, "lk-capsule");
 
   g_assert_nonnull (setup);
   g_assert_true (lk_test_shown (setup, window));
 
-  g_assert_nonnull (switched_off);
-  g_assert_false (lk_test_shown (switched_off, window));
+  g_assert_null (lk_test_find_label (window, "Every chart set is switched off"));
 
   /* No chart, no readouts: a capsule reading 1:— over an empty view is chrome
    * with nothing to report. */
@@ -137,12 +135,10 @@ test_setup_later_puts_it_away (void)
   g_signal_emit_by_name (later, "clicked");
   lk_test_drain ();
 
-  /* Setup is down, and the page under it is not raised in its place: the
-     mariner asked for the app, not for another page. */
+  /* Setup is down and no page is raised in its place: the mariner asked for
+     the app, and the app is the basemap with the chrome over it. */
   g_assert_null (lk_test_find_label (window, "Welcome to Lookout Marine"));
-  g_assert_false (lk_test_shown (lk_test_find_label (window,
-                                                     "Every chart set is switched off"),
-                                 window));
+  g_assert_null (lk_test_find_label (window, "Every chart set is switched off"));
 
   /* And it stays down for the rest of the launch, however often the window
      reconsiders. */
@@ -151,13 +147,12 @@ test_setup_later_puts_it_away (void)
   g_assert_null (lk_test_find_label (window, "Welcome to Lookout Marine"));
 }
 
-/* The page answers to whether anything is DRAWN, not to whether a chart is
- * open. A chart of no charts is open and draws the basemap, so has-chart says
- * yes while the mariner has nothing.
+/* The page fill stands while there is no chart handle. A chart of no charts
+ * draws the basemap, and setup floats over that, so the fill goes.
  *
- * The four states, in the order a launch meets them. The engine has no handle
- * here, so a chart reported open reads as one holding no charts, which is
- * exactly the state under test. */
+ * The four states, in the order a launch meets them, driven through the model:
+ * the harness opens a handle of its own accord and the assertions here are
+ * about what the window draws for each state. */
 static void
 test_page_follows_nothing_to_draw (void)
 {
@@ -169,7 +164,11 @@ test_page_follows_nothing_to_draw (void)
   g_assert_nonnull (first_run);
   g_assert_nonnull (loader);
 
-  /* Nothing open, nothing installed. */
+  /* No handle and nothing installed: the fill stands, with no basemap under
+     it, and setup stands on the fill. */
+  lk_app_model_set_chart_open (model, FALSE, NULL);
+  lk_app_model_set_opening (model, FALSE, FALSE);
+  lk_test_drain ();
   g_assert_true (lk_app_model_get_nothing_to_draw (model));
   g_assert_true (lk_test_shown (page, window));
   g_assert_true (lk_test_shown (first_run, window));
@@ -182,8 +181,9 @@ test_page_follows_nothing_to_draw (void)
   g_assert_false (lk_app_model_get_nothing_to_draw (model));
   g_assert_true (lk_test_shown (loader, window));
 
-  /* Open, and holding no charts. The loader has done its job and the page
-     comes back: the basemap is not a library. */
+  /* Open, and holding no charts. The loader has done its job and the basemap
+     draws. Setup stands over it behind a scrim, so the fill is up and dimming
+     rather than hiding the map. */
   lk_app_model_set_opening (model, FALSE, FALSE);
   lk_app_model_set_chart_open (model, TRUE, NULL);
   lk_app_model_set_first_build_done (model, TRUE);
@@ -192,13 +192,19 @@ test_page_follows_nothing_to_draw (void)
   g_assert_true (lk_app_model_get_chart_is_empty (model));
   g_assert_true (lk_app_model_get_nothing_to_draw (model));
   g_assert_true (lk_test_shown (first_run, window));
+  g_assert_true (lk_test_shown (page, window));
+  g_assert_true (gtk_widget_has_css_class (page, "lk-scrim"));
 
   /* The chrome that reports on a chart stays down with setup up. */
   g_assert_false (lk_test_shown (lk_test_find_css (window, "lk-capsule"), window));
   g_assert_false (g_action_get_enabled (action ("zoom-in")));
 
+  /* The handle gone again: the fill stands on its own, with no basemap under
+     it to dim. */
   lk_app_model_set_chart_open (model, FALSE, NULL);
   lk_test_drain ();
+  g_assert_true (lk_test_shown (page, window));
+  g_assert_false (gtk_widget_has_css_class (page, "lk-scrim"));
 }
 
 /* A pick raises the report into the overlay; close-pick clears the set, and the
@@ -224,14 +230,23 @@ test_close_pick_clears_report (void)
 }
 
 /* The scheme action tracks the chart's scheme, so the menu radio marks the one
- * in force even when a cycle or a load moved it. The engine reports the scheme
- * through the readouts push, which is the path a load or a Ctrl+L cycle takes. */
+ * in force even when a cycle or a load moved it.
+ *
+ * Set through the model and wait for the engine to report it back, which is
+ * the path a load or a Ctrl+L cycle takes. Pushing a readout by hand raced the
+ * frame tick: the window opens a chart of no charts for the basemap, and that
+ * tick pushes the engine's scheme over one written by hand. */
 static void
 push_scheme (int scheme)
 {
-  lookout_view view = { .lon = -76.48, .lat = 38.98, .zoom = 14, .rotation_deg = 0 };
-  lk_app_model_push_readouts (model, view, 13267, 1.0, scheme);
-  lk_test_drain ();
+  lk_app_model_set_scheme (model, scheme);
+  for (int i = 0; i < 100; i++)
+    {
+      lk_test_drain ();
+      if (lk_app_model_get_scheme (model) == scheme)
+        return;
+      g_usleep (5000);
+    }
 }
 
 static void

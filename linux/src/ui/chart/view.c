@@ -165,18 +165,31 @@ lk_chart_view_do_auto_open (gpointer user_data)
   if (!lk_chart_controller_is_open (self->controller))
     {
       g_auto (GStrv) paths = lk_app_model_initial_chart_paths (self->model);
+      g_autofree char *source = NULL;
+
       if (paths != NULL && g_strv_length (paths) > 0)
         {
           lk_chart_controller_open (self->controller, (const char *const *) paths, GTK_WIDGET (self));
+          lk_app_model_set_opening (self->model, FALSE, FALSE);
+          return G_SOURCE_REMOVE;
         }
-      else
+
+      /* Nothing here draws yet. It may still be charts: an exchange set as
+         an agency publishes it is raw cells, which bake first. */
+      source = lk_app_model_initial_source (self->model);
+      if (source != NULL)
         {
-          /* Nothing here draws yet. It may still be charts: an exchange set as
-             an agency publishes it is raw cells, which bake first. */
-          g_autofree char *source = lk_app_model_initial_source (self->model);
-          if (source != NULL)
-            lk_app_model_open_chart_directory (self->model, source);
+          lk_app_model_open_chart_directory (self->model, source);
+          lk_app_model_set_opening (self->model, FALSE, FALSE);
+          return G_SOURCE_REMOVE;
         }
+
+      /* An empty library still opens a chart of no charts, so the basemap
+         draws under setup. The window was a flat fill until something else
+         wanted a handle, which on a fresh install was the import. */
+      static const char *const none[] = { NULL };
+
+      lk_chart_controller_open (self->controller, none, GTK_WIDGET (self));
     }
 
   lk_app_model_set_opening (self->model, FALSE, FALSE);
@@ -222,14 +235,6 @@ lk_chart_view_maybe_auto_open (LkChartView *self)
          not known until the read lands, so it says "the chart", not a number. */
       lk_app_model_set_opening_cells (self->model, 0);
       lk_app_model_set_opening (self->model, TRUE, lookout_atlas_cache_ready () == 0);
-      return;
-    }
-
-  if ((paths == NULL || g_strv_length (paths) == 0) && source == NULL)
-    {
-      /* Read, and there is nothing to draw. Take the loader down: the window
-         puts up setup, or the switch the mariner turned off. */
-      lk_app_model_set_opening (self->model, FALSE, FALSE);
       return;
     }
 

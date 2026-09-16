@@ -69,9 +69,9 @@ void lk_app_model_remove_chart_set (LkAppModel *self, const char *path);
 
 /* TRUE when sets ARE installed and every one of them is switched off.
  *
- * The one case where the library is not empty and the chart is still blank. A
- * mariner there does not need setup: they need the switch they turned off, so
- * the window offers that instead. */
+ * The one case where the library is not empty and the chart is still blank.
+ * Setup stays down for it: the mariner has charts, and the basemap with the
+ * chrome over it is what they get until they switch one back on. */
 gboolean lk_app_model_all_sets_off (LkAppModel *self);
 
 /* TRUE while a background scan has a set still to read. The library composes

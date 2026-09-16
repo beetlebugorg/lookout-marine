@@ -43,6 +43,10 @@ static const char *LK_CSS =
      * (Chrome.panel, #F8F8F8) and its loader carries it too. Opaque: the chart
      * window is transparent, so anything less shows the desktop through it. */
     ".lk-page { background: @theme_bg_color; }"
+    /* Setup stands over the basemap now, and a pale card on a pale coastline
+     * loses its edges. The scrim puts the map back a step, so the card reads
+     * as raised over it. */
+    ".lk-page.lk-scrim { background: alpha(#0b1a2b, 0.45); }"
     /* The readouts, as a capsule at the bottom centre. */
     ".lk-capsule {"
     "  background: alpha(@theme_bg_color, 0.94);"

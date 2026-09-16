@@ -874,7 +874,10 @@ lk_chart_controller_open (LkChartController *self,
    * writes both again at close. With nothing saved it holds the view it opened
    * on, so the shell asks for the opening one. */
   lookout_set_store (handle, lk_store_handle ());
-  if (!lk_store_has_saved_view ())
+  /* A chart of no charts opens on the core's default view whatever is saved.
+   * With no charts the default is the whole world, and the saved pose is a
+   * scale the basemap has no detail for. */
+  if (n == 0 || !lk_store_has_saved_view ())
     {
       lookout_view opening;
 

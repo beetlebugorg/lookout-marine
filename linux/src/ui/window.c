@@ -613,7 +613,6 @@ lk_window_chart_sets_changed (LkAppModel *model, gpointer user_data)
 
   if (gtk_widget_in_destruction (self->window))
     return;
-  lk_window_refresh_switched_off (self);
   /* A set switched off, a set added, or a scan landing all change whether
    * anything is drawn, and the page answers to that rather than to has-chart. */
   lk_window_update_overlays (self);
@@ -644,9 +643,17 @@ lk_window_update_overlays (LkWindow *self)
         g_simple_action_set_enabled (G_SIMPLE_ACTION (action), drawing);
     }
 
-  /* One rule for the whole page: any state with no chart on screen is a page,
-     not a chart with something floating over it. */
-  gtk_widget_set_visible (self->page, !drawing);
+  /* The fill stands where there is no chart handle at all. A chart of no
+     charts draws the basemap, and setup floats over that behind a scrim: the
+     card is pale and so is the coastline under it. */
+  gboolean has_chart = lk_app_model_get_has_chart (self->model);
+  gboolean setup_up = lk_first_run_page_showing (self->first_run);
+
+  gtk_widget_set_visible (self->page, (!drawing && !has_chart) || setup_up);
+  if (setup_up && has_chart)
+    gtk_widget_add_css_class (self->page, "lk-scrim");
+  else
+    gtk_widget_remove_css_class (self->page, "lk-scrim");
 
   /* Sets installed and every one switched off: the mariner needs the switch
    * they turned off, not setup. */
@@ -667,12 +674,6 @@ lk_window_update_overlays (LkWindow *self)
     self->loader_pulse_id = g_timeout_add (120, lk_window_loader_pulse, self);
   else if (!loader_up)
     g_clear_handle_id (&self->loader_pulse_id, g_source_remove);
-  /* Nothing is open DURING a bake either, but "No chart open" beside a card
-     offering to open one is the wrong thing to say while the app is already
-     busy preparing the charts the mariner just picked. The import pill is the
-     status; this stays out of its way until there is a decision to make. */
-  gtk_widget_set_visible (self->switched_off_page,
-                          settled && !lk_first_run_page_showing (self->first_run));
   /* No chart, no readouts: a capsule reading 1:— over an empty view is chrome
    * with nothing to report. */
   gtk_widget_set_visible (self->capsule, drawing);
@@ -680,12 +681,6 @@ lk_window_update_overlays (LkWindow *self)
      lk_scale_bar_update), so this is the coarse gate and that is the fine one.
      They agree: no chart means no denominator. */
   gtk_widget_set_visible (self->scale_bar, drawing);
-
-  /* A hidden empty state drops its inline error with it: the sentence
-   * belonged to the press that raised it. */
-  if (loading || drawing || baking)
-    gtk_widget_set_visible (g_object_get_data (G_OBJECT (self->switched_off_page), "lk-error"),
-                            FALSE);
 
   if (loading && !baking)
     {
@@ -932,15 +927,6 @@ lk_window_show_open_error (LkWindow *self)
   if (message == NULL)
     return;
 
-  if (gtk_widget_get_visible (self->switched_off_page))
-    {
-      /* The mariner pressed the button on the first-run page; the sentence
-       * belongs there, not in an alert floating over an empty window. */
-      GtkWidget *error = g_object_get_data (G_OBJECT (self->switched_off_page), "lk-error");
-      gtk_label_set_text (GTK_LABEL (error), message);
-      gtk_widget_set_visible (error, TRUE);
-    }
-  else
     {
       GtkAlertDialog *dialog = gtk_alert_dialog_new ("Couldn't open chart");
       gtk_alert_dialog_set_detail (dialog, message);
@@ -1135,7 +1121,6 @@ lk_window_new (GtkApplication *app, LkAppModel *model)
 
   self->chart_view = lk_chart_view_new (model);
   self->loader = lk_window_build_loader ();
-  self->switched_off_page = lk_window_build_switched_off_page ();
   self->first_run = lk_first_run_page_new (model);
 
   self->overlay = gtk_overlay_new ();
@@ -1229,7 +1214,6 @@ lk_window_new (GtkApplication *app, LkAppModel *model)
 
   /* The loader and the empty state stand over all of it. */
   gtk_overlay_add_overlay (GTK_OVERLAY (self->overlay), self->loader);
-  gtk_overlay_add_overlay (GTK_OVERLAY (self->overlay), self->switched_off_page);
   /* Setup stands over all of it, including the first-run page: it IS the
    * first-run page when there is a decision to make. */
   gtk_overlay_add_overlay (GTK_OVERLAY (self->overlay), self->first_run);
@@ -1265,7 +1249,6 @@ lk_window_new (GtkApplication *app, LkAppModel *model)
                 "gtk-application-prefer-dark-theme", &self->desktop_prefers_dark, NULL);
 
   lk_window_update_overlays (self);
-  lk_window_refresh_switched_off (self);
   lk_window_raster_changed (model, self);
   lk_window_apply_scheme (self);
   lk_window_apply_dev_hooks (self);
