@@ -18,6 +18,7 @@ typedef struct {
   GtkWidget *window;
   GtkWidget *cost;
   GtkWidget *download;
+  GtkWidget *again;
 
   /* The water this device already holds, ticked when the picker opens, and the
    * pick as it stood then. Download acts on the difference between the two. */
@@ -47,11 +48,6 @@ lk_noaa_window_free (gpointer data)
   g_free (self);
 }
 
-/* The cost line and the Download button, from the pick.
- *
- * Water already held is fetched again rather than left behind a dead button.
- * It is how a mariner repairs a set, or takes the current edition of one NOAA
- * has reissued. */
 /* Tick the water already on the device, once the catalog has priced each
  * region. A mariner coming back to add more starts from what they have. */
 static void
@@ -211,6 +207,23 @@ lk_noaa_window_sync (LkNoaa *noaa, gpointer user_data)
 
   gtk_button_set_label (GTK_BUTTON (self->download), removes ? "Apply" : "Download");
   gtk_widget_set_sensitive (self->download, ready && moved);
+
+  /* Water the device holds in full has no cells to add or remove, so the
+   * button above is insensitive. Fetching it again repairs a damaged
+   * download and picks up any edition NOAA has reissued, so that press has a
+   * button of its own (apple/LookoutMarine/Charts/NoaaRegionList.swift). */
+  gtk_widget_set_visible (self->again, ready && picked && !removes &&
+                                           lk_noaa_cells (noaa) <= lk_noaa_held (noaa));
+}
+
+/* Fetch the whole pick again, held cells included. */
+static void
+lk_noaa_window_again (GtkButton *button, gpointer user_data)
+{
+  LkNoaaWindow *self = user_data;
+
+  lk_app_model_start_noaa_download (self->model, TRUE);
+  gtk_window_close (GTK_WINDOW (self->window));
 }
 
 /* Fetch what the pick added. The cells this device holds are left out, so a
@@ -278,18 +291,26 @@ lk_noaa_window_download (GtkButton *button, gpointer user_data)
   if (n == 0)
     {
       /* The pick dropped water whose every chart another district still picked
-       * also covers, so there is none to delete. Say so rather than closing on
-       * a press that did nothing. */
+       * also covers, so there is none to delete. */
       g_auto (GStrv) dropped = lk_noaa_window_dropped (self, self->noaa);
+      gboolean removes = dropped != NULL && g_strv_length (dropped) > 0;
 
-      if (dropped != NULL && g_strv_length (dropped) > 0 &&
-          lk_noaa_cells (self->noaa) <= lk_noaa_held (self->noaa))
+      /* Drop the region from the record anyway. The picker ticks from the
+       * record, so a region left in it opens ticked again on the next open.
+       * No file is deleted, so no confirmation dialog appears
+       * (apple/LookoutMarine/Charts/NoaaRegionList.swift, apply). */
+      if (removes)
+        lk_noaa_forget_downloaded (self->noaa, (const char *const *) dropped);
+
+      if (removes && lk_noaa_cells (self->noaa) <= lk_noaa_held (self->noaa))
         {
+          /* Show a message, so the press has a visible result. */
           GtkAlertDialog *none = gtk_alert_dialog_new ("Nothing to remove");
 
           gtk_alert_dialog_set_detail (
               none, "Every chart that water covers is also covered by a region "
-                    "still picked, so removing it would delete none of them.");
+                    "still picked, so removing it would delete none of them. The "
+                    "water is off your pick.");
           gtk_alert_dialog_show (none, GTK_WINDOW (self->window));
           g_object_unref (none);
           return;
@@ -305,8 +326,9 @@ lk_noaa_window_download (GtkButton *button, gpointer user_data)
       g_strdup_printf (n == 1 ? "Remove %u chart from this device?"
                               : "Remove %u charts from this device?", n);
   const char *detail = "These are the charts only the water you took out of the "
-                       "pick covers. They go from this device, and NOAA still "
-                       "publishes them.";
+                       "pick covers. Lookout deletes the charts it downloaded. "
+                       "Charts you added yourself stay where they are, and you "
+                       "can download this water again.";
   static const char *answers[] = { "Cancel", "Remove", NULL };
 
   GtkAlertDialog *dialog = gtk_alert_dialog_new ("%s", question);
@@ -369,7 +391,8 @@ lk_noaa_window_present (GtkWindow *parent, LkAppModel *model)
   GtkWidget *scroller = gtk_scrolled_window_new ();
   GtkWidget *page = gtk_box_new (GTK_ORIENTATION_VERTICAL, 14);
   GtkWidget *blurb = gtk_label_new ("NOAA publishes an ENC for every United States "
-                                    "waterway at no cost. Pick the water you sail.");
+                                    "waterway at no cost. Tick the water you sail. "
+                                    "Unticking water you hold removes those charts.");
 
   gtk_label_set_wrap (GTK_LABEL (blurb), TRUE);
   gtk_label_set_xalign (GTK_LABEL (blurb), 0.0);
@@ -396,6 +419,7 @@ lk_noaa_window_present (GtkWindow *parent, LkAppModel *model)
   GtkWidget *cancel = gtk_button_new_with_label ("Cancel");
 
   self->cost = gtk_label_new ("");
+  self->again = gtk_button_new_with_label ("Download Again");
   self->download = gtk_button_new_with_label ("Download");
 
   gtk_widget_add_css_class (self->cost, "dim-label");
@@ -404,13 +428,21 @@ lk_noaa_window_present (GtkWindow *parent, LkAppModel *model)
   gtk_widget_set_hexpand (self->cost, TRUE);
   gtk_widget_add_css_class (self->download, "suggested-action");
   gtk_widget_add_css_class (self->download, "pill");
+  gtk_widget_add_css_class (self->again, "pill");
   gtk_widget_add_css_class (cancel, "pill");
+  gtk_widget_set_tooltip_text (self->again, "Download this water again, including the "
+                                            "charts already here. This repairs a damaged "
+                                            "download and gets any edition NOAA has "
+                                            "reissued.");
+  gtk_widget_set_visible (self->again, FALSE);
   g_signal_connect (self->download, "clicked",
                     G_CALLBACK (lk_noaa_window_download), self);
+  g_signal_connect (self->again, "clicked", G_CALLBACK (lk_noaa_window_again), self);
   g_signal_connect (cancel, "clicked", G_CALLBACK (lk_noaa_window_cancel), self);
 
   gtk_box_append (GTK_BOX (footer), self->cost);
   gtk_box_append (GTK_BOX (footer), cancel);
+  gtk_box_append (GTK_BOX (footer), self->again);
   gtk_box_append (GTK_BOX (footer), self->download);
   gtk_widget_set_margin_top (footer, 12);
   gtk_widget_set_margin_bottom (footer, 12);

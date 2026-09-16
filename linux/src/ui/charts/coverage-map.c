@@ -599,22 +599,27 @@ lk_catalog_line_sync (LkNoaa *noaa, gpointer user_data)
   GtkWidget *spinner = g_object_get_data (G_OBJECT (box), "lk-spinner");
   GtkWidget *label = g_object_get_data (G_OBJECT (box), "lk-label");
   GtkWidget *again = g_object_get_data (G_OBJECT (box), "lk-again");
+  GtkWidget *note = g_object_get_data (G_OBJECT (box), "lk-note");
   gboolean reading = state->phase == LK_NOAA_READING_CATALOG;
   gboolean failed = !reading && state->error[0] != '\0';
+  /* A catalog already read outranks a failed read. The core loads the cached
+   * catalog before it requests a new one, so a mariner with no network has a
+   * working picker and a failed request at the same time. Showing the error
+   * first put red text where the catalog summary belongs. The error now shows
+   * as a caption below the summary. */
+  gboolean stale = failed && state->have_catalog;
 
   gtk_widget_set_visible (spinner, reading);
   gtk_spinner_set_spinning (GTK_SPINNER (spinner), reading);
   gtk_widget_set_visible (again, failed);
+  gtk_widget_set_visible (note, stale);
+  if (stale)
+    gtk_label_set_text (GTK_LABEL (note), state->error);
 
   if (reading)
     {
       gtk_label_set_text (GTK_LABEL (label), "Reading NOAA's chart catalog…");
       gtk_widget_remove_css_class (label, "error");
-    }
-  else if (failed)
-    {
-      gtk_label_set_text (GTK_LABEL (label), state->error);
-      gtk_widget_add_css_class (label, "error");
     }
   else if (state->have_catalog)
     {
@@ -626,6 +631,11 @@ lk_catalog_line_sync (LkNoaa *noaa, gpointer user_data)
 
       gtk_label_set_text (GTK_LABEL (label), text);
       gtk_widget_remove_css_class (label, "error");
+    }
+  else if (failed)
+    {
+      gtk_label_set_text (GTK_LABEL (label), state->error);
+      gtk_widget_add_css_class (label, "error");
     }
   else
     {
@@ -639,9 +649,13 @@ lk_catalog_line_sync (LkNoaa *noaa, gpointer user_data)
 GtkWidget *
 lk_noaa_catalog_line_new (LkNoaa *noaa)
 {
-  GtkWidget *box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
+  /* Two lines: the catalog summary, and below it the reason a read failed
+   * over a catalog already loaded. */
+  GtkWidget *box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 2);
+  GtkWidget *line = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
   GtkWidget *spinner = gtk_spinner_new ();
   GtkWidget *label = gtk_label_new ("");
+  GtkWidget *note = gtk_label_new ("");
   GtkWidget *again = gtk_button_new_with_label ("Try Again");
 
   g_return_val_if_fail (LK_IS_NOAA (noaa), NULL);
@@ -652,16 +666,24 @@ lk_noaa_catalog_line_new (LkNoaa *noaa)
   gtk_label_set_xalign (GTK_LABEL (label), 0.0);
   gtk_label_set_wrap (GTK_LABEL (label), TRUE);
   gtk_widget_set_hexpand (label, TRUE);
+  gtk_widget_add_css_class (note, "caption");
+  gtk_widget_add_css_class (note, "error");
+  gtk_label_set_xalign (GTK_LABEL (note), 0.0);
+  gtk_label_set_wrap (GTK_LABEL (note), TRUE);
+  gtk_widget_set_visible (note, FALSE);
   gtk_widget_set_valign (again, GTK_ALIGN_CENTER);
   g_signal_connect (again, "clicked", G_CALLBACK (lk_catalog_try_again), noaa);
 
-  gtk_box_append (GTK_BOX (box), spinner);
-  gtk_box_append (GTK_BOX (box), label);
-  gtk_box_append (GTK_BOX (box), again);
+  gtk_box_append (GTK_BOX (line), spinner);
+  gtk_box_append (GTK_BOX (line), label);
+  gtk_box_append (GTK_BOX (line), again);
+  gtk_box_append (GTK_BOX (box), line);
+  gtk_box_append (GTK_BOX (box), note);
 
   g_object_set_data (G_OBJECT (box), "lk-spinner", spinner);
   g_object_set_data (G_OBJECT (box), "lk-label", label);
   g_object_set_data (G_OBJECT (box), "lk-again", again);
+  g_object_set_data (G_OBJECT (box), "lk-note", note);
 
   g_signal_connect_object (noaa, "changed", G_CALLBACK (lk_catalog_line_sync), box, 0);
   lk_catalog_line_sync (noaa, box);

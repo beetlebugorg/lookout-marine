@@ -600,6 +600,11 @@ lk_noaa_adopt_downloaded (LkNoaa *self)
   was = lk_store_load_noaa_regions ();
   if (was != NULL && was[0] != NULL)
     return FALSE;
+  /* An empty record still counts as a record. A mariner who gave back the
+   * only region they held leaves one. Adopting every whole region then ticks
+   * that water again on the next open. */
+  if (lk_store_noaa_regions_recorded ())
+    return FALSE;
   if (!self->regions_costed)
     return FALSE;
 

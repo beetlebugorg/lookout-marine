@@ -16,11 +16,14 @@
  * checked below against the catalog instead, one layer down.
  */
 
+#include <string.h>
+
 #include "lk-test.h"
 
 #include "library/noaa.h"
 #include "model/app-model.h"
 #include "model/store.h"
+#include "ui/charts/coverage-map.h"
 #include "ui/charts/noaa-window.h"
 #include "ui/window.h"
 
@@ -81,16 +84,109 @@ hold_nothing (void)
   lk_noaa_note_managed (noaa, none);
 }
 
+/* What the device has downloaded, as the record states it.
+ *
+ * An empty list here means no record at all, from a device that has never
+ * downloaded a region. A record the mariner emptied by giving back the only
+ * region they held is a different state. The first adopts every whole region
+ * the library holds. The second does not. Every case below that passes none
+ * means the first. */
 static void
 record (const char *const *ids)
 {
-  lk_store_save_noaa_regions (ids);
+  if (ids == NULL || ids[0] == NULL)
+    lk_store_forget_noaa_regions ();
+  else
+    lk_store_save_noaa_regions (ids);
 }
 
 static char **
 recorded (void)
 {
   return lk_noaa_downloaded_regions (noaa);
+}
+
+/* The catalog is written to the disk.
+ *
+ * Every region control requires a catalog, and this picker is the only route
+ * into a downloaded set. The core stores the catalog it reads and loads it
+ * again before the next network read. That lets the picker work with no
+ * network. The read-back half is checked in the core against a
+ * service with no fetcher (src/noaajob.zig). */
+static void
+test_the_catalog_is_kept_on_the_disk (void)
+{
+  g_autofree char *path = g_build_filename (g_get_user_cache_dir (), "lookout",
+                                            "fetched", "ENCProdCat.xml", NULL);
+
+  /* catalog_ready has already run for this suite. */
+  g_assert_true (lk_noaa_state (noaa)->have_catalog);
+  g_assert_true (g_file_test (path, G_FILE_TEST_EXISTS));
+
+  /* The file is complete. The catalog is about 10 MB, so a partial write is
+   * the failure to guard against. */
+  g_autofree char *bytes = NULL;
+  gsize len = 0;
+  g_assert_true (g_file_get_contents (path, &bytes, &len, NULL));
+  g_assert_cmpuint (len, >, 0);
+  g_assert_nonnull (strstr (bytes, "</EncProductCatalog>"));
+}
+
+/* A catalog already read outranks a failed read, on the line that reports it.
+ *
+ * The core loads the cached catalog before it requests a new one, so a
+ * mariner with no network has a working picker and a failed request at the
+ * same time. Showing the error first put red text where the catalog summary
+ * belongs. The error now shows as a caption below the summary.
+ *
+ * This raises the error by asking to download water the device already holds
+ * in full. That is the one failure this suite can produce with a catalog
+ * still loaded. The line treats every error the same way. */
+static void
+test_a_failed_read_does_not_hide_the_catalog (void)
+{
+  GtkWidget *line = lk_noaa_catalog_line_new (noaa);
+  GtkWidget *host = gtk_window_new ();
+
+  gtk_window_set_child (GTK_WINDOW (host), line);
+  gtk_window_present (GTK_WINDOW (host));
+  lk_test_drain ();
+
+  g_assert_true (lk_noaa_state (noaa)->have_catalog);
+
+  /* Now a failure, with the catalog still in hand. */
+  {
+    g_auto (GStrv) cells = lk_noaa_region_cells (noaa, LK_TEST_REGION);
+
+    lk_noaa_note_installed (noaa, (const char *const *) cells);
+    lk_noaa_clear_picks (noaa);
+    lk_noaa_toggle (noaa, LK_TEST_REGION);
+    lk_noaa_download (noaa, "/tmp", FALSE);
+    lk_test_drain ();
+  }
+
+  const char *error = lk_noaa_state (noaa)->error;
+  g_assert_cmpstr (error, !=, "");
+  g_assert_true (lk_noaa_state (noaa)->have_catalog);
+
+  /* The catalog summary comes first, and the failure shows below it. */
+  g_autofree char *summary = g_strdup_printf ("%u charts published, catalog dated %s.",
+                                              lk_noaa_state (noaa)->catalog_cells,
+                                              lk_noaa_state (noaa)->date);
+  GtkWidget *says_catalog = lk_test_find_label (line, summary);
+  GtkWidget *says_error = lk_test_find_label (line, error);
+
+  g_assert_nonnull (says_catalog);
+  g_assert_true (lk_test_shown (says_catalog, line));
+  g_assert_nonnull (says_error);
+  g_assert_true (lk_test_shown (says_error, line));
+  /* The catalog summary does not have the error class. */
+  g_assert_false (gtk_widget_has_css_class (says_catalog, "error"));
+
+  gtk_window_destroy (GTK_WINDOW (host));
+  lk_test_drain ();
+  lk_noaa_clear_picks (noaa);
+  hold_nothing ();
 }
 
 /* The window the picker opens in, found by its title. It is a toplevel of its
@@ -444,6 +540,10 @@ main (int argc, char *argv[])
       return 77;
     }
 
+  g_test_add_func ("/noaa-cycle/the-catalog-is-kept-on-the-disk",
+                   test_the_catalog_is_kept_on_the_disk);
+  g_test_add_func ("/noaa-cycle/a-failed-read-does-not-hide-the-catalog",
+                   test_a_failed_read_does_not_hide_the_catalog);
   g_test_add_func ("/noaa-cycle/the-record-survives-a-restart",
                    test_the_record_survives_a_restart);
   g_test_add_func ("/noaa-cycle/a-downloaded-region-is-held-whole",

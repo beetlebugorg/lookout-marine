@@ -82,6 +82,18 @@ void  lk_store_save_chart_links (const char *json);
  * neighbour's cells and read as installed. Free with g_strfreev. */
 char **lk_store_load_noaa_regions (void);
 void   lk_store_save_noaa_regions (const char *const *ids);
+
+/* TRUE once this device has written that list, including an empty one.
+ *
+ * Saving an empty list clears the key, so a read cannot distinguish a device
+ * that has downloaded no regions from one whose regions the mariner gave
+ * back. The first adopts every whole region the library holds. The second
+ * skips that, or the picker ticks the water again on the next open. */
+gboolean lk_store_noaa_regions_recorded (void);
+
+/* Clear both the list and the flag, so the device reads as never having
+ * downloaded a region. This is the state of a fresh install. */
+void lk_store_forget_noaa_regions (void);
 char *lk_store_load_chart_link_active (void);
 void  lk_store_save_chart_link_active (const char *url);
 

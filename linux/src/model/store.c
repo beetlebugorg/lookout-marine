@@ -358,7 +358,29 @@ void
 lk_store_save_noaa_regions (const char *const *ids)
 {
   lk_store_save_list (LOOKOUT_STORE_CHARTSETS, "noaa_regions", ids);
+  /* The store drops a key set to an empty list, so an emptied record reads
+   * back as one that was never written. The flag records the difference. */
+  lookout_store_set_flag (lk_store_handle (), LOOKOUT_STORE_CHARTSETS,
+                          "noaa_regions_kept", 1);
   lk_store_wrote ();
+}
+
+void
+lk_store_forget_noaa_regions (void)
+{
+  static const char *const none[] = { NULL };
+
+  lk_store_save_list (LOOKOUT_STORE_CHARTSETS, "noaa_regions", none);
+  lookout_store_set_flag (lk_store_handle (), LOOKOUT_STORE_CHARTSETS,
+                          "noaa_regions_kept", 0);
+  lk_store_wrote ();
+}
+
+gboolean
+lk_store_noaa_regions_recorded (void)
+{
+  return lookout_store_flag (lk_store_handle (), LOOKOUT_STORE_CHARTSETS,
+                             "noaa_regions_kept", 0) != 0;
 }
 
 /* ---- plugin settings ----------------------------------------------------- */
