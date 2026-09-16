@@ -1613,30 +1613,40 @@ namespace winrt::LookoutMarine::implementation
             reading.Children().Append(says);
             body.Children().Append(reading);
         }
-        else if (st.error[0] != '\0')
+        else
         {
-            StackPanel failed;
-            failed.Orientation(Orientation::Horizontal);
-            failed.Spacing(10);
-            auto why = Muted(winrt::to_hstring(st.error).c_str());
-            why.VerticalAlignment(VerticalAlignment::Center);
-            failed.Children().Append(why);
-            Button again;
-            again.Content(box_value(L"Try Again"));
-            again.Click([this](auto &&, auto &&) {
-                noaa_catalog_asked = true;
-                lk_controller_noaa_refresh(controller);
-                FirstRunRender();
-            });
-            failed.Children().Append(again);
-            body.Children().Append(failed);
-        }
-        else if (st.have_catalog)
-        {
-            std::wstring says = Thousands(st.catalog_cells) + L" charts published";
-            if (st.date[0] != '\0')
-                says += L", catalog dated " + std::wstring{ winrt::to_hstring(st.date) };
-            body.Children().Append(Muted(says + L".", 12));
+            // What the catalog says comes first when there IS one. A read that
+            // failed over a catalog already loaded leaves the prices standing,
+            // and putting its error where the summary goes said the step had
+            // nothing to price.
+            if (st.have_catalog)
+            {
+                std::wstring says = Thousands(st.catalog_cells) + L" charts published";
+                if (st.date[0] != '\0')
+                    says += L", catalog dated " + std::wstring{ winrt::to_hstring(st.date) };
+                body.Children().Append(Muted(says + L".", 12));
+            }
+            if (st.error[0] != '\0')
+            {
+                StackPanel failed;
+                failed.Orientation(Orientation::Horizontal);
+                failed.Spacing(10);
+                // Under the summary, and smaller than it: the catalog on this
+                // device is the fact, and the failed read is the caption.
+                auto why = Muted(winrt::to_hstring(st.error).c_str(),
+                                 st.have_catalog ? 11 : 12);
+                why.VerticalAlignment(VerticalAlignment::Center);
+                failed.Children().Append(why);
+                Button again;
+                again.Content(box_value(L"Try Again"));
+                again.Click([this](auto &&, auto &&) {
+                    noaa_catalog_asked = true;
+                    lk_controller_noaa_refresh(controller);
+                    FirstRunRender();
+                });
+                failed.Children().Append(again);
+                body.Children().Append(failed);
+            }
         }
 
         // The districts as pills, wrapped into rows. The mariner picks as many
