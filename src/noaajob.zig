@@ -21,6 +21,7 @@ const lock = @import("lock.zig");
 const Lock = lock.Lock;
 const clock = @import("clock.zig");
 const httpgather = @import("httpgather.zig");
+const cachedir = @import("cachedir.zig");
 
 /// Set on every request id this service issues.
 pub const id_mark: u64 = @as(u64, 1) << 63;
@@ -412,9 +413,83 @@ pub const Service = struct {
 
     // ---- the catalog ------------------------------------------------------
 
+    /// What the cached catalog is called, under cachedir.fetchedDir.
+    const catalog_file = "ENCProdCat.xml";
+
+    /// The catalog's path in the cache, or null when no cache root resolves.
+    /// Owned by `alloc`.
+    fn catalogCachePath(self: *Service) ?[]u8 {
+        const dir = cachedir.fetchedDir(self.alloc) orelse return null;
+        defer self.alloc.free(dir);
+        return std.fmt.allocPrint(self.alloc, "{s}/{s}", .{ dir, catalog_file }) catch null;
+    }
+
+    /// Store the catalog just parsed, so the next run has one before it has a
+    /// network.
+    ///
+    /// Writes through a temporary and a rename, as every other write here
+    /// does. A machine that loses power mid-write keeps the catalog it already
+    /// had.
+    fn cacheCatalog(self: *Service, bytes: []const u8) void {
+        const path = self.catalogCachePath() orelse return;
+        defer self.alloc.free(path);
+        const tmp = std.fmt.allocPrint(self.alloc, "{s}.new", .{path}) catch return;
+        defer self.alloc.free(tmp);
+
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const cwd = std.Io.Dir.cwd();
+        cwd.writeFile(io, .{ .sub_path = tmp, .data = bytes }) catch return;
+        cwd.rename(tmp, cwd, path, io) catch {
+            cwd.deleteFile(io, tmp) catch {};
+        };
+    }
+
+    /// Load the catalog this device last read from the disk.
+    ///
+    /// This is what lets a mariner price and remove water with no network.
+    /// Every region control requires a catalog, and the picker is the only
+    /// route into a downloaded set. An old catalog still names the cells the
+    /// device holds. It can be wrong only about water not yet downloaded, and
+    /// the network read that follows corrects that.
+    ///
+    /// `checked_at` comes from the file's mtime, so the picker reports when
+    /// the catalog was read.
+    fn loadCachedCatalog(self: *Service) void {
+        if (self.cat != null) return;
+        const path = self.catalogCachePath() orelse return;
+        defer self.alloc.free(path);
+
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const bytes = std.Io.Dir.cwd().readFileAlloc(io, path, self.alloc,
+                                                     .limited(MAX_ZIP_BYTES)) catch return;
+        defer self.alloc.free(bytes);
+
+        var parsed = noaa.parse(self.alloc, bytes) catch return;
+        if (parsed.cells.len == 0) {
+            parsed.deinit();
+            return;
+        }
+        self.cat = parsed;
+        self.checked_at = cachedFileSeconds(io, path);
+        self.phase = .ready;
+        self.changed = true;
+    }
+
+    /// When a cached file was last written, in unix seconds. 0 when unknown,
+    /// which the picker shows as never checked.
+    fn cachedFileSeconds(io: std.Io, path: []const u8) i64 {
+        const f = std.Io.Dir.cwd().openFile(io, path, .{}) catch return 0;
+        defer f.close(io);
+        const st = f.stat(io) catch return 0;
+        return @intCast(@divFloor(st.mtime.nanoseconds, std.time.ns_per_s));
+    }
+
     /// Read NOAA's product catalog. One request is outstanding at a time.
     pub fn refresh(self: *Service) void {
         if (self.phase == .reading_catalog) return;
+        // Load the cached catalog first, so the picker works while the read
+        // below is in flight and after it fails.
+        self.loadCachedCatalog();
         if (self.get == null) {
             self.setErr("no network provider");
             return;
@@ -856,6 +931,7 @@ pub const Service = struct {
         self.checked_at = @divFloor(clock.wallMs(), 1000);
         self.phase = .ready;
         self.changed = true;
+        self.cacheCatalog(a.bytes);
     }
 
     fn tookCell(self: *Service, job: usize, a: Answer) void {
@@ -1038,7 +1114,36 @@ test "request ids are distinguishable from chartlinks ids" {
     try testing.expect(!ownsId(std.math.maxInt(u32)));
 }
 
+/// A catalog of one cell, small enough to write in a test and complete enough
+/// to parse.
+const test_catalog =
+    \\<ENC_Product_Catalog><date_valid>20250903</date_valid>
+    \\<cell><name>US5MD1MC</name><lname>Chesapeake Bay Entrance</lname>
+    \\<cscale>20000</cscale><edtn>27</edtn><updn>3</updn><isdt>20250801</isdt>
+    \\<zipfile_location>https://charts.noaa.gov/ENCs/US5MD1MC.zip</zipfile_location>
+    \\<zipfile_size>1048576</zipfile_size><coast_guard_district>5</coast_guard_district>
+    \\<panel><vertex><lat>36.0</lat><long>-76.5</long></vertex>
+    \\<vertex><lat>37.0</lat><long>-75.5</long></vertex></panel></cell>
+    \\</ENC_Product_Catalog>
+;
+
+/// Point the cache root at a directory of this test's own.
+///
+/// Every test that reaches the catalog cache needs this. The root is a global
+/// the host sets once. Without it a test reads whatever catalog the machine
+/// running it holds, and passes or fails on that.
+fn testCacheRoot(tmp: *std.testing.TmpDir) ![]u8 {
+    const dir = try std.fmt.allocPrint(testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    cachedir.setRoot(dir);
+    return dir;
+}
+
 test "a service with no fetcher reports why and stays idle" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try testCacheRoot(&tmp);
+    defer testing.allocator.free(root);
+
     var s = Service.init(testing.allocator);
     defer s.deinit();
 
@@ -1058,6 +1163,47 @@ test "a download refuses to start before a catalog is read" {
     s.start(&.{5}, "/tmp/lookout-noaa-test-should-not-exist", false);
     try testing.expectEqual(Phase.idle, s.phase);
     try testing.expect(s.err.len != 0);
+}
+
+test "the catalog is kept, and the next run reads it with no network" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try testCacheRoot(&tmp);
+    defer testing.allocator.free(root);
+
+    {
+        var s = Service.init(testing.allocator);
+        defer s.deinit();
+        s.cacheCatalog(test_catalog);
+    }
+
+    // A separate run with no fetcher. This is a mariner with no network. The
+    // picker has to price their water and let them delete it.
+    var s = Service.init(testing.allocator);
+    defer s.deinit();
+
+    try testing.expect(!s.haveCatalog());
+    s.refresh();
+    try testing.expect(s.haveCatalog());
+    try testing.expectEqual(Phase.ready, s.phase);
+    // The catalog is real, so a region prices against it.
+    try testing.expect(s.costOf(&.{5}).cells > 0);
+    // checked_at is the time of the network read, from the file's mtime.
+    try testing.expect(s.checked_at > 0);
+}
+
+test "a catalog the cache does not hold leaves the service idle" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try testCacheRoot(&tmp);
+    defer testing.allocator.free(root);
+
+    var s = Service.init(testing.allocator);
+    defer s.deinit();
+
+    s.refresh();
+    try testing.expect(!s.haveCatalog());
+    try testing.expectEqual(Phase.idle, s.phase);
 }
 
 test "the snapshot fits a long error into its buffer" {

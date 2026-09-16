@@ -32,6 +32,7 @@ const ctglyphs = @import("charttable").glyphs;
 const ctscene = @import("charttable").scene;
 const ov = @import("overlay.zig");
 const marks = @import("markers.zig"); // the mariner's own marks on the water
+const cachedir = @import("cachedir.zig"); // where files that can be made again live
 
 pub const Mariner = cc.tile57_mariner;
 pub const Scheme = cc.tile57_scheme;
@@ -138,31 +139,10 @@ fn buildMarinerFrom(base: cc.tile57_mariner, sch: cc.tile57_scheme) cc.tile57_ma
 
 /// A cache root the host handed us. Android exports neither HOME nor
 /// XDG_CACHE_HOME, so there this is the ONLY way to a writable cache — the path
-/// exists solely as Context.getCacheDir(). Owned here; set before opening.
-var cache_root: ?[]u8 = null;
-
-/// Adopt `path` as the cache root, replacing any previous one.
+/// exists solely as Context.getCacheDir(). Owned by cachedir.zig. Set it
+/// before opening.
 pub fn setCacheRoot(path: []const u8) void {
-    const a = std.heap.c_allocator;
-    const dup = a.dupe(u8, path) catch return;
-    if (cache_root) |old| a.free(old);
-    cache_root = dup;
-}
-
-/// `<root>/lookout/v<version>`: the host's root if it gave one, else
-/// XDG_CACHE_HOME, else the platform default under HOME.
-fn cacheDirPath(alloc: std.mem.Allocator, ver: []const u8) ?[]u8 {
-    if (cache_root) |root| return std.fmt.allocPrint(alloc, "{s}/lookout/v{s}", .{ root, ver }) catch null;
-    if (std.c.getenv("XDG_CACHE_HOME")) |x| {
-        const s = std.mem.span(x);
-        if (s.len > 0) return std.fmt.allocPrint(alloc, "{s}/lookout/v{s}", .{ s, ver }) catch null;
-    }
-    const home = std.mem.span(std.c.getenv("HOME") orelse return null);
-    if (home.len == 0) return null;
-    return switch (builtin.os.tag) {
-        .macos, .ios => std.fmt.allocPrint(alloc, "{s}/Library/Caches/lookout/v{s}", .{ home, ver }) catch null,
-        else => std.fmt.allocPrint(alloc, "{s}/.cache/lookout/v{s}", .{ home, ver }) catch null,
-    };
+    cachedir.setRoot(path);
 }
 
 /// The app's atlas cache directory — purgeable by the OS (it's a rebuildable
@@ -170,7 +150,7 @@ fn cacheDirPath(alloc: std.mem.Allocator, ver: []const u8) ?[]u8 {
 /// Keyed by tile57 version so a catalogue/engine change invalidates old atlases.
 pub fn atlasCacheDir(alloc: std.mem.Allocator) ?[]u8 {
     const ver = std.mem.span(cc.tile57_version());
-    const dir = cacheDirPath(alloc, ver) orelse return null;
+    const dir = cachedir.versionedPath(alloc, ver) orelse return null;
     const io = std.Io.Threaded.global_single_threaded.io();
     std.Io.Dir.cwd().createDirPath(io, dir) catch {};
     return dir;
