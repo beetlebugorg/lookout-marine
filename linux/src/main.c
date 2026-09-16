@@ -445,6 +445,18 @@ static const char *LK_CSS =
     "  font-size: 76%;"
     "  font-weight: bold;"
     "}"
+    /* A set the NOAA downloader owns. The mark says where the charts came
+     * from and, by saying it, where they are added and removed. A mariner
+     * otherwise reads the download as a folder they picked and looks for it
+     * on the disk. */
+    ".lk-managed-pill {"
+    "  color: @accent_color;"
+    "  background: alpha(@accent_color, 0.14);"
+    "  border-radius: 999px;"
+    "  padding: 1px 7px;"
+    "  font-size: 76%;"
+    "  font-weight: 500;"
+    "}"
     /* The band panel on the import step: a shelf of its own, so the bands
      * read as one list rather than as more of the page. */
     ".lk-band-panel {"

@@ -212,6 +212,7 @@ lk_chart_sets_rows (LkChartSets *self)
       g_autofree char *prepared = lk_chart_bake_prepared_dir (set->path);
       row->derived = lk_chart_bake_is_derived (set->path) ||
                      (prepared != NULL && g_file_test (prepared, G_FILE_TEST_IS_DIR));
+      row->managed = set->managed != 0;
       row->on = set->on != 0;
       lk_chart_set_count_bands (self, set->path, row->bands);
       g_ptr_array_add (rows, row);

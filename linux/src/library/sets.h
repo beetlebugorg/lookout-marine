@@ -35,6 +35,9 @@ typedef struct {
   /* TRUE when this app prepared the charts. Removing one of those deletes
    * work that has to be done again, which is worth asking about first. */
   gboolean derived;
+  /* TRUE when the NOAA downloader owns this set. Charts go in and out of it
+   * through the downloader, not through this list. */
+  gboolean managed;
   gboolean on;
   /* Cells per usage band, 1 to 6. Index 0 holds the cells whose name states no
    * band, which is every S-101 dataset: those have no place on a scale ramp

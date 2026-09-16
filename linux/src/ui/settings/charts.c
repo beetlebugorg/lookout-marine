@@ -586,7 +586,27 @@ lk_settings_fill_sets_list (LkSettings *settings)
       gtk_widget_add_css_class (title, "heading");
       gtk_label_set_xalign (GTK_LABEL (title), 0.0);
       gtk_label_set_ellipsize (GTK_LABEL (title), PANGO_ELLIPSIZE_END);
-      gtk_box_append (GTK_BOX (column), title);
+
+      /* WHO OWNS THIS SET. Charts go in and out of a managed set through the
+       * NOAA chart downloader. Without the mark a mariner reads the download
+       * as a folder they picked, and looks for it on the disk
+       * (apple/LookoutMarine/Charts/ChartsSection.swift, ManagedBadge). */
+      if (set->managed)
+        {
+          GtkWidget *line = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
+          GtkWidget *pill = gtk_label_new ("Managed by NOAA chart downloader");
+
+          gtk_widget_add_css_class (pill, "lk-managed-pill");
+          gtk_widget_set_valign (pill, GTK_ALIGN_CENTER);
+          gtk_accessible_update_property (GTK_ACCESSIBLE (pill),
+                                          GTK_ACCESSIBLE_PROPERTY_LABEL,
+                                          "Managed by the NOAA chart downloader", -1);
+          gtk_box_append (GTK_BOX (line), title);
+          gtk_box_append (GTK_BOX (line), pill);
+          gtk_box_append (GTK_BOX (column), line);
+        }
+      else
+        gtk_box_append (GTK_BOX (column), title);
 
       /* ONE line under the title, not two. Where it came from and what it
        * holds are both about the same set, and stacking them made a row three

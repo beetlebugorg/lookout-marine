@@ -374,6 +374,21 @@ derived_row (LkChartSets *sets, const char *path)
   g_assert_not_reached ();
 }
 
+static gboolean
+managed_row (LkChartSets *sets, const char *path)
+{
+  g_autoptr (GPtrArray) rows = lk_chart_sets_rows (sets);
+
+  for (guint i = 0; i < rows->len; i++)
+    {
+      const LkChartSetRow *row = g_ptr_array_index (rows, i);
+
+      if (g_strcmp0 (row->path, path) == 0)
+        return row->managed;
+    }
+  g_assert_not_reached ();
+}
+
 static void
 test_a_set_with_prepared_charts_is_derived (void)
 {
@@ -394,6 +409,29 @@ test_a_set_with_prepared_charts_is_derived (void)
   place_prepared (prepared, "US3CU1EF/US3CU1EF.pmtiles");
 
   g_assert_true (derived_row (sets, dir));
+
+  lk_chart_sets_free (sets);
+}
+
+/* The downloader's mark reaches the row the settings list draws.
+ *
+ * The Charts pane marks a managed set so a mariner reads where the charts came
+ * from, and where they are added and removed. The mark is the core's, and the
+ * row is what the pane reads. */
+static void
+test_a_managed_set_says_so_on_its_row (void)
+{
+  g_autoptr (GObject) owner = g_object_new (G_TYPE_OBJECT, NULL);
+  LkChartSets *sets = lk_chart_sets_new (noop_changed, owner);
+  g_autofree char *dir = g_build_filename (home, "noaa-cells", NULL);
+
+  place_cell (dir, "US3CU1EF.000");
+  g_assert_true (lk_chart_sets_note (sets, dir));
+  g_assert_false (managed_row (sets, dir));
+
+  g_assert_true (lk_chart_sets_set_managed (sets, dir, TRUE));
+  g_assert_true (lk_chart_sets_is_managed (sets, dir));
+  g_assert_true (managed_row (sets, dir));
 
   lk_chart_sets_free (sets);
 }
@@ -425,6 +463,8 @@ main (int argc, char *argv[])
                    test_prepared_archive_is_not_work);
   g_test_add_func ("/library/a-set-with-prepared-charts-is-derived",
                    test_a_set_with_prepared_charts_is_derived);
+  g_test_add_func ("/library/a-managed-set-says-so-on-its-row",
+                   test_a_managed_set_says_so_on_its_row);
 
   return g_test_run ();
 }
