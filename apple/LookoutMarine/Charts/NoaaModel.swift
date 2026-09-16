@@ -60,6 +60,34 @@ struct NoaaState: Equatable {
     var bytesTotal: UInt64 = 0
     var bytesDone: UInt64 = 0
     var error = ""
+
+    /// What the catalog line draws.
+    ///
+    /// A loaded catalog leads and a read that failed goes under it, because
+    /// the picker prices and removes water from the catalog it already holds.
+    /// An error in the summary's place describes a picker that cannot work.
+    /// With no catalog the error is the whole line.
+    enum CatalogLine: Equatable {
+        case reading
+        case summary(String)
+        case summaryThenError(summary: String, error: String)
+        case error(String)
+        case blank
+    }
+
+    var catalogLine: CatalogLine {
+        if phase == .readingCatalog { return .reading }
+        guard haveCatalog else { return error.isEmpty ? .blank : .error(error) }
+        if error.isEmpty { return .summary(catalogSummary) }
+        return .summaryThenError(summary: catalogSummary, error: error)
+    }
+
+    /// The catalog in the mariner's words.
+    var catalogSummary: String {
+        var s = "\(catalogCells) charts published"
+        if !date.isEmpty { s += ", catalog dated \(date)" }
+        return s + "."
+    }
 }
 
 @MainActor

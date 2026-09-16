@@ -30,36 +30,43 @@ struct NoaaCatalogLine: View {
     }
 
     @ViewBuilder private var line: some View {
-        switch noaa.state.phase {
-        case .readingCatalog:
+        switch noaa.state.catalogLine {
+        case .reading:
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
                 Text("Reading NOAA's chart catalog…")
             }
             .font(.system(size: 12.5))
             .foregroundStyle(Chrome.muted)
-        default:
-            if !noaa.state.error.isEmpty {
-                HStack(spacing: 8) {
-                    Label(noaa.state.error, systemImage: "exclamationmark.triangle")
-                        .fixedSize(horizontal: false, vertical: true)
-                    Button("Try Again") { noaa.refresh() }
-                }
-                .font(.system(size: 12.5))
-                .foregroundStyle(Chrome.overscale)
-            } else if noaa.state.haveCatalog {
-                Text(summary)
-                    .font(.system(size: 12))
-                    .foregroundStyle(Chrome.muted)
-                    .monospacedDigit()
+        case .summary(let text):
+            summaryText(text)
+        case .summaryThenError(let text, let err):
+            VStack(alignment: .leading, spacing: 3) {
+                summaryText(text)
+                errorLine(err, size: 11.5)
             }
+        case .error(let err):
+            errorLine(err, size: 12.5)
+        case .blank:
+            EmptyView()
         }
     }
 
-    private var summary: String {
-        var s = "\(noaa.state.catalogCells) charts published"
-        if !noaa.state.date.isEmpty { s += ", catalog dated \(noaa.state.date)" }
-        return s + "."
+    private func summaryText(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 12))
+            .foregroundStyle(Chrome.muted)
+            .monospacedDigit()
+    }
+
+    private func errorLine(_ err: String, size: CGFloat) -> some View {
+        HStack(spacing: 8) {
+            Label(err, systemImage: "exclamationmark.triangle")
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Try Again") { noaa.refresh() }
+        }
+        .font(.system(size: size))
+        .foregroundStyle(Chrome.overscale)
     }
 }
 
