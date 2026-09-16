@@ -36,13 +36,10 @@ namespace winrt::LookoutMarine::implementation
         {
             chart_sets_model =
                 lookout_chart_sets_open(lk_store_handle(), lkw::ChartLibraryDir().c_str());
-            // The library IS the downloader's set on this shell: NOAA cells are
-            // fetched into Downloads and prepared into here. Marking it says
-            // which set the picker's ticks come from, and compose prefers it
-            // when two sets hold the same cell at the same edition.
-            if (chart_sets_model != nullptr)
-                lookout_chart_sets_set_managed(chart_sets_model,
-                                               lkw::ChartLibraryDir().c_str(), 1);
+            // Which set the downloader owns is marked in LoadChartSets, where
+            // the list is read: the library is not on that list until
+            // something adopts it, and a mark has nothing to land on before
+            // then.
             SweepRemovedCharts();
         }
         return chart_sets_model;
@@ -102,6 +99,27 @@ namespace winrt::LookoutMarine::implementation
                         row.title = agency;
                 }
                 chart_sets.push_back(std::move(row));
+            }
+        }
+
+        // The mark that says which set the downloader owns, applied whenever
+        // the list is read rather than once when the model opens. The library
+        // is not on the list at all until something adopts it, so on a device
+        // whose first act is a NOAA download the mark had nothing to land on
+        // and the picker would have read every region as water the mariner
+        // does not hold.
+        //
+        // AFTER the copy above, never during it: the call resets the arena
+        // the borrowed list points into.
+        if (lookout_chart_sets *model = ChartSetsModel())
+        {
+            std::string const lib = lkw::ChartLibraryDir();
+            for (auto &row : chart_sets)
+            {
+                if (row.path != lib || row.managed)
+                    continue;
+                lookout_chart_sets_set_managed(model, lib.c_str(), 1);
+                row.managed = true;
             }
         }
         if (then)
