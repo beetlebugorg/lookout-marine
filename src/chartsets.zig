@@ -126,6 +126,17 @@ pub const Sets = struct {
 
     /// What a read hands out. Reset by the next call that changes the list.
     reads: std.heap.ArenaAllocator,
+    /// The arenas a landing scan replaced, and whether `reads` holds a
+    /// generation the caller has finished with.
+    ///
+    /// A read hands out pointers into a row's files_arena and an array out of
+    /// `reads`. `land` runs on the scan worker, so freeing either there takes
+    /// the list out from under a shell walking it: a background scan landing
+    /// mid-loop is not a call the caller made, and the header promises a
+    /// borrow until the caller's next one. Both are held here instead and
+    /// freed at the head of the next read.
+    retired: std.ArrayList(std.heap.ArenaAllocator) = .empty,
+    reads_stale: bool = false,
 
     const group = settings.group_chartsets;
     const paths_key = "paths";
@@ -193,6 +204,8 @@ pub const Sets = struct {
         self.rows.deinit(self.gpa);
         for (self.queue.items) |p| self.gpa.free(p);
         self.queue.deinit(self.gpa);
+        for (self.retired.items) |*a| a.deinit();
+        self.retired.deinit(self.gpa);
         self.gpa.free(self.prepared_root);
         self.reads.deinit();
         self.gpa.destroy(self);
@@ -227,9 +240,22 @@ pub const Sets = struct {
     ///
     /// Borrowed until the next call that changes the list. Empty until the
     /// background scan has read the folder.
+    /// Free what a landing scan replaced. Every read calls this first, under
+    /// the lock, so the generation a caller was handed last time goes only
+    /// once that caller has come back for another.
+    fn releaseRetired(self: *Sets) void {
+        for (self.retired.items) |*a| a.deinit();
+        self.retired.clearRetainingCapacity();
+        if (self.reads_stale) {
+            _ = self.reads.reset(.retain_capacity);
+            self.reads_stale = false;
+        }
+    }
+
     pub fn files(self: *Sets, path: []const u8) []const *const library.File {
         self.mu.lock();
         defer self.mu.unlock();
+        self.releaseRetired();
         for (self.rows.items) |r| {
             if (!std.mem.eql(u8, r.path, path)) continue;
             const a = self.reads.allocator();
@@ -245,6 +271,7 @@ pub const Sets = struct {
     pub fn all(self: *Sets) []const *const Set {
         self.mu.lock();
         defer self.mu.unlock();
+        self.releaseRetired();
         const a = self.reads.allocator();
         const out = a.alloc(Set, self.rows.items.len) catch return &.{};
         const by_ptr = a.alloc(*const Set, out.len) catch return &.{};
@@ -393,6 +420,7 @@ pub const Sets = struct {
     pub fn compose(self: *Sets) []const [*:0]const u8 {
         self.mu.lock();
         defer self.mu.unlock();
+        self.releaseRetired();
         const a = self.reads.allocator();
         var out = std.ArrayList([:0]const u8).empty;
         // The winner so far for each dataset name, as its index in `out`.
@@ -688,7 +716,12 @@ pub const Sets = struct {
             }
             self.gpa.free(r.openable);
             r.openable = openable.toOwnedSlice(self.gpa) catch &.{};
-            if (r.files_arena) |*a| a.deinit();
+            if (r.files_arena) |old_arena| {
+                self.retired.append(self.gpa, old_arena) catch {
+                    var tmp = old_arena;
+                    tmp.deinit();
+                };
+            }
             r.files_arena = files_arena;
             r.files = found.items;
             r.charts = charts;
@@ -706,7 +739,7 @@ pub const Sets = struct {
                 } else |_| {}
             }
             self.dirty = true;
-            _ = self.reads.reset(.retain_capacity);
+            self.reads_stale = true;
             return;
         }
         // The row went while the scan ran.
@@ -1213,4 +1246,42 @@ test "a baked chart reports the edition of the cell it was made from" {
     }
     try t.expect(baked != null);
     try t.expectEqual(@as(u32, 28), baked.?.edition);
+}
+
+test "a landing scan retires the file arena rather than freeing it" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const dir = try f.folder("Set A");
+    defer t.allocator.free(dir);
+
+    const s = try f.open();
+    defer s.close();
+    try t.expect(s.add(dir));
+    settle(s);
+
+    // The borrow is taken AFTER the rescan is asked for, so the only thing
+    // between it and the read below is the worker landing the scan.
+    try t.expect(s.rescan(dir));
+    const held = s.files(dir);
+    try t.expect(held.len > 0);
+    settle(s);
+
+    // land replaced the row's arena. Freeing it there would take `held` with
+    // it, so it waits here instead. Reading the bytes proves nothing: a freed
+    // arena still holds them.
+    s.mu.lock();
+    const retired = s.retired.items.len;
+    const stale = s.reads_stale;
+    s.mu.unlock();
+    try t.expectEqual(@as(usize, 1), retired);
+    try t.expect(stale);
+
+    // The caller coming back is what releases the generation before it.
+    try t.expect(s.files(dir).len > 0);
+    s.mu.lock();
+    const after = s.retired.items.len;
+    const stale_after = s.reads_stale;
+    s.mu.unlock();
+    try t.expectEqual(@as(usize, 0), after);
+    try t.expect(!stale_after);
 }
