@@ -280,6 +280,9 @@ final class NoaaModel {
     // MARK: - The water the mariner asked for
 
     private static let regionsKey = "noaa-regions"
+    /// Set whenever the record is written. A record read back empty is then a
+    /// device that gave back all its water, and adoption stays off.
+    private static let regionsKeptKey = "noaa-regions-kept"
 
     /// The regions the mariner downloaded, by id.
     ///
@@ -291,8 +294,16 @@ final class NoaaModel {
     private(set) var recorded: Set<String> = Set(
         Store.shared.strings(NoaaModel.group, NoaaModel.regionsKey))
 
+    /// True once this device has written a record. The list alone cannot say
+    /// it, because the core's setList clears a key given an empty list and
+    /// Store.strings returns [] for a key that was never set.
+    private(set) var hasRecord: Bool =
+        Store.shared.bool(NoaaModel.group, NoaaModel.regionsKeptKey) ?? false
+
     private func saveRecorded() {
         Store.shared.set(Array(recorded).sorted(), NoaaModel.group, NoaaModel.regionsKey)
+        hasRecord = true
+        Store.shared.set(true, NoaaModel.group, NoaaModel.regionsKeptKey)
     }
 
     /// Write down the water a download was asked for.
@@ -309,17 +320,19 @@ final class NoaaModel {
 
     /// Reconcile the record with the device.
     ///
-    /// A record with no entry adopts the regions held whole, once, so a
-    /// library downloaded before the record existed opens ticked. A region the
-    /// device no longer holds whole is dropped, which heals a library whose
-    /// charts went by another route, such as removing the chart set.
+    /// A device that has never written a record adopts the regions held
+    /// whole, so a library downloaded before the record existed opens ticked.
+    /// After that the record rules: a region the device no longer holds whole
+    /// is dropped, which heals a library whose charts went by another route,
+    /// such as removing the chart set. An empty record then stays empty, so
+    /// giving back the last region does not tick it again.
     func reconcileRecorded() {
         guard state.haveCatalog else { return }
         let whole = Set(regions.filter { regionState[$0.id]?.complete ?? false }.map(\.id))
-        if recorded.isEmpty {
-            recorded = whole
-        } else {
+        if hasRecord {
             recorded.formIntersection(whole)
+        } else {
+            recorded = whole
         }
         saveRecorded()
     }

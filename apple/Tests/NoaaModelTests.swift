@@ -1,4 +1,5 @@
-//  NoaaModelTests.swift — the catalog line, and what a removal deletes.
+//  NoaaModelTests.swift — the catalog line, the region record, and what a
+//  removal deletes.
 //
 //  These run against FakeEngine, so the catalog, what a region costs and the
 //  cells it names are whatever the test sets. The region table comes from the
@@ -76,6 +77,67 @@ final class NoaaModelTests: ShellTestCase {
 
     func testNoCatalogAndNoErrorLeavesTheLineBlank() {
         XCTAssertEqual(NoaaState().catalogLine, .blank)
+    }
+
+    // MARK: The region record
+
+    /// A library downloaded before the record existed opens ticked.
+    func testADeviceWithNoRecordAdoptsTheWaterItHolds() {
+        let (m, _) = model(cells: ["d1": ["US1NE01", "US2NE02"],
+                                   "d5": ["US1MA01", "US2MA02"]])
+        m.noteManaged(["US1NE01", "US2NE02"])
+        XCTAssertFalse(m.hasRecord)
+
+        m.pickInstalled()
+
+        XCTAssertEqual(m.picked, ["d1"])
+    }
+
+    /// Giving back the last region leaves a record that is empty and written.
+    /// Read back as a device that never recorded, it ticks the water straight
+    /// back, because the cells are still on the disk.
+    func testAnEmptyRecordThatWasWrittenStaysEmpty() {
+        let held = ["US1NE01", "US2NE02"]
+        let (first, _) = model(cells: ["d1": held])
+        first.noteManaged(held)
+        first.recordPicked(["d1"])
+        first.dropRecorded(["d1"])
+        XCTAssertTrue(first.recorded.isEmpty)
+
+        // A relaunch: a second model reads the record off the same store.
+        let next = NoaaModel()
+        next.engine = engine
+        next.poll()
+        next.noteManaged(held)
+        XCTAssertTrue(next.hasRecord)
+
+        next.pickInstalled()
+
+        XCTAssertEqual(next.picked, [])
+    }
+
+    /// A region the device no longer holds whole goes out of the record, which
+    /// heals a library whose charts went by another route.
+    func testARegionNoLongerHeldWholeIsDropped() {
+        let (m, _) = model(cells: ["d1": ["US1NE01", "US2NE02"]])
+        m.noteManaged(["US1NE01", "US2NE02"])
+        m.recordPicked(["d1"])
+
+        // The charts went, so the region is no longer complete.
+        m.noteManaged([])
+        m.pickInstalled()
+
+        XCTAssertEqual(m.picked, [])
+        XCTAssertTrue(m.recorded.isEmpty)
+    }
+
+    func testTheRecordSurvivesARelaunch() {
+        let (m, _) = model(cells: ["d1": ["US1NE01"]])
+        m.recordPicked(["d1", "d5"])
+
+        let next = NoaaModel()
+        XCTAssertEqual(next.recorded, ["d1", "d5"])
+        XCTAssertTrue(next.hasRecord)
     }
 
     // MARK: What a removal deletes
