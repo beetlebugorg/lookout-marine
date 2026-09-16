@@ -167,6 +167,7 @@ struct NoaaPickerSheet: View {
         let gone = removing
         if !gone.isEmpty {
             model.charts.removeNoaaWater(named: noaa.cellsToRemove(unpicking: gone))
+            noaa.dropRecorded(gone.map(\.id))
         }
         if adding { model.startNoaaDownload() }
         shut()

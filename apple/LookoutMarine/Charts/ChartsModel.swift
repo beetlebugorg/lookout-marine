@@ -169,7 +169,11 @@ final class ChartsModel {
         guard let dest = NoaaModel.downloadDirectory else { return [] }
         var seen = Set<String>()
         for set in sets where set.path == dest {
-            for cell in set.cells where !cell.isRaster {
+            // A cell that still needs preparing draws no chart. The core
+            // hides a .000 behind the chart baked from it, so this stays quiet
+            // until a bake fails, and then the raw cells read as water the
+            // mariner holds.
+            for cell in set.cells where !cell.isRaster && !cell.needsPrepare {
                 seen.insert(cell.stem.uppercased())
             }
         }

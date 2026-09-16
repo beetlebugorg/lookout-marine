@@ -249,6 +249,53 @@ final class NoaaModel {
         repriceRegions()
     }
 
+    // MARK: - The water the mariner asked for
+
+    private static let regionsKey = "noaa-regions"
+
+    /// The regions the mariner downloaded, by id.
+    ///
+    /// The tick reads this rather than the cells on the device. NOAA files
+    /// cells across district lines, so a download of one region installs some
+    /// of its neighbour's, and coverage alone cannot state which water was
+    /// asked for: a region reads as held on its neighbour's spillover, and a
+    /// region removed still reads as held on what the neighbour left.
+    private(set) var recorded: Set<String> = Set(
+        Store.shared.strings(NoaaModel.group, NoaaModel.regionsKey))
+
+    private func saveRecorded() {
+        Store.shared.set(Array(recorded).sorted(), NoaaModel.group, NoaaModel.regionsKey)
+    }
+
+    /// Write down the water a download was asked for.
+    func recordPicked(_ ids: [String]) {
+        recorded.formUnion(ids)
+        saveRecorded()
+    }
+
+    /// Take the water a removal gave back out of the record.
+    func dropRecorded(_ ids: [String]) {
+        recorded.subtract(ids)
+        saveRecorded()
+    }
+
+    /// Reconcile the record with the device.
+    ///
+    /// A record with no entry adopts the regions held whole, once, so a
+    /// library downloaded before the record existed opens ticked. A region the
+    /// device no longer holds whole is dropped, which heals a library whose
+    /// charts went by another route, such as removing the chart set.
+    func reconcileRecorded() {
+        guard state.haveCatalog else { return }
+        let whole = Set(regions.filter { regionState[$0.id]?.complete ?? false }.map(\.id))
+        if recorded.isEmpty {
+            recorded = whole
+        } else {
+            recorded.formIntersection(whole)
+        }
+        saveRecorded()
+    }
+
     /// Price every region on its own.
     ///
     /// One cost call per region, which the core answers off the catalog it
@@ -282,7 +329,8 @@ final class NoaaModel {
     /// unticked said they held nothing, and ticking a region they had already
     /// downloaded read as a second download of the same water.
     func pickInstalled() {
-        picked = Set(regions.filter { regionState[$0.id]?.complete ?? false }.map(\.id))
+        reconcileRecorded()
+        picked = recorded
         recost()
     }
 
@@ -327,6 +375,7 @@ final class NoaaModel {
     /// Download the picked regions into `destination`.
     func download(to destination: String, again: Bool = false) {
         guard !picked.isEmpty else { return }
+        recordPicked(regions.filter { picked.contains($0.id) }.map(\.id))
         engine?.noaaDownload(regionIDs: pickedIDs, destination: destination, again: again)
         poll()
     }
