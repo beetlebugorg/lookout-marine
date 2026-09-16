@@ -454,6 +454,12 @@ final class ChartsModel {
                 on: row.on,
                 managed: row.managed)
         }
+        // The downloader's set draws first. It is the set the mariner adds
+        // and removes in another window, so the row leading the list is where
+        // they look for it. The core returns rows in the order they were
+        // added, and a download made after two folders otherwise draws third.
+        let managedFirst = sets.filter(\.managed) + sets.filter { !$0.managed }
+        if managedFirst.map(\.path) != sets.map(\.path) { sets = managedFirst }
         syncRasterFromSets()
         // The launch walk cannot see a library of pictures: it looks for
         // cells, and finds none. Open what the scan found once it knows, or a
