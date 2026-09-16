@@ -956,6 +956,45 @@ namespace winrt::LookoutMarine::implementation
     // and only while the page holds the line that says so: the controls are
     // null on every other page and whenever no transfer is running, which is
     // what keeps this off the tick the rest of the time.
+    // The removal panel's live parts, restated rather than rebuilt: this runs
+    // off the readout tick, and building the page again under the pointer is
+    // what took the hover off the rows.
+    void MainWindow::PollRemovalPane()
+    {
+        if (removal_job == nullptr || removal_pane_title == nullptr)
+            return;
+        auto const p = removal_job->Snapshot();
+        std::wstring title = winrt::to_hstring(p.Title()).c_str();
+        if (!p.running)
+        {
+            // What it left to say, once there is nothing to count.
+            std::string const note = removal_job->Note();
+            if (!note.empty())
+                title = winrt::to_hstring(note).c_str();
+        }
+        removal_pane_title.Text(winrt::hstring{ title });
+
+        if (removal_pane_bar != nullptr)
+        {
+            bool const sweep = p.running && p.total == 0;
+            if (removal_pane_bar.IsIndeterminate() != sweep)
+                removal_pane_bar.IsIndeterminate(sweep);
+            if (!sweep)
+                removal_pane_bar.Value(p.running ? p.Fraction() : 1.0);
+            removal_pane_bar.Visibility(p.running ? Visibility::Visible
+                                                  : Visibility::Collapsed);
+        }
+        if (removal_pane_count != nullptr)
+        {
+            std::wstring says;
+            if (p.running && p.total > 0)
+                says = lkw::Thousands(p.done) + L" of " + lkw::Thousands(p.total);
+            removal_pane_count.Text(winrt::hstring{ says });
+            removal_pane_count.Visibility(says.empty() ? Visibility::Collapsed
+                                                       : Visibility::Visible);
+        }
+    }
+
     void MainWindow::PollNoaaPane()
     {
         if (noaa_pane_count == nullptr || controller == nullptr)
@@ -1004,6 +1043,8 @@ namespace winrt::LookoutMarine::implementation
         // stands in for.
         s += chart_sets.empty() ? "empty" : "sets";
         s += bake_job != nullptr ? "|baking" : "|idle";
+        // The removal line comes and goes with the job that feeds it.
+        s += removal_job != nullptr ? "|removing" : "|kept";
         if (lk_controller_is_open(controller))
         {
             lookout_noaa_state nst{};
@@ -1153,8 +1194,10 @@ namespace winrt::LookoutMarine::implementation
             }
         }
 
-        // The download, which has its own line and its own poll.
+        // The download and the removal, which have their own lines and their
+        // own polls.
         PollNoaaPane();
+        PollRemovalPane();
     }
 
     void MainWindow::RefreshChartsPageOnChange()
@@ -1189,6 +1232,9 @@ namespace winrt::LookoutMarine::implementation
         bake_pane_count = nullptr;
         bake_pane_eta = nullptr;
         bake_pane_bar = nullptr;
+        removal_pane_title = nullptr;
+        removal_pane_count = nullptr;
+        removal_pane_bar = nullptr;
         chart_tile_ui.clear();
         chart_set_ui.clear();
         chart_sets_total = nullptr;
@@ -1903,6 +1949,39 @@ namespace winrt::LookoutMarine::implementation
             }
 
 
+            // ---- Removing charts, while a delete runs -------------------------
+            // A removal reports where it has got to, the way an import does.
+            // The charts are out of the library the moment the rename returns
+            // and the delete behind it is disk work: 930 cells is 446 MB. There
+            // is NO WAY OUT of one, so no Cancel: the set is already off the
+            // list and the charts are already moved aside.
+            //
+            // The line stays after it finishes, saying what went, until the
+            // next removal or the next time this page is built.
+            if (removal_job != nullptr)
+            {
+                auto p = removal_job->Snapshot();
+                header(L"Removing charts");
+
+                removal_pane_title = Controls::TextBlock{};
+                removal_pane_title.FontSize(12);
+                stack.Children().Append(removal_pane_title);
+
+                removal_pane_bar = Controls::ProgressBar{};
+                removal_pane_bar.Minimum(0);
+                removal_pane_bar.Maximum(1);
+                removal_pane_bar.HorizontalAlignment(HorizontalAlignment::Stretch);
+                removal_pane_bar.Margin({ 0, 6, 0, 0 });
+                stack.Children().Append(removal_pane_bar);
+
+                removal_pane_count = Controls::TextBlock{};
+                removal_pane_count.FontSize(11);
+                removal_pane_count.Opacity(0.7);
+                removal_pane_count.Margin({ 0, 6, 0, 0 });
+                stack.Children().Append(removal_pane_count);
+                // Current on the frame it is built in.
+                PollRemovalPane();
+            }
             // ---- Downloading from NOAA, while a transfer runs -----------------
             // Where it was started. This window stands over the chart, so a
             // transfer begun here otherwise runs behind it.

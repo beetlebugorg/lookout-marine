@@ -382,6 +382,8 @@ namespace winrt::LookoutMarine::implementation
             // A download the Charts page is reporting. Returns at once unless
             // that line is on the page.
             PollNoaaPane();
+            // A removal the page is reporting, for the same reason.
+            PollRemovalPane();
         }
         catch (...)
         {

@@ -858,5 +858,20 @@ void TestFirstRun()
         LK_EQ(pick.Footnote(idle), std::wstring(L""));
         LK_EQ(At(FirstRunStep::Coverage).Footnote(idle),
               std::wstring(L"Pick at least one region."));
+
+        /* What the page says when a removal is over. Every shell reports one
+         * the same way, so the words are here rather than in a dialog of one
+         * shell's own. */
+        Case("what a removal says afterwards");
+        LK_EQ(RemovalNote(930, 0), std::wstring(L"Removed 930 charts."));
+        LK_EQ(RemovalNote(1, 0), std::wstring(L"Removed 1 chart."));
+        LK_EQ(RemovalNote(0, 0), std::wstring(L"No downloaded charts matched that water."));
+
+        Case("a chart something else is reading stays");
+        LK_EQ(RemovalNote(928, 2),
+              std::wstring(L"Removed 928 charts. 2 charts are still in use and stayed on "
+                           L"the disk."));
+        LK_EQ(RemovalNote(0, 1),
+              std::wstring(L"1 chart is still in use and stayed on the disk."));
     }
 }

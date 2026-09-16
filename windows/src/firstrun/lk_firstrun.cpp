@@ -306,6 +306,24 @@ namespace lkw
         return buf;
     }
 
+    std::wstring RemovalNote(size_t removed, size_t failed)
+    {
+        if (removed == 0 && failed == 0)
+            return L"No downloaded charts matched that water.";
+        std::wstring s;
+        if (removed != 0)
+            s = L"Removed " + Thousands(removed) +
+                (removed == 1 ? L" chart" : L" charts") + L".";
+        if (failed != 0)
+        {
+            if (!s.empty())
+                s += L" ";
+            s += Thousands(failed) + (failed == 1 ? L" chart is" : L" charts are") +
+                 L" still in use and stayed on the disk.";
+        }
+        return s;
+    }
+
     std::wstring Thousands(uint64_t n)
     {
         std::wstring s = std::to_wstring(n);

@@ -333,7 +333,7 @@ namespace winrt::LookoutMarine::implementation
         /* Delete the charts Lookout prepared for one set. Refuses any path it
          * did not make. Call it with the chart CLOSED: the handle holds the
          * files open, and Windows refuses to rename a directory under one. */
-        void DeletePreparedCharts(std::string const &path);
+        void DeletePreparedCharts(std::string const &path, std::string const &name);
         int remove_seq{ 0 };
         /* Give back the water a mariner unticked in the picker, and what that
          * took out.
@@ -350,9 +350,14 @@ namespace winrt::LookoutMarine::implementation
             size_t sources{ 0 };
             size_t failed{ 0 };
         };
-        NoaaRemoval RemoveNoaaCells(std::set<std::string> const &names);
+        NoaaRemoval RemoveNoaaCells(std::set<std::string> const &names,
+                                    std::string const &water);
         /* Open what the switched-on sets compose, or take the chart off the
          * display when nothing is installed. */
+        /* The removal running now, and what the last one left to say. The
+         * delete thread writes it and the page reads it, so it outlives the
+         * call that started it. */
+        std::shared_ptr<lkw::RemovalJob> removal_job;
         void ReopenChartSets(std::string const &recent);
         std::vector<ChartSetRow> chart_sets;
         lookout_chart_sets *chart_sets_model{ nullptr };
@@ -747,6 +752,12 @@ namespace winrt::LookoutMarine::implementation
         Microsoft::UI::Xaml::Controls::TextBlock bake_pane_count{ nullptr };
         Microsoft::UI::Xaml::Controls::TextBlock bake_pane_eta{ nullptr };
         Microsoft::UI::Xaml::Controls::ProgressBar bake_pane_bar{ nullptr };
+        /* The removal panel: the same three parts, fed by removal_job. A
+         * removal has no Cancel — the charts are already moved aside. */
+        Microsoft::UI::Xaml::Controls::TextBlock removal_pane_title{ nullptr };
+        Microsoft::UI::Xaml::Controls::TextBlock removal_pane_count{ nullptr };
+        Microsoft::UI::Xaml::Controls::ProgressBar removal_pane_bar{ nullptr };
+        void PollRemovalPane();
         // Read the download the Charts page is reporting, and put the page
         // away once it ends.
         void PollNoaaPane();

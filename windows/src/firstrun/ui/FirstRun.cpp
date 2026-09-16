@@ -1019,7 +1019,12 @@ namespace winrt::LookoutMarine::implementation
         if (result != Controls::ContentDialogResult::Primary)
             co_return;
 
-        auto const took = RemoveNoaaCells(NoaaCellsToRemove(gone));
+        // The water, in the mariner's words, for the line the page shows
+        // while the delete runs.
+        std::wstring water;
+        for (auto const &one : NoaaRegionNames(gone))
+            water += (water.empty() ? L"" : L", ") + one;
+        auto const took = RemoveNoaaCells(NoaaCellsToRemove(gone), winrt::to_string(water));
         // The library has changed, so what a price leaves out has changed with
         // it. Both halves read this.
         FirstRunNoaaHave();
@@ -1039,14 +1044,12 @@ namespace winrt::LookoutMarine::implementation
         first_run.Finish();
         FirstRunRender();
 
-        // Say what happened rather than closing on silence. A mariner who
-        // unticked water they downloaded on another device, or into a folder
-        // of their own, matches nothing here.
+        // Nothing matched: the page has the same line, but the picker just
+        // closed the settings window, so it would be said to an empty screen.
+        // Every other outcome reports inline, where the other shells report
+        // it (lkw::RemovalNote).
         if (took.prepared == 0 && took.sources == 0)
-            FirstRunSayRemoval(L"No downloaded charts matched that water.");
-        else if (took.failed != 0)
-            FirstRunSayRemoval(L"Some of those charts are still in use and stayed on the "
-                               L"disk. Close anything reading them and try again.");
+            FirstRunSayRemoval(lkw::RemovalNote(0, 0));
     }
 
     // One line about a removal, when there is something to say.

@@ -333,6 +333,60 @@ namespace winrt::LookoutMarine::implementation
         return shared.first == lib.end();
     }
 
+    // Delete a holding directory, a chart at a time, saying where it has got
+    // to.
+    //
+    // The count is the mariner's own unit: a bake writes a directory per
+    // chart, so removing one is a chart gone, and the panel counts the same
+    // things coming out that it counted going in. One listing, not a walk of
+    // every file under them.
+    //
+    // A set moved aside whole arrives as one directory holding the charts, and
+    // an archive's charts arrive under ENC_ROOT. Descending past a lone child
+    // counts charts rather than the skeleton above them.
+    //
+    // Static, and it takes the job by value: this runs on a thread of its own
+    // that outlives the window's call. `failed` is what the caller could not
+    // move aside, for the line at the end.
+    static void EmptyAndRemove(std::filesystem::path trash,
+                               std::shared_ptr<lkw::RemovalJob> job, size_t failed)
+    {
+        std::error_code ec;
+        std::filesystem::path level = trash;
+        for (;;)
+        {
+            std::vector<std::filesystem::path> kids;
+            for (auto const &entry : std::filesystem::directory_iterator(level, ec))
+                kids.push_back(entry.path());
+            if (kids.size() != 1)
+                break;
+            std::error_code one;
+            if (!std::filesystem::is_directory(kids[0], one))
+                break;
+            level = kids[0];
+        }
+
+        std::vector<std::filesystem::path> kids;
+        for (auto const &entry : std::filesystem::directory_iterator(level, ec))
+            kids.push_back(entry.path());
+        if (job != nullptr)
+            job->Count((unsigned)kids.size());
+
+        size_t gone = 0;
+        for (auto const &kid : kids)
+        {
+            std::error_code one;
+            std::filesystem::remove_all(kid, one);
+            if (!one)
+                ++gone;
+            if (job != nullptr)
+                job->Step();
+        }
+        std::filesystem::remove_all(trash, ec);
+        if (job != nullptr)
+            job->Finish(winrt::to_string(lkw::RemovalNote(gone, failed)));
+    }
+
     // Delete the charts Lookout prepared for one set.
     //
     // Renamed first and deleted behind. A NOAA library is thousands of
@@ -340,7 +394,7 @@ namespace winrt::LookoutMarine::implementation
     // the charts are gone from where anything looks for them before this
     // returns, and a set added straight back writes into a fresh directory
     // rather than racing the delete.
-    void MainWindow::DeletePreparedCharts(std::string const &path)
+    void MainWindow::DeletePreparedCharts(std::string const &path, std::string const &name)
     {
         if (!ChartSetIsDerived(path))
             return;
@@ -375,12 +429,15 @@ namespace winrt::LookoutMarine::implementation
             std::filesystem::rename(p, trash / p.filename(), ec);
         }
 
+        // Report it while it runs, in the panel an import reports in: a NOAA
+        // library is thousands of directories and seconds of disk work, and a
+        // removal that says nothing looks like nothing happening.
+        removal_job = std::make_shared<lkw::RemovalJob>();
+        removal_job->Begin(name, 0);
+
         // Behind the rename, off this thread. Nothing waits for it: every
         // chart it holds is already out of the library.
-        std::thread([trash] {
-            std::error_code gone;
-            std::filesystem::remove_all(trash, gone);
-        }).detach();
+        std::thread(EmptyAndRemove, trash, removal_job, (size_t)0).detach();
     }
 
     // Give back the water a mariner unticked in the NOAA picker.
@@ -399,7 +456,8 @@ namespace winrt::LookoutMarine::implementation
     //
     // Both halves are renamed into ONE trash directory and deleted behind it,
     // off the UI thread. The library is correct the moment the rename returns.
-    MainWindow::NoaaRemoval MainWindow::RemoveNoaaCells(std::set<std::string> const &names)
+    MainWindow::NoaaRemoval MainWindow::RemoveNoaaCells(std::set<std::string> const &names,
+                                                        std::string const &water)
     {
         NoaaRemoval took;
         if (names.empty())
@@ -494,12 +552,13 @@ namespace winrt::LookoutMarine::implementation
             }
         }
 
+        // Report it while it runs, in the panel an import reports in.
+        removal_job = std::make_shared<lkw::RemovalJob>();
+        removal_job->Begin(water, 0);
+
         // Behind the rename, off this thread. Every chart it holds is already
         // out of the library.
-        std::thread([trash] {
-            std::error_code done;
-            std::filesystem::remove_all(trash, done);
-        }).detach();
+        std::thread(EmptyAndRemove, trash, removal_job, took.failed).detach();
 
         if (took.prepared != 0)
         {
@@ -531,13 +590,21 @@ namespace winrt::LookoutMarine::implementation
     void MainWindow::RemoveChartSet(std::string const &path)
     {
         lookout_chart_sets *model = ChartSetsModel();
-        if (model == nullptr || !lookout_chart_sets_remove(model, path.c_str()))
+        if (model == nullptr)
+            return;
+        // What it is called, before the row that knows goes. The removal says
+        // this while it runs, and by then the set is off the list.
+        std::string name = std::filesystem::path(path).filename().string();
+        for (auto const &row : chart_sets)
+            if (row.path == path && !row.title.empty())
+                name = row.title;
+        if (!lookout_chart_sets_remove(model, path.c_str()))
             return;
         LoadChartSets(nullptr);
         // Before the delete: the handle holds every chart file open, and
         // Windows refuses to rename a directory under an open file.
         ReopenChartSets({});
-        DeletePreparedCharts(path);
+        DeletePreparedCharts(path, name);
         if (SettingsOpen())
             BuildSettingsPage();
     }

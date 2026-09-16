@@ -233,6 +233,17 @@ namespace lkw
     // mixed Chesapeake set with every core working.
     std::wstring PrepareEstimate(size_t charts);
 
+    // What the page says after a removal, in the mariner's words.
+    //
+    // Here beside PrepareEstimate for the same reason: these are the words the
+    // question about deleting charts and its answer are made of, and one file
+    // holds the words the tests can read.
+    //
+    // `removed` is how many charts went, `failed` how many a rename refused,
+    // which on Windows means something still has the file open. Nothing of
+    // either says the water was not this app's to give back.
+    std::wstring RemovalNote(size_t removed, size_t failed);
+
     // The band breakdown, from what the scan found and how far the bake has
     // got. `band_of_each_chart` is the band of every chart the scan returned,
     // in any order. `done` is the bake's own count.
