@@ -187,7 +187,21 @@ lk_chart_sets_rows (LkChartSets *self)
     {
       const lookout_chart_set *set = all[i];
       const char *agency = lk_chart_set_agency (set->producer);
-      LkChartSetRow *row = g_new0 (LkChartSetRow, 1);
+      LkChartSetRow *row;
+      size_t n_files = 0;
+
+      /* Drop a set the scan has read and found empty. The NOAA picker empties
+       * one by deleting the cells for water the mariner unticked, and the
+       * folder remains. That folder produced a row with a switch over zero
+       * charts and a size of zero. Before the scan completes the count is 0
+       * for every set, so this waits on `scanned`. The reference drops the
+       * same row (apple/LookoutMarine/Charts/ChartsModel.swift,
+       * pullChartSets). */
+      lookout_chart_set_files (self->sets, set->path, &n_files);
+      if (set->scanned != 0 && n_files == 0)
+        continue;
+
+      row = g_new0 (LkChartSetRow, 1);
 
       row->path = g_strdup (set->path);
       /* The core names a set by its folder. An office the app knows is the

@@ -535,6 +535,20 @@ lk_sets_summary (GPtrArray *rows)
   return g_strdup_printf ("%u charts · %s", charts, size);
 }
 
+/* Draw a separator above every entry except the first.
+ *
+ * A set can run to four lines: the title row, a scale ramp, a count still to
+ * prepare, and the pictures added with it. With only a gap between them, two
+ * such sets read as one. The reference draws each set as a List row, which
+ * separates them the same way
+ * (apple/LookoutMarine/Charts/ChartsSection.swift). */
+static void
+lk_sets_list_rule (GtkWidget *list)
+{
+  if (gtk_widget_get_first_child (list) != NULL)
+    gtk_box_append (GTK_BOX (list), gtk_separator_new (GTK_ORIENTATION_HORIZONTAL));
+}
+
 static void
 lk_settings_fill_sets_list (LkSettings *settings)
 {
@@ -568,20 +582,38 @@ lk_settings_fill_sets_list (LkSettings *settings)
   /* Which pictures have a set to sit under. What is left came in on its own. */
   g_autoptr (GHashTable) placed = g_hash_table_new (g_direct_hash, g_direct_equal);
 
-  for (guint i = 0; i < rows->len; i++)
+  /* Draw the downloader's set first, whatever order the library returns.
+   *
+   * It is the set the app fills and empties through the NOAA picker. Without
+   * this it appears below folders the mariner added earlier, and they search
+   * the list for it.
+   *
+   * `order` holds borrowed pointers in draw order. `rows` owns them. */
+  g_autoptr (GPtrArray) order = g_ptr_array_new ();
+
+  for (guint pass = 0; pass < 2; pass++)
+    for (guint i = 0; i < rows->len; i++)
+      {
+        const LkChartSetRow *set = g_ptr_array_index (rows, i);
+
+        if (set->managed == (pass == 0))
+          g_ptr_array_add (order, (gpointer) set);
+      }
+
+  for (guint i = 0; i < order->len; i++)
     {
-      const LkChartSetRow *set = g_ptr_array_index (rows, i);
-      /* One set is ONE block: its switch, its scale ramp, what it still has to
-       * prepare and the pictures it came in with. The parts sit closer to each
-       * other than the sets sit to one another, so a mariner reads where a set
-       * ends without a rule drawn between them. The reference groups it the
-       * same way (apple/LookoutMarine/Charts/ChartsSection.swift). */
+      const LkChartSetRow *set = g_ptr_array_index (order, i);
+      /* One set is one block: the switch, the scale ramp, the count still to
+       * prepare, and the pictures added with it. The gap inside a block is
+       * smaller than the gap between blocks, and a separator closes each one.
+       * The reference groups it the same way
+       * (apple/LookoutMarine/Charts/ChartsSection.swift). */
       GtkWidget *entry = gtk_box_new (GTK_ORIENTATION_VERTICAL, 8);
       GtkWidget *row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 10);
       GtkWidget *toggle = lk_settings_switch (set->on);
       GtkWidget *column = gtk_box_new (GTK_ORIENTATION_VERTICAL, 2);
       GtkWidget *title = gtk_label_new (set->title);
-      GtkWidget *remove = gtk_button_new_from_icon_name ("lk-remove-symbolic");
+      GtkWidget *action;
 
       gtk_widget_add_css_class (title, "heading");
       gtk_label_set_xalign (GTK_LABEL (title), 0.0);
@@ -594,10 +626,16 @@ lk_settings_fill_sets_list (LkSettings *settings)
       if (set->managed)
         {
           GtkWidget *line = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
-          GtkWidget *pill = gtk_label_new ("Managed by NOAA chart downloader");
+          /* Two words here, where the reference uses a sentence. This pane
+           * is about 430 points wide against the reference's 460. The title
+           * is the only label on the line that can shrink, so a five-word
+           * pill reduced it to an ellipsis. The full sentence is in the
+           * tooltip and the accessible label. */
+          GtkWidget *pill = gtk_label_new ("NOAA downloader");
 
           gtk_widget_add_css_class (pill, "lk-managed-pill");
           gtk_widget_set_valign (pill, GTK_ALIGN_CENTER);
+          gtk_widget_set_tooltip_text (pill, "Managed by the NOAA chart downloader.");
           gtk_accessible_update_property (GTK_ACCESSIBLE (pill),
                                           GTK_ACCESSIBLE_PROPERTY_LABEL,
                                           "Managed by the NOAA chart downloader", -1);
@@ -637,33 +675,68 @@ lk_settings_fill_sets_list (LkSettings *settings)
        * whole path reachable. */
       gtk_widget_set_tooltip_text (row, set->path);
 
-      gtk_button_set_has_frame (GTK_BUTTON (remove), FALSE);
-      gtk_widget_set_valign (remove, GTK_ALIGN_CENTER);
-      gtk_widget_set_tooltip_text (remove,
-                                   set->derived
-                                       ? "Remove from the library. Charts Lookout prepared "
-                                         "from it are deleted; your folder is not touched."
-                                       : "Take these charts out of the list. Your files "
-                                         "stay where they are.");
-      gtk_accessible_update_property (GTK_ACCESSIBLE (remove),
-                                      GTK_ACCESSIBLE_PROPERTY_LABEL, "Remove chart set", -1);
-
       g_object_set_data_full (G_OBJECT (toggle), "lk-path", g_strdup (set->path), g_free);
-      g_object_set_data_full (G_OBJECT (remove), "lk-path", g_strdup (set->path), g_free);
-      g_object_set_data_full (G_OBJECT (remove), "lk-set-title", g_strdup (set->title),
-                              g_free);
-      g_object_set_data (G_OBJECT (remove), "lk-set-charts", GUINT_TO_POINTER (set->charts));
-      if (set->derived)
-        g_object_set_data (G_OBJECT (remove), "lk-set-derived", GINT_TO_POINTER (1));
       g_signal_connect (toggle, "notify::active", G_CALLBACK (lk_chart_set_toggled),
                         settings);
-      g_signal_connect (remove, "clicked", G_CALLBACK (lk_chart_set_remove_clicked),
-                        settings);
+
+      /* The managed set is removed through the NOAA picker, so this row
+       * opens it. Remove on this row deleted the prepared charts and left the
+       * downloaded cells under downloads/NOAA, which no page lists. The
+       * picker's region record still counted that water as held. The
+       * reference gives the managed row the same button
+       * (apple/LookoutMarine/Charts/ChartsSection.swift, ChartSetRow). */
+      if (set->managed)
+        {
+          action = gtk_button_new_with_label ("Manage…");
+
+          gtk_button_set_has_frame (GTK_BUTTON (action), FALSE);
+          gtk_widget_add_css_class (action, "caption");
+          /* Accent color, because a frameless button beside dimmed text
+           * reads as disabled. */
+          gtk_widget_add_css_class (action, "lk-accent");
+          gtk_widget_set_valign (action, GTK_ALIGN_CENTER);
+          gtk_widget_set_tooltip_text (action, "Add or remove this water in the NOAA "
+                                               "chart downloader.");
+          gtk_accessible_update_property (GTK_ACCESSIBLE (action),
+                                          GTK_ACCESSIBLE_PROPERTY_LABEL,
+                                          "Manage the NOAA charts", -1);
+          g_signal_connect (action, "clicked", G_CALLBACK (lk_charts_noaa_clicked),
+                            settings);
+        }
+      else
+        {
+          action = gtk_button_new_from_icon_name ("lk-remove-symbolic");
+
+          gtk_button_set_has_frame (GTK_BUTTON (action), FALSE);
+          gtk_widget_set_valign (action, GTK_ALIGN_CENTER);
+          gtk_widget_set_tooltip_text (action,
+                                       set->derived
+                                           ? "Remove from the library. Charts Lookout "
+                                             "prepared from it are deleted; your folder "
+                                             "is not touched."
+                                           : "Take these charts out of the list. Your "
+                                             "files stay where they are.");
+          gtk_accessible_update_property (GTK_ACCESSIBLE (action),
+                                          GTK_ACCESSIBLE_PROPERTY_LABEL, "Remove chart set",
+                                          -1);
+
+          g_object_set_data_full (G_OBJECT (action), "lk-path", g_strdup (set->path),
+                                  g_free);
+          g_object_set_data_full (G_OBJECT (action), "lk-set-title", g_strdup (set->title),
+                                  g_free);
+          g_object_set_data (G_OBJECT (action), "lk-set-charts",
+                             GUINT_TO_POINTER (set->charts));
+          if (set->derived)
+            g_object_set_data (G_OBJECT (action), "lk-set-derived", GINT_TO_POINTER (1));
+          g_signal_connect (action, "clicked", G_CALLBACK (lk_chart_set_remove_clicked),
+                            settings);
+        }
 
       gtk_box_append (GTK_BOX (row), toggle);
       gtk_box_append (GTK_BOX (row), column);
-      gtk_box_append (GTK_BOX (row), remove);
+      gtk_box_append (GTK_BOX (row), action);
       gtk_box_append (GTK_BOX (entry), row);
+      lk_sets_list_rule (list);
       gtk_box_append (GTK_BOX (list), entry);
 
       /* What scales it holds. A set that stops at Coastal does not draw the
@@ -713,6 +786,7 @@ lk_settings_fill_sets_list (LkSettings *settings)
 
       if (g_hash_table_contains (placed, group))
         continue;
+      lk_sets_list_rule (list);
       lk_raster_group_row (settings, list, group, FALSE);
     }
 
@@ -1093,9 +1167,10 @@ lk_build_charts_page (LkSettings *settings)
   GtkWidget *library_group = lk_group (library, 0);
 
   /* Wider than the 8 inside a set, so the gap between two sets reads as a
-   * boundary and the gap inside one reads as one block. */
+   * boundary. A separator closes each set as well, so 12 is enough where 16
+   * was needed before. */
   lk_deferred_list_bind (&settings->sets, settings,
-                         gtk_box_new (GTK_ORIENTATION_VERTICAL, 16),
+                         gtk_box_new (GTK_ORIENTATION_VERTICAL, 12),
                          lk_settings_fill_sets_list);
   gtk_box_append (GTK_BOX (library_group), settings->sets.box);
   lk_settings_fill_sets_list (settings);

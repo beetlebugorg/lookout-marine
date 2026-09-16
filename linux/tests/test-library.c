@@ -8,6 +8,8 @@
  * No display. This is the model's answer, read directly.
  */
 
+#include <glib/gstdio.h>
+
 #include "library/bake.h"
 #include "library/scan.h"
 #include "library/sets.h"
@@ -436,6 +438,53 @@ test_a_managed_set_says_so_on_its_row (void)
   lk_chart_sets_free (sets);
 }
 
+/* Is this set on the list? Bounded, because the scan runs on the core's own
+ * thread and the answer changes when it completes. */
+static gboolean
+wait_for_row (LkChartSets *sets, const char *path, gboolean want)
+{
+  for (int i = 0; i < 400; i++)
+    {
+      g_autoptr (GPtrArray) rows = lk_chart_sets_rows (sets);
+      gboolean found = FALSE;
+
+      for (guint r = 0; r < rows->len; r++)
+        if (g_strcmp0 (((const LkChartSetRow *) g_ptr_array_index (rows, r))->path,
+                       path) == 0)
+          found = TRUE;
+      if (found == want)
+        return TRUE;
+      g_main_context_iteration (NULL, FALSE);
+      g_usleep (5000);
+    }
+  return FALSE;
+}
+
+/* A set the scan has read and found empty leaves the list.
+ *
+ * The NOAA picker empties its own set. Unticking water deletes the cells from
+ * the folder they were downloaded to, and the folder remains. That folder
+ * produced a row with a switch over zero charts and a size of zero. */
+static void
+test_an_emptied_set_leaves_the_list (void)
+{
+  g_autoptr (GObject) owner = g_object_new (G_TYPE_OBJECT, NULL);
+  LkChartSets *sets = lk_chart_sets_new (noop_changed, owner);
+  g_autofree char *dir = g_build_filename (home, "emptied", NULL);
+  g_autofree char *cell = g_build_filename (dir, "US3CU1EF.000", NULL);
+
+  place_cell (dir, "US3CU1EF.000");
+  g_assert_true (lk_chart_sets_note (sets, dir));
+  g_assert_true (wait_for_row (sets, dir, TRUE));
+
+  /* What a removal leaves is the empty folder. */
+  g_assert_cmpint (g_unlink (cell), ==, 0);
+  g_assert_true (lk_chart_sets_rescan (sets, dir));
+  g_assert_true (wait_for_row (sets, dir, FALSE));
+
+  lk_chart_sets_free (sets);
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -463,6 +512,8 @@ main (int argc, char *argv[])
                    test_prepared_archive_is_not_work);
   g_test_add_func ("/library/a-set-with-prepared-charts-is-derived",
                    test_a_set_with_prepared_charts_is_derived);
+  g_test_add_func ("/library/an-emptied-set-leaves-the-list",
+                   test_an_emptied_set_leaves_the_list);
   g_test_add_func ("/library/a-managed-set-says-so-on-its-row",
                    test_a_managed_set_says_so_on_its_row);
 
