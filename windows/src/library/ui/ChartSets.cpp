@@ -33,8 +33,18 @@ namespace winrt::LookoutMarine::implementation
     lookout_chart_sets *MainWindow::ChartSetsModel()
     {
         if (chart_sets_model == nullptr)
+        {
             chart_sets_model =
                 lookout_chart_sets_open(lk_store_handle(), lkw::ChartLibraryDir().c_str());
+            // The library IS the downloader's set on this shell: NOAA cells are
+            // fetched into Downloads and prepared into here. Marking it says
+            // which set the picker's ticks come from, and compose prefers it
+            // when two sets hold the same cell at the same edition.
+            if (chart_sets_model != nullptr)
+                lookout_chart_sets_set_managed(chart_sets_model,
+                                               lkw::ChartLibraryDir().c_str(), 1);
+            SweepRemovedCharts();
+        }
         return chart_sets_model;
     }
 
@@ -54,6 +64,7 @@ namespace winrt::LookoutMarine::implementation
                 row.path = all[i]->path;
                 row.title = all[i]->title;
                 row.on = all[i]->on != 0;
+                row.managed = all[i]->managed != 0;
                 row.scanned = all[i]->scanned != 0;
                 row.unprepared = all[i]->unprepared;
                 row.bytes = all[i]->bytes;
@@ -125,6 +136,122 @@ namespace winrt::LookoutMarine::implementation
             return;
         lookout_chart_sets_close(chart_sets_model);
         chart_sets_model = nullptr;
+    }
+
+    // What an interrupted removal left behind.
+    //
+    // A removal renames the charts into a holding directory beside the library
+    // and deletes behind the rename on a thread of its own. An app that goes
+    // down before that thread finishes leaves the directory on the disk, with
+    // every chart still in it. Nothing else would ever take it out.
+    //
+    // Once a session, off the UI thread, and only names this app writes.
+    void MainWindow::SweepRemovedCharts()
+    {
+        std::error_code ec;
+        std::filesystem::path lib = lkw::ChartLibraryDir();
+        std::filesystem::path const holding =
+            lib.has_parent_path() ? lib.parent_path() : lib;
+        std::vector<std::filesystem::path> old;
+        for (auto const &entry : std::filesystem::directory_iterator(holding, ec))
+        {
+            std::error_code one;
+            if (!entry.is_directory(one))
+                continue;
+            if (entry.path().filename().string().rfind(".removing-", 0) == 0)
+                old.push_back(entry.path());
+        }
+        if (old.empty())
+            return;
+        std::thread([old] {
+            for (auto const &dir : old)
+            {
+                std::error_code done;
+                std::filesystem::remove_all(dir, done);
+            }
+        }).detach();
+    }
+
+    // The cells the library holds, read off the disk.
+    //
+    // The safe source while a scan is in flight. The core hands out its file
+    // list as pointers into an arena, and a scan LANDING on its own worker
+    // frees that arena (Sets.land: files_arena.deinit and reads.reset), so a
+    // read racing a landing walks freed memory. The library is this shell's
+    // managed set, so its own directory answers the same question.
+    std::set<std::string> MainWindow::LibraryCellsOnDisk()
+    {
+        std::set<std::string> out;
+        std::error_code ec;
+        std::filesystem::path root(lkw::ChartLibraryDir());
+        if (!std::filesystem::is_directory(root, ec))
+            return out;
+        for (auto it = std::filesystem::recursive_directory_iterator(root, ec);
+             !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec))
+        {
+            std::error_code one;
+            if (!it->is_regular_file(one))
+                continue;
+            auto ext = it->path().extension().string();
+            for (auto &ch : ext)
+                ch = (char)tolower((unsigned char)ch);
+            if (ext != ".pmtiles")
+                continue;
+            std::string stem = it->path().stem().string();
+            for (auto &ch : stem)
+                ch = (char)toupper((unsigned char)ch);
+            if (!stem.empty())
+                out.insert(stem);
+        }
+        return out;
+    }
+
+    // The cells a set holds, by dataset name.
+    //
+    // `managed_only` answers for the downloader's own set: the folder NOAA
+    // charts are prepared into. That is what the picker's ticks come from. The
+    // whole list, every set, is what a PRICE skips: a cell the mariner already
+    // holds in a folder of their own is a cell a download has no reason to
+    // fetch again.
+    //
+    // A prepared chart stands in for the cell it was made from here, so this
+    // reads one entry per cell whether or not the source .000 is still beside
+    // it (lookout_chart_set_files).
+    //
+    // While a scan is in flight this reads the disk instead. See
+    // LibraryCellsOnDisk for why.
+    std::set<std::string> MainWindow::ChartSetCells(bool managed_only)
+    {
+        std::set<std::string> out;
+        lookout_chart_sets *model = ChartSetsModel();
+        if (model == nullptr)
+            return out;
+        if (ChartSetsScanning())
+            return LibraryCellsOnDisk();
+        for (auto const &row : chart_sets)
+        {
+            if (managed_only && !row.managed)
+                continue;
+            size_t files = 0;
+            auto found = lookout_chart_set_files(model, row.path.c_str(), &files);
+            if (found == nullptr)
+                continue;
+            for (size_t f = 0; f < files; ++f)
+            {
+                if (found[f] == nullptr || found[f]->kind != LOOKOUT_FILE_BAKED)
+                    continue;
+                std::string name = std::filesystem::path(found[f]->name).stem().string();
+                for (auto &ch : name)
+                    ch = (char)std::toupper((unsigned char)ch);
+                if (!name.empty())
+                    out.insert(name);
+            }
+        }
+        // A library with charts on it and nothing to report means the model has
+        // yet to read them.
+        if (out.empty())
+            return LibraryCellsOnDisk();
+        return out;
     }
 
     // Every chart the switched-on sets carry, ready for the engine: sorted,
@@ -258,22 +385,29 @@ namespace winrt::LookoutMarine::implementation
 
     // Give back the water a mariner unticked in the NOAA picker.
     //
-    // Only the charts this app downloaded and prepared, and only inside its
-    // own library: a mariner's own folders are their files, and a set they
-    // added is removed a set at a time in the Charts pane. The library holds
-    // one directory per cell, named after it, so a cell is a directory to
-    // take out. A file sitting loose in the library counts as well, because
-    // an older import wrote them that way.
+    // Only what this app downloaded and prepared, and only inside its own two
+    // directories: a mariner's own folders are their files, and a set they
+    // added is removed a set at a time in the Charts pane.
     //
-    // Returns how many were taken out.
-    size_t MainWindow::RemoveNoaaCells(std::set<std::string> const &names)
+    // BOTH HALVES of every cell, resolved by name:
+    //   <library>/<CELL>            the prepared chart
+    //   <downloads>/**/<CELL>       the cell it was made from, a level down
+    //                               under ENC_ROOT
+    // A prepared chart stands in for its source in a set's file list, so a
+    // loop over that list deletes the chart, leaves the .000 beside it and the
+    // next scan reads the cell straight back.
+    //
+    // Both halves are renamed into ONE trash directory and deleted behind it,
+    // off the UI thread. The library is correct the moment the rename returns.
+    MainWindow::NoaaRemoval MainWindow::RemoveNoaaCells(std::set<std::string> const &names)
     {
+        NoaaRemoval took;
         if (names.empty())
-            return 0;
+            return took;
         std::error_code ec;
         std::filesystem::path lib = lkw::ChartLibraryDir();
         if (!std::filesystem::is_directory(lib, ec))
-            return 0;
+            return took;
 
         // The core holds every chart in the library open, and Windows refuses
         // to move a directory out from under an open file. Nothing is drawn
@@ -292,24 +426,72 @@ namespace winrt::LookoutMarine::implementation
                        std::to_string(++remove_seq));
         std::filesystem::create_directories(trash, ec);
         if (ec)
-            return 0;
+            return took;
 
-        size_t gone = 0;
+        // `into` keeps the two halves of one cell apart inside the trash.
+        auto take = [&](std::filesystem::path const &what, std::string const &into) {
+            std::error_code one;
+            std::filesystem::rename(what, trash / into, one);
+            if (one)
+            {
+                ++took.failed;
+                return false;
+            }
+            return true;
+        };
+        auto cell_of = [&names](std::filesystem::directory_entry const &entry) {
+            std::error_code one;
+            std::string stem = entry.is_directory(one) ? entry.path().filename().string()
+                                                       : entry.path().stem().string();
+            for (auto &ch : stem)
+                ch = (char)std::toupper((unsigned char)ch);
+            return names.find(stem) != names.end() ? stem : std::string{};
+        };
+
+        // The prepared half: one directory per cell in the library, named
+        // after it. A file sitting loose counts too, because an older import
+        // wrote them that way.
         for (auto const &entry : std::filesystem::directory_iterator(lib, ec))
         {
             std::string const leaf = entry.path().filename().string();
             if (leaf.rfind(prefix, 0) == 0)
                 continue;
-            std::string stem = entry.is_directory(ec) ? leaf
-                                                      : entry.path().stem().string();
-            for (auto &ch : stem)
-                ch = (char)std::toupper((unsigned char)ch);
-            if (names.find(stem) == names.end())
+            std::string const cell = cell_of(entry);
+            if (cell.empty())
                 continue;
-            std::error_code one;
-            std::filesystem::rename(entry.path(), trash / entry.path().filename(), one);
-            if (!one)
-                ++gone;
+            if (take(entry.path(), cell))
+                ++took.prepared;
+        }
+
+        // The source half, under the download directory. NOAA's zips unpack to
+        // ENC_ROOT/<CELL>/, so this walks rather than assuming the depth.
+        std::filesystem::path const downloads =
+            noaa_dest_dir.empty() ? holding / "Downloads" : std::filesystem::path(noaa_dest_dir);
+        if (std::filesystem::is_directory(downloads, ec))
+        {
+            std::vector<std::filesystem::path> hits;
+            for (auto it = std::filesystem::recursive_directory_iterator(downloads, ec);
+                 !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec))
+            {
+                std::error_code one;
+                if (!it->is_directory(one))
+                    continue;
+                std::string const cell = cell_of(*it);
+                if (cell.empty())
+                    continue;
+                hits.push_back(it->path());
+                // Its own children are this cell's as well, and the walk must
+                // not follow a directory that is about to be renamed away.
+                it.disable_recursion_pending();
+            }
+            for (auto const &hit : hits)
+            {
+                std::string cell = hit.filename().string();
+                for (auto &ch : cell)
+                    ch = (char)std::toupper((unsigned char)ch);
+                if (take(hit, "src-" + cell))
+                    ++took.sources;
+            }
         }
 
         // Behind the rename, off this thread. Every chart it holds is already
@@ -319,27 +501,25 @@ namespace winrt::LookoutMarine::implementation
             std::filesystem::remove_all(trash, done);
         }).detach();
 
-        if (gone != 0)
+        if (took.prepared != 0)
         {
             // Ask for a scan by the path the model itself reported, not by the
             // library's name as this file spells it: the core knows a set by
             // its own string. A rescan of a set that did not change raises the
             // same flag rather than reporting a lie.
             //
-            // The counts a row shows arrive with that scan, which is why the
-            // page follows lookout_chart_sets_changed (PollChartSets) as well
-            // as this immediate copy. Without the refresh the pane kept the
-            // charts it had before the removal.
+            // AND THEN LEAVE IT ALONE. The counts a row shows arrive with that
+            // scan, announced by lookout_chart_sets_changed, and PollChartSets
+            // is what reads them. Copying the list here instead put a read of
+            // the core's borrowed file lists right beside the scan that frees
+            // them (Sets.land, on its own worker, calls files_arena.deinit and
+            // reads.reset), and the app died with an access violation.
             if (lookout_chart_sets *model = ChartSetsModel())
                 for (auto const &row : chart_sets)
                     lookout_chart_sets_rescan(model, row.path.c_str());
-            LoadChartSets([this] {
-                if (SettingsOpen())
-                    RefreshChartsPageOnChange();
-            });
         }
         ReopenChartSets({});
-        return gone;
+        return took;
     }
 
     // Take a set off the list.

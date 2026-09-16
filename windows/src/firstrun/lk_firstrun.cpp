@@ -199,11 +199,12 @@ namespace lkw
 
     std::wstring RegionBadge(RegionHold const &hold)
     {
-        if (hold.Complete())
-            return L"installed";
-        if (hold.Partial())
-            return Thousands(hold.held) + L" of " + Thousands(hold.Total());
-        return L"";
+        // Whole regions only. NOAA files cells across district lines, so
+        // downloading one region installs some of its neighbour's, and a
+        // fraction on the pill ("42 of 1,045") reads as a transfer that
+        // stopped part way. The count is still in the pill's name, which a
+        // screen reader states.
+        return hold.Complete() ? L"installed" : L"";
     }
 
     std::wstring RegionLabel(std::wstring const &name, std::wstring const &blurb,

@@ -281,6 +281,12 @@ namespace winrt::LookoutMarine::implementation
         {
             std::string path;
             bool on{ true };
+            /* The downloader's own set rather than the mariner's: the
+             * folder NOAA charts are downloaded and prepared into. The
+             * picker states what THIS set holds, so a mariner holding an
+             * archive that merely lists cells does not read as holding
+             * every region (lookout_chart_sets_set_managed). */
+            bool managed{ false };
             // 0 until the background scan has read the folder, and every
             // count below is 0 until then.
             bool scanned{ false };
@@ -304,6 +310,17 @@ namespace winrt::LookoutMarine::implementation
         bool ChartSetsScanning() const;
         void CloseChartSets();
         std::vector<std::string> ChartSetOpenPaths();
+        /* The cells the sets hold, by dataset name. `managed_only` answers
+         * for the downloader's own set, which is what the picker's ticks
+         * come from; the whole list is what a price skips. */
+        std::set<std::string> ChartSetCells(bool managed_only);
+        /* The cells the library holds, read off the disk: the safe source
+         * while a scan is in flight, because the core frees the arena its
+         * file list points into when a scan lands on its own worker. */
+        std::set<std::string> LibraryCellsOnDisk();
+        /* What an interrupted removal left beside the library. Swept once a
+         * session, off the UI thread. */
+        void SweepRemovedCharts();
         void AdoptChartSet(std::string const &path);
         void SetChartSetOn(std::string const &path, bool on);
         void RemoveChartSet(std::string const &path);
@@ -318,11 +335,22 @@ namespace winrt::LookoutMarine::implementation
          * files open, and Windows refuses to rename a directory under one. */
         void DeletePreparedCharts(std::string const &path);
         int remove_seq{ 0 };
-        /* Give back the water a mariner has unticked in the picker: the
-         * prepared charts of these cells, deleted from the library. Returns
-         * how many were taken out. The handle is closed first, because the
-         * core holds every chart in the library open. */
-        size_t RemoveNoaaCells(std::set<std::string> const &names);
+        /* Give back the water a mariner unticked in the picker, and what that
+         * took out.
+         *
+         * BOTH HALVES of a cell: the prepared chart in the library and the
+         * source it was made from under the download directory. A prepared
+         * chart stands in for its source in a set's file list, so deleting
+         * only the prepared one leaves the .000 for the next scan to read
+         * back. The handle is closed first, because the core holds every
+         * chart in the library open. */
+        struct NoaaRemoval
+        {
+            size_t prepared{ 0 };
+            size_t sources{ 0 };
+            size_t failed{ 0 };
+        };
+        NoaaRemoval RemoveNoaaCells(std::set<std::string> const &names);
         /* Open what the switched-on sets compose, or take the chart off the
          * display when nothing is installed. */
         void ReopenChartSets(std::string const &recent);
@@ -465,6 +493,9 @@ namespace winrt::LookoutMarine::implementation
         void FirstRunApply();
         fire_and_forget FirstRunConfirmRemoval(std::vector<std::string> gone,
                                                std::wstring title);
+        /* One line about a removal, when there is something to say: nothing
+         * matched, or something stayed on the disk. */
+        fire_and_forget FirstRunSayRemoval(std::wstring says);
         /* The regions ticked when the picker opened, as the core's list. */
         std::string noaa_held_at_open;
         /* Which regions are being given back, and the cells that means. */

@@ -1019,7 +1019,7 @@ namespace winrt::LookoutMarine::implementation
         if (result != Controls::ContentDialogResult::Primary)
             co_return;
 
-        RemoveNoaaCells(NoaaCellsToRemove(gone));
+        auto const took = RemoveNoaaCells(NoaaCellsToRemove(gone));
         // The library has changed, so what a price leaves out has changed with
         // it. Both halves read this.
         FirstRunNoaaHave();
@@ -1038,6 +1038,27 @@ namespace winrt::LookoutMarine::implementation
         // Nothing to fetch: the picker has done what it was opened for.
         first_run.Finish();
         FirstRunRender();
+
+        // Say what happened rather than closing on silence. A mariner who
+        // unticked water they downloaded on another device, or into a folder
+        // of their own, matches nothing here.
+        if (took.prepared == 0 && took.sources == 0)
+            FirstRunSayRemoval(L"No downloaded charts matched that water.");
+        else if (took.failed != 0)
+            FirstRunSayRemoval(L"Some of those charts are still in use and stayed on the "
+                               L"disk. Close anything reading them and try again.");
+    }
+
+    // One line about a removal, when there is something to say.
+    fire_and_forget MainWindow::FirstRunSayRemoval(std::wstring says)
+    {
+        auto lifetime = get_strong();
+        Controls::ContentDialog dialog;
+        dialog.XamlRoot(DialogRoot());
+        dialog.Title(box_value(L"Remove charts"));
+        dialog.Content(box_value(winrt::hstring{ says }));
+        dialog.CloseButtonText(L"OK");
+        co_await dialog.ShowAsync();
     }
 
     // What the coverage step draws from. The counters of a download are left
@@ -1203,22 +1224,36 @@ namespace winrt::LookoutMarine::implementation
     // By name, without the extension, which is the stem of each prepared chart.
     void MainWindow::FirstRunNoaaHave()
     {
+        // Every set, not only the downloader's: a cell the mariner already
+        // holds in a folder of their own is a cell a download has no reason to
+        // fetch again. The model is asked first, because a prepared chart
+        // stands in for the cell it was made from and an archive lists its
+        // cells without unpacking one.
         std::vector<std::string> names;
-        std::error_code ec;
-        std::filesystem::path root(BakeOutputDir());
-        if (std::filesystem::is_directory(root, ec))
-            for (auto it = std::filesystem::recursive_directory_iterator(root, ec);
-                 !ec && it != std::filesystem::recursive_directory_iterator();
-                 it.increment(ec))
-            {
-                if (!it->is_regular_file(ec))
-                    continue;
-                auto ext = it->path().extension().string();
-                for (auto &c : ext)
-                    c = (char)tolower((unsigned char)c);
-                if (ext == ".pmtiles")
-                    names.push_back(it->path().stem().string());
-            }
+        for (auto const &cell : ChartSetCells(false))
+            names.push_back(cell);
+
+        // Before the first scan lands the model has no files to report, and a
+        // picker opened in that moment would price water already here. The
+        // library on disk answers until it does.
+        if (names.empty())
+        {
+            std::error_code ec;
+            std::filesystem::path root(BakeOutputDir());
+            if (std::filesystem::is_directory(root, ec))
+                for (auto it = std::filesystem::recursive_directory_iterator(root, ec);
+                     !ec && it != std::filesystem::recursive_directory_iterator();
+                     it.increment(ec))
+                {
+                    if (!it->is_regular_file(ec))
+                        continue;
+                    auto ext = it->path().extension().string();
+                    for (auto &c : ext)
+                        c = (char)tolower((unsigned char)c);
+                    if (ext == ".pmtiles")
+                        names.push_back(it->path().stem().string());
+                }
+        }
 
         if (names.empty())
         {
@@ -1248,14 +1283,36 @@ namespace winrt::LookoutMarine::implementation
         size_t const n = lk_controller_noaa_regions(&regions);
         if (n == 0 || regions == nullptr)
             return;
+
+        // The ticks come from the DOWNLOADER'S set alone. Driving them from
+        // every installed cell counted switched-off sets and archives that
+        // list their cells without unpacking one, so a mariner holding
+        // All_ENCs.zip read every region as installed, unticking one asked to
+        // delete cells no download ever wrote, and Apply had nothing to do.
+        std::set<std::string> const mine = ChartSetCells(true);
         for (size_t i = 0; i < n; ++i)
         {
-            uint32_t cells = 0, held = 0;
-            uint64_t bytes = 0, held_bytes = 0;
-            if (!lk_controller_noaa_cost(controller, regions[i].id, &cells, &bytes,
-                                         &held, &held_bytes))
+            size_t const want = lk_controller_noaa_region_cells(controller, regions[i].id,
+                                                                nullptr, 0);
+            if (want == 0)
                 continue;
-            noaa_region_hold.push_back({ regions[i].id, lkw::RegionHold{ cells, held } });
+            std::vector<char const *> buf(want, nullptr);
+            size_t const got = lk_controller_noaa_region_cells(controller, regions[i].id,
+                                                               buf.data(), buf.size());
+            uint32_t held = 0, missing = 0;
+            for (size_t c = 0; c < got && c < buf.size(); ++c)
+            {
+                if (buf[c] == nullptr)
+                    continue;
+                std::string name = buf[c];
+                for (auto &ch : name)
+                    ch = (char)std::toupper((unsigned char)ch);
+                if (mine.find(name) != mine.end())
+                    ++held;
+                else
+                    ++missing;
+            }
+            noaa_region_hold.push_back({ regions[i].id, lkw::RegionHold{ missing, held } });
         }
     }
 

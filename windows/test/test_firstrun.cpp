@@ -671,7 +671,10 @@ void TestFirstRun()
         LK_EQ(some.Total(), 12u);
         LK_EQ(some.Complete(), false);
         LK_EQ(some.Partial(), true);
-        LK_EQ(RegionBadge(some), std::wstring(L"3 of 12"));
+        /* No fraction: NOAA files cells across district lines, so part of a
+         * neighbour arrives with every download, and "3 of 12" on the pill
+         * reads as a transfer that stopped. The name keeps the count. */
+        LK_EQ(RegionBadge(some), std::wstring(L""));
 
         Case("water none of which is here says nothing");
         RegionHold none{ 412, 0 };
