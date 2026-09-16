@@ -36,6 +36,13 @@ lk_noaa_window_free (gpointer data)
 
   if (lk_noaa_window == self->window)
     lk_noaa_window = NULL;
+  /* The pick is scratch work on a model that outlives this window. Left
+   * standing, the next open takes it as the baseline and reads abandoned water
+   * as water the mariner holds: the region opens ticked and the button opens
+   * dead, so the water cannot be downloaded without unticking it first. The
+   * next open builds the pick again from the record. */
+  if (LK_IS_NOAA (self->noaa))
+    lk_noaa_clear_picks (self->noaa);
   g_free (self->baseline);
   g_free (self);
 }

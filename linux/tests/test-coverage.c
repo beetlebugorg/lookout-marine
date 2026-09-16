@@ -264,6 +264,33 @@ test_picker_window (void)
   g_assert_null (picker_window ());
 }
 
+/* Cancel undoes the pick.
+ *
+ * The pick lives on the model, which outlives the picker window. A mariner who
+ * ticks water, thinks better of it and presses Cancel comes back to a picker
+ * that reads their abandoned pick as water they hold: the seed takes the pick
+ * as its baseline, so the region opens ticked and the button opens dead. */
+static void
+test_cancel_undoes_the_pick (void)
+{
+  GtkWidget *picker;
+
+  lk_noaa_window_present (GTK_WINDOW (window), model);
+  lk_test_drain ();
+  picker = picker_window ();
+  g_assert_nonnull (picker);
+
+  lk_noaa_toggle (noaa, "d5");
+  lk_test_drain ();
+  g_assert_cmpuint (lk_noaa_picked_count (noaa), ==, 1);
+
+  g_signal_emit_by_name (lk_test_find_button (picker, "Cancel"), "clicked");
+  lk_test_drain ();
+  g_assert_null (picker_window ());
+
+  g_assert_cmpuint (lk_noaa_picked_count (noaa), ==, 0);
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -282,6 +309,7 @@ main (int argc, char *argv[])
   g_test_add_func ("/coverage/region-hit", test_region_hit);
   g_test_add_func ("/coverage/click-needs-a-catalog", test_click_needs_a_catalog);
   g_test_add_func ("/coverage/picker-window", test_picker_window);
+  g_test_add_func ("/coverage/cancel-undoes-the-pick", test_cancel_undoes_the_pick);
 
   return g_test_run ();
 }
