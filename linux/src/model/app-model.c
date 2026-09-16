@@ -41,6 +41,10 @@ struct _LkAppModel {
   LkBakeProgress remove_progress;
   char          *remove_name;
   gboolean       removing;
+  /* The set to read again once the removal is over. Cells deleted out of a
+   * prepared directory stay in the composed chart until its folder is read
+   * again, and the read costs a walk, so it waits for the last chart to go. */
+  char          *remove_rescan;
   GStrv    recents;
 
   gboolean is_opening;
@@ -191,6 +195,7 @@ lk_app_model_dispose (GObject *object)
   g_clear_pointer (&self->pending_open_source, g_free);
   g_clear_pointer (&self->bake_name, g_free);
   g_clear_pointer (&self->remove_name, g_free);
+  g_clear_pointer (&self->remove_rescan, g_free);
   g_clear_pointer (&self->noaa_dest, g_free);
   g_clear_pointer (&self->recents, g_strfreev);
   g_clear_pointer (&self->overlay_pin, g_free);
@@ -279,6 +284,7 @@ lk_app_model_class_init (LkAppModelClass *klass)
 
 static void lk_app_model_remove_progress (const LkBakeProgress *progress,
                                           gpointer user_data);
+static void lk_app_model_noaa_note_all (LkAppModel *self);
 
 static void
 lk_app_model_emit_chart_sets_changed (LkAppModel *self)
@@ -348,6 +354,8 @@ lk_app_model_noaa_changed (LkNoaa *noaa, gpointer user_data)
     return;
 
   lk_app_model_open_chart_directory (self, self->noaa_dest);
+  /* The downloader's own set. The picker states what THIS holds. */
+  lk_chart_sets_set_managed (self->chart_sets, self->noaa_dest, TRUE);
 }
 
 /* NOAA asked for its catalog with no chart open. Open one of no charts: the
@@ -371,6 +379,14 @@ lk_app_model_init (LkAppModel *self)
   /* The library. A background scan fills in each set's title and size, and
    * says so through this callback. */
   self->chart_sets = lk_chart_sets_new (lk_app_model_sets_changed, G_OBJECT (self));
+
+  /* The downloader's own set. A library downloaded before the mark existed is
+   * on the list without it, and the NOAA picker states what this set holds. */
+  {
+    g_autofree char *dest = lk_noaa_download_dir ();
+
+    lk_chart_sets_set_managed (self->chart_sets, dest, TRUE);
+  }
   self->overscale = 1.0;
   self->pick_results = g_ptr_array_new_with_free_func ((GDestroyNotify) lk_pick_decoded_free);
 
@@ -433,6 +449,13 @@ void
 lk_app_model_noaa_chart_did_open (LkAppModel *self)
 {
   g_return_if_fail (LK_IS_APP_MODEL (self));
+
+  /* The cells this device holds live on the handle, and this is a new one.
+   * lk_noaa_chart_did_open below replays the catalog read for the same reason.
+   * Without this the picker prices water the mariner already has as water to
+   * fetch, and the regions it should open ticked open bare. */
+  lk_app_model_noaa_note_all (self);
+
   lk_noaa_chart_did_open (self->noaa);
 }
 
@@ -441,6 +464,26 @@ lk_app_model_installed_cell_names (LkAppModel *self)
 {
   g_return_val_if_fail (LK_IS_APP_MODEL (self), g_new0 (char *, 1));
   return lk_chart_sets_cell_names (self->chart_sets);
+}
+
+char **
+lk_app_model_managed_cell_names (LkAppModel *self)
+{
+  g_return_val_if_fail (LK_IS_APP_MODEL (self), g_new0 (char *, 1));
+  return lk_chart_sets_managed_cell_names (self->chart_sets);
+}
+
+/* Both halves of what the NOAA picker reads: every installed cell, which is
+ * what a download is priced against, and the downloader's own cells, which is
+ * what the pills state. */
+static void
+lk_app_model_noaa_note_all (LkAppModel *self)
+{
+  g_auto (GStrv) have = lk_app_model_installed_cell_names (self);
+  g_auto (GStrv) mine = lk_app_model_managed_cell_names (self);
+
+  lk_noaa_note_installed (self->noaa, (const char *const *) have);
+  lk_noaa_note_managed (self->noaa, (const char *const *) mine);
 }
 
 void
@@ -459,8 +502,7 @@ lk_app_model_start_noaa_download (LkAppModel *self, gboolean again)
 
   /* Price against what is already here first. A mariner who picks water they
    * partly hold fetches the rest of it. */
-  g_auto (GStrv) have = lk_app_model_installed_cell_names (self);
-  lk_noaa_note_installed (self->noaa, (const char *const *) have);
+  lk_app_model_noaa_note_all (self);
 
   g_free (self->noaa_dest);
   self->noaa_dest = g_strdup (dest);
@@ -759,10 +801,61 @@ lk_app_model_remove_progress (const LkBakeProgress *progress, gpointer user_data
   self->remove_progress.bands = NULL;
   self->remove_progress.n_bands = 0;
 
+  if (over && self->remove_rescan != NULL)
+    {
+      g_autofree char *path = g_steal_pointer (&self->remove_rescan);
+
+      lk_chart_sets_rescan (self->chart_sets, path);
+      lk_app_model_recompose_library (self);
+      lk_app_model_emit_chart_sets_changed (self);
+    }
+
   if (self->removing == !over)
     return;
   self->removing = !over;
   g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_REMOVING]);
+}
+
+char **
+lk_app_model_noaa_cells_present (LkAppModel *self, const char *const *names)
+{
+  g_autofree char *source = NULL;
+  g_autofree char *prepared = NULL;
+
+  g_return_val_if_fail (LK_IS_APP_MODEL (self), g_new0 (char *, 1));
+
+  source = lk_noaa_download_dir ();
+  prepared = lk_chart_bake_prepared_dir (source);
+  return lk_chart_bake_cells_present (prepared, source, names);
+}
+
+void
+lk_app_model_remove_noaa_cells (LkAppModel *self, const char *const *names)
+{
+  g_autofree char *source = NULL;
+  g_autofree char *prepared = NULL;
+
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+  g_return_if_fail (names != NULL && names[0] != NULL);
+
+  source = lk_noaa_download_dir ();
+  prepared = lk_chart_bake_prepared_dir (source);
+  if (prepared == NULL)
+    return;
+
+  g_free (self->remove_rescan);
+  self->remove_rescan = g_strdup (source);
+
+  /* Say so when the removal matched nothing. A silent no-op reads as the app
+   * ignoring the press. */
+  if (!lk_chart_bake_delete_cells (prepared, source, names, "NOAA charts",
+                                   lk_app_model_remove_progress, self))
+    {
+      g_clear_pointer (&self->remove_rescan, g_free);
+      lk_app_model_set_open_error (self, "None of those charts are in the folder "
+                                         "this app downloaded them to, so nothing "
+                                         "was removed.");
+    }
 }
 
 static void

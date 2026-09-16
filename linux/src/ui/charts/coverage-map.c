@@ -483,19 +483,17 @@ lk_pill_mark_held (GtkWidget *pill, LkNoaa *noaa, const char *id)
   gboolean known = lk_noaa_region_held (noaa, id, &cells, &held);
   gboolean all = known && cells > 0 && held >= cells;
 
-  gtk_widget_set_visible (mark, held > 0);
+  /* WHOLE REGIONS ONLY. NOAA files cells across district lines, so downloading
+   * one region installs some of its neighbour's, and "42 of 1045" on a pill
+   * reads as a transfer that stopped part way. */
+  gtk_widget_set_visible (mark, all);
   if (all)
     gtk_widget_add_css_class (pill, "lk-region-held");
   else
     gtk_widget_remove_css_class (pill, "lk-region-held");
 
-  g_autofree char *have = NULL;
-  if (all)
-    have = g_strdup_printf ("%s. Every chart installed. %s", name, blurb);
-  else if (held > 0)
-    have = g_strdup_printf ("%s. %u of %u charts installed. %s", name, held, cells, blurb);
-  else
-    have = g_strdup_printf ("%s. %s", name, blurb);
+  g_autofree char *have = all ? g_strdup_printf ("%s. Installed. %s", name, blurb)
+                              : g_strdup_printf ("%s. %s", name, blurb);
 
   gtk_widget_set_tooltip_text (pill, have);
   gtk_accessible_update_property (GTK_ACCESSIBLE (pill),

@@ -1,6 +1,8 @@
 /* library/noaa.c — NOAA's charts. See library/noaa.h. */
 #include "library/noaa.h"
 
+#include "model/store.h"
+
 #include <string.h>
 
 /* How often the shell asks where the core has got to. The core reports
@@ -38,6 +40,8 @@ struct _LkNoaa {
   guint32 *region_cells;
   guint32 *region_held;
   gboolean regions_costed;
+  /* The dataset names the downloader's own set holds. */
+  GHashTable *managed;
 
   /* A read asked for before a chart was open. Every call here runs through a
    * chart handle, so a read asked for at launch had nothing to run through. */
@@ -365,7 +369,7 @@ lk_noaa_chart_did_open (LkNoaa *self)
 
 /* ---- what a pick costs --------------------------------------------------- */
 
-/* What each region holds, one catalog walk per region. */
+/* What each region holds, counted against the downloader's own set. */
 static void
 lk_noaa_recost_regions (LkNoaa *self)
 {
@@ -381,18 +385,37 @@ lk_noaa_recost_regions (LkNoaa *self)
   memset (self->region_cells, 0, self->n_regions * sizeof *self->region_cells);
   memset (self->region_held, 0, self->n_regions * sizeof *self->region_held);
 
-  if (!self->state.have_catalog)
+  if (!self->state.have_catalog || self->managed == NULL)
     return;
 
   for (guint i = 0; i < self->n_regions; i++)
     {
-      guint64 bytes = 0, held_bytes = 0;
+      g_auto (GStrv) cells = lk_chart_controller_noaa_region_cells (self->controller,
+                                                                    self->regions[i].id);
 
-      lk_chart_controller_noaa_cost (self->controller, self->regions[i].id,
-                                     &self->region_cells[i], &bytes,
-                                     &self->region_held[i], &held_bytes);
+      for (guint c = 0; cells != NULL && cells[c] != NULL; c++)
+        {
+          self->region_cells[i]++;
+          if (g_hash_table_contains (self->managed, cells[c]))
+            self->region_held[i]++;
+        }
     }
   self->regions_costed = TRUE;
+}
+
+void
+lk_noaa_note_managed (LkNoaa *self, const char *const *names)
+{
+  g_return_if_fail (LK_IS_NOAA (self));
+
+  if (self->managed == NULL)
+    self->managed = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+  g_hash_table_remove_all (self->managed);
+  for (guint i = 0; names != NULL && names[i] != NULL; i++)
+    g_hash_table_add (self->managed, g_strdup (names[i]));
+
+  lk_noaa_recost_regions (self);
+  g_signal_emit (self, signals[SIGNAL_CHANGED], 0);
 }
 
 gboolean
@@ -478,6 +501,14 @@ lk_noaa_cost_words (guint32 cells, guint64 bytes, guint32 held, guint64 held_byt
   return g_strdup_printf ("%u charts, %s", cells, size);
 }
 
+char **
+lk_noaa_region_cells (LkNoaa *self, const char *region_ids)
+{
+  g_return_val_if_fail (LK_IS_NOAA (self), g_new0 (char *, 1));
+
+  return lk_chart_controller_noaa_region_cells (self->controller, region_ids);
+}
+
 char *
 lk_noaa_cost_line (LkNoaa *self)
 {
@@ -499,6 +530,114 @@ lk_noaa_note_installed (LkNoaa *self, const char *const *names)
 
 /* ---- downloading --------------------------------------------------------- */
 
+char **
+lk_noaa_downloaded_regions (LkNoaa *self)
+{
+  g_return_val_if_fail (LK_IS_NOAA (self), g_new0 (char *, 1));
+  return lk_store_load_noaa_regions ();
+}
+
+void
+lk_noaa_forget_downloaded (LkNoaa *self, const char *const *ids)
+{
+  g_auto (GStrv) was = NULL;
+  g_autoptr (GPtrArray) now = g_ptr_array_new ();
+
+  g_return_if_fail (LK_IS_NOAA (self));
+  if (ids == NULL || ids[0] == NULL)
+    return;
+
+  was = lk_store_load_noaa_regions ();
+  for (guint i = 0; was != NULL && was[i] != NULL; i++)
+    if (!g_strv_contains (ids, was[i]))
+      g_ptr_array_add (now, was[i]);
+
+  g_ptr_array_add (now, NULL);
+  lk_store_save_noaa_regions ((const char *const *) now->pdata);
+}
+
+void
+lk_noaa_prune_downloaded (LkNoaa *self)
+{
+  g_auto (GStrv) was = NULL;
+  g_autoptr (GPtrArray) now = g_ptr_array_new ();
+  gboolean dropped = FALSE;
+
+  g_return_if_fail (LK_IS_NOAA (self));
+  if (!self->regions_costed)
+    return;
+
+  was = lk_store_load_noaa_regions ();
+  for (guint i = 0; was != NULL && was[i] != NULL; i++)
+    {
+      guint32 cells = 0, held = 0;
+
+      lk_noaa_region_held (self, was[i], &cells, &held);
+      /* WHOLE, the same test that adopts one. A download that finished leaves
+       * the region complete, and what is left of a removed one is its
+       * neighbour's cells spilling over a district line: 22 of 891 is not a
+       * region the mariner holds. */
+      if (cells > 0 && held >= cells)
+        g_ptr_array_add (now, was[i]);
+      else
+        dropped = TRUE;
+    }
+
+  if (!dropped)
+    return;
+  g_ptr_array_add (now, NULL);
+  lk_store_save_noaa_regions ((const char *const *) now->pdata);
+}
+
+gboolean
+lk_noaa_adopt_downloaded (LkNoaa *self)
+{
+  g_auto (GStrv) was = NULL;
+  g_autoptr (GPtrArray) whole = g_ptr_array_new ();
+
+  g_return_val_if_fail (LK_IS_NOAA (self), FALSE);
+
+  was = lk_store_load_noaa_regions ();
+  if (was != NULL && was[0] != NULL)
+    return FALSE;
+  if (!self->regions_costed)
+    return FALSE;
+
+  /* A region held WHOLE is one the mariner downloaded. A region they hold part
+   * of is their neighbour's cells spilling over a district line. */
+  for (guint i = 0; i < self->n_regions; i++)
+    if (self->region_cells[i] > 0 && self->region_held[i] >= self->region_cells[i])
+      g_ptr_array_add (whole, (gpointer) self->regions[i].id);
+
+  if (whole->len == 0)
+    return FALSE;
+  g_ptr_array_add (whole, NULL);
+  lk_store_save_noaa_regions ((const char *const *) whole->pdata);
+  return TRUE;
+}
+
+/* Add the pick to what this device has downloaded. */
+static void
+lk_noaa_note_downloaded (LkNoaa *self)
+{
+  g_auto (GStrv) was = lk_store_load_noaa_regions ();
+  g_autoptr (GHashTable) seen = g_hash_table_new (g_str_hash, g_str_equal);
+  g_autoptr (GPtrArray) now = g_ptr_array_new ();
+
+  for (guint i = 0; was != NULL && was[i] != NULL; i++)
+    if (g_hash_table_add (seen, was[i]))
+      g_ptr_array_add (now, was[i]);
+  for (guint i = 0; i < self->n_regions; i++)
+    {
+      const char *id = self->regions[i].id;
+
+      if (lk_noaa_is_picked (self, id) && g_hash_table_add (seen, (gpointer) id))
+        g_ptr_array_add (now, (gpointer) id);
+    }
+  g_ptr_array_add (now, NULL);
+  lk_store_save_noaa_regions ((const char *const *) now->pdata);
+}
+
 void
 lk_noaa_download (LkNoaa *self, const char *dest_dir, gboolean again)
 {
@@ -510,6 +649,7 @@ lk_noaa_download (LkNoaa *self, const char *dest_dir, gboolean again)
   if (g_hash_table_size (self->picked) == 0)
     return;
 
+  lk_noaa_note_downloaded (self);
   ids = lk_noaa_picked_ids (self);
   lk_chart_controller_noaa_download (self->controller, ids, dest_dir, again);
   lk_noaa_poll (self);
@@ -606,6 +746,7 @@ lk_noaa_dispose (GObject *object)
   g_clear_pointer (&self->regions, g_free);
   g_clear_pointer (&self->region_cells, g_free);
   g_clear_pointer (&self->region_held, g_free);
+  g_clear_pointer (&self->managed, g_hash_table_unref);
   self->n_regions = 0;
 
   G_OBJECT_CLASS (lk_noaa_parent_class)->dispose (object);

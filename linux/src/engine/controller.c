@@ -1209,6 +1209,29 @@ lk_chart_controller_noaa_have (LkChartController *self, const char *const *names
   lookout_noaa_have (self->handle, names, g_strv_length ((char **) names));
 }
 
+char **
+lk_chart_controller_noaa_region_cells (LkChartController *self, const char *region_ids)
+{
+  size_t n;
+
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), g_new0 (char *, 1));
+
+  if (self->handle == NULL || region_ids == NULL || region_ids[0] == '\0')
+    return g_new0 (char *, 1);
+
+  n = lookout_noaa_region_cells (self->handle, region_ids, NULL, 0);
+  if (n == 0)
+    return g_new0 (char *, 1);
+
+  g_autofree const char **raw = g_new0 (const char *, n);
+  n = lookout_noaa_region_cells (self->handle, region_ids, raw, n);
+
+  char **out = g_new0 (char *, n + 1);
+  for (size_t i = 0; i < n; i++)
+    out[i] = g_strdup (raw[i]);
+  return out;
+}
+
 gsize
 lk_chart_controller_noaa_coverage (LkChartController *self, const char *region_id,
                                    lookout_noaa_box *out, gsize cap)

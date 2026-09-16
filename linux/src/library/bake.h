@@ -122,6 +122,26 @@ char *lk_chart_bake_prepared_dir (const char *source);
  * to `set`. */
 GPtrArray *lk_chart_bake_to_prepare (const char *source, const LkChartSet *set);
 
+/* Which of `names` this device actually holds under `prepared` or `source`.
+ * Transfer full, NULL-terminated. The count a warning states has to be the
+ * count a removal deletes, so both read this. */
+char **lk_chart_bake_cells_present (const char        *prepared,
+                                    const char        *source,
+                                    const char *const *names);
+
+/* Delete named cells from a prepared directory and from the folder they were
+ * prepared out of, saying where it has got to.
+ *
+ * `prepared` holds a directory per chart, and `source` the exchange set they
+ * were made from. Both go, because a source left behind is baked again on the
+ * next launch. Reports as lk_chart_bake_delete_derived does. */
+gboolean lk_chart_bake_delete_cells (const char        *prepared,
+                                     const char        *source,
+                                     const char *const *names,
+                                     const char        *label,
+                                     LkBakeProgressFunc on_progress,
+                                     gpointer           user_data);
+
 /* Delete charts this app prepared. Refuses any path it did not make, so a
  * mariner's own folder can never be deleted by removing a set. */
 /* Delete the charts Lookout prepared, saying where it has got to.

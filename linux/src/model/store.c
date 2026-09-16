@@ -346,6 +346,21 @@ lk_store_save_chart_link_active (const char *url)
   lk_store_wrote ();
 }
 
+/* ---- the NOAA pick ------------------------------------------------------- */
+
+char **
+lk_store_load_noaa_regions (void)
+{
+  return lk_store_load_list (LOOKOUT_STORE_CHARTSETS, "noaa_regions");
+}
+
+void
+lk_store_save_noaa_regions (const char *const *ids)
+{
+  lk_store_save_list (LOOKOUT_STORE_CHARTSETS, "noaa_regions", ids);
+  lk_store_wrote ();
+}
+
 /* ---- plugin settings ----------------------------------------------------- */
 
 char **

@@ -67,6 +67,20 @@ void lk_app_model_set_chart_set_on (LkAppModel *self, const char *path, gboolean
  * be made again — and the mariner's own folder is never touched. */
 void lk_app_model_remove_chart_set (LkAppModel *self, const char *path);
 
+/* The cells the downloader's own set holds. The NOAA picker ticks from this
+ * and nothing else. Transfer full. */
+char **lk_app_model_managed_cell_names (LkAppModel *self);
+
+/* Which of `names` the download set actually holds. Transfer full. The count a
+ * warning states is the count the removal below deletes, so both read this. */
+char **lk_app_model_noaa_cells_present (LkAppModel *self, const char *const *names);
+
+/* Delete named NOAA cells from the download set: the charts prepared from them
+ * and the cells themselves. A source left behind is prepared again on the next
+ * launch. Reports through ::removing, and the chart drops them once the set has
+ * been read again. */
+void lk_app_model_remove_noaa_cells (LkAppModel *self, const char *const *names);
+
 /* TRUE when sets ARE installed and every one of them is switched off.
  *
  * The one case where the library is not empty and the chart is still blank.

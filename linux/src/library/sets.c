@@ -31,6 +31,8 @@ struct _LkChartSets {
 #define LK_SETS_POLL_MS 200
 
 static void lk_chart_sets_sync_paths (LkChartSets *self);
+static char **lk_chart_sets_names_of (LkChartSets *self, gboolean managed_only,
+                                      gboolean baked_only);
 static void lk_chart_sets_watch_scans (LkChartSets *self);
 
 /* ---- the walk over what is on disk --------------------------------------- */
@@ -218,6 +220,16 @@ lk_chart_sets_rows (LkChartSets *self)
 }
 
 gboolean
+lk_chart_sets_rescan (LkChartSets *self, const char *path)
+{
+  if (path == NULL || !lookout_chart_sets_rescan (self->sets, path))
+    return FALSE;
+
+  lk_chart_sets_watch_scans (self);
+  return TRUE;
+}
+
+gboolean
 lk_chart_sets_set_on (LkChartSets *self, const char *path, gboolean on)
 {
   return lookout_chart_sets_set_on (self->sets, path, on ? 1 : 0) != 0;
@@ -315,8 +327,38 @@ lk_chart_sets_compose (LkChartSets *self)
   return out;
 }
 
+gboolean
+lk_chart_sets_set_managed (LkChartSets *self, const char *path, gboolean on)
+{
+  return path != NULL &&
+         lookout_chart_sets_set_managed (self->sets, path, on ? 1 : 0) != 0;
+}
+
+gboolean
+lk_chart_sets_is_managed (LkChartSets *self, const char *path)
+{
+  return path != NULL && lookout_chart_sets_is_managed (self->sets, path) != 0;
+}
+
+char **
+lk_chart_sets_managed_cell_names (LkChartSets *self)
+{
+  /* PREPARED CHARTS ONLY. A downloaded cell that has not been prepared is a
+   * file, and the picker states what the mariner can draw. Counting the raw
+   * cell read a library whose charts had been deleted as still installed: the
+   * pills opened ticked on water that was gone. */
+  return lk_chart_sets_names_of (self, TRUE, TRUE);
+}
+
 char **
 lk_chart_sets_cell_names (LkChartSets *self)
+{
+  return lk_chart_sets_names_of (self, FALSE, FALSE);
+}
+
+/* Every cell name on the list, or only the ones the downloader's sets hold. */
+static char **
+lk_chart_sets_names_of (LkChartSets *self, gboolean managed_only, gboolean baked_only)
 {
   size_t n_sets = 0;
   const lookout_chart_set *const *sets = lookout_chart_sets_all (self->sets, &n_sets);
@@ -325,6 +367,8 @@ lk_chart_sets_cell_names (LkChartSets *self)
 
   for (size_t s = 0; s < n_sets; s++)
     {
+      if (managed_only && sets[s]->managed == 0)
+        continue;
       size_t n_files = 0;
       const lookout_chart_file *const *files =
           lookout_chart_set_files (self->sets, sets[s]->path, &n_files);
@@ -334,6 +378,8 @@ lk_chart_sets_cell_names (LkChartSets *self)
           const lookout_chart_file *file = files[f];
 
           if (file->name == NULL || file->name[0] == '\0')
+            continue;
+          if (baked_only && file->kind != LOOKOUT_FILE_BAKED)
             continue;
           /* An update carries its base cell's name, so it dedups into it. */
           if (file->kind != LOOKOUT_FILE_BAKED && file->kind != LOOKOUT_FILE_SOURCE &&

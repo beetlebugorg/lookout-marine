@@ -141,6 +141,40 @@ gboolean lk_noaa_all_installed (LkNoaa *self);
 gboolean lk_noaa_region_held (LkNoaa *self, const char *id, guint32 *out_cells,
                               guint32 *out_held);
 
+/* The cells THE DOWNLOADER holds. The pills read this, and only this: counting
+ * every installed cell reads an archive the mariner merely lists as water they
+ * can delete, so unticking asked to remove cells no download ever wrote.
+ * lk_noaa_note_installed still names every installed cell, because skipping
+ * what the mariner holds elsewhere is the right price for a download. */
+void lk_noaa_note_managed (LkNoaa *self, const char *const *names);
+
+/* The regions this device has downloaded, as the picker opens them. Written
+ * when a download starts and read when the picker opens. */
+char **lk_noaa_downloaded_regions (LkNoaa *self);
+
+/* Take regions out of that record, when the mariner has removed their charts.
+ * Without this the picker opens them ticked again and reads as holding water
+ * it has just deleted. */
+void lk_noaa_forget_downloaded (LkNoaa *self, const char *const *ids);
+
+/* Drop recorded regions the downloader no longer holds whole. Charts removed
+ * by other means leave the record naming water that is gone. Does nothing
+ * before the per-region counts are in. */
+void lk_noaa_prune_downloaded (LkNoaa *self);
+
+/* Write the regions this device holds whole into that record, once, for a
+ * library downloaded before the record existed. FALSE when the catalog is not
+ * in yet, or when the record already has something in it. */
+gboolean lk_noaa_adopt_downloaded (LkNoaa *self);
+
+/* The dataset names of every cell covering `region_ids`, a comma separated
+ * list. Transfer full, NULL-terminated, empty before the catalog is read.
+ *
+ * Regions overlap, because NOAA files a cell under one district that covers
+ * another's. The cells a shell removes are the unpicked regions' minus every
+ * region still picked. */
+char **lk_noaa_region_cells (LkNoaa *self, const char *region_ids);
+
 /* What the pick costs, in the mariner's words. Free with g_free. */
 char *lk_noaa_cost_line (LkNoaa *self);
 

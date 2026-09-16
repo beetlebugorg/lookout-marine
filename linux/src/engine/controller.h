@@ -238,6 +238,11 @@ gboolean lk_chart_controller_noaa_cost (LkChartController *self, const char *reg
  * extension. The cost above leaves them out and a download skips them. */
 void lk_chart_controller_noaa_have (LkChartController *self, const char *const *names);
 
+/* The dataset names of every cell covering `region_ids`, in catalog order.
+ * Transfer full, NULL-terminated. Empty before the catalog is read. */
+char **lk_chart_controller_noaa_region_cells (LkChartController *self,
+                                              const char *region_ids);
+
 /* One region's coverage, as the boxes the catalog states. Writes at most `cap`
  * and answers how many there are, so a caller sizes its buffer by asking once
  * with `out` NULL. */

@@ -83,6 +83,21 @@ gboolean lk_chart_sets_scanning (LkChartSets *self);
  * it. TRUE when the list or the switch changed. */
 gboolean lk_chart_sets_note (LkChartSets *self, const char *path);
 
+/* Mark a set as the downloader's rather than the mariner's, and read the mark.
+ * The NOAA picker states what THIS set holds: counting every installed cell
+ * reads an archive the mariner merely lists as water they can delete. */
+gboolean lk_chart_sets_set_managed (LkChartSets *self, const char *path, gboolean on);
+gboolean lk_chart_sets_is_managed (LkChartSets *self, const char *path);
+
+/* The dataset names the MANAGED sets hold, uppercased and deduplicated.
+ * Transfer full. */
+char **lk_chart_sets_managed_cell_names (LkChartSets *self);
+
+/* Read a set's folder again. Charts deleted out of a prepared directory, or
+ * written into one after the scan read it, are invisible to the composed chart
+ * until this runs. FALSE when the set is not on the list. */
+gboolean lk_chart_sets_rescan (LkChartSets *self, const char *path);
+
 /* Switch one set into or out of the chart. TRUE when the state changed. */
 gboolean lk_chart_sets_set_on (LkChartSets *self, const char *path, gboolean on);
 

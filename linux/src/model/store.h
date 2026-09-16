@@ -74,6 +74,14 @@ void     lk_store_save_chart_hidden (gboolean hidden);
  * on, or NULL/empty for lookout's own chart. */
 char *lk_store_load_chart_links (void);
 void  lk_store_save_chart_links (const char *json);
+
+/* The NOAA regions this device has downloaded. The picker opens them ticked.
+ *
+ * Read from the pick rather than from cell coverage: NOAA files cells across
+ * district lines, so a district the mariner never chose holds some of its
+ * neighbour's cells and read as installed. Free with g_strfreev. */
+char **lk_store_load_noaa_regions (void);
+void   lk_store_save_noaa_regions (const char *const *ids);
 char *lk_store_load_chart_link_active (void);
 void  lk_store_save_chart_link_active (const char *url);
 
