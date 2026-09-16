@@ -30,7 +30,7 @@ foreach name : unit_tests
   test(name, exe, suite: 'unit', timeout: 60)
 endforeach
 
-widget_tests = ['charts', 'coverage', 'depth-step', 'hud', 'window', 'pick-report']
+widget_tests = ['charts', 'coverage', 'depth-step', 'hud', 'window', 'pick-report', 'noaa-cycle']
 headless = find_program ('run-headless.sh')
 
 foreach name : widget_tests

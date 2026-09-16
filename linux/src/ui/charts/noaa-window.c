@@ -420,6 +420,24 @@ lk_noaa_window_present (GtkWindow *parent, LkAppModel *model)
 
   gtk_window_set_child (GTK_WINDOW (self->window), root);
 
+  /* What the picker needs before it can price anything: where the service
+   * stands and what this device already holds.
+   *
+   * BOTH BEFORE THE HANDLER IS CONNECTED. The sync seeds the pick, and the
+   * seed reads the per-region counts these calls recompute. Each call also
+   * emits ::changed, so connecting first ran the seed on the counts the
+   * FIRST of the two left: a picker opened after the charts had gone seeded
+   * from a device that still held them, and opened ticked on water it had
+   * deleted. */
+  lk_noaa_poll (noaa);
+  {
+    g_auto (GStrv) have = lk_app_model_installed_cell_names (model);
+    g_auto (GStrv) mine = lk_app_model_managed_cell_names (model);
+
+    lk_noaa_note_installed (noaa, (const char *const *) have);
+    lk_noaa_note_managed (noaa, (const char *const *) mine);
+  }
+
   g_signal_connect_object (noaa, "changed", G_CALLBACK (lk_noaa_window_sync),
                            self->window, 0);
   lk_noaa_window_sync (noaa, self->window);
@@ -427,14 +445,6 @@ lk_noaa_window_present (GtkWindow *parent, LkAppModel *model)
   lk_noaa_window = self->window;
   gtk_window_present (GTK_WINDOW (self->window));
 
-  /* What the picker needs before it can price anything: where the service
-   * stands, what this device already holds, and the catalog itself. */
-  lk_noaa_poll (noaa);
-  g_auto (GStrv) have = lk_app_model_installed_cell_names (model);
-  g_auto (GStrv) mine = lk_app_model_managed_cell_names (model);
-
-  lk_noaa_note_installed (noaa, (const char *const *) have);
-  lk_noaa_note_managed (noaa, (const char *const *) mine);
   if (!lk_noaa_state (noaa)->have_catalog)
     lk_noaa_refresh (noaa);
 }
