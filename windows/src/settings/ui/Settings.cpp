@@ -1652,8 +1652,18 @@ namespace winrt::LookoutMarine::implementation
                 chart_sets_none.Visibility(Visibility::Collapsed);
                 stack.Children().Append(chart_sets_none);
 
+                // The downloader's own set first. It is the set this app adds
+                // to and takes from, and the only row that leads to the picker.
+                std::vector<ChartSetRow const *> ordered;
                 for (auto const &set : chart_sets)
+                    if (set.managed)
+                        ordered.push_back(&set);
+                for (auto const &set : chart_sets)
+                    if (!set.managed)
+                        ordered.push_back(&set);
+                for (auto const *held : ordered)
                 {
+                    auto const &set = *held;
                     Controls::Grid srow;
                     Controls::ColumnDefinition sc0, sc1, sc2, sc3;
                     sc0.Width({ 0, GridUnitType::Auto });
@@ -1681,7 +1691,31 @@ namespace winrt::LookoutMarine::implementation
                     sname.FontWeight(winrt::Windows::UI::Text::FontWeights::Medium());
                     sname.Opacity(set.on ? 1.0 : 0.6);
                     sname.TextTrimming(TextTrimming::CharacterEllipsis);
-                    stext.Children().Append(sname);
+                    // The name, and on the downloader's own set what it is.
+                    // A mariner otherwise reads the download as a folder they
+                    // picked and looks for it on the disk.
+                    Controls::StackPanel title_row;
+                    title_row.Orientation(Controls::Orientation::Horizontal);
+                    title_row.Spacing(6);
+                    title_row.Children().Append(sname);
+                    if (set.managed)
+                    {
+                        Controls::TextBlock mark;
+                        mark.Text(L"Managed by NOAA chart downloader");
+                        mark.FontSize(10);
+                        mark.FontWeight(winrt::Windows::UI::Text::FontWeights::Medium());
+                        mark.Foreground(lkw::Brush(lkw::chrome::Accent(DarkChrome())));
+                        Controls::Border tag;
+                        tag.CornerRadius({ 8, 8, 8, 8 });
+                        tag.Padding({ 6, 1, 6, 2 });
+                        tag.Background(lkw::Brush(lkw::chrome::AccentFill(DarkChrome())));
+                        tag.VerticalAlignment(VerticalAlignment::Center);
+                        tag.Child(mark);
+                        Automation::AutomationProperties::SetName(
+                            tag, L"Managed by the NOAA chart downloader");
+                        title_row.Children().Append(tag);
+                    }
+                    stext.Children().Append(title_row);
                     // What it holds, and what of it has yet to be prepared.
                     // Both are counts a scan moves, so the refresh states them
                     // and the prepare line is built collapsed.
@@ -1699,34 +1733,60 @@ namespace winrt::LookoutMarine::implementation
                     Controls::Grid::SetColumn(stext, 1);
                     srow.Children().Append(stext);
 
-                    Controls::Button srm;
-                    Controls::FontIcon sminus;
-                    sminus.Glyph(L""); // Remove
-                    sminus.FontSize(12);
-                    srm.Content(sminus);
-                    srm.Padding({ 4, 2, 4, 2 });
-                    srm.Background(Media::SolidColorBrush{ winrt::Windows::UI::Color{ 0, 0, 0, 0 } });
-                    srm.BorderThickness({ 0, 0, 0, 0 });
-                    // A set Lookout prepared is work to do again, so removing
-                    // it asks first and says how much. A folder of the
-                    // mariner's own files is a list entry, so it goes without
-                    // a question.
-                    bool derived = ChartSetIsDerived(set.path);
-                    Automation::AutomationProperties::SetName(
-                        srm, derived ? L"Remove. The charts this app prepared are deleted; your "
+                    if (set.managed)
+                    {
+                        // The downloader's own set is added to and taken from
+                        // in the picker, so the row goes there. A Remove here
+                        // would leave the picker stating water that had gone.
+                        Controls::Button manage;
+                        manage.Content(winrt::box_value(L"Manage…"));
+                        manage.Padding({ 6, 2, 6, 2 });
+                        manage.Foreground(lkw::Brush(lkw::chrome::Accent(DarkChrome())));
+                        manage.FontSize(12);
+                        lkw::FlatFills(manage, DarkChrome());
+                        Automation::AutomationProperties::SetName(
+                            manage, L"Manage the NOAA charts this app downloaded");
+                        // Handed to the next tick: ShowNoaaPicker closes this
+                        // window, and closing the window that owns the button
+                        // from inside its own handler destroys the button while
+                        // the handler is still running.
+                        manage.Click([this](auto &&, auto &&) {
+                            DispatcherQueue().TryEnqueue([this] { ShowNoaaPicker(); });
+                        });
+                        Controls::Grid::SetColumn(manage, 3);
+                        srow.Children().Append(manage);
+                    }
+                    else
+                    {
+                        Controls::Button srm;
+                        Controls::FontIcon sminus;
+                        sminus.Glyph(L""); // Remove
+                        sminus.FontSize(12);
+                        srm.Content(sminus);
+                        srm.Padding({ 4, 2, 4, 2 });
+                        lkw::FlatFills(srm, DarkChrome());
+                        // A set Lookout prepared is work to do again, so
+                        // removing it asks first and says how much. A folder of
+                        // the mariner's own files is a list entry, so it goes
+                        // without a question.
+                        bool derived = ChartSetIsDerived(set.path);
+                        Automation::AutomationProperties::SetName(
+                            srm, derived
+                                     ? L"Remove. The charts this app prepared are deleted; your "
                                        L"own cells stay where they are."
                                      : L"Take these charts out of the list. Your files stay "
                                        L"where they are.");
-                    std::string sname_str = set.title;
-                    size_t scharts = set.charts + set.pictures;
-                    srm.Click([this, spath, sname_str, scharts, derived](auto &&, auto &&) {
-                        if (derived)
-                            ConfirmRemoveChartSet(spath, sname_str, scharts);
-                        else
-                            RemoveChartSet(spath);
-                    });
-                    Controls::Grid::SetColumn(srm, 3);
-                    srow.Children().Append(srm);
+                        std::string sname_str = set.title;
+                        size_t scharts = set.charts + set.pictures;
+                        srm.Click([this, spath, sname_str, scharts, derived](auto &&, auto &&) {
+                            if (derived)
+                                ConfirmRemoveChartSet(spath, sname_str, scharts);
+                            else
+                                RemoveChartSet(spath);
+                        });
+                        Controls::Grid::SetColumn(srm, 3);
+                        srow.Children().Append(srm);
+                    }
 
                     // The row, then what scales the set holds. The ramp reads
                     // from the whole width of the card, so it goes under the
