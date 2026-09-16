@@ -481,7 +481,10 @@ final class NoaaModel {
 
     /// Where downloaded cells are staged before they bake. One directory, so
     /// the whole download bakes as a single chart set.
-    static var downloadDirectory: String? {
+    /// nonisolated: the chart set model marks this path as it opens, off the
+    /// main actor, and one definition of the directory keeps the mark and the
+    /// download on the same folder.
+    nonisolated static var downloadDirectory: String? {
         guard let docs = FileManager.default.urls(
             for: .documentDirectory, in: .userDomainMask).first else { return nil }
         return docs

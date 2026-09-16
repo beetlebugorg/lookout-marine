@@ -363,9 +363,19 @@ enum ChartSetStore {
         guard let store = Store.shared.handle else { return nil }
         // Where the bake writes. The core scans it beside each set, so a
         // folder imported once does not ask to be imported again.
-        return (ChartBake.chartsRoot ?? "").withCString {
+        let h = (ChartBake.chartsRoot ?? "").withCString {
             lookout_chart_sets_open(store, $0)
         }
+        // The download directory is the downloader's set. open loaded the
+        // saved list, so the row is there to mark. A path the library has no
+        // row for is skipped, so this runs unconditionally: adopt marks a
+        // fresh download, and this marks one already installed. An unmarked
+        // download draws as a folder the mariner picked, and the remove
+        // button on that row deletes charts the downloader still lists.
+        if let h, let dest = NoaaModel.downloadDirectory {
+            _ = dest.withCString { lookout_chart_sets_set_managed(h, $0, 1) }
+        }
+        return h
     }
 
     /// A background scan has landed since the last ask. The frame loop polls
