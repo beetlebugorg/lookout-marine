@@ -79,12 +79,29 @@ final class AppModel {
         watchNoaaDownload(dest)
     }
 
+    /// Fetch the reissued editions of every installed cell, and prepare what
+    /// lands.
+    ///
+    /// The same path as a download. The Update button called the NOAA model
+    /// straight, which started the fetch and no watcher, so the new editions
+    /// arrived as raw cells that never baked and the count on screen stood.
+    func startNoaaUpdate() {
+        guard let dest = NoaaModel.downloadDirectory else {
+            charts.openError = "Couldn't find a place to download charts to."
+            return
+        }
+        let have = charts.installedCells
+        guard !have.isEmpty else { return }
+        noaa.update(have, to: dest)
+        watchNoaaDownload(dest, thenRecheck: true)
+    }
+
     /// Follow a download to its end and bake the directory it filled.
     ///
     /// A poll rather than a callback, because the core reports progress and
     /// accepts no callback across the C ABI. It ends when the download ends, so
     /// an idle app runs no timer.
-    private func watchNoaaDownload(_ dest: String) {
+    private func watchNoaaDownload(_ dest: String, thenRecheck: Bool = false) {
         noaaWatch?.cancel()
         noaaWatch = Task { [weak self] in
             while !Task.isCancelled {
@@ -95,9 +112,37 @@ final class AppModel {
                 // Bake only when something arrived. A download that failed
                 // every cell leaves an empty directory and its own error.
                 if self.noaa.state.done > 0 { self.charts.openChartDirectory(dest) }
+                if thenRecheck { await self.recheckNoaaUpdates() }
                 return
             }
         }
+    }
+
+    /// Count the reissued charts again, once the new editions are in the
+    /// library.
+    ///
+    /// An update lands as cells that still have to bake, and the editions the
+    /// library reports do not change until that work ends. Reading them any
+    /// sooner puts the same count back on screen.
+    private func recheckNoaaUpdates() async {
+        // The bake and the scan run on workers of their own, and a 700 cell
+        // import is minutes. Idle four reads running rather than one, so the
+        // gap between the scan ending and the bake starting does not pass for
+        // finished work.
+        var idle = 0
+        for _ in 0..<2400 {
+            try? await Task.sleep(for: .milliseconds(500))
+            if charts.scanning || charts.chartWork != nil {
+                idle = 0
+                continue
+            }
+            idle += 1
+            if idle >= 4 { break }
+        }
+        let have = charts.installedCells
+        guard !have.isEmpty else { return }
+        noaaChecked = true
+        await noaa.checkForUpdates(have)
     }
 
     /// Look for reissued charts, when the cadence says to and there is

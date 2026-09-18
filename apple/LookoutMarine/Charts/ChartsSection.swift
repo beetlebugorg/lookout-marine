@@ -463,7 +463,7 @@ private struct ChartSetRow: View {
                         .font(.caption)
                         .foregroundStyle(Chrome.accent)
                     Button("Update") {
-                        model.noaa.downloadUpdates(model.charts.installedCells)
+                        model.startNoaaUpdate()
                     }
                     .font(.caption)
                     .disabled(model.noaa.state.phase == .downloading

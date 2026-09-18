@@ -514,12 +514,6 @@ final class NoaaModel {
         Store.shared.set(now.timeIntervalSince1970, NoaaModel.group, NoaaModel.checkedKey)
     }
 
-    /// Fetch the reissued editions of every installed cell.
-    func downloadUpdates(_ have: [NoaaInstalledCell]) {
-        guard let dest = NoaaModel.downloadDirectory else { return }
-        update(have, to: dest)
-    }
-
     /// Where downloaded cells are staged before they bake. One directory, so
     /// the whole download bakes as a single chart set.
     /// nonisolated: the chart set model marks this path as it opens, off the
