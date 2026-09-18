@@ -131,6 +131,7 @@ final class AppModel {
     /// every launch while the scan reads the library, and raising the flow on
     /// that puts it over a mariner's own charts.
     func considerFirstRun() {
+        firstRun.noteLibrary(charts)
         guard !firstRun.showing,
               firstRun.shouldRun(charts: charts, links: chartLinks) else { return }
         firstRun.begin()

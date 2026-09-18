@@ -92,6 +92,14 @@ final class FirstRunModel {
     /// started with nothing to draw.
     private var putAway = false
 
+    /// True once this run has seen a library with something to draw.
+    ///
+    /// A mariner who finished setup and then removed every chart is offered
+    /// the page that builds one again. One whose library never held charts
+    /// keeps the answer they gave, so Set Up Later stands, and so does a
+    /// cancelled file picker.
+    private var sawCharts = false
+
     /// LOOKOUT_FIRST_RUN=1 runs setup whatever the store says, and =0 keeps it
     /// down. A screenshot run and a UI test both need to choose, because the
     /// store keeps the answer between launches on one device.
@@ -132,8 +140,20 @@ final class FirstRunModel {
     /// empty library to fill, so setup stays down over one.
     func shouldRun(charts: ChartsModel, links: ChartLinksModel) -> Bool {
         if let override = Self.override { return override }
-        guard !putAway, links.active == nil else { return false }
+        guard links.active == nil else { return false }
+        guard !putAway || sawCharts else { return false }
         return charts.nothingToDraw && charts.chartWork == nil
+    }
+
+    /// Note what the library holds, wherever setup is considered.
+    ///
+    /// The test is what a set holds rather than `nothingToDraw`. That reads
+    /// false for the first moment of every launch while the scan runs, and
+    /// reading it as a library puts setup away on a device that has none.
+    func noteLibrary(_ charts: ChartsModel) {
+        if charts.sets.contains(where: { $0.on && $0.hasSomethingToDraw }) {
+            sawCharts = true
+        }
     }
 
     // MARK: NOAA's terms
@@ -223,8 +243,10 @@ final class FirstRunModel {
     }
 
     /// Set Up Later, and the end of a run that finished. Both put setup away
-    /// for the rest of this launch. A run that finished leaves a chart behind
-    /// it, and a chart is what keeps setup down after that.
+    /// for this launch. A run that finished leaves a chart behind it, and a
+    /// chart is what keeps setup down after that. Remove every chart and
+    /// setup comes back, because the way to the library that went is the page
+    /// that built it.
     func finish() {
         putAway = true
         showing = false

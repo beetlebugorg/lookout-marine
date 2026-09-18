@@ -176,6 +176,8 @@
 		A82FE0EC387B02B7E0690E17 /* ChartPreviewEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AACD5211CA10FC5BBD5D661A /* ChartPreviewEngine.swift */; };
 		A9D1AA03743D4E13ED98E4E8 /* PluginTableTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C7090FA8708C087510A6B66 /* PluginTableTests.swift */; };
 		AA57905B74D7272259E6FC71 /* RasterModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD12651F04161741811A5386 /* RasterModelTests.swift */; };
+		AA57905BCCD7272259E6FC73 /* FirstRunReturnTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD1265CC04161741811A5392 /* FirstRunReturnTests.swift */; };
+		AA57905BBBD7272259E6FC72 /* NoaaDownloadRemovalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD1265BB04161741811A5391 /* NoaaDownloadRemovalTests.swift */; };
 		AA57905BAAD7272259E6FC71 /* NoaaModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD1265AA04161741811A5390 /* NoaaModelTests.swift */; };
 		AAEAA11652744E72897F0250 /* FakeEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = C92108B96F87BAE129BE6656 /* FakeEngine.swift */; };
 		AB753B2BDEE44483CCDD903C /* CoordFormat.swift in Sources */ = {isa = PBXBuildFile; fileRef = 539774253A46E025DD1B5E20 /* CoordFormat.swift */; };
@@ -234,6 +236,8 @@
 		D27C7A5C6C930EFAA6ECF045 /* SettingsWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4548244FA1C95958287A425 /* SettingsWindow.swift */; };
 		D291F68292B43ED593C67FC8 /* PluginManageSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9678B3409AC6184055D285AD /* PluginManageSection.swift */; };
 		D30AB6E85C67FF3FD87B7E3A /* RasterModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD12651F04161741811A5386 /* RasterModelTests.swift */; };
+		D30AB6E8CC67FF3FD87B7E3C /* FirstRunReturnTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD1265CC04161741811A5392 /* FirstRunReturnTests.swift */; };
+		D30AB6E8BB67FF3FD87B7E3B /* NoaaDownloadRemovalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD1265BB04161741811A5391 /* NoaaDownloadRemovalTests.swift */; };
 		D30AB6E8AA67FF3FD87B7E3A /* NoaaModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD1265AA04161741811A5390 /* NoaaModelTests.swift */; };
 		D4053EFD7BBC6FD277438F1D /* CoordFormatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80A6678722FC01CA46E10CE0 /* CoordFormatTests.swift */; };
 		D592C74889CB79128A0A81C5 /* PluginTableView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B7482797128261B463A8277 /* PluginTableView.swift */; };
@@ -478,6 +482,8 @@
 		F8BE491FFF560F7E7EEACF38 /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
 		FA314B5CAB2F0E35B1DE67D8 /* LookoutMarine.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = LookoutMarine.entitlements; sourceTree = "<group>"; };
 		FD12651F04161741811A5386 /* RasterModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RasterModelTests.swift; sourceTree = "<group>"; };
+		FD1265CC04161741811A5392 /* FirstRunReturnTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirstRunReturnTests.swift; sourceTree = "<group>"; };
+		FD1265BB04161741811A5391 /* NoaaDownloadRemovalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoaaDownloadRemovalTests.swift; sourceTree = "<group>"; };
 		FD1265AA04161741811A5390 /* NoaaModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoaaModelTests.swift; sourceTree = "<group>"; };
 		FE36262A44201EEF33B87681 /* FirstRunFlow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirstRunFlow.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -645,6 +651,8 @@
 				1CA144ED7593A8DDDC3229B5 /* PluginStatusTests.swift */,
 				9C7090FA8708C087510A6B66 /* PluginTableTests.swift */,
 				FD12651F04161741811A5386 /* RasterModelTests.swift */,
+				FD1265CC04161741811A5392 /* FirstRunReturnTests.swift */,
+				FD1265BB04161741811A5391 /* NoaaDownloadRemovalTests.swift */,
 				FD1265AA04161741811A5390 /* NoaaModelTests.swift */,
 				B9CB7F2EE01F7A2521E623AD /* RasterPillTests.swift */,
 				06BD91FFFE38B9BD5B086791 /* ReadoutsModelTests.swift */,
@@ -1202,6 +1210,8 @@
 				8DA009DEDAE728D38DFE062E /* PluginTableTests.swift in Sources */,
 				F66040BFE624A252A3C9DA34 /* PluginsModelTests.swift in Sources */,
 				D30AB6E85C67FF3FD87B7E3A /* RasterModelTests.swift in Sources */,
+				D30AB6E8CC67FF3FD87B7E3C /* FirstRunReturnTests.swift in Sources */,
+				D30AB6E8BB67FF3FD87B7E3B /* NoaaDownloadRemovalTests.swift in Sources */,
 				D30AB6E8AA67FF3FD87B7E3A /* NoaaModelTests.swift in Sources */,
 				A26BE99590C76FD74BF2E521 /* RasterPillTests.swift in Sources */,
 				BF15D9955A4DF8A1DB862090 /* ReadoutsModelTests.swift in Sources */,
@@ -1365,6 +1375,8 @@
 				A9D1AA03743D4E13ED98E4E8 /* PluginTableTests.swift in Sources */,
 				5CE2A0D966DE83049C387273 /* PluginsModelTests.swift in Sources */,
 				AA57905B74D7272259E6FC71 /* RasterModelTests.swift in Sources */,
+				AA57905BCCD7272259E6FC73 /* FirstRunReturnTests.swift in Sources */,
+				AA57905BBBD7272259E6FC72 /* NoaaDownloadRemovalTests.swift in Sources */,
 				AA57905BAAD7272259E6FC71 /* NoaaModelTests.swift in Sources */,
 				5396D82AF2680CB6CA36DC9F /* RasterPillTests.swift in Sources */,
 				290D9208A65A5AA6D68642AF /* ReadoutsModelTests.swift in Sources */,
