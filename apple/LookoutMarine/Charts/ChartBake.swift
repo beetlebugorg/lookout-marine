@@ -195,8 +195,9 @@ enum ChartBake {
     /// been. One directory per source folder, named after it, under the app's
     /// own support directory. The source folder is never written to: it may be
     /// a read-only disc or a drive that goes away.
-    static func preparedDirectory(for sourceDir: String) -> String? {
-        guard let root = chartsRoot else { return nil }
+    static func preparedDirectory(for sourceDir: String,
+                                  under: String? = chartsRoot) -> String? {
+        guard let root = under else { return nil }
         var name = (sourceDir as NSString).lastPathComponent
         // An archive names its directory without the .zip: what comes out of
         // All_ENCs.zip is charts, and "All_ENCs.zip/" as a folder full of them
@@ -284,10 +285,19 @@ enum ChartBake {
                 targets.append(dir)
             }
         }
-        guard !targets.isEmpty else { return 0 }
+        return trash(targets, under: root, progress: progress)
+    }
 
-        let trash = (root as NSString).appendingPathComponent(trashPrefix + UUID().uuidString)
-        guard (try? fm.createDirectory(atPath: trash, withIntermediateDirectories: true)) != nil
+    /// Rename each target into one trash directory, then empty it off the main
+    /// thread. Returns how many were taken out of the library.
+    ///
+    /// The rename is atomic, so the library is correct before this returns and
+    /// the scan behind it reads what is left.
+    private static func trash(_ targets: [String], under root: String,
+                              progress: ((BakeProgress) -> Void)?) -> Int {
+        let fm = FileManager.default
+        let bin = (root as NSString).appendingPathComponent(trashPrefix + UUID().uuidString)
+        guard (try? fm.createDirectory(atPath: bin, withIntermediateDirectories: true)) != nil
         else {
             DispatchQueue.global(qos: .utility).async {
                 for t in targets { try? fm.removeItem(atPath: t) }
@@ -297,7 +307,7 @@ enum ChartBake {
 
         var moved = 0
         for (i, t) in targets.enumerated() {
-            let into = (trash as NSString).appendingPathComponent("\(i)-\((t as NSString).lastPathComponent)")
+            let into = (bin as NSString).appendingPathComponent("\(i)-\((t as NSString).lastPathComponent)")
             do {
                 try fm.moveItem(atPath: t, toPath: into)
                 moved += 1
@@ -307,8 +317,74 @@ enum ChartBake {
                 moved += 1
             }
         }
-        DispatchQueue.global(qos: .utility).async { emptyAndRemove(trash, progress: progress) }
+        DispatchQueue.global(qos: .utility).async { emptyAndRemove(bin, progress: progress) }
         return moved
+    }
+
+    /// The cells the NOAA downloader holds at `dest`, by name.
+    ///
+    /// Both halves are read: the charts prepared under the charts root, and
+    /// the cells they were prepared from under the download directory. A name
+    /// in both is one chart on the water, so each is counted once. A cell
+    /// directory is named for its cell, and every NOAA cell name starts US.
+    static func noaaCellsHeld(at dest: String,
+                              preparedRoot: String? = chartsRoot) -> Set<String> {
+        var out = Set<String>()
+        if let prepared = preparedDirectory(for: dest, under: preparedRoot) {
+            for p in childDirectories(of: prepared) {
+                out.insert((p as NSString).lastPathComponent.uppercased())
+            }
+        }
+        for parent in [dest] + childDirectories(of: dest) {
+            for p in childDirectories(of: parent) {
+                let name = (p as NSString).lastPathComponent.uppercased()
+                guard name.hasPrefix("US") else { continue }
+                out.insert(name)
+            }
+        }
+        return out
+    }
+
+    /// Delete the whole NOAA download at `dest`: the exchange set, the charts
+    /// prepared from it, and the folder both sit in.
+    ///
+    /// What the downloader holds is read off the disk rather than named from
+    /// the catalog. NOAA files a cell under a district the record does not
+    /// hold, and it delists a cell it once published, so naming cells from the
+    /// catalog leaves those on the disk. The folder then stays on the list
+    /// holding charts no pick reaches. The paperwork an exchange set ships
+    /// with, CATALOG.031 and the text files beside it, goes the same way.
+    ///
+    /// Returns the number of charts removed. Returns 0 for a `dest` outside
+    /// `permitted`, where this deletes no file.
+    ///
+    /// `permitted` is the downloader's own directory at every call site. It is
+    /// an argument so a test can run the delete against a folder of its own
+    /// rather than the mariner's charts.
+    @discardableResult
+    static func deleteNoaaDownload(from dest: String,
+                                   permitted: String? = NoaaModel.downloadDirectory,
+                                   preparedRoot: String? = chartsRoot,
+                                   progress: ((BakeProgress) -> Void)? = nil) -> Int {
+        // A whole-folder delete gets one guard. The downloader's own directory
+        // is the only one this removes.
+        guard let own = permitted,
+              URL(fileURLWithPath: dest).standardizedFileURL.path
+                == URL(fileURLWithPath: own).standardizedFileURL.path,
+              let root = preparedRoot else { return 0 }
+
+        let fm = FileManager.default
+        let count = noaaCellsHeld(at: dest, preparedRoot: root).count
+        var targets: [String] = []
+        if let prepared = preparedDirectory(for: dest, under: root),
+           fm.fileExists(atPath: prepared) {
+            targets.append(prepared)
+        }
+        if fm.fileExists(atPath: dest) { targets.append(dest) }
+        guard !targets.isEmpty, trash(targets, under: root, progress: progress) > 0 else {
+            return 0
+        }
+        return count
     }
 
     /// The directories directly inside `dir`, in name order.

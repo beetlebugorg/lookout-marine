@@ -173,7 +173,15 @@ struct NoaaPickerSheet: View {
     private func apply() {
         let gone = removing
         if !gone.isEmpty {
-            model.charts.removeNoaaWater(named: noaa.cellsToRemove(unpicking: gone))
+            // An empty pick gives the whole download back. The cells to
+            // delete are named from the catalog, and a cell no picked district
+            // claims is in neither half of that sum. It stayed in a folder
+            // with no pick left to reach it.
+            if noaa.picked.isEmpty {
+                model.charts.removeAllNoaaWater()
+            } else {
+                model.charts.removeNoaaWater(named: noaa.cellsToRemove(unpicking: gone))
+            }
             noaa.dropRecorded(gone.map(\.id))
         }
         if adding { model.startNoaaDownload() }
@@ -190,8 +198,17 @@ struct NoaaPickerSheet: View {
 
     private var removalTitle: String {
         let gone = removing
+        if noaa.picked.isEmpty { return "Remove all NOAA charts?" }
         if gone.count == 1 { return "Remove \(gone[0].name) charts?" }
         return "Remove charts for \(gone.count) regions?"
+    }
+
+    /// What the whole-download removal deletes, counted off the disk when the
+    /// question is asked. The catalog counts what a district names, and the
+    /// point of this removal is the cells it does not.
+    private var wholeRemovalMessage: String {
+        let n = NoaaModel.downloadDirectory.map { ChartBake.noaaCellsHeld(at: $0).count } ?? 0
+        return "Lookout deletes all \(n) charts it downloaded, and the folder they are in. Charts you added yourself stay where they are, and you can download this water again."
     }
 
     var body: some View {
@@ -248,7 +265,11 @@ struct NoaaPickerSheet: View {
             Button("Remove", role: .destructive) { apply() }
             Button("Cancel", role: .cancel) { }
         } message: {
-            Text("Lookout deletes the charts it downloaded for this water. Charts you added yourself stay where they are, and you can download this water again.")
+            if noaa.picked.isEmpty {
+                Text(wholeRemovalMessage)
+            } else {
+                Text("Lookout deletes the charts it downloaded for this water. Charts you added yourself stay where they are, and you can download this water again.")
+            }
         }
         .onAppear {
             noaa.poll()

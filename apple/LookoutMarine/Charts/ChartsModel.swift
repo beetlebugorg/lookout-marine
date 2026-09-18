@@ -857,9 +857,30 @@ final class ChartsModel {
             return
         }
         ChartSetStore.rescan(dest)
-        // The set stays on the list with the water that is left. A download
-        // whose every cell was unticked leaves an empty folder, and the next
-        // scan drops it.
+        // The set stays on the list with the water that is left.
+        requestOpen(openPaths)
+    }
+
+    /// Give the whole NOAA download back.
+    ///
+    /// An empty pick removes everything the downloader holds, read off the
+    /// disk. removeNoaaWater names cells from the catalog, so it leaves a cell
+    /// filed under a district the record does not hold and a cell NOAA has
+    /// delisted. Those stayed in the folder with no pick left to reach them.
+    func removeAllNoaaWater() {
+        guard let dest = NoaaModel.downloadDirectory else { return }
+        let gone = ChartBake.deleteNoaaDownload(from: dest) { [weak self] p in
+            self?.removing = p.name.isEmpty ? nil : p
+        }
+        guard gone > 0 else {
+            openError = "Lookout found no downloaded charts to remove."
+            return
+        }
+        // The folder is gone, so the row goes with it rather than waiting for
+        // a scan of a directory that is no longer there.
+        sets.removeAll { $0.path == dest }
+        ChartSetStore.remove(dest)
+        syncRasterFromSets()
         requestOpen(openPaths)
     }
 
