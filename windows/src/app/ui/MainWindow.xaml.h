@@ -359,6 +359,11 @@ namespace winrt::LookoutMarine::implementation
          * call that started it. */
         std::shared_ptr<lkw::RemovalJob> removal_job;
         void ReopenChartSets(std::string const &recent);
+        /* The composed set paths the chart was last opened from. Empty when
+         * the chart draws something else: a recent, the basemap, or nothing.
+         * A scan landing is often the first moment the library composes at
+         * all, and this is how the shell knows it has yet to open it. */
+        std::vector<std::string> opened_set_paths;
         std::vector<ChartSetRow> chart_sets;
         lookout_chart_sets *chart_sets_model{ nullptr };
 

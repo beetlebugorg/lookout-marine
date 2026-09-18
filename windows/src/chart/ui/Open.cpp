@@ -62,6 +62,7 @@ namespace winrt::LookoutMarine::implementation
         // plugged in), fall through to the recents-based walk.
         LoadChartSets([this] {
             auto set_paths = ChartSetOpenPaths();
+            opened_set_paths = set_paths;
             if (!set_paths.empty())
             {
                 OpenPaths(set_paths, set_paths.front(), lkw::AgencyForCells(set_paths));
@@ -146,6 +147,7 @@ namespace winrt::LookoutMarine::implementation
     void MainWindow::ReopenChartSets(std::string const &recent)
     {
         auto paths = ChartSetOpenPaths();
+        opened_set_paths = paths;
         if (!paths.empty())
         {
             OpenPaths(paths, recent.empty() ? paths.front() : recent,

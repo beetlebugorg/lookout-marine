@@ -137,6 +137,19 @@ namespace winrt::LookoutMarine::implementation
             // Only when a row on the page changed. A rescan that finds what it
             // found before raises the same flag.
             RefreshChartsPageOnChange();
+
+            // A scan landing is often the first moment the library composes at
+            // all. The open at startup asks the model what the switched-on sets
+            // hold, and before the scan the answer is nothing, so the chart
+            // drew a recent and the library stayed shut for the rest of the
+            // run. The release build loses that race every time: it reaches the
+            // open sooner than the debug build does.
+            if (opened_set_paths.empty())
+            {
+                auto composed = ChartSetOpenPaths();
+                if (!composed.empty())
+                    ReopenChartSets({});
+            }
         });
     }
 
