@@ -1161,6 +1161,13 @@ namespace winrt::LookoutMarine::implementation
             else if (set.bytes != 0)
                 sum += (sum.empty() ? "" : " \xC2\xB7 ") +
                        winrt::to_string(lkw::SizeText(set.bytes));
+            // Where it came from, when that is not what it is called. Two
+            // sets from one office share a title, and the folder is what
+            // tells them apart.
+            std::string const folder =
+                std::filesystem::path(set.path).filename().string();
+            if (folder != set.title && !folder.empty())
+                sum = folder + (sum.empty() ? "" : " · ") + sum;
             row.summary.Text(winrt::to_hstring(sum));
 
             row.prepare.Text(winrt::hstring{ lkw::Thousands(set.unprepared) + L" to prepare" });
