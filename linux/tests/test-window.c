@@ -10,6 +10,7 @@
 
 #include "model/app-model.h"
 #include "pick-fixture.h"
+#include "ui/firstrun/private.h"
 #include "ui/window.h"
 
 static LkAppModel *model;
@@ -145,6 +146,36 @@ test_setup_later_puts_it_away (void)
   lk_app_model_set_chart_open (model, FALSE, NULL);
   lk_test_drain ();
   g_assert_null (lk_test_find_label (window, "Welcome to Lookout Marine"));
+}
+
+/* Setup comes back when the library goes empty.
+ *
+ * A mariner who removes every chart through the NOAA picker has an empty
+ * library and no way back to the page that builds one, because finishing setup
+ * put it away for the run. This reads the rule directly. Driving it through
+ * the window needs a library to remove.
+ *
+ * Set Up Later is the other half. A mariner who never had charts asked for the
+ * app, so setup stays down for them. */
+static void
+test_setup_returns_when_the_library_empties (void)
+{
+  g_autoptr (LkFirstRun) run = lk_first_run_new ();
+
+  /* A run with charts, put away by finishing setup. */
+  g_assert_false (lk_first_run_should_run (run, FALSE, FALSE));
+  lk_first_run_finish (run);
+  g_assert_false (lk_first_run_should_run (run, FALSE, FALSE));
+
+  /* The charts go. */
+  g_assert_true (lk_first_run_should_run (run, TRUE, FALSE));
+
+  /* Set Up Later over a library that never had charts holds. */
+  g_autoptr (LkFirstRun) later = lk_first_run_new ();
+
+  g_assert_true (lk_first_run_should_run (later, TRUE, FALSE));
+  lk_first_run_finish (later);
+  g_assert_false (lk_first_run_should_run (later, TRUE, FALSE));
 }
 
 /* The page fill stands while there is no chart handle. A chart of no charts
@@ -285,6 +316,8 @@ main (int argc, char *argv[])
   g_test_add_func ("/window/setup-runs-over-an-empty-library",
                    test_setup_runs_over_an_empty_library);
   g_test_add_func ("/window/setup-steps", test_setup_steps);
+  g_test_add_func ("/window/setup-returns-when-the-library-empties",
+                   test_setup_returns_when_the_library_empties);
   g_test_add_func ("/window/page-follows-nothing-to-draw", test_page_follows_nothing_to_draw);
   g_test_add_func ("/window/close-pick-clears-report", test_close_pick_clears_report);
   g_test_add_func ("/window/scheme-action-follows", test_scheme_action_follows);

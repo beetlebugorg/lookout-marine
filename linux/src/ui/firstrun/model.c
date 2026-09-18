@@ -13,6 +13,11 @@ struct _LkFirstRun {
    * with nothing to draw. */
   gboolean put_away;
 
+  /* TRUE once this run has had a chart to draw. A mariner who removes every
+   * chart has an empty library and no way back to the page that builds one,
+   * because finishing setup put it away for the run. */
+  gboolean saw_charts;
+
   /* A bake has been seen running. */
   gboolean saw_bake;
   gboolean asked_depths;
@@ -110,8 +115,21 @@ lk_first_run_should_run (LkFirstRun *self, gboolean nothing_to_draw, gboolean on
 
   if (spec != NULL)
     return !g_str_equal (spec, "0");
-  if (self->put_away || on_a_link)
+  if (!nothing_to_draw)
+    self->saw_charts = TRUE;
+  if (on_a_link)
     return FALSE;
+  if (self->put_away)
+    {
+      /* A library this run had charts in and no longer does is a mariner who
+       * removed them, and the page that builds a library is the way back. A
+       * library that was empty all along is a mariner who pressed Set Up
+       * Later, so setup stays down for them. */
+      if (!self->saw_charts || !nothing_to_draw)
+        return FALSE;
+      self->put_away = FALSE;
+      self->saw_charts = FALSE;
+    }
   return nothing_to_draw;
 }
 
