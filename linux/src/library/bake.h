@@ -142,6 +142,27 @@ gboolean lk_chart_bake_delete_cells (const char        *prepared,
                                      LkBakeProgressFunc on_progress,
                                      gpointer           user_data);
 
+/* Every cell the download at `source` holds, by name: what its exchange set
+ * holds, and what was prepared from it.
+ *
+ * The catalog cannot answer this. A device holds cells no recorded district
+ * claims, and cells the catalog no longer lists at all, and a removal counted
+ * from the catalog leaves those behind. Transfer full, NULL-terminated. */
+char **lk_chart_bake_cells_held (const char *prepared, const char *source);
+
+/* Delete a download whole: the exchange set and the charts prepared from it.
+ *
+ * `source` must be under this app's downloads directory, so a mariner's own
+ * folder can never be deleted through this. The prepared charts report where
+ * the removal has got to, as lk_chart_bake_delete_derived does. The exchange
+ * set goes without a report, because the two run together and one panel
+ * cannot show both. */
+gboolean lk_chart_bake_delete_download (const char        *prepared,
+                                        const char        *source,
+                                        const char        *name,
+                                        LkBakeProgressFunc on_progress,
+                                        gpointer           user_data);
+
 /* Delete charts this app prepared. Refuses any path it did not make, so a
  * mariner's own folder can never be deleted by removing a set. */
 /* Delete the charts Lookout prepared, saying where it has got to.

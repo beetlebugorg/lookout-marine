@@ -858,6 +858,43 @@ lk_app_model_remove_noaa_cells (LkAppModel *self, const char *const *names)
     }
 }
 
+char **
+lk_app_model_noaa_cells_held (LkAppModel *self)
+{
+  g_autofree char *source = NULL;
+  g_autofree char *prepared = NULL;
+
+  g_return_val_if_fail (LK_IS_APP_MODEL (self), g_new0 (char *, 1));
+
+  source = lk_noaa_download_dir ();
+  prepared = lk_chart_bake_prepared_dir (source);
+  return lk_chart_bake_cells_held (prepared, source);
+}
+
+void
+lk_app_model_remove_noaa_download (LkAppModel *self)
+{
+  g_autofree char *source = NULL;
+  g_autofree char *prepared = NULL;
+
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+
+  source = lk_noaa_download_dir ();
+  prepared = lk_chart_bake_prepared_dir (source);
+
+  /* Off the list before the files go, so the library recomposes without it
+   * and the chart closes on what is left. */
+  lk_chart_sets_remove (self->chart_sets, source, NULL);
+  lk_chart_bake_delete_download (prepared, source, "NOAA charts",
+                                 lk_app_model_remove_progress, self);
+  /* Nothing to rescan: the folder itself is going. */
+  g_clear_pointer (&self->remove_rescan, g_free);
+
+  lk_app_model_recompose_library (self);
+  lk_app_model_emit_chart_sets_changed (self);
+  lk_app_model_noaa_note_all (self);
+}
+
 static void
 lk_app_model_bake_done (const char *out_dir, guint baked, gpointer user_data)
 {

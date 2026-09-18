@@ -12,6 +12,7 @@
 
 #include "library/bake.h"
 #include "library/scan.h"
+#include "library/noaa.h"
 #include "library/sets.h"
 #include "model/app-model.h"
 
@@ -485,6 +486,83 @@ test_an_emptied_set_leaves_the_list (void)
   lk_chart_sets_free (sets);
 }
 
+/* What a download holds, counted off the disk.
+ *
+ * The catalog cannot answer this. A device holds cells no recorded district
+ * claims, and cells the catalog no longer lists, and a removal counted from
+ * the catalog leaves those behind. One download of district 5 on this
+ * machine left 16 cells filed under district 1, 7 under district 7, and one
+ * cell the catalog does not list. */
+static void
+test_a_download_states_every_cell_it_holds (void)
+{
+  g_autofree char *source = g_build_filename (home, "downloads", "NOAA", NULL);
+  g_autofree char *root = g_build_filename (source, "ENC_ROOT", NULL);
+  g_autofree char *prepared = g_build_filename (home, "prepared", NULL);
+
+  /* An exchange set: a directory per cell, and the paperwork beside them. */
+  g_autofree char *one = g_build_filename (root, "US3CU1EF", NULL);
+  g_autofree char *two = g_build_filename (root, "US4TE3W0", NULL);
+
+  place_cell (one, "US3CU1EF.000");
+  place_cell (two, "US4TE3W0.000");
+  g_autofree char *readme = g_build_filename (root, "README.TXT", NULL);
+  g_autofree char *catalog = g_build_filename (root, "CATALOG.031", NULL);
+  g_assert_true (g_file_set_contents (readme, "", 0, NULL));
+  g_assert_true (g_file_set_contents (catalog, "", 0, NULL));
+
+  /* And a chart prepared from a cell whose source has gone. */
+  place_prepared (prepared, "US5MD1MC/US5MD1MC.pmtiles");
+
+  g_auto (GStrv) held = lk_chart_bake_cells_held (prepared, source);
+
+  g_assert_cmpuint (g_strv_length (held), ==, 3);
+  g_assert_true (g_strv_contains ((const char *const *) held, "US3CU1EF"));
+  g_assert_true (g_strv_contains ((const char *const *) held, "US4TE3W0"));
+  g_assert_true (g_strv_contains ((const char *const *) held, "US5MD1MC"));
+  g_assert_false (g_strv_contains ((const char *const *) held, "README.TXT"));
+  g_assert_false (g_strv_contains ((const char *const *) held, "CATALOG.031"));
+}
+
+/* Unticking every region gives the whole download back.
+ *
+ * Counting from the catalog left the paperwork, the folder and any cell no
+ * recorded district claims. What the downloader made is what it gives back:
+ * the exchange set, the charts prepared from it, and the folder itself. */
+static void
+test_the_whole_download_goes (void)
+{
+  g_autoptr (LkAppModel) model = NULL;
+  g_autofree char *source = lk_noaa_download_dir ();
+  g_autofree char *prepared = lk_chart_bake_prepared_dir (source);
+  g_autofree char *root = g_build_filename (source, "ENC_ROOT", NULL);
+  g_autofree char *cell = g_build_filename (root, "US3CU1EF", NULL);
+  g_autofree char *readme = g_build_filename (root, "README.TXT", NULL);
+
+  place_cell (cell, "US3CU1EF.000");
+  g_assert_true (g_file_set_contents (readme, "", 0, NULL));
+  place_prepared (prepared, "US3CU1EF/US3CU1EF.pmtiles");
+
+  model = lk_app_model_new ();
+  lk_app_model_remove_noaa_download (model);
+
+  /* The rename is synchronous, so the charts are out of reach before this
+   * returns. The delete behind it runs on its own thread. */
+  g_assert_false (g_file_test (source, G_FILE_TEST_EXISTS));
+  g_assert_false (g_file_test (prepared, G_FILE_TEST_EXISTS));
+}
+
+/* A folder the app did not download is never deleted through this. */
+static void
+test_only_the_downloads_directory_is_given_back (void)
+{
+  g_autofree char *mine = g_build_filename (home, "my-cells", NULL);
+
+  place_cell (mine, "US3CU1EF.000");
+  g_assert_false (lk_chart_bake_delete_download (NULL, mine, "theirs", NULL, NULL));
+  g_assert_true (g_file_test (mine, G_FILE_TEST_IS_DIR));
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -512,6 +590,11 @@ main (int argc, char *argv[])
                    test_prepared_archive_is_not_work);
   g_test_add_func ("/library/a-set-with-prepared-charts-is-derived",
                    test_a_set_with_prepared_charts_is_derived);
+  g_test_add_func ("/library/a-download-states-every-cell-it-holds",
+                   test_a_download_states_every_cell_it_holds);
+  g_test_add_func ("/library/the-whole-download-goes", test_the_whole_download_goes);
+  g_test_add_func ("/library/only-the-downloads-directory-is-given-back",
+                   test_only_the_downloads_directory_is_given_back);
   g_test_add_func ("/library/an-emptied-set-leaves-the-list",
                    test_an_emptied_set_leaves_the_list);
   g_test_add_func ("/library/a-managed-set-says-so-on-its-row",

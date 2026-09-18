@@ -122,6 +122,18 @@ lk_noaa_window_doomed (LkNoaaWindow *self, LkNoaa *noaa)
   g_auto (GStrv) dropped = lk_noaa_window_dropped (self, noaa);
   GPtrArray *out = g_ptr_array_new ();
 
+  /* AN EMPTY PICK TAKES THE WHOLE DOWNLOAD. The cells above come from the
+   * catalog's districts, and a device holds cells no recorded district claims:
+   * one download of district 5 left 16 cells filed under district 1, 7 under
+   * district 7, and one cell the catalog no longer lists. Unticking every
+   * region deleted 934 of 958 and left those 24, which no later press could
+   * reach. What the downloader holds is what it gives back. */
+  if (lk_noaa_picked_count (noaa) == 0)
+    {
+      g_ptr_array_free (out, TRUE);
+      return lk_app_model_noaa_cells_held (self->model);
+    }
+
   if (dropped != NULL && g_strv_length (dropped) > 0)
     {
       g_autofree char *gone_ids = g_strjoinv (",", dropped);
@@ -245,6 +257,7 @@ typedef struct {
   LkNoaa     *noaa;   /* not owned: the model owns it */
   GStrv       cells;
   GStrv       regions; /* the ids whose charts are going */
+  gboolean    all;     /* the pick is empty: the whole download goes */
 } LkNoaaRemoveAsk;
 
 static void
@@ -274,7 +287,10 @@ lk_noaa_remove_answered (GObject *source, GAsyncResult *result, gpointer user_da
       /* Out of the record as well, or the picker opens them ticked again and
        * reads as holding water it has just deleted. */
       lk_noaa_forget_downloaded (ask->noaa, (const char *const *) ask->regions);
-      lk_app_model_remove_noaa_cells (ask->model, (const char *const *) ask->cells);
+      if (ask->all)
+        lk_app_model_remove_noaa_download (ask->model);
+      else
+        lk_app_model_remove_noaa_cells (ask->model, (const char *const *) ask->cells);
       if (self != NULL && !gtk_widget_in_destruction (GTK_WIDGET (ask->window)))
         lk_noaa_window_fetch (self);
     }
@@ -320,15 +336,22 @@ lk_noaa_window_download (GtkButton *button, gpointer user_data)
     }
 
   /* Water taken out of the pick is water to delete, and a delete is asked
-   * about before it runs. The charts go from the device; NOAA still has
+   * about before it runs. The charts go from the device. NOAA still has
    * them. */
+  gboolean all = lk_noaa_picked_count (self->noaa) == 0;
   g_autofree char *question =
-      g_strdup_printf (n == 1 ? "Remove %u chart from this device?"
-                              : "Remove %u charts from this device?", n);
-  const char *detail = "These are the charts only the water you took out of the "
-                       "pick covers. Lookout deletes the charts it downloaded. "
-                       "Charts you added yourself stay where they are, and you "
-                       "can download this water again.";
+      all ? g_strdup_printf (n == 1 ? "Remove the %u NOAA chart on this device?"
+                                    : "Remove all %u NOAA charts on this device?", n)
+          : g_strdup_printf (n == 1 ? "Remove %u chart from this device?"
+                                    : "Remove %u charts from this device?", n);
+  const char *detail =
+      all ? "This gives back everything the NOAA downloader holds, and the "
+            "folder it downloaded to. Charts you added yourself stay where "
+            "they are, and you can download this water again."
+          : "These are the charts only the water you took out of the pick "
+            "covers. Lookout deletes the charts it downloaded. Charts you "
+            "added yourself stay where they are, and you can download this "
+            "water again.";
   static const char *answers[] = { "Cancel", "Remove", NULL };
 
   GtkAlertDialog *dialog = gtk_alert_dialog_new ("%s", question);
@@ -343,6 +366,7 @@ lk_noaa_window_download (GtkButton *button, gpointer user_data)
   ask->noaa = self->noaa;
   ask->cells = g_steal_pointer (&doomed);
   ask->regions = lk_noaa_window_dropped (self, self->noaa);
+  ask->all = lk_noaa_picked_count (self->noaa) == 0;
   gtk_alert_dialog_choose (dialog, GTK_WINDOW (self->window), NULL,
                            lk_noaa_remove_answered, ask);
   g_object_unref (dialog);

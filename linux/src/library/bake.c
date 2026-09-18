@@ -412,6 +412,83 @@ lk_chart_bake_delete_cells (const char *prepared, const char *source,
   return TRUE;
 }
 
+/* The cell directories one directory holds. A cell is a directory, so a file
+ * beside them is the exchange set's own paperwork. */
+static void
+lk_chart_bake_add_cell_dirs (GHashTable *into, const char *dir)
+{
+  g_autoptr (GDir) open = dir != NULL ? g_dir_open (dir, 0, NULL) : NULL;
+  const char *name;
+
+  if (open == NULL)
+    return;
+  while ((name = g_dir_read_name (open)) != NULL)
+    {
+      g_autofree char *path = g_build_filename (dir, name, NULL);
+
+      if (g_file_test (path, G_FILE_TEST_IS_DIR))
+        g_hash_table_add (into, g_strdup (name));
+    }
+}
+
+char **
+lk_chart_bake_cells_held (const char *prepared, const char *source)
+{
+  g_autoptr (GHashTable) seen = g_hash_table_new_full (g_str_hash, g_str_equal,
+                                                       g_free, NULL);
+  GPtrArray *out = g_ptr_array_new ();
+
+  if (source != NULL)
+    {
+      g_autofree char *root = g_build_filename (source, "ENC_ROOT", NULL);
+
+      lk_chart_bake_add_cell_dirs (seen, g_file_test (root, G_FILE_TEST_IS_DIR)
+                                             ? root
+                                             : source);
+    }
+  lk_chart_bake_add_cell_dirs (seen, prepared);
+
+  GHashTableIter iter;
+  gpointer key;
+
+  g_hash_table_iter_init (&iter, seen);
+  while (g_hash_table_iter_next (&iter, &key, NULL))
+    g_ptr_array_add (out, g_strdup (key));
+  g_ptr_array_add (out, NULL);
+  return (char **) g_ptr_array_free (out, FALSE);
+}
+
+gboolean
+lk_chart_bake_delete_download (const char *prepared, const char *source,
+                               const char *name, LkBakeProgressFunc on_progress,
+                               gpointer user_data)
+{
+  const char *root = lk_chart_bake_root ();
+  g_autofree char *downloads = g_build_filename (g_get_user_data_dir (),
+                                                 "lookout-marine", "downloads", NULL);
+
+  if (source == NULL || !g_str_has_prefix (source, downloads))
+    return FALSE;
+
+  /* The exchange set goes to the trash root. The rename puts it out of reach
+   * at once, and the delete runs behind it. */
+  if (g_file_test (source, G_FILE_TEST_IS_DIR))
+    {
+      g_autofree char *uuid = g_uuid_string_random ();
+      g_autofree char *leaf = g_strconcat (lookout_bake_trash_prefix (), uuid, NULL);
+      g_autofree char *trash = g_build_filename (root, leaf, NULL);
+
+      if (g_rename (source, trash) == 0)
+        lk_trash_start (g_steal_pointer (&trash), NULL, NULL, NULL);
+      else
+        lk_trash_start (g_strdup (source), NULL, NULL, NULL);
+    }
+
+  if (prepared != NULL && g_file_test (prepared, G_FILE_TEST_EXISTS))
+    return lk_chart_bake_delete_derived (prepared, name, on_progress, user_data);
+  return TRUE;
+}
+
 gboolean
 lk_chart_bake_delete_derived (const char *path, const char *name,
                               LkBakeProgressFunc on_progress, gpointer user_data)

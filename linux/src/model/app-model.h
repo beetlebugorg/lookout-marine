@@ -81,6 +81,17 @@ char **lk_app_model_noaa_cells_present (LkAppModel *self, const char *const *nam
  * been read again. */
 void lk_app_model_remove_noaa_cells (LkAppModel *self, const char *const *names);
 
+/* Every cell the downloader's own directory holds, by name. A removal of the
+ * whole download deletes these, and its warning states the count. Transfer
+ * full. */
+char **lk_app_model_noaa_cells_held (LkAppModel *self);
+
+/* Give the whole download back: the exchange set, the charts prepared from it,
+ * and the set's place on the list. A mariner who unticks every region is left
+ * with no NOAA charts and no folder holding the paperwork of the ones that
+ * went. */
+void lk_app_model_remove_noaa_download (LkAppModel *self);
+
 /* TRUE when sets ARE installed and every one of them is switched off.
  *
  * The one case where the library is not empty and the chart is still blank.
