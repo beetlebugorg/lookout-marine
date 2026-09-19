@@ -79,3 +79,75 @@ final class FirstRunReturnTests: ShellTestCase {
         XCTAssertFalse(flow.shouldRun(charts: charts, links: links))
     }
 }
+
+/// The steps' own ways out.
+@MainActor
+final class FirstRunStepTests: ShellTestCase {
+
+    /// A flow on the importing step with a NOAA order out.
+    private func importing() -> FirstRunModel {
+        let flow = FirstRunModel()
+        flow.step = .importing
+        flow.noaaOrder = .init(regions: "Chesapeake", charts: 12, bytes: 1_000)
+        return flow
+    }
+
+    private func state(_ phase: NoaaState.Phase, done: UInt32 = 0, total: UInt32 = 12,
+                       error: String = "") -> NoaaState {
+        var s = NoaaState()
+        s.phase = phase
+        s.done = done
+        s.total = total
+        s.error = error
+        return s
+    }
+
+    func testTheImportHoldsWhileChartsArrive() {
+        let flow = importing()
+        flow.noteImport(state(.downloading), bakeRunning: false)
+        XCTAssertFalse(flow.importEnded)
+        XCTAssertFalse(flow.canGoBack)
+        flow.back()
+        XCTAssertEqual(flow.step, .importing)
+    }
+
+    /// The defect: a download that ended with no cell landed never started a
+    /// bake, and the step waited on one with no control left alive.
+    func testAnOrderThatLandedNothingOffersTheWayBack() {
+        let flow = importing()
+        flow.noteImport(state(.ready, error: "no network provider"), bakeRunning: false)
+        XCTAssertTrue(flow.importEnded)
+        XCTAssertTrue(flow.canGoBack)
+
+        flow.back()
+        XCTAssertEqual(flow.step, .coverage)
+        XCTAssertNil(flow.noaaOrder)
+        XCTAssertFalse(flow.importEnded)
+    }
+
+    /// A transfer that landed a cell is about to bake, so the step waits.
+    func testAnOrderThatLandedChartsWaitsForTheBake() {
+        let flow = importing()
+        flow.noteImport(state(.ready, done: 3), bakeRunning: false)
+        XCTAssertFalse(flow.importEnded)
+        flow.noteImport(state(.ready, done: 3), bakeRunning: true)
+        XCTAssertFalse(flow.importEnded)
+    }
+
+    /// Once a bake has run the step finishes through Continue, not Back.
+    func testASeenBakeIsNotAnEndedOrder() {
+        let flow = importing()
+        flow.sawBake = true
+        flow.noteImport(state(.ready), bakeRunning: false)
+        XCTAssertFalse(flow.importEnded)
+    }
+
+    /// Setup begun again forgets the last run's bake.
+    func testBeginForgetsTheLastImport() {
+        let flow = importing()
+        flow.sawBake = true
+        flow.begin()
+        XCTAssertFalse(flow.sawBake)
+        XCTAssertNil(flow.noaaOrder)
+    }
+}

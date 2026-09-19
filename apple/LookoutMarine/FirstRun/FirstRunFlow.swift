@@ -195,7 +195,7 @@ struct FirstRunFlow: View {
                 Spacer(minLength: 12)
                 // Stop applies while the transfer or the bake runs. After
                 // that it stood beside Continue with no job to stop.
-                if step == .importing && !importFinished {
+                if step == .importing && !importFinished && !flow.importEnded {
                     Button("Stop") { stopImport() }
                         .accessibilityIdentifier("first-run-stop")
                 } else if flow.canGoBack {

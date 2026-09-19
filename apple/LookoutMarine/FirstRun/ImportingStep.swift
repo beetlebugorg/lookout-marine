@@ -61,7 +61,9 @@ struct ImportingStep: View {
             }
             model.noaa.poll()
         }
+        .onChange(of: model.noaa.state, initial: true) { noteImport() }
         .onChange(of: model.charts.chartWork) { _, now in
+            defer { noteImport() }
             guard let now else { return }
             flow.sawBake = true
             // Keep the bake's own reports. ChartsModel rescans the set once
@@ -118,7 +120,24 @@ struct ImportingStep: View {
             }
             .padding(.top, 18)
 
-            if let refused = refusedText {
+            if let ended = endedText {
+                HStack(spacing: 9) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Chrome.amber)
+                    Text(ended)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Chrome.ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.vertical, 9)
+                .padding(.horizontal, 11)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Chrome.amber.opacity(0.12),
+                            in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .padding(.top, 16)
+                .accessibilityIdentifier("first-run-import-ended")
+            } else if let refused = refusedText {
                 HStack(spacing: 9) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 12))
@@ -195,6 +214,17 @@ struct ImportingStep: View {
         return "Reading the folder"
     }
 
+    private func noteImport() {
+        flow.noteImport(model.noaa.state, bakeRunning: model.charts.chartWork != nil)
+    }
+
+    /// Why an order ended with nothing to prepare, in the core's words where
+    /// it gave some.
+    private var endedText: String? {
+        guard flow.importEnded else { return nil }
+        return noaa.error.isEmpty ? "No charts arrived." : noaa.error
+    }
+
     /// Named only once the bake has finished, because the core counts what
     /// landed at the end (src/bakejob.zig).
     private var refusedText: String? {
@@ -208,7 +238,7 @@ struct ImportingStep: View {
         if let o = order {
             // The transfer's own count while it runs, and the order once it
             // has stopped reporting.
-            let n = downloading ? noaa.done : o.charts
+            let n = downloading || flow.importEnded ? noaa.done : o.charts
             out.append(Phase(title: "Downloading charts",
                              detail: "\(n) of \(o.charts)",
                              state: downloading ? .active : .done))

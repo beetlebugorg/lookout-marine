@@ -111,7 +111,15 @@ final class AppModel {
                 guard self.noaa.state.phase != .downloading else { continue }
                 // Bake only when something arrived. A download that failed
                 // every cell leaves an empty directory and its own error.
-                if self.noaa.state.done > 0 { self.charts.openChartDirectory(dest) }
+                let st = self.noaa.state
+                if st.done > 0 {
+                    self.charts.openChartDirectory(dest)
+                } else if st.total > 0 {
+                    // Nothing to bake, so nothing else will say the charts
+                    // did not come.
+                    self.charts.openError = st.error.isEmpty
+                        ? "The download stopped before any chart arrived." : st.error
+                }
                 if thenRecheck { await self.recheckNoaaUpdates() }
                 return
             }

@@ -74,6 +74,11 @@ final class FirstRunModel {
     /// What the mariner asked NOAA for, kept from the moment they asked. The
     /// service's own counters are for the transfer, and the panel outlives it.
     var noaaOrder: NoaaOrder?
+    /// True once a NOAA order has stopped with nothing to prepare: the
+    /// transfer is over, no cell landed and no bake ran or will run. Every
+    /// cell failed, Stop came before the first one, or the core refused the
+    /// order. The step then has no work to wait on, so it offers the way back.
+    private(set) var importEnded = false
 
     /// A NOAA download as it was ordered.
     struct NoaaOrder: Equatable {
@@ -179,6 +184,27 @@ final class FirstRunModel {
     func begin() {
         step = Self.openingStep
         showing = true
+        resetImport()
+    }
+
+    /// Read the download and the bake, while the importing step is up.
+    ///
+    /// The watcher bakes only a download that landed a cell, so one that
+    /// ended with none never starts the bake that would finish the step.
+    func noteImport(_ noaa: NoaaState, bakeRunning: Bool) {
+        importEnded = step == .importing
+            && noaaOrder != nil
+            && !sawBake
+            && !bakeRunning
+            && noaa.phase != .downloading
+            && noaa.done == 0
+    }
+
+    /// Forget the last order, so a second one starts from nothing.
+    private func resetImport() {
+        sawBake = false
+        noaaOrder = nil
+        importEnded = false
     }
 
     /// The primary action for the step on screen. Returns the source to act on
@@ -226,8 +252,11 @@ final class FirstRunModel {
     /// charts are already arriving.
     var canGoBack: Bool {
         switch step {
-        case .welcome, .importing, .depths: return false
+        case .welcome, .depths: return false
         case .source, .coverage, .onlineChart: return true
+        // Back only once the order has ended with nothing to prepare. While
+        // charts arrive there is nothing to go back to.
+        case .importing: return importEnded
         }
     }
 
@@ -236,7 +265,10 @@ final class FirstRunModel {
         case .welcome: break
         case .source: step = .welcome
         case .coverage, .onlineChart: step = .source
-        case .importing: break
+        case .importing:
+            guard importEnded else { break }
+            resetImport()
+            step = .coverage
         // The charts are in. Back offers a second import of them.
         case .depths: break
         }
