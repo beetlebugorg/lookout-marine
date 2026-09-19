@@ -444,6 +444,10 @@ namespace winrt::LookoutMarine::implementation
         // Hand the core the cells this device holds, so a cost and a download
         // leave them out.
         void FirstRunNoaaHave();
+        /* Whether the core has this device's cells. Fed once a run: the
+         * step build asked every time, and the answer comes from a
+         * recursive read of the library when a scan is in flight. */
+        bool noaa_have_known{ false };
         /* Price each region on its own, into noaa_region_hold. The pick's own
          * total is what a download costs; these are what the device already
          * holds, which the pills state. One cost call per region, answered off

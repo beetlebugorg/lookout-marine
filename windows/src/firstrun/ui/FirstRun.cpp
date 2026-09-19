@@ -499,6 +499,7 @@ namespace winrt::LookoutMarine::implementation
     {
         CloseSettings();
         noaa_handed_over = false;
+        noaa_have_known = false; // the library may have changed since
         // The last run's import state. A second download in one launch read
         // the first run's bands, and its bake never started.
         noaa_scan_bands.clear();
@@ -534,6 +535,7 @@ namespace winrt::LookoutMarine::implementation
 
     void MainWindow::FirstRunBegin()
     {
+        noaa_have_known = false;
         first_run.Begin();
         FirstRunRender();
     }
@@ -1086,6 +1088,7 @@ namespace winrt::LookoutMarine::implementation
         for (auto const &one : NoaaRegionNames(gone))
             water += (water.empty() ? L"" : L", ") + one;
         auto const took = RemoveNoaaCells(NoaaCellsToRemove(gone), winrt::to_string(water));
+        noaa_have_known = false; // those cells are gone from the library
         // The library has changed, so what a price leaves out has changed with
         // it. Both halves read this.
         FirstRunNoaaHave();
@@ -1288,6 +1291,13 @@ namespace winrt::LookoutMarine::implementation
     // By name, without the extension, which is the stem of each prepared chart.
     void MainWindow::FirstRunNoaaHave()
     {
+        // Once per run of the picker, and again when the library changes.
+        // This was called from the step build, so every pill click and every
+        // catalog change walked the prepared library again, on the UI
+        // thread, through a recursive read of a folder per chart.
+        if (noaa_have_known)
+            return;
+        noaa_have_known = true;
         // Every set, not only the downloader's: a cell the mariner already
         // holds in a folder of their own is a cell a download has no reason to
         // fetch again. The model is asked first, because a prepared chart
