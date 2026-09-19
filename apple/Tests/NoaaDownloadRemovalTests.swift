@@ -98,3 +98,49 @@ final class NoaaDownloadRemovalTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: dest.path))
     }
 }
+
+/// A download ordered while the chart handle is replaced. The NOAA service
+/// lives on the handle, and closing the handle cancels every transfer.
+@MainActor
+final class NoaaDownloadThroughReopenTests: ShellTestCase {
+
+    private func app() -> (AppModel, FakeEngine) {
+        let app = AppModel()
+        let fake = FakeEngine()
+        app.charts.engine = fake
+        app.noaa.engine = fake
+        app.noaa.picked = [app.noaa.regions[0].id]
+        app.charts.hasChart = true
+        return (app, fake)
+    }
+
+    private func downloads(_ fake: FakeEngine) -> Int {
+        fake.calls.filter { $0.hasPrefix("noaaDownload") }.count
+    }
+
+    /// The defect: Apply removed one region, which asked for a reopen, and
+    /// then started the download for the other on the handle about to close.
+    func testAnApplyThatRemovesAndAddsDownloadsOnTheNewHandle() {
+        let (app, fake) = app()
+        // The removal's reopen, on its way.
+        app.charts.isOpening = true
+        app.startNoaaDownload()
+        XCTAssertEqual(downloads(fake), 0)
+
+        app.charts.isOpening = false
+        app.chartDidOpen()
+        XCTAssertEqual(downloads(fake), 1)
+        XCTAssertFalse(fake.calls.contains("noaaCancel"))
+
+        // Held once, started once.
+        app.chartDidOpen()
+        XCTAssertEqual(downloads(fake), 1)
+    }
+
+    func testADownloadWithAChartUpStartsAtOnce() {
+        let (app, fake) = app()
+        app.startNoaaDownload(again: true)
+        XCTAssertEqual(downloads(fake), 1)
+        XCTAssertTrue(fake.calls.contains { $0.hasSuffix("again: true)") })
+    }
+}
