@@ -49,6 +49,11 @@ pub const Set = extern struct {
     /// holds no cell with a band in its name.
     band_lo: c_int,
     band_hi: c_int,
+    /// The charts this set holds that another switched-on set draws instead,
+    /// because both hold the same cell and the other copy has the newer
+    /// edition or is in the managed set. They stay installed. 0 for a set
+    /// switched off.
+    held_back: usize = 0,
 };
 
 /// One chart that can be handed to the engine, and the dataset it holds.
@@ -275,7 +280,9 @@ pub const Sets = struct {
         const a = self.reads.allocator();
         const out = a.alloc(Set, self.rows.items.len) catch return &.{};
         const by_ptr = a.alloc(*const Set, out.len) catch return &.{};
-        for (self.rows.items, out, by_ptr) |r, *dst, *p| {
+        const held_back = a.alloc(usize, out.len) catch return &.{};
+        self.countHeldBack(held_back);
+        for (self.rows.items, out, by_ptr, held_back) |r, *dst, *p, held| {
             dst.* = .{
                 .path = r.path.ptr,
                 .title = r.title.ptr,
@@ -289,10 +296,38 @@ pub const Sets = struct {
                 .bytes = r.bytes,
                 .band_lo = r.band_lo,
                 .band_hi = r.band_hi,
+                .held_back = held,
             };
             p.* = dst;
         }
         return by_ptr;
+    }
+
+    /// For each row, how many of its named charts compose draws from another
+    /// row instead. Called with `mu` held.
+    fn countHeldBack(self: *Sets, out: []usize) void {
+        @memset(out, 0);
+        const Won = struct { row: usize, held: Openable, managed: bool };
+        var byName = std.StringHashMap(Won).init(self.gpa);
+        defer byName.deinit();
+        for (self.rows.items, 0..) |r, i| {
+            if (!r.on) continue;
+            for (r.openable) |o| {
+                if (o.name.len == 0) continue;
+                if (byName.get(o.name)) |won| {
+                    if (!o.beats(won.held, r.managed, won.managed)) continue;
+                }
+                byName.put(o.name, .{ .row = i, .held = o, .managed = r.managed }) catch return;
+            }
+        }
+        for (self.rows.items, 0..) |r, i| {
+            if (!r.on) continue;
+            for (r.openable) |o| {
+                if (o.name.len == 0) continue;
+                const won = byName.get(o.name) orelse continue;
+                if (won.row != i) out[i] += 1;
+            }
+        }
     }
 
     /// Put a folder on the list and scan it. False when it is already there.
@@ -1177,6 +1212,34 @@ test "the managed set wins a cell the mariner also holds" {
     // Neither states an edition, so the downloaded copy wins even though the
     // mariner's folder was added first.
     try t.expect(std.mem.startsWith(u8, std.mem.span(paths[0]), downloaded));
+}
+
+test "the set that loses a cell by name counts it as held back" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const mine = try f.folder("Mine");
+    defer t.allocator.free(mine);
+    const downloaded = try f.folder("NOAA");
+    defer t.allocator.free(downloaded);
+
+    const s = try f.open();
+    defer s.close();
+    try t.expect(s.add(mine));
+    try t.expect(s.add(downloaded));
+    try t.expect(s.setManaged(downloaded, true));
+    settle(s);
+
+    const rows = s.all();
+    try t.expectEqual(@as(usize, 2), rows.len);
+    for (rows) |r| {
+        const is_mine = std.mem.eql(u8, std.mem.span(r.path), mine);
+        // The download draws the cell. The mariner's copy is held back.
+        try t.expectEqual(@as(usize, if (is_mine) 1 else 0), r.held_back);
+    }
+
+    // With the download switched off, no row holds a chart back.
+    try t.expect(s.setOn(downloaded, false));
+    for (s.all()) |r| try t.expectEqual(@as(usize, 0), r.held_back);
 }
 
 test "the newer edition wins, whoever holds it" {

@@ -353,6 +353,11 @@ typedef struct {
     /* The coarsest and finest usage bands present, 1 to 6. 0 when the set
      * holds no cell with a band in its name. */
     int band_lo, band_hi;
+    /* The charts this set holds that another switched-on set draws instead,
+     * because both hold the same cell and the other copy has the newer
+     * edition or is in the managed set: "12 charts also in the NOAA
+     * download". They stay installed. 0 for a set switched off. */
+    size_t held_back;
 } lookout_chart_set;
 
 /* Load the saved list off `store` and start the background scans.
