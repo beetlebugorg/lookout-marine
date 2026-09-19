@@ -105,6 +105,9 @@ final class ChartPreviews {
                 guard let shot = await self.offscreen.render(
                     link: url, lon: lon, lat: lat, zoom: zoom)
                 else {
+                    // A cancelled render returns nil too. That link is
+                    // unfinished and keeps its place for the next run.
+                    if Task.isCancelled { return }
                     self.unavailable.insert(url)
                     continue
                 }

@@ -33,7 +33,11 @@ final class ChartPreviewEngine {
     private var handle: OpaquePointer?
     private let fetch = ChartLinkFetch()
 
-    deinit { }
+    /// A ChartPreviews dropped without stopRendering left the handle, its
+    /// GPU device and its fetcher open.
+    isolated deinit {
+        close()
+    }
 
     /// A picture kept from a previous run, if there is one for this chart at
     /// this water. Reading one costs a file open, so a list of charts looked
@@ -76,22 +80,17 @@ final class ChartPreviewEngine {
 
         // Tick the frame loop: it is what adopts the style and the tiles as
         // the fetches land. A windowed host does this on its display link.
-        var pixels = [UInt8](repeating: 0, count: Self.size.w * Self.size.h * 4)
         var settled = 0
-        var drawn = false
         for i in 0..<Self.patience {
             try? await Task.sleep(for: Self.tick)
             if Task.isCancelled { return nil }
             var f = lookout_frame()
             lookout_frame_next(h, &f)
-            // Render every tick. Asking for a frame is what works out which
-            // tiles the view needs, so a loop that only ticks and snapshots at
-            // the end never asks for one and draws an empty style.
-            // 0 is success here, unlike the rest of this ABI.
-            let ok = pixels.withUnsafeMutableBufferPointer {
-                lookout_snapshot_rgba(h, $0.baseAddress, $0.count)
-            }
-            drawn = drawn || ok == 0
+            // lookout_build runs the view update that requests the view's
+            // tiles. The pixels are read once, after the frame goes idle or
+            // the patience runs out. Reading them every tick copied a
+            // 960x720 frame on the main thread ten times a second.
+            lookout_build(h)
             guard i >= Self.warmup else { continue }
             if f.verdict == LOOKOUT_FRAME_IDLE && f.building == 0 {
                 settled += 1
@@ -100,7 +99,13 @@ final class ChartPreviewEngine {
                 settled = 0
             }
         }
-        guard drawn else { return nil }
+        if Task.isCancelled { return nil }
+        var pixels = [UInt8](repeating: 0, count: Self.size.w * Self.size.h * 4)
+        // 0 is success here, unlike the rest of this ABI.
+        let ok = pixels.withUnsafeMutableBufferPointer {
+            lookout_snapshot_rgba(h, $0.baseAddress, $0.count)
+        }
+        guard ok == 0 else { return nil }
         guard let cg = Self.bitmap(w: Self.size.w, h: Self.size.h, rgba: pixels) else { return nil }
         Self.keep(cg, link: link, lon: lon, lat: lat, zoom: zoom)
         #if os(macOS)

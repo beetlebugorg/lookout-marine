@@ -71,6 +71,12 @@ final class ChartLinkFetch: @unchecked Sendable {
         proxy.owner = self
     }
 
+    /// URLSession retains its delegate until the session is invalidated.
+    /// Without this each fetcher leaked its session and its proxy.
+    deinit {
+        session.invalidateAndCancel()
+    }
+
     /// Attach to a chart handle and start answering. Call once per handle.
     /// `wake` is called on the main thread after every answer.
     func attach(to h: OpaquePointer, wake: @escaping () -> Void) {
