@@ -277,8 +277,13 @@ lk_trash_worker (gpointer data)
 
   for (guint i = 0; i < charts->len; i++)
     {
-      lk_remove_tree (g_ptr_array_index (charts, i));
-      if (self->mates != NULL && self->mates[i] != NULL)
+      const char *chart = g_ptr_array_index (charts, i);
+
+      /* An empty entry is a cell whose chart was never prepared. Its source
+       * still goes. */
+      if (chart[0] != '\0')
+        lk_remove_tree (chart);
+      if (self->mates != NULL && self->mates[i] != NULL && self->mates[i][0] != '\0')
         lk_remove_tree (self->mates[i]);
       g_mutex_lock (&self->mu);
       self->done = (int) (i + 1);
@@ -398,7 +403,10 @@ lk_chart_bake_delete_cells (const char *prepared, const char *source,
       if (!have_chart && !have_cell)
         continue;
       g_ptr_array_add (made, have_chart ? g_steal_pointer (&chart) : g_strdup (""));
-      g_ptr_array_add (raw, have_cell ? g_steal_pointer (&cell) : NULL);
+      /* An empty string for a cell with no source directory. A NULL here ends
+       * the list, and g_strfreev then stopped at the gap and leaked every
+       * path after it. */
+      g_ptr_array_add (raw, have_cell ? g_steal_pointer (&cell) : g_strdup (""));
     }
 
   if (made->len == 0)

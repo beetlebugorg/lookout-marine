@@ -61,6 +61,14 @@ lk_noaa_window_seed (LkNoaaWindow *self, LkNoaa *noaa)
   if (!lk_noaa_state (noaa)->have_catalog)
     return;
 
+  /* NOT WHILE THE LIBRARY IS BEING READ. What this device holds comes from
+   * the background scan, and a set it has yet to reach reports no cells at
+   * all. The prune below then reads every region as gone and writes the
+   * record empty, which no later scan puts back: a picker opened in the first
+   * seconds after launch left every region unticked for good. */
+  if (lk_app_model_library_scanning (self->model))
+    return;
+
   /* A library downloaded before the record existed has none. Take the regions
    * it holds whole, once. */
   lk_noaa_adopt_downloaded (noaa);
@@ -186,23 +194,24 @@ lk_noaa_window_sync (LkNoaa *noaa, gpointer user_data)
 
   if (dropped_now != NULL && g_strv_length (dropped_now) > 0)
     {
-      g_autoptr (GString) gone = g_string_new (NULL);
+      /* HOW MANY CHARTS GO, as the spec states it. The region names read as a
+       * list of water, and a mariner cannot weigh that against the charts a
+       * pick adds. This is the count the warning states as well. */
+      g_auto (GStrv) doomed = lk_noaa_window_doomed (self, noaa);
+      guint n = doomed != NULL ? g_strv_length (doomed) : 0;
+      g_autofree char *gone =
+          g_strdup_printf (n == 1 ? "remove %u chart" : "remove %u charts", n);
 
-      for (guint i = 0; dropped_now[i] != NULL; i++)
-        {
-          const LkNoaaRegion *region = lk_noaa_region (noaa, dropped_now[i]);
-
-          if (gone->len > 0)
-            g_string_append (gone, ", ");
-          g_string_append (gone, region != NULL ? region->name : dropped_now[i]);
-        }
       if (lk_noaa_cells (noaa) > lk_noaa_held (noaa))
         {
           g_autofree char *add = lk_noaa_cost_line (noaa);
-          plan = g_strdup_printf ("%s · remove %s", add, gone->str);
+          plan = g_strdup_printf ("%s · %s", add, gone);
         }
       else
-        plan = g_strdup_printf ("Remove %s", gone->str);
+        {
+          gone[0] = g_ascii_toupper (gone[0]);
+          plan = g_steal_pointer (&gone);
+        }
     }
   else if (priced)
     plan = lk_noaa_cost_line (noaa);
@@ -486,13 +495,14 @@ lk_noaa_window_present (GtkWindow *parent, LkAppModel *model)
    * from a device that still held them, and opened ticked on water it had
    * deleted. */
   lk_noaa_poll (noaa);
-  {
-    g_auto (GStrv) have = lk_app_model_installed_cell_names (model);
-    g_auto (GStrv) mine = lk_app_model_managed_cell_names (model);
+  if (!lk_app_model_library_scanning (model))
+    {
+      g_auto (GStrv) have = lk_app_model_installed_cell_names (model);
+      g_auto (GStrv) mine = lk_app_model_managed_cell_names (model);
 
-    lk_noaa_note_installed (noaa, (const char *const *) have);
-    lk_noaa_note_managed (noaa, (const char *const *) mine);
-  }
+      lk_noaa_note_installed (noaa, (const char *const *) have);
+      lk_noaa_note_managed (noaa, (const char *const *) mine);
+    }
 
   g_signal_connect_object (noaa, "changed", G_CALLBACK (lk_noaa_window_sync),
                            self->window, 0);

@@ -18,6 +18,9 @@ struct _LkAppModel {
    * following that download to its end. */
   char              *noaa_dest;
   gboolean           noaa_watching;
+  /* A reopen asked for while a download ran. The reopen closes the handle the
+   * transfer runs on, so it waits for the transfer to end. */
+  gboolean           recompose_held;
 
   gboolean has_chart;
   char    *chart_path;
@@ -292,12 +295,20 @@ lk_app_model_emit_chart_sets_changed (LkAppModel *self)
   g_signal_emit (self, signals[SIGNAL_CHART_SETS_CHANGED], 0);
 }
 
-/* A background scan landed. Nothing reopened, so this only tells the windows
- * to read the list again. */
+/* A background scan finished. No reopen follows, so this tells the windows to
+ * read the list again.
+ *
+ * The NOAA service is told as well. What this device holds comes from the
+ * scan, and a set it had yet to reach reported no cells: the picker priced
+ * water the mariner already had, and read their regions as gone. */
 static void
 lk_app_model_sets_changed (GObject *owner)
 {
-  lk_app_model_emit_chart_sets_changed (LK_APP_MODEL (owner));
+  LkAppModel *self = LK_APP_MODEL (owner);
+
+  if (!lk_chart_sets_scanning (self->chart_sets))
+    lk_app_model_noaa_note_all (self);
+  lk_app_model_emit_chart_sets_changed (self);
 }
 
 /* Reopen the chart from the current library. If every set is off, close
@@ -306,6 +317,18 @@ lk_app_model_sets_changed (GObject *owner)
 static void
 lk_app_model_recompose_library (LkAppModel *self)
 {
+  /* NOT WHILE A DOWNLOAD RUNS. The NOAA service lives on the chart handle,
+   * and a reopen closes the old handle, which cancels every transfer it was
+   * running. A removal's rescan and a set switched off both reach here, and
+   * either one seconds into a download stopped it and left the cells that had
+   * arrived unprepared. lk_app_model_noaa_changed runs the held reopen when
+   * the transfer ends. */
+  if (self->noaa_watching)
+    {
+      self->recompose_held = TRUE;
+      return;
+    }
+
   g_auto (GStrv) all = lk_chart_sets_compose (self->chart_sets);
 
   if (all != NULL && all[0] != NULL)
@@ -346,6 +369,14 @@ lk_app_model_noaa_changed (LkNoaa *noaa, gpointer user_data)
   if (!self->noaa_watching || state->phase == LK_NOAA_DOWNLOADING)
     return;
   self->noaa_watching = FALSE;
+
+  /* The reopen a removal or a switch asked for while the transfer ran. */
+  if (self->recompose_held)
+    {
+      self->recompose_held = FALSE;
+      lk_app_model_recompose_library (self);
+      lk_app_model_emit_chart_sets_changed (self);
+    }
 
   /* Nothing arrived. A download that failed every cell leaves an empty
    * directory, and adding that to the library makes a set that never fills.
