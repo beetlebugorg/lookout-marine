@@ -143,6 +143,24 @@ lk_first_run_import_finished (LkFirstRunFlow *self)
          !lk_app_model_get_nothing_to_draw (self->model);
 }
 
+/* The import ended with no chart.
+ *
+ * A download that failed every cell, a Stop pressed before the first one
+ * arrived, and a pick the core refused all reach this. The bake starts only
+ * once a cell arrives, so the step waits on a bake that never runs: Continue
+ * stays dead, Stop has no job, and Back is hidden. */
+gboolean
+lk_first_run_import_stalled (LkFirstRunFlow *self)
+{
+  const LkNoaaState *noaa = lk_noaa_state (lk_app_model_get_noaa (self->model));
+
+  return lk_first_run_step (self->flow) == LK_FIRST_RUN_IMPORTING &&
+         !lk_first_run_saw_bake (self->flow) &&
+         noaa->phase != LK_NOAA_DOWNLOADING &&
+         !lk_app_model_get_baking (self->model) &&
+         lk_app_model_get_nothing_to_draw (self->model);
+}
+
 /* Whether the primary action has anything to do. */
 static gboolean
 lk_first_run_primary_ready (LkFirstRunFlow *self)
@@ -244,11 +262,14 @@ lk_first_run_refresh_footer (LkFirstRunFlow *self)
   gtk_widget_set_visible (self->later, step == LK_FIRST_RUN_WELCOME);
   /* Stop applies while the transfer or the bake runs. After that it stood
    * beside Continue with no job to stop. */
+  gboolean stalled = lk_first_run_import_stalled (self);
+
   gtk_widget_set_visible (self->stop,
-                          step == LK_FIRST_RUN_IMPORTING &&
+                          step == LK_FIRST_RUN_IMPORTING && !stalled &&
                               !lk_first_run_import_finished (self));
+  /* Back is the only way off this step when no chart arrived. */
   gtk_widget_set_visible (self->back,
-                          lk_first_run_can_go_back (self->flow) &&
+                          (lk_first_run_can_go_back (self->flow) || stalled) &&
                               !gtk_widget_get_visible (self->stop));
 }
 
@@ -352,6 +373,8 @@ lk_first_run_app_moved (GtkWidget *page)
    * step on the card rather than building a new one. */
   if (lk_first_run_step (self->flow) == LK_FIRST_RUN_IMPORTING)
     lk_first_run_importing_sync (gtk_widget_get_first_child (self->body));
+  if (lk_first_run_step (self->flow) == LK_FIRST_RUN_ONLINE)
+    lk_first_run_online_sync (gtk_widget_get_first_child (self->body));
   lk_first_run_refresh_footer (self);
 }
 

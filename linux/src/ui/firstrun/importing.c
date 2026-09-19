@@ -46,6 +46,7 @@ typedef struct {
 
   GtkWidget *name;
   GtkWidget *under;
+  GtkWidget *why;   /* why no chart arrived */
   GtkWidget *bar;
   GtkWidget *percent;
   GtkWidget *remaining;
@@ -358,6 +359,22 @@ lk_first_run_importing_sync (GtkWidget *step)
                                                         : LK_PHASE_DONE);
 
   lk_importing_fill_bands (self, work, running);
+
+  /* WHY NO CHART ARRIVED. The step waits on a bake, and the bake starts only
+   * once a cell arrives. A download that failed every cell, a Stop pressed
+   * before the first one, and a pick the core refused all end here with the
+   * phases stopped and the card saying only that it is preparing. */
+  if (lk_first_run_import_stalled (self->flow))
+    {
+      const char *why = noaa->error[0] != '\0'
+                            ? noaa->error
+                            : "No charts arrived, so none could be prepared.";
+
+      gtk_label_set_text (GTK_LABEL (self->why), why);
+      gtk_widget_set_visible (self->why, TRUE);
+    }
+  else
+    gtk_widget_set_visible (self->why, FALSE);
 }
 
 /* ---- the step ------------------------------------------------------------ */
@@ -400,6 +417,15 @@ lk_first_run_importing_new (LkFirstRunFlow *flow)
   gtk_label_set_xalign (GTK_LABEL (self->under), 0.0);
   gtk_widget_set_margin_top (self->under, 3);
   gtk_box_append (GTK_BOX (column), self->under);
+
+  self->why = gtk_label_new ("");
+  gtk_widget_add_css_class (self->why, "error");
+  gtk_widget_add_css_class (self->why, "caption");
+  gtk_label_set_wrap (GTK_LABEL (self->why), TRUE);
+  gtk_label_set_xalign (GTK_LABEL (self->why), 0.0);
+  gtk_widget_set_margin_top (self->why, 10);
+  gtk_widget_set_visible (self->why, FALSE);
+  gtk_box_append (GTK_BOX (column), self->why);
 
   self->bar = gtk_progress_bar_new ();
   gtk_widget_set_margin_top (self->bar, 16);

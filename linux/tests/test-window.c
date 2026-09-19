@@ -178,6 +178,39 @@ test_setup_returns_when_the_library_empties (void)
   g_assert_false (lk_first_run_should_run (later, TRUE, FALSE));
 }
 
+/* An import with no chart offers a way out.
+ *
+ * Continue waits on a bake, and the bake starts only once a cell arrives. A
+ * download that failed every cell left the step with Continue dead, Stop with
+ * no job, and Back hidden, so the card stood over an empty library with no
+ * live control. */
+static void
+test_an_import_with_no_chart_can_go_back (void)
+{
+  g_autoptr (LkFirstRun) run = lk_first_run_new ();
+  LkFirstRunFlow flow = { .model = model, .flow = run };
+
+  g_setenv ("LOOKOUT_FIRST_RUN", "importing", TRUE);
+  lk_first_run_begin (run);
+  g_unsetenv ("LOOKOUT_FIRST_RUN");
+
+  /* No download, no bake, and an empty library. */
+  g_assert_true (lk_app_model_get_nothing_to_draw (model));
+  g_assert_false (lk_first_run_saw_bake (run));
+  g_assert_true (lk_first_run_import_stalled (&flow));
+
+  /* Back leaves for the coverage step, where the water is still picked. */
+  lk_first_run_back (run);
+  g_assert_cmpint (lk_first_run_step (run), ==, LK_FIRST_RUN_COVERAGE);
+
+  /* A bake seen is an import doing its job, so the step waits as it did. */
+  g_setenv ("LOOKOUT_FIRST_RUN", "importing", TRUE);
+  lk_first_run_begin (run);
+  g_unsetenv ("LOOKOUT_FIRST_RUN");
+  lk_first_run_note_bake (run);
+  g_assert_false (lk_first_run_import_stalled (&flow));
+}
+
 /* The page fill stands while there is no chart handle. A chart of no charts
  * draws the basemap, and setup floats over that, so the fill goes.
  *
@@ -316,6 +349,8 @@ main (int argc, char *argv[])
   g_test_add_func ("/window/setup-runs-over-an-empty-library",
                    test_setup_runs_over_an_empty_library);
   g_test_add_func ("/window/setup-steps", test_setup_steps);
+  g_test_add_func ("/window/an-import-with-no-chart-can-go-back",
+                   test_an_import_with_no_chart_can_go_back);
   g_test_add_func ("/window/setup-returns-when-the-library-empties",
                    test_setup_returns_when_the_library_empties);
   g_test_add_func ("/window/page-follows-nothing-to-draw", test_page_follows_nothing_to_draw);

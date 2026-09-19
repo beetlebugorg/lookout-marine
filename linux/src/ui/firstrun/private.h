@@ -161,6 +161,14 @@ GtkWidget *lk_first_run_importing_new (LkFirstRunFlow *flow);
  * several times a second, and a rebuild per report restarted the spinner. Does
  * nothing for a step built by another unit. */
 void lk_first_run_importing_sync (GtkWidget *step);
+
+/* The online step's error line, which changes while the step stands: a link
+ * is resolved after Continue is pressed. */
+void lk_first_run_online_sync (GtkWidget *step);
+
+/* TRUE when the import step ended with no chart: the transfer left the
+ * downloading phase, no bake ran, and the library is still empty. */
+gboolean lk_first_run_import_stalled (LkFirstRunFlow *self);
 GtkWidget *lk_first_run_depths_new (LkFirstRunFlow *flow);
 
 /* Read the footer again: the primary action's words, whether it can act, and

@@ -234,6 +234,11 @@ lk_first_run_back (LkFirstRun *self)
     case LK_FIRST_RUN_ONLINE:
       self->step = LK_FIRST_RUN_SOURCE;
       break;
+    case LK_FIRST_RUN_IMPORTING:
+      /* Back from an import with no chart. The water is still picked, so the
+       * coverage step opens on it and Download runs again. */
+      self->step = LK_FIRST_RUN_COVERAGE;
+      break;
     default:
       return;
     }

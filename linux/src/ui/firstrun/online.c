@@ -47,6 +47,32 @@ lk_online_add_asked (gpointer user_data)
     gtk_widget_grab_focus (entry);
 }
 
+static void
+lk_online_entry_gone (GtkWidget *entry, gpointer page)
+{
+  if (g_object_get_data (G_OBJECT (page), "lk-online-entry") == entry)
+    g_object_set_data (G_OBJECT (page), "lk-online-entry", NULL);
+}
+
+void
+lk_first_run_online_sync (GtkWidget *step)
+{
+  LkFirstRunFlow *flow;
+  GtkWidget      *label;
+  const char     *error;
+
+  if (step == NULL)
+    return;
+  label = g_object_get_data (G_OBJECT (step), "lk-online-error");
+  flow = g_object_get_data (G_OBJECT (step), "lk-online-flow");
+  if (label == NULL || flow == NULL)
+    return;
+
+  error = lk_chart_links_error (lk_app_model_get_chart_links (flow->model));
+  gtk_label_set_text (GTK_LABEL (label), error);
+  gtk_widget_set_visible (label, error[0] != '\0');
+}
+
 GtkWidget *
 lk_first_run_online_new (LkFirstRunFlow *flow)
 {
@@ -79,7 +105,10 @@ lk_first_run_online_new (LkFirstRunFlow *flow)
   g_signal_connect (entry, "activate", G_CALLBACK (lk_online_entry_activated), flow);
   g_object_set_data (G_OBJECT (add), "lk-entry", entry);
   g_signal_connect (add, "clicked", G_CALLBACK (lk_online_add_clicked), flow);
+  /* The page outlives this step, and every rebuild destroys the entry, so the
+   * page's pointer goes when the entry does. */
   g_object_set_data (G_OBJECT (flow->page), "lk-online-entry", entry);
+  g_signal_connect (entry, "destroy", G_CALLBACK (lk_online_entry_gone), flow->page);
 
   gtk_box_append (GTK_BOX (row), entry);
   gtk_box_append (GTK_BOX (row), add);
@@ -92,18 +121,20 @@ lk_first_run_online_new (LkFirstRunFlow *flow)
   gtk_widget_set_margin_top (kind, 6);
   gtk_box_append (GTK_BOX (step), kind);
 
-  const char *error = lk_chart_links_error (lk_app_model_get_chart_links (flow->model));
-  if (error[0] != '\0')
-    {
-      GtkWidget *label = gtk_label_new (error);
+  /* A link is resolved after Continue is pressed, so the refusal arrives
+   * while this step stands. Built once and re-lettered by
+   * lk_first_run_online_sync. */
+  GtkWidget *error = gtk_label_new ("");
 
-      gtk_widget_add_css_class (label, "error");
-      gtk_widget_add_css_class (label, "caption");
-      gtk_label_set_wrap (GTK_LABEL (label), TRUE);
-      gtk_label_set_xalign (GTK_LABEL (label), 0.0);
-      gtk_widget_set_margin_top (label, 12);
-      gtk_box_append (GTK_BOX (step), label);
-    }
+  gtk_widget_add_css_class (error, "error");
+  gtk_widget_add_css_class (error, "caption");
+  gtk_label_set_wrap (GTK_LABEL (error), TRUE);
+  gtk_label_set_xalign (GTK_LABEL (error), 0.0);
+  gtk_widget_set_margin_top (error, 12);
+  gtk_box_append (GTK_BOX (step), error);
+  g_object_set_data (G_OBJECT (step), "lk-online-error", error);
+  g_object_set_data (G_OBJECT (step), "lk-online-flow", flow);
+  lk_first_run_online_sync (step);
 
   GtkWidget *warning = lk_step_warning (
       "Not for navigation.",
