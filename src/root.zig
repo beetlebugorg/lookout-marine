@@ -766,6 +766,9 @@ pub const Lookout = struct {
     /// NOAA's chart catalog and the downloads run from it. Shares the shell's
     /// fetcher with links. See src/noaajob.zig.
     noaa: noaajob.Service = undefined,
+    /// The names lookout_noaa_region_cells last handed out, valid until its
+    /// next call on this handle.
+    noaa_cells: ?std.heap.ArenaAllocator = null,
 
     // API-entry lock (see capi.locked): serializes the C ABI between the
     // host's input thread and its render thread. Distinct from engine_mu,
@@ -2079,6 +2082,8 @@ pub const Lookout = struct {
         // tiles it has outstanding, and those answers go through the renderer.
         self.links.deinit();
         self.noaa.deinit();
+        if (self.noaa_cells) |*a| a.deinit();
+        self.noaa_cells = null;
         self.pollCompose(true); // finish any in-flight partition build first
         // BEFORE the composition and the charts: the renderer's tile workers
         // read the compositor, and its deinit is what stops them.

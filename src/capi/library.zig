@@ -628,8 +628,9 @@ export fn lookout_noaa_region_cells(h: ?*lookout, region_ids: ?[*:0]const u8,
     if (out == null) return names.items.len;
 
     // The catalog holds the names unterminated. A caller reads C strings, so
-    // they are copied into an arena that lives until the next call.
-    if (noaa_cells) |old| old.deinit();
+    // they are copied into an arena on the handle that lives until the next
+    // call on it.
+    if (l.noaa_cells) |*old| old.deinit();
     var arena = std.heap.ArenaAllocator.init(gpa);
     const a = arena.allocator();
     var n: usize = 0;
@@ -639,12 +640,9 @@ export fn lookout_noaa_region_cells(h: ?*lookout, region_ids: ?[*:0]const u8,
         out.?[n] = z.ptr;
         n += 1;
     }
-    noaa_cells = arena;
+    l.noaa_cells = arena;
     return names.items.len;
 }
-
-/// The strings the call above handed out, freed when it is called again.
-var noaa_cells: ?std.heap.ArenaAllocator = null;
 
 /// Download every cell covering these regions. See lookout-library.h.
 export fn lookout_noaa_download(h: ?*lookout, region_ids: ?[*:0]const u8,

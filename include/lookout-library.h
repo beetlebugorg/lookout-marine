@@ -930,7 +930,8 @@ void lookout_noaa_download(lookout *h, const char *region_ids,
 /* The dataset names of every cell covering these regions, in catalog order.
  * Writes at most `cap` and returns how many there are, so a caller sizes its
  * buffer by calling once with `out` NULL. The strings are borrowed until the
- * next call. Returns 0 when no catalog is loaded.
+ * next call on this handle, or its close. Returns 0 when no catalog is
+ * loaded.
  *
  * For a shell that removes water a mariner has unpicked. Regions overlap,
  * because NOAA files a cell under one district that covers another's, so the
