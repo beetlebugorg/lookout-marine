@@ -59,6 +59,15 @@ final class SetupFlowTests: UITestCase {
         XCTAssertTrue(app.buttons["first-run-back"].exists)
     }
 
+    /// Continue with NOAA picked raises NOAA's terms. The regions show after
+    /// the mariner agrees. The query uses the button's label: on iOS the
+    /// sheet's "enc-terms" identifier replaces the button's own.
+    private func agreeToEncTerms(_ app: XCUIApplication) {
+        let agree = app.buttons["Agree and Continue"]
+        XCTAssertTrue(agree.waitForExistence(timeout: 10))
+        agree.tap()
+    }
+
     /// NOAA leads to the regions, which are the districts the core publishes.
     func testCoverageStepListsRegions() throws {
         let app = try setupApp()
@@ -66,6 +75,7 @@ final class SetupFlowTests: UITestCase {
         app.buttons["first-run-continue"].tap()
         XCTAssertTrue(app.buttons["source-NOAA charts"].waitForExistence(timeout: 10))
         app.buttons["first-run-continue"].tap()
+        agreeToEncTerms(app)
 
         XCTAssertTrue(app.staticTexts["Which waters do you sail?"].waitForExistence(timeout: 10))
         // Nine Coast Guard districts, each with a row of its own.
@@ -84,6 +94,7 @@ final class SetupFlowTests: UITestCase {
         app.buttons["first-run-continue"].tap()
         XCTAssertTrue(app.buttons["source-NOAA charts"].waitForExistence(timeout: 10))
         app.buttons["first-run-continue"].tap()
+        agreeToEncTerms(app)
 
         XCTAssertTrue(app.staticTexts["Which waters do you sail?"].waitForExistence(timeout: 10))
         let last = app.buttons["region-d17"]   // Alaska, the last one listed
