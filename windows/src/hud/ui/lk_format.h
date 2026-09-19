@@ -7,6 +7,9 @@
 
 #include <winrt/base.h>
 #include <winrt/Microsoft.UI.Xaml.Media.h>
+#include <winrt/Microsoft.UI.Xaml.Media.Imaging.h>
+#include <winrt/Microsoft.UI.Xaml.Controls.h>
+#include <winrt/Microsoft.UI.Xaml.h>
 
 namespace lkw
 {
@@ -45,4 +48,36 @@ namespace lkw
         constexpr uint32_t AccentFill(bool dark) { return dark ? 0x1F7EA1F5u : kAccentFill; }
         constexpr uint32_t Rule(bool dark) { return dark ? 0xFF33414Du : kRule; }
     }
+
+    /* Pin a button's four background states, and its border in all of them.
+     *
+     * WinUI animates a button's background between its states over 83 ms
+     * (DefaultButtonStyle puts a BrushTransition on the ContentPresenter),
+     * and it interpolates the colour. A button left transparent starts that
+     * animation at transparent BLACK and ends at the theme's near-white hover
+     * fill, #80F9F9F9, so on the way in it passes through a quarter-opaque
+     * grey: the highlight goes dark for a moment, then light. Naming the
+     * states keeps the fade inside one hue.
+     *
+     * The fills go in the button's own resources, which is where its template
+     * looks the state brushes up from, and the resting fill is set on the
+     * button as well, so the fade out of hover ends on it.
+     */
+    void ButtonFills(winrt::Microsoft::UI::Xaml::Controls::Control const &c, uint32_t flat,
+                     uint32_t over, uint32_t down, uint32_t edge);
+
+    /* A button drawn flat against a card: the card's own ink at night, its
+     * shadow by day, at a resting, a hovered and a pressed alpha. `edge` is
+     * the border it keeps in every state, which a button with no border of
+     * its own leaves at zero. */
+    /* One picture shipped beside the executable, or nullptr when the file
+     * is absent. The setup steps and the chart shelf both draw these, and
+     * each had its own copy of the loader. A step reads properly without
+     * the picture, which is also what a launch looks like when a file
+     * fails to load. */
+    winrt::Microsoft::UI::Xaml::Media::Imaging::BitmapImage ShippedPicture(
+        wchar_t const *name);
+
+    void FlatFills(winrt::Microsoft::UI::Xaml::Controls::Control const &c, bool dark,
+                   uint32_t edge = 0x00000000u);
 }

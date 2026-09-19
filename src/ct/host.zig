@@ -524,12 +524,37 @@ pub const Host = struct {
     /// share one atlas, one texture, and the banded-row upload that already
     /// exists for the missing-symbol path.
     pub fn addSpritePack(self: *Host, prefix: []const u8, index_json: []const u8, png_bytes: []const u8) usize {
+        var tmp = std.heap.ArenaAllocator.init(self.alloc);
+        defer tmp.deinit();
+        const img = decodeSheet(tmp.allocator(), png_bytes) catch return 0;
+
+        return self.addSpriteCells(prefix, index_json, img);
+    }
+
+    /// The sheet a pack names, decoded. libpng where the build has it: about
+    /// 1.6x the reader here on a real sheet, and it reads the shapes that one
+    /// declines. Whoever calls this may be off the main thread.
+    pub fn decodeSheet(alloc: std.mem.Allocator, png_bytes: []const u8) !ct.png.Image {
+        if (ct.libpng.have) {
+            if (ct.libpng.decode(alloc, png_bytes)) |i| {
+                return .{ .w = i.w, .h = i.h, .rgba = i.rgba };
+            } else |_| {}
+        }
+        return try ct.png.read(alloc, png_bytes);
+    }
+
+    /// Fold a pack whose sheet is already decoded.
+    ///
+    /// The decode is the expensive half — 274 ms of a 486 ms fold for a
+    /// 4096 by 4096 sheet — and it needs nothing of the host, so a caller
+    /// that has a thread to spare does it there and comes here with the
+    /// pixels. `img.rgba` is borrowed for the call.
+    pub fn addSpriteCells(self: *Host, prefix: []const u8, index_json: []const u8, img: ct.png.Image) usize {
         self.m.waitForBuild(); // the build worker reads the sprite
         var tmp = std.heap.ArenaAllocator.init(self.alloc);
         defer tmp.deinit();
         const ta = tmp.allocator();
 
-        const img = ct.png.read(ta, png_bytes) catch return 0;
         const doc = std.json.parseFromSliceLeaky(std.json.Value, ta, index_json, .{}) catch return 0;
         if (doc != .object) return 0;
 

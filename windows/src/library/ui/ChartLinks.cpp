@@ -9,6 +9,7 @@
 #include "pch.h"
 #include "MainWindow.xaml.h"
 
+#include <shobjidl.h> // IInitializeWithWindow, for the style file picker
 #include <winhttp.h>
 
 #include <condition_variable>
@@ -16,6 +17,9 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <atomic>
+#include <map>
+#include <memory>
 #include <mutex>
 #include <thread>
 
@@ -28,8 +32,89 @@ using namespace winrt::Windows::Data::Json;
 namespace
 {
     // One HTTP GET, synchronous, on a worker thread. Returns the final HTTP
-    // status (0 on transport failure) and fills bytes on a 2xx.
-    int FetchUrl(std::wstring const &url, std::vector<uint8_t> &bytes)
+    // status (0 on transport failure). The body goes to `sink` in pieces as
+    // they arrive and is never accumulated here. A NOAA district is one zip of
+    // a couple of hundred megabytes, and holding one whole costs that much
+    // again for the copy the core makes of it. `sink` runs on this thread, in
+    // order, and only on a 2xx. It is passed the status so every piece has the
+    // same one.
+    using ChunkSink = std::function<void(void const *bytes, size_t len, int status)>;
+
+    // A request in flight, so a cancel or a stop can end it.
+    //
+    // A district arrives as one archive of up to 222 MB. The worker sits
+    // inside WinHttpReadData for as long as the 8 second timeout allows, so
+    // a flag read between pieces ends the transfer at the next piece and no
+    // sooner. Closing the request handle ends the read itself. Both paths
+    // close through one lock, so the handle closes once.
+    struct LiveFetch
+    {
+        std::mutex        mu;
+        HINTERNET         req{ nullptr };
+        std::atomic<bool> ended{ false };
+
+        void Hold(HINTERNET h)
+        {
+            std::lock_guard<std::mutex> lock(mu);
+            if (ended.load())
+            {
+                WinHttpCloseHandle(h);
+                return;
+            }
+            req = h;
+        }
+        void End()
+        {
+            ended.store(true);
+            std::lock_guard<std::mutex> lock(mu);
+            if (req != nullptr)
+            {
+                WinHttpCloseHandle(req);
+                req = nullptr;
+            }
+        }
+    };
+
+    std::mutex                                     g_fetch_mu;
+    std::map<uint64_t, std::shared_ptr<LiveFetch>> g_fetches;
+
+    std::shared_ptr<LiveFetch> BeginFetch(uint64_t id)
+    {
+        auto live = std::make_shared<LiveFetch>();
+        std::lock_guard<std::mutex> lock(g_fetch_mu);
+        g_fetches[id] = live;
+        return live;
+    }
+    void EndFetch(uint64_t id)
+    {
+        std::lock_guard<std::mutex> lock(g_fetch_mu);
+        g_fetches.erase(id);
+    }
+    void AbortFetch(uint64_t id)
+    {
+        std::shared_ptr<LiveFetch> live;
+        {
+            std::lock_guard<std::mutex> lock(g_fetch_mu);
+            auto it = g_fetches.find(id);
+            if (it == g_fetches.end())
+                return;
+            live = it->second;
+        }
+        live->End();
+    }
+    void AbortFetches()
+    {
+        std::vector<std::shared_ptr<LiveFetch>> all;
+        {
+            std::lock_guard<std::mutex> lock(g_fetch_mu);
+            for (auto const &one : g_fetches)
+                all.push_back(one.second);
+        }
+        for (auto const &live : all)
+            live->End();
+    }
+
+    int FetchUrl(std::wstring const &url, ChunkSink const &sink, uint64_t id)
     {
         URL_COMPONENTS parts{};
         wchar_t host[256]{}, path[2048]{}, extra[2048]{};
@@ -72,6 +157,10 @@ namespace
             req = WinHttpOpenRequest(con, L"GET", object.c_str(), nullptr, L"https://beetlebug.org/",
                                      WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
         }
+        // Reachable by a cancel or a stop from this point on.
+        auto live = BeginFetch(id);
+        if (req != nullptr)
+            live->Hold(req);
         if (req != nullptr &&
             WinHttpSendRequest(req, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
                                WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
@@ -83,32 +172,79 @@ namespace
             status = (int)code;
             if (status >= 200 && status < 300)
             {
-                // A hostile or broken host must not be able to stream the app
-                // out of memory. Nothing a chart link legitimately fetches
-                // comes anywhere near this cap.
-                constexpr size_t kFetchCap = size_t{ 64 } << 20;
-                DWORD avail = 0;
+                // What replaced kFetchCap, and why the number moved.
+                //
+                // The old 64 MB cap counted bytes accumulated here, to stop a
+                // hostile or broken host from exhausting memory. Nothing
+                // accumulates now, so a body of any size costs one buffer.
+                // That cap now measures how large a legitimate chart is, and
+                // it rejects every district: the largest NOAA
+                // publishes measured 222 MB (17CGD_ENCs.zip, content-length,
+                // 2026-09-12).
+                //
+                // A host that answers without end still needs a bound.
+                // Pieces are written to disk as they arrive, so a runaway
+                // fills the drive rather than the heap, and the 8-second
+                // timeouts above catch a stalled transfer rather than a slow
+                // endless one. The guard stays, an order of magnitude above
+                // any real district, where tripping it means the host is
+                // broken.
+                //
+                // Tripping it truncates the answer. The pieces already
+                // delivered cannot be recalled and `status` is fixed for the
+                // request, so the core sees a short archive and fails to
+                // extract it. Holding everything back to fail it cleanly is
+                // the memory cost this change exists to avoid.
+                constexpr uint64_t kTransferCap = uint64_t{ 4 } << 30;
+
+                // 256 KB a read, matching the Android shell; nothing has
+                // measured it on either. It makes a 222 MB district about 900
+                // reads, and the buffer is allocated once for the whole
+                // transfer rather than per read.
+                constexpr size_t kReadChunk = size_t{ 256 } << 10;
+
+                std::vector<uint8_t> buf(kReadChunk);
+                uint64_t             total = 0;
+                DWORD                avail = 0;
                 while (WinHttpQueryDataAvailable(req, &avail) && avail > 0)
                 {
-                    if (bytes.size() + avail > kFetchCap)
+                    DWORD want = avail < (DWORD)kReadChunk ? avail : (DWORD)kReadChunk;
+                    DWORD got  = 0;
+                    if (live->ended.load())
                     {
-                        bytes.clear();
+                        status = 0; // stopped, and the body is part of one
+                        break;
+                    }
+                    if (!WinHttpReadData(req, buf.data(), want, &got))
+                    {
+                        // A body that stopped part way is not a body. The
+                        // status stayed 200 here, so the caller took a
+                        // truncated style or archive for a whole one.
                         status = 0;
                         break;
                     }
-                    size_t at = bytes.size();
-                    bytes.resize(at + avail);
-                    DWORD got = 0;
-                    if (!WinHttpReadData(req, bytes.data() + at, avail, &got))
-                        break;
-                    bytes.resize(at + got);
                     if (got == 0)
                         break;
+                    total += got;
+                    if (total > kTransferCap)
+                    {
+                        status = 0; // over the cap, and cut off mid body
+                        break;
+                    }
+                    // `got`, never `want` and never the buffer size. The
+                    // length handed on has to be exactly what was read. The
+                    // Android shell passed a length meaning "the whole array"
+                    // here, appended a bufferful of stale bytes, and pushed the
+                    // zip end-of-central-directory record out of the scan
+                    // window. Extraction then failed with an empty chart
+                    // directory and no error reported.
+                    sink(buf.data(), got, status);
                 }
             }
         }
-        if (req != nullptr)
-            WinHttpCloseHandle(req);
+        // The handle closes here or in End, whichever runs first.
+        live->End();
+        EndFetch(id);
         if (con != nullptr)
             WinHttpCloseHandle(con);
         WinHttpCloseHandle(ses);
@@ -190,6 +326,10 @@ namespace
                     dropped.push_back(job.id);
                 queue_.clear();
             }
+            // The transfers still out. A district is up to 222 MB, and
+            // joining a worker still reading one held the UI thread for
+            // as long as it took.
+            AbortFetches();
             cv_.notify_all();
             for (auto &t : threads_)
             {
@@ -228,6 +368,8 @@ namespace
                     return;
                 }
             }
+            // A job already out. Its read ends when the handle closes.
+            AbortFetch(id);
         }
 
     private:
@@ -277,6 +419,20 @@ namespace winrt::LookoutMarine::implementation
         lk_controller_http_respond(controller, id, bytes, len, status);
     }
 
+    // The same gate for a piece of an answer. Taken once per piece rather than
+    // once per request, about 900 times across a district zip, which costs
+    // little beside the read that produced each one. It keeps the teardown
+    // rule identical for both paths: a handle closing mid-stream stops being
+    // answered into, the same as for a whole body.
+    void MainWindow::ChartLinkRespondChunk(uint64_t id, void const *bytes, size_t len,
+                                           int status, int done)
+    {
+        std::lock_guard<std::mutex> lock(link_mu);
+        if (!link_live)
+            return;
+        lk_controller_http_respond_chunk(controller, id, bytes, len, status, done);
+    }
+
     // The C entry point: fired on the render thread with lookout's lock held.
     // Copy the url out — it is lookout's memory and valid only for this call —
     // queue the fetch, return.
@@ -292,8 +448,6 @@ namespace winrt::LookoutMarine::implementation
         std::string link(url);
         bool        allow = allow_file != 0;
         bool queued = g_http_pool.Submit(req_id, [self, req_id, link, allow] {
-            std::vector<uint8_t> bytes;
-            int                  status = 0;
             // The file:// boundary. lookout says when a url may be read off
             // disk (see lookout_http_get): the link the mariner typed, and
             // what a document already read from disk names inside that link's
@@ -303,15 +457,29 @@ namespace winrt::LookoutMarine::implementation
             std::string path = LocalPath(link);
             if (!path.empty())
             {
-                if (allow && ReadLocalFile(path, bytes))
-                    status = 200;
+                // A style or TileJSON off the mariner's own disk: small, and
+                // already whole in memory by the time it can be answered. One
+                // piece is the honest shape for it.
+                std::vector<uint8_t> bytes;
+                int                  status = allow && ReadLocalFile(path, bytes) ? 200 : 0;
+                self->ChartLinkRespond(req_id, bytes.empty() ? nullptr : bytes.data(),
+                                       bytes.size(), status);
+                return;
             }
-            else
-            {
-                status = FetchUrl(winrt::to_hstring(link).c_str(), bytes);
-            }
-            self->ChartLinkRespond(req_id, bytes.empty() ? nullptr : bytes.data(),
-                                   bytes.size(), status);
+
+            // Each read goes straight through. A style, a TileJSON, a sprite
+            // sheet and a tile arrive in one or two pieces and the core joins
+            // them before use, so they behave exactly as they did.
+            int status = FetchUrl(winrt::to_hstring(link).c_str(),
+                                  [self, req_id](void const *piece, size_t n, int st) {
+                                      self->ChartLinkRespondChunk(req_id, piece, n, st, 0);
+                                  }, req_id);
+
+            // The terminator, always sent and always exact: no buffer, length
+            // 0, `done` set. There is no bufferful of stale bytes in scope at
+            // this call. Every path above reaches it, 2xx, 404, transport
+            // failure and a cap trip alike, so the req_id is always finished.
+            self->ChartLinkRespondChunk(req_id, nullptr, 0, status, 1);
         });
         if (!queued)
             self->ChartLinkRespond(req_id, nullptr, 0, 0);
@@ -429,6 +597,17 @@ namespace winrt::LookoutMarine::implementation
         }
         lookout_links_free(read);
 
+        // The chart the mariner picked off the shelf is marked until its
+        // resolve settles, so the "Reading this chart…" line sits on the tile
+        // they clicked. chart_link_picking means the call has yet to go out,
+        // where a poll landing first would clear the mark before the core
+        // reported anything.
+        if (!chart_link_picking && !chart_link_busy)
+        {
+            chart_link_pending.clear();
+            chart_link_picked = false;
+        }
+
         // Public tile hosts make the visible credit a condition of service, so
         // it sits under the scale bar for as long as the link draws.
         if (credit.empty())
@@ -441,17 +620,16 @@ namespace winrt::LookoutMarine::implementation
             ScaleBarCredit().Text(winrt::to_hstring(credit));
             ScaleBarCredit().Visibility(Visibility::Visible);
         }
-        // The list appears only in the Charts settings section. Rebuild the page
-        // solely when it is on screen there — a change with the settings window
-        // closed, or open on another section, has nothing to redraw. The members
-        // above are updated regardless, so the section is current the next time
-        // it is built. This runs on the readout tick, so an unconditional rebuild
-        // here churned the whole page while a link resolved.
-        bool charts_visible = SettingsOpen() && settings_tab >= 0 &&
-                              settings_tab < (int)settings_tabs.size() &&
-                              settings_tabs[settings_tab].id == "charts";
-        if (charts_visible)
-            BuildSettingsPage();
+        // The list appears only in the Charts settings section, and only a
+        // change to what that page draws is worth a rebuild. The members above
+        // are updated regardless, so the section is current the next time it
+        // is built.
+        //
+        // This runs on the readout tick. The core raises its changed flag
+        // while a style draws, for tiles landing that leave every tile, row
+        // and line the same, and rebuilding for those flickered the whole
+        // page several times a second.
+        RefreshChartsPageOnChange();
     }
 
     // ---- the management surface --------------------------------------------
@@ -469,14 +647,29 @@ namespace winrt::LookoutMarine::implementation
         PollChartLinks();
     }
 
+    // A style the mariner holds rather than one they paste. The core reads a
+    // style.json from a path as it reads one from a url, so the file joins the
+    // list the same way.
+    fire_and_forget MainWindow::PickChartStyleFile()
+    {
+        auto lifetime = get_strong();
+        Windows::Storage::Pickers::FileOpenPicker picker;
+        picker.as<::IInitializeWithWindow>()->Initialize(top_hwnd);
+        picker.FileTypeFilter().Append(L".json");
+        auto file = co_await picker.PickSingleFileAsync();
+        if (file != nullptr)
+            AddChartLink(winrt::to_string(file.Path()));
+    }
+
     void MainWindow::SelectChartLink(std::string const &url)
     {
-        // Selecting the link that is already drawn is a no-op: the radio fires
-        // on every click, and re-selecting would re-resolve the style and
-        // every sprite pack for nothing. A selection whose last resolve failed
-        // does retry.
-        if (!url.empty() && url == active_chart_link && chart_link_error.empty())
-            return;
+        // Every pick reaches the core. The core's list can name a chart as
+        // PICKED while something else DRAWS — a resolve that failed, or a list
+        // just loaded off the store — and this used to refuse the pick in
+        // exactly that state, which left the mariner tapping a tile that never
+        // drew. Asking for the chart already drawing is the only no-op, and
+        // the core makes that one cheap itself: it re-marks the pick, saves,
+        // and resolves nothing (src/chartlinks.zig, Links.select).
         lk_controller_chart_link_select(controller, url.empty() ? nullptr : url.c_str());
         PollChartLinks();
     }

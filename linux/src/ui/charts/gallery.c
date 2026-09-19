@@ -1,0 +1,780 @@
+/* ui/charts/gallery.c — see ui/charts/gallery.h. */
+#include "ui/charts/gallery.h"
+
+#include "library/preview.h"
+#include "ui/charts/catalog.h"
+
+/* The design's tile. A picture narrower than this cannot be told from another
+ * publisher's picture of the same water. */
+#define LK_TILE_WIDTH 250
+#define LK_TILE_ART   132
+#define LK_TILE_ADD   176
+#define LK_TILE_GAP   10
+
+typedef struct {
+  LkAppModel        *model;    /* not owned */
+  LkChartPreviews   *previews; /* owned: the pictures for this row */
+  GtkWidget         *row;      /* the box the tiles are built into */
+  LkChartGalleryAdd  on_add;
+  gpointer           on_add_data;
+
+  /* The chart that was drawing when this row was last built. A change means a
+   * new chart to watch as it settles. `known` guards the first pass, where
+   * NULL is a real answer rather than "not asked yet". */
+  char              *drawing;
+  gboolean           known;
+
+  /* The row as it stands: the tiles it holds, and where the mariner had it
+   * scrolled to before the last rebuild. */
+  GtkWidget         *scroller; /* not owned */
+  char              *signature;
+  double             restore_to;
+  guint              restore_id;
+
+  /* The chart just picked, and held until the core is drawing it. Reading a
+   * publisher's style is the core's work and it runs inside a frame: a 389
+   * layer style with a 5,354 cell sprite pack holds the main thread for over
+   * a second on this machine. The tile says so for the whole of that wait.
+   *
+   * IT IS NOT DROPPED WHEN THE CORE IS TOLD. An ADD does not set the core's
+   * active url until the style has landed, so between the two the snapshot
+   * reads "busy, nothing active" — and NO ACTIVE URL IS LOOKOUT'S OWN CHART.
+   * The row put the pick back on Lookout's chart for the whole resolve, which
+   * reads as the pick being refused. */
+  char              *pending;
+  gboolean           pending_mine;
+  /* The core has begun: from here a resolve that ends retires the pick. */
+  gboolean           pending_begun;
+  guint              act_id;
+  /* A rebuild waiting on an idle. The links object reports inside the call
+   * that changed it, and a rebuild there destroys the button being clicked. */
+  guint              refill_id;
+  /* A pick the core never reports on must not mark the row for ever. */
+  guint              pending_id;
+} LkGallery;
+
+static void lk_gallery_fill (LkGallery *self);
+
+static void
+lk_gallery_free (gpointer data)
+{
+  LkGallery *self = data;
+
+  /* The row is going. Nothing is left to draw a picture that lands after
+   * this, and a fetch in flight holds the controller. */
+  if (self->previews != NULL)
+    lk_chart_previews_shutdown (self->previews);
+  g_clear_object (&self->previews);
+  g_free (self->drawing);
+  g_free (self->signature);
+  g_clear_handle_id (&self->act_id, g_source_remove);
+  g_clear_handle_id (&self->refill_id, g_source_remove);
+  g_clear_handle_id (&self->restore_id, g_source_remove);
+  g_clear_handle_id (&self->pending_id, g_source_remove);
+  g_free (self->pending);
+  g_free (self);
+}
+
+/* ---- what a tile does ---------------------------------------------------- */
+
+/* Long enough for the slowest style this has been pointed at, and short enough
+ * that a pick the core says nothing about does not mark the row for ever. */
+#define LK_GALLERY_PICK_MS 25000
+
+/* The core never reported on the pick. Give the row back to what is drawing. */
+static gboolean
+lk_gallery_pick_gave_up (gpointer user_data)
+{
+  GtkWidget *row = user_data;
+  LkGallery *self = g_object_get_data (G_OBJECT (row), "lk-gallery");
+
+  if (self == NULL || gtk_widget_in_destruction (row))
+    return G_SOURCE_REMOVE;
+
+  self->pending_id = 0;
+  g_clear_pointer (&self->pending, g_free);
+  self->pending_begun = FALSE;
+  lk_gallery_fill (self);
+  return G_SOURCE_REMOVE;
+}
+
+/* Draw the chart the mariner picked.
+ *
+ * A frame goes out between the pick and the call, so the tile is already
+ * marked as being read when the core takes the main thread to read it. */
+static gboolean
+lk_gallery_act (gpointer user_data)
+{
+  GtkWidget *row = user_data;
+  LkGallery *self = g_object_get_data (G_OBJECT (row), "lk-gallery");
+  g_autofree char *url = NULL;
+
+  if (self == NULL || gtk_widget_in_destruction (row))
+    return G_SOURCE_REMOVE;
+
+  self->act_id = 0;
+  /* The pick was retired before this ran. lk_gallery_fill retires one the
+   * moment the core answers for it, and a pick of the chart already drawing
+   * is answered by the fill inside the click itself. */
+  if (self->pending == NULL)
+    return G_SOURCE_REMOVE;
+
+  /* A COPY. The pick stays on the row until the core is drawing it or has
+   * given up on it: see `pending` in LkGallery. */
+  url = g_strdup (self->pending);
+  self->pending_begun = FALSE;
+  g_clear_handle_id (&self->pending_id, g_source_remove);
+  self->pending_id = g_timeout_add (LK_GALLERY_PICK_MS, lk_gallery_pick_gave_up, row);
+
+  /* NULL is how the links object spells "lookout's own chart". */
+  if (url[0] == '\0' || self->pending_mine)
+    lk_chart_links_select (lk_app_model_get_chart_links (self->model),
+                           url[0] != '\0' ? url : NULL);
+  else
+    lk_chart_links_add (lk_app_model_get_chart_links (self->model), url);
+  return G_SOURCE_REMOVE;
+}
+
+/* Pick this chart. A shipped entry the mariner has not taken yet is added
+ * first, which the core reads and then picks. */
+static void
+lk_tile_clicked (GtkButton *button, gpointer user_data)
+{
+  LkGallery *self = user_data;
+  const char *url = g_object_get_data (G_OBJECT (button), "lk-url");
+
+  if (self->act_id != 0)
+    return; /* one pick at a time: the last one has yet to be made */
+
+  /* The chart this tile names is the one drawing, so there is no pick to
+   * make. Asking the core for it again reads as a reload of a chart the
+   * mariner is already on. */
+  {
+    const char *active = lk_chart_links_active (lk_app_model_get_chart_links (self->model));
+    const char *want = url != NULL ? url : "";
+
+    if (want[0] == '\0' ? active == NULL : g_strcmp0 (active, want) == 0)
+      return;
+  }
+
+  g_free (self->pending);
+  self->pending = g_strdup (url != NULL ? url : "");
+  self->pending_mine = g_object_get_data (G_OBJECT (button), "lk-mine") != NULL;
+
+  /* The row first, then the frame that draws it, then the core. A plain idle
+   * can run before the frame clock's own paint, so this waits a frame. */
+  lk_gallery_fill (self);
+  self->act_id = g_timeout_add (25, lk_gallery_act, self->row);
+}
+
+static void
+lk_tile_refresh (GtkButton *button, gpointer user_data)
+{
+  LkGallery *self = user_data;
+  const char *url = g_object_get_data (G_OBJECT (button), "lk-url");
+
+  lk_chart_links_refresh (lk_app_model_get_chart_links (self->model), url);
+}
+
+static void
+lk_tile_remove (GtkButton *button, gpointer user_data)
+{
+  LkGallery *self = user_data;
+  const char *url = g_object_get_data (G_OBJECT (button), "lk-url");
+
+  lk_chart_links_remove (lk_app_model_get_chart_links (self->model), url);
+}
+
+static void
+lk_add_tile_clicked (GtkButton *button, gpointer user_data)
+{
+  LkGallery *self = user_data;
+
+  if (self->on_add != NULL)
+    self->on_add (self->on_add_data);
+}
+
+/* ---- one tile ------------------------------------------------------------ */
+
+/* The picture at the top of a tile, or the room one will take. */
+static GtkWidget *
+lk_tile_art (GdkTexture *picture)
+{
+  GtkWidget *art = gtk_overlay_new ();
+  GtkWidget *frame = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+
+  /* The frame requests the tile size, and the picture goes over it.
+   *
+   * GtkPicture requests the size and shape of its texture, so a 960 by 720
+   * render made its tile 720 points tall, and a window-shaped snapshot made
+   * a shorter one beside it. GtkOverlay does not measure overlay children,
+   * so the frame fixes the size and the cover fit crops the picture. */
+  gtk_widget_set_size_request (frame, LK_TILE_WIDTH, LK_TILE_ART);
+  gtk_widget_add_css_class (frame, "lk-chart-art");
+  gtk_overlay_set_child (GTK_OVERLAY (art), frame);
+  gtk_widget_set_overflow (art, GTK_OVERFLOW_HIDDEN);
+
+  if (picture != NULL)
+    {
+      GtkWidget *shot = gtk_picture_new_for_paintable (GDK_PAINTABLE (picture));
+
+      gtk_picture_set_content_fit (GTK_PICTURE (shot), GTK_CONTENT_FIT_COVER);
+      gtk_picture_set_can_shrink (GTK_PICTURE (shot), TRUE);
+      gtk_overlay_add_overlay (GTK_OVERLAY (art), shot);
+    }
+  else
+    {
+      /* A style with no picture yet draws its kind. A publisher's own
+       * portrayal needs the style resolved and its tiles fetched, so the
+       * icon stands in until the first render arrives. */
+      GtkWidget *icon = gtk_image_new_from_icon_name ("network-workgroup-symbolic");
+
+      gtk_image_set_pixel_size (GTK_IMAGE (icon), 26);
+      gtk_widget_add_css_class (icon, "lk-accent");
+      gtk_widget_set_valign (icon, GTK_ALIGN_CENTER);
+      gtk_widget_set_halign (icon, GTK_ALIGN_CENTER);
+      gtk_widget_add_css_class (frame, "lk-chart-art-empty");
+      /* An overlay child as well, so the frame alone sets the height. */
+      gtk_overlay_add_overlay (GTK_OVERLAY (art), icon);
+    }
+
+  return art;
+}
+
+/* Read this chart again, or take it off the list. Lookout's own chart has
+ * neither: it is built from the sets below and cannot be removed. */
+static GtkWidget *
+lk_tile_menu (LkGallery *self, const char *url)
+{
+  GtkWidget *menu = gtk_menu_button_new ();
+  GtkWidget *box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 2);
+  GtkWidget *popover = gtk_popover_new ();
+  GtkWidget *again = gtk_button_new_with_label ("Read This Chart Again");
+  GtkWidget *remove = gtk_button_new_with_label ("Remove");
+
+  gtk_widget_add_css_class (again, "flat");
+  gtk_widget_add_css_class (remove, "flat");
+  gtk_button_set_has_frame (GTK_BUTTON (again), FALSE);
+  gtk_button_set_has_frame (GTK_BUTTON (remove), FALSE);
+  gtk_widget_set_halign (gtk_button_get_child (GTK_BUTTON (again)), GTK_ALIGN_START);
+  gtk_widget_set_halign (gtk_button_get_child (GTK_BUTTON (remove)), GTK_ALIGN_START);
+
+  g_object_set_data_full (G_OBJECT (again), "lk-url", g_strdup (url), g_free);
+  g_object_set_data_full (G_OBJECT (remove), "lk-url", g_strdup (url), g_free);
+  g_signal_connect (again, "clicked", G_CALLBACK (lk_tile_refresh), self);
+  g_signal_connect (remove, "clicked", G_CALLBACK (lk_tile_remove), self);
+
+  gtk_box_append (GTK_BOX (box), again);
+  gtk_box_append (GTK_BOX (box), remove);
+  gtk_popover_set_child (GTK_POPOVER (popover), box);
+  gtk_menu_button_set_popover (GTK_MENU_BUTTON (menu), popover);
+  gtk_menu_button_set_icon_name (GTK_MENU_BUTTON (menu), "view-more-symbolic");
+  gtk_widget_add_css_class (menu, "lk-chart-more");
+  gtk_widget_set_halign (menu, GTK_ALIGN_END);
+  gtk_widget_set_valign (menu, GTK_ALIGN_START);
+  gtk_widget_set_margin_top (menu, 7);
+  gtk_widget_set_margin_end (menu, 7);
+  return menu;
+}
+
+/* One chart: a picture of it, its name, and where it comes from.
+ *
+ * `url` NULL is Lookout's own chart. `mine` marks a link already on the
+ * mariner's list, which is the only kind that offers a menu. */
+static GtkWidget *
+lk_tile_new (LkGallery *self, const char *url, const char *name, const char *detail,
+             GdkTexture *picture, gboolean active, gboolean mine)
+{
+  GtkWidget *button = gtk_button_new ();
+  GtkWidget *column = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+  GtkWidget *overlay = gtk_overlay_new ();
+  GtkWidget *words = gtk_box_new (GTK_ORIENTATION_VERTICAL, 3);
+  GtkWidget *title = gtk_label_new (name);
+  GtkWidget *where = gtk_label_new (detail);
+
+  gtk_overlay_set_child (GTK_OVERLAY (overlay), lk_tile_art (picture));
+
+  /* The badge goes over the CLIPPED picture, not inside it: a picture that
+   * fills by covering is wider than the tile, and a badge aligned inside it
+   * starts left of the tile's own edge. */
+  if (active)
+    {
+      GtkWidget *badge = gtk_label_new ("ACTIVE");
+
+      gtk_widget_add_css_class (badge, "lk-chart-badge");
+      gtk_widget_set_halign (badge, GTK_ALIGN_START);
+      gtk_widget_set_valign (badge, GTK_ALIGN_START);
+      gtk_widget_set_margin_top (badge, 7);
+      gtk_widget_set_margin_start (badge, 7);
+      gtk_overlay_add_overlay (GTK_OVERLAY (overlay), badge);
+    }
+  if (mine)
+    gtk_overlay_add_overlay (GTK_OVERLAY (overlay), lk_tile_menu (self, url));
+
+  gtk_widget_add_css_class (title, "heading");
+  gtk_label_set_xalign (GTK_LABEL (title), 0.0);
+  gtk_label_set_ellipsize (GTK_LABEL (title), PANGO_ELLIPSIZE_END);
+  gtk_widget_add_css_class (where, "caption");
+  gtk_widget_add_css_class (where, "dim-label");
+  gtk_label_set_xalign (GTK_LABEL (where), 0.0);
+  /* A style link holds the publisher, the style and often a key, and those are
+   * the parts an end ellipsis removes first. */
+  gtk_label_set_ellipsize (GTK_LABEL (where), PANGO_ELLIPSIZE_MIDDLE);
+
+  gtk_box_append (GTK_BOX (words), title);
+  gtk_box_append (GTK_BOX (words), where);
+  gtk_widget_set_margin_start (words, 11);
+  gtk_widget_set_margin_end (words, 11);
+  gtk_widget_set_margin_top (words, 9);
+  gtk_widget_set_margin_bottom (words, 11);
+
+  gtk_box_append (GTK_BOX (column), overlay);
+  gtk_box_append (GTK_BOX (column), words);
+
+  gtk_button_set_child (GTK_BUTTON (button), column);
+  gtk_widget_set_size_request (button, LK_TILE_WIDTH, -1);
+  gtk_widget_add_css_class (button, "lk-chart-tile");
+  if (active)
+    gtk_widget_add_css_class (button, "lk-chart-tile-active");
+
+  if (url != NULL)
+    {
+      g_object_set_data_full (G_OBJECT (button), "lk-url", g_strdup (url), g_free);
+      gtk_widget_set_tooltip_text (button, url);
+    }
+  if (mine)
+    g_object_set_data (G_OBJECT (button), "lk-mine", GINT_TO_POINTER (1));
+  g_signal_connect (button, "clicked", G_CALLBACK (lk_tile_clicked), self);
+
+  gtk_accessible_update_state (GTK_ACCESSIBLE (button), GTK_ACCESSIBLE_STATE_SELECTED,
+                               active, -1);
+  return button;
+}
+
+/* The last tile: add a chart by link or from a file. */
+static GtkWidget *
+lk_add_tile_new (LkGallery *self)
+{
+  GtkWidget *button = gtk_button_new ();
+  GtkWidget *column = gtk_box_new (GTK_ORIENTATION_VERTICAL, 8);
+  GtkWidget *plus = gtk_image_new_from_icon_name ("list-add-symbolic");
+  GtkWidget *title = gtk_label_new ("Add a chart");
+  GtkWidget *detail = gtk_label_new ("Style link, TileJSON, or a file");
+
+  gtk_image_set_pixel_size (GTK_IMAGE (plus), 20);
+  gtk_widget_add_css_class (plus, "lk-accent");
+  gtk_widget_add_css_class (title, "heading");
+  gtk_widget_add_css_class (detail, "caption");
+  gtk_widget_add_css_class (detail, "dim-label");
+  gtk_label_set_wrap (GTK_LABEL (detail), TRUE);
+  gtk_label_set_justify (GTK_LABEL (detail), GTK_JUSTIFY_CENTER);
+
+  gtk_box_append (GTK_BOX (column), plus);
+  gtk_box_append (GTK_BOX (column), title);
+  gtk_box_append (GTK_BOX (column), detail);
+  gtk_widget_set_valign (column, GTK_ALIGN_CENTER);
+
+  gtk_button_set_child (GTK_BUTTON (button), column);
+  gtk_widget_set_size_request (button, LK_TILE_ADD, -1);
+  gtk_widget_add_css_class (button, "lk-add-tile");
+  g_signal_connect (button, "clicked", G_CALLBACK (lk_add_tile_clicked), self);
+  return button;
+}
+
+/* ---- the row ------------------------------------------------------------- */
+
+/* What Lookout's own chart is built from. */
+static char *
+lk_gallery_own_detail (LkGallery *self)
+{
+  g_autoptr (GPtrArray) rows = lk_app_model_get_chart_sets (self->model);
+  guint cells = 0;
+
+  for (guint i = 0; i < rows->len; i++)
+    {
+      const LkChartSetRow *set = g_ptr_array_index (rows, i);
+
+      if (set->on)
+        cells += set->charts;
+    }
+
+  if (cells == 0)
+    return g_strdup ("From your chart sets");
+  return g_strdup_printf ("From your chart sets · %u cells", cells);
+}
+
+/* True when this url is on the mariner's own list. */
+static gboolean
+lk_gallery_is_mine (GPtrArray *links, const char *url)
+{
+  for (guint i = 0; i < links->len; i++)
+    if (g_strcmp0 (((const LkChartLink *) g_ptr_array_index (links, i))->url, url) == 0)
+      return TRUE;
+  return FALSE;
+}
+
+/* The publisher's own name for a chart, once the core has read its style. */
+static const char *
+lk_gallery_name_of (GPtrArray *links, const char *url, const char *fallback)
+{
+  for (guint i = 0; i < links->len; i++)
+    {
+      const LkChartLink *link = g_ptr_array_index (links, i);
+
+      if (g_strcmp0 (link->url, url) == 0 && link->name != NULL && link->name[0] != '\0')
+        return link->name;
+    }
+  return fallback;
+}
+
+/* Ask for a picture of every chart on the row.
+ *
+ * The chart being drawn is captured off the engine, which is the only true
+ * picture of a publisher's portrayal. Everything else is a shipped picture or
+ * one tile fetched at the mariner's own water. */
+static void
+lk_gallery_ask_for_pictures (LkGallery *self, GPtrArray *mine,
+                             const LkChartCatalogEntry *catalog, guint n_catalog)
+{
+  LkChartLinks *links = lk_app_model_get_chart_links (self->model);
+  g_autoptr (GPtrArray) urls = g_ptr_array_new ();
+
+  /* Lookout's own chart is first, under the empty url. */
+  g_ptr_array_add (urls, (gpointer) "");
+  for (guint i = 0; i < n_catalog; i++)
+    g_ptr_array_add (urls, (gpointer) catalog[i].url);
+  for (guint i = 0; i < mine->len; i++)
+    {
+      const LkChartLink *link = g_ptr_array_index (mine, i);
+
+      if (lk_chart_catalog_entry (link->url) == NULL)
+        g_ptr_array_add (urls, link->url);
+    }
+  g_ptr_array_add (urls, NULL);
+
+  lk_chart_previews_want (self->previews, (const char *const *) urls->pdata);
+
+  /* And the chart on the screen, as the engine draws it. Only when the chart
+   * has CHANGED: a capture keeps a picture, which rebuilds this row, and
+   * capturing from here on every rebuild would never stop. */
+  const char *active = lk_chart_links_active (links);
+  if (!self->known || g_strcmp0 (self->drawing, active) != 0)
+    {
+      self->known = TRUE;
+      g_free (self->drawing);
+      self->drawing = g_strdup (active);
+      lk_chart_previews_watch (self->previews, active);
+    }
+}
+
+/* One tile to draw. The row is planned before it is built, so a rebuild that
+ * would draw the same tiles can be dropped. */
+typedef struct {
+  const char *url;    /* NULL for Lookout's own chart */
+  const char *name;
+  const char *detail;
+  GdkTexture *art;    /* borrowed from the picture store */
+  gboolean    active;
+  gboolean    mine;
+} LkTilePlan;
+
+/* Put the row back where the mariner had it.
+ *
+ * A tile off the left edge cannot be picked if the row jumps home under the
+ * pointer, and the row is rebuilt whenever a picture lands. The offset can
+ * only be restored once the new tiles are measured, which is what the
+ * adjustment's upper says. */
+/* Put the offset back, once the new tiles have been measured. */
+static void
+lk_gallery_restore_now (LkGallery *self)
+{
+  GtkAdjustment *adjustment;
+  double room;
+
+  if (self->scroller == NULL || self->restore_to <= 0)
+    return;
+
+  adjustment = gtk_scrolled_window_get_hadjustment (GTK_SCROLLED_WINDOW (self->scroller));
+  room = gtk_adjustment_get_upper (adjustment) - gtk_adjustment_get_page_size (adjustment);
+  if (room <= 0)
+    return;
+  gtk_adjustment_set_value (adjustment, MIN (self->restore_to, room));
+  self->restore_to = 0;
+}
+
+static void
+lk_gallery_upper_changed (GtkAdjustment *adjustment, GParamSpec *pspec,
+                          gpointer user_data)
+{
+  GtkWidget *row = user_data;
+  LkGallery *self = g_object_get_data (G_OBJECT (row), "lk-gallery");
+
+  if (self != NULL)
+    lk_gallery_restore_now (self);
+}
+
+/* The last word on where the row sits.
+ *
+ * Refocusing the tile makes the scroller reveal it, and a reveal worked out
+ * against an allocation the rebuild has not run yet moves the row by a few
+ * points. This runs under the layout and puts the offset back. The row is not
+ * rebuilt often, and nothing is armed when it is not. */
+static gboolean
+lk_gallery_restore_settled (gpointer user_data)
+{
+  GtkWidget *row = user_data;
+  LkGallery *self = g_object_get_data (G_OBJECT (row), "lk-gallery");
+
+  if (self == NULL || gtk_widget_in_destruction (row))
+    return G_SOURCE_REMOVE;
+
+  self->restore_id = 0;
+  lk_gallery_restore_now (self);
+  return G_SOURCE_REMOVE;
+}
+
+static void
+lk_gallery_fill (LkGallery *self)
+{
+  LkChartLinks *links = lk_app_model_get_chart_links (self->model);
+  const char *active = lk_chart_links_active (links);
+  GPtrArray *mine = lk_chart_links_list (links);
+  g_autoptr (GArray) plan = g_array_new (FALSE, TRUE, sizeof (LkTilePlan));
+  g_autoptr (GString) signature = g_string_new (NULL);
+  GtkWidget *child;
+  guint n_catalog = 0;
+  const LkChartCatalogEntry *catalog = lk_chart_catalog_entries (&n_catalog);
+
+  /* A chart being read is the one the mariner picked, whatever the core still
+   * reports as active, and its line says what is happening. */
+  gboolean busy = lk_chart_links_busy (links);
+
+  /* Retire the pick once the core has answered for it: it is the chart being
+   * drawn, or the resolve that began for it has ended. Only after the core has
+   * BEGUN, because the error and the active url both still read as the last
+   * chart's until then. */
+  if (self->pending != NULL)
+    {
+      gboolean landed = self->pending[0] == '\0'
+                            ? active == NULL
+                            : g_strcmp0 (active, self->pending) == 0;
+
+      if (busy)
+        self->pending_begun = TRUE;
+      if (landed || (self->pending_begun && !busy))
+        {
+          g_clear_pointer (&self->pending, g_free);
+          self->pending_begun = FALSE;
+          g_clear_handle_id (&self->pending_id, g_source_remove);
+        }
+    }
+
+  const char *picked = self->pending != NULL ? self->pending
+                       : busy                ? (active != NULL ? active : "")
+                                             : NULL;
+
+  /* Lookout's own chart first. It is built from the sets below and cannot be
+   * removed, so it has no menu. */
+  g_autofree char *own = lk_gallery_own_detail (self);
+  gboolean own_picked = picked != NULL && picked[0] == '\0';
+  LkTilePlan first = { NULL, "Lookout chart", own_picked ? "Reading this chart…" : own,
+                       lk_chart_previews_get (self->previews, NULL),
+                       own_picked || (picked == NULL && active == NULL), FALSE };
+  g_array_append_val (plan, first);
+
+  /* Then the charts the app ships, in their own order, so picking one does not
+   * move the cards. */
+  for (guint i = 0; i < n_catalog; i++)
+    {
+      const LkChartCatalogEntry *entry = &catalog[i];
+      gboolean reading = g_strcmp0 (picked, entry->url) == 0;
+      LkTilePlan tile = { entry->url,
+                          lk_gallery_name_of (mine, entry->url, entry->name),
+                          reading ? "Reading this chart…" : entry->url,
+                          lk_chart_previews_get (self->previews, entry->url),
+                          reading || (picked == NULL && g_strcmp0 (active, entry->url) == 0),
+                          lk_gallery_is_mine (mine, entry->url) };
+
+      g_array_append_val (plan, tile);
+    }
+
+  /* Then the links the mariner added themselves. */
+  for (guint i = 0; i < mine->len; i++)
+    {
+      const LkChartLink *link = g_ptr_array_index (mine, i);
+      gboolean reading = g_strcmp0 (picked, link->url) == 0;
+      LkTilePlan tile = { link->url, link->name,
+                          reading ? "Reading this chart…" : link->url,
+                          lk_chart_previews_get (self->previews, link->url),
+                          reading || (picked == NULL && g_strcmp0 (active, link->url) == 0),
+                          TRUE };
+
+      if (lk_chart_catalog_entry (link->url) != NULL)
+        continue; /* already planned above, under the publisher's name */
+      g_array_append_val (plan, tile);
+    }
+
+  for (guint i = 0; i < plan->len; i++)
+    {
+      const LkTilePlan *tile = &g_array_index (plan, LkTilePlan, i);
+
+      g_string_append_printf (signature, "%s\x1f%s\x1f%s\x1f%p\x1f%d%d\x1e",
+                              tile->url != NULL ? tile->url : "", tile->name,
+                              tile->detail, tile->art, tile->active, tile->mine);
+    }
+
+  /* The links poll several times a second while a style resolves, and each
+   * report rebuilt this row. Nothing about the tiles changed, and the row
+   * jumped home each time. */
+  if (g_strcmp0 (signature->str, self->signature) == 0)
+    return;
+  g_free (self->signature);
+  self->signature = g_strdup (signature->str);
+
+  if (self->scroller != NULL)
+    {
+      GtkAdjustment *adjustment =
+          gtk_scrolled_window_get_hadjustment (GTK_SCROLLED_WINDOW (self->scroller));
+      double at = gtk_adjustment_get_value (adjustment);
+
+      if (at > 0)
+        self->restore_to = at;
+    }
+
+  /* WHICH TILE HAS THE KEYBOARD. A click focuses the tile, this rebuild
+   * destroys it, and GTK then moves the focus to the first thing it can find
+   * in the row. A scroller puts its focused child on screen, so the row jumped
+   * home to the first tile every time a chart was picked — taking the tiles
+   * the mariner was looking at out from under the pointer. The tile in the
+   * same place gets it back. */
+  int focused = -1;
+  GtkRoot *root = gtk_widget_get_root (self->row);
+  GtkWidget *had = root != NULL ? gtk_root_get_focus (root) : NULL;
+
+  if (had != NULL)
+    {
+      int i = 0;
+
+      for (child = gtk_widget_get_first_child (self->row); child != NULL;
+           child = gtk_widget_get_next_sibling (child), i++)
+        if (child == had || gtk_widget_is_ancestor (had, child))
+          {
+            focused = i;
+            break;
+          }
+    }
+
+  while ((child = gtk_widget_get_first_child (self->row)) != NULL)
+    gtk_box_remove (GTK_BOX (self->row), child);
+
+  for (guint i = 0; i < plan->len; i++)
+    {
+      const LkTilePlan *tile = &g_array_index (plan, LkTilePlan, i);
+
+      gtk_box_append (GTK_BOX (self->row),
+                      lk_tile_new (self, tile->url, tile->name, tile->detail,
+                                   tile->art, tile->active, tile->mine));
+    }
+
+  gtk_box_append (GTK_BOX (self->row), lk_add_tile_new (self));
+
+  if (focused >= 0)
+    {
+      int i = 0;
+
+      for (child = gtk_widget_get_first_child (self->row); child != NULL;
+           child = gtk_widget_get_next_sibling (child), i++)
+        if (i == focused)
+          {
+            gtk_widget_grab_focus (child);
+            break;
+          }
+    }
+
+  if (self->restore_to > 0 && self->restore_id == 0)
+    self->restore_id = g_idle_add_full (G_PRIORITY_LOW, lk_gallery_restore_settled,
+                                        self->row, NULL);
+
+  lk_gallery_ask_for_pictures (self, mine, catalog, n_catalog);
+}
+
+static gboolean
+lk_gallery_refill (gpointer user_data)
+{
+  GtkWidget *row = user_data;
+  LkGallery *self = g_object_get_data (G_OBJECT (row), "lk-gallery");
+
+  if (self == NULL || gtk_widget_in_destruction (row))
+    return G_SOURCE_REMOVE;
+  self->refill_id = 0;
+  lk_gallery_fill (self);
+  return G_SOURCE_REMOVE;
+}
+
+/* ON AN IDLE. Remove and Refresh call the links object, which reports back
+ * inside the call, and the rebuild that answers destroys every tile including
+ * the menu holding the button being clicked. The Charts page defers its own
+ * rebuilds for the same reason. */
+static void
+lk_gallery_changed (gpointer subject, gpointer user_data)
+{
+  GtkWidget *row = user_data;
+  LkGallery *self = g_object_get_data (G_OBJECT (row), "lk-gallery");
+
+  if (self == NULL || gtk_widget_in_destruction (row))
+    return;
+  if (self->refill_id == 0)
+    self->refill_id = g_idle_add (lk_gallery_refill, row);
+}
+
+GtkWidget *
+lk_chart_gallery_new (LkAppModel *model, LkChartGalleryAdd on_add, gpointer user_data)
+{
+  GtkWidget *scroller = gtk_scrolled_window_new ();
+  LkGallery *self;
+
+  g_return_val_if_fail (LK_IS_APP_MODEL (model), NULL);
+
+  self = g_new0 (LkGallery, 1);
+  self->model = model;
+  self->on_add = on_add;
+  self->on_add_data = user_data;
+  self->row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, LK_TILE_GAP);
+  self->previews = lk_chart_previews_new (lk_app_model_get_controller (model));
+
+  gtk_widget_set_margin_top (self->row, 2);
+  gtk_widget_set_margin_bottom (self->row, 2);
+  /* The row keeps its own height, and every tile fills it. The tile that
+   * adds a chart has a line of words and no picture, so its own height is
+   * less than the height of the tiles beside it. */
+  gtk_widget_set_valign (self->row, GTK_ALIGN_START);
+  self->scroller = scroller;
+  /* Bound to the row: the adjustment belongs to the scroller, which outlives
+   * the row that holds `self`. */
+  g_signal_connect_object (gtk_scrolled_window_get_hadjustment (GTK_SCROLLED_WINDOW (scroller)),
+                           "notify::upper", G_CALLBACK (lk_gallery_upper_changed),
+                           self->row, 0);
+  gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scroller), self->row);
+  gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scroller),
+                                  GTK_POLICY_AUTOMATIC, GTK_POLICY_NEVER);
+  /* gtk_widget_compute_expand reads the children, so the gallery sets the
+   * flag itself: a picture inside a tile must not claim the spare height of
+   * the page the gallery is on. */
+  gtk_widget_set_vexpand (scroller, FALSE);
+  /* The row is as tall as its tiles and no taller. */
+  gtk_scrolled_window_set_propagate_natural_height (GTK_SCROLLED_WINDOW (scroller), TRUE);
+  g_object_set_data_full (G_OBJECT (self->row), "lk-gallery", self, lk_gallery_free);
+
+  /* A style the core has just read, a link added or dropped, and a set
+   * switched on or off all change what this row says. */
+  g_signal_connect_object (lk_app_model_get_chart_links (model), "changed",
+                           G_CALLBACK (lk_gallery_changed), self->row, 0);
+  g_signal_connect_object (model, "chart-sets-changed",
+                           G_CALLBACK (lk_gallery_changed), self->row, 0);
+  /* A picture landing is a tile to redraw. */
+  g_signal_connect_object (self->previews, "changed",
+                           G_CALLBACK (lk_gallery_changed), self->row, 0);
+
+  lk_gallery_fill (self);
+  return scroller;
+}

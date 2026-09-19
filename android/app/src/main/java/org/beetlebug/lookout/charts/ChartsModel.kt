@@ -41,10 +41,11 @@ data class Library(val dir: File, val cells: List<String>) {
  *
  * [chartPaths] is what [LookoutView] opens, and it falls back — the union,
  * then anything pushed into the app's own external files dir (no permission
- * needed, see the adb recipe in [LookoutActivity]), then the cell bundled in
- * the APK — so the app always has something to draw.
+ * needed, see the adb recipe in [LookoutActivity]). No chart ships in the APK,
+ * so an empty list is a real answer: the engine opens on the basemap and setup
+ * runs over it.
  */
-class ChartsModel(private val appContext: Context, private val bundled: String?) {
+class ChartsModel(private val appContext: Context) {
 
     /** The installed sets, in the order added. Re-read when the core's
      *  background scan lands. */
@@ -72,6 +73,13 @@ class ChartsModel(private val appContext: Context, private val bundled: String?)
 
     /** The import pipeline: scan, bake what is raw, open the result. */
     val importer = ChartImport(appContext)
+
+    /**
+     * Where NOAA's downloads land. The app's own external files dir, which
+     * needs no permission, and one directory for the lot: the core writes one
+     * zip per cell there, so the whole directory bakes as one set.
+     */
+    val noaaDir: File get() = File(appContext.getExternalFilesDir(null), "NOAA")
 
     /** Volume roots a folder browser starts from (computed once). */
     val roots: List<File> by lazy { storageRoots(appContext) }
@@ -121,7 +129,7 @@ class ChartsModel(private val appContext: Context, private val bundled: String?)
         get() {
             val want = composed.takeIf { it.isNotEmpty() }
                 ?: pushed
-                ?: return bundled?.let { arrayOf(it) } ?: emptyArray()
+                ?: return emptyArray()
             // Held, not rebuilt. This is read from composition, and a real
             // library is seven thousand cells: returning a fresh Array on
             // every read copied all of them each time the loader recomposed.
@@ -148,7 +156,9 @@ class ChartsModel(private val appContext: Context, private val bundled: String?)
                 return if (on.size == 1) "${on[0].title} ($cells)" else "${on.size} sets ($cells)"
             }
             pushed?.let { return "pushed (${cells(it.size)})" }
-            return "bundled demo cell"
+            // Nothing installed. No chart ships in the app, so this is the
+            // basemap with setup over it rather than a demo cell.
+            return "no charts installed"
         }
 
     /**
@@ -172,6 +182,9 @@ class ChartsModel(private val appContext: Context, private val bundled: String?)
             ChartSets.add(dir.absolutePath)
             lastEmptyPick = null
             pullSets()
+            picturesOf(dir.absolutePath).takeIf { it.isNotEmpty() }?.let {
+                onPictures?.invoke(it, emptyList())
+            }
             Log.i(TAG, "set added: ${dir.absolutePath} ($charts charts)")
             return true
         } finally {
@@ -190,10 +203,30 @@ class ChartsModel(private val appContext: Context, private val bundled: String?)
      * not make.
      */
     fun remove(path: String) {
+        // Read before the set goes: the index is what knows which pictures
+        // came in with it.
+        val pictures = picturesOf(path)
         if (!ChartSets.remove(path)) return
         ChartBake.deletePrepared(appContext, File(path))
         pullSets()
+        if (pictures.isNotEmpty()) onPictures?.invoke(emptyList(), pictures)
     }
+
+    /**
+     * Install the pictures a set carries, and take them out again with it.
+     *
+     * A picture and a survey are different kinds of chart, but they arrive in
+     * the same folders, so adding a folder installs both. One direction only:
+     * the raster model knows nothing about sets. Set by the Activity, which is
+     * where both models are to hand.
+     */
+    var onPictures: ((add: List<String>, remove: List<String>) -> Unit)? = null
+
+    /** The picture files a set holds, as the index reports them. */
+    private fun picturesOf(path: String): List<String> =
+        ChartSets.files(path)
+            .filter { it.kind == ChartScanRead.RASTER || it.kind == ChartScanRead.RASTER_SOURCE }
+            .map { it.path }
 
     /**
      * Re-read the list and the union. Called after every change the shell made,

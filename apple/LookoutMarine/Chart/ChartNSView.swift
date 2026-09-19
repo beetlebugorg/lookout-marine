@@ -34,8 +34,13 @@ struct ChartView: NSViewRepresentable {
         // A pending open request the model couldn't service (no view attached
         // yet when it was made) — normally requestOpen drives the controller
         // directly; see AppModel.requestOpen.
-        if let req = model.charts.openRequest, req.id != v.lastOpenId {
-            v.lastOpenId = req.id
+        // SwiftUI updates before the first layout, where the view reports no
+        // usable size and the engine is handed the fallback 1280x800. The
+        // chart then draws to an aspect the window never has. maybeAutoOpen
+        // runs at the first real size, so the request waits for it.
+        if let req = model.charts.openRequest, req.id != controller.lastOpenId,
+           ChartController.hasRealSize(v) {
+            controller.lastOpenId = req.id
             _ = controller.open(charts: req.paths, in: v)
             v.raiseOverlay()
             v.syncMetalLayerScale()
@@ -84,7 +89,6 @@ final class PassThroughHostingView<Content: View>: NSHostingView<Content> {
 final class ChartNSView: NSView {
     weak var controller: ChartController?
     weak var model: AppModel?
-    var lastOpenId = 0
     private var didAutoOpen = false
     private var overlayHost: NSView?
     private var fsObservers: [NSObjectProtocol] = []
@@ -235,8 +239,19 @@ final class ChartNSView: NSView {
         controller?.attachView(self)
         // A request raised before this view had a size is the newer list: the
         // scan or the import worked it out after the walk ran.
-        let paths = model?.charts.openRequest?.paths ?? model?.charts.initialChartPaths() ?? []
-        guard !paths.isEmpty else { return }
+        // An install with no charts still opens. The engine draws the basemap
+        // under an empty library, which is what a mariner picking their first
+        // chart should be looking at; returning here left the window grey
+        // until something else asked for a chart.
+        // A request of NO paths is the launch one: pullChartSets runs before
+        // the background scan has read a folder, so compose is empty, and the
+        // pictures in the library carry it past requestOpen's guard. Preferring
+        // it threw away the walk below, which reads the prepared charts off the
+        // disk and had them all along. The chart then opened with no cells, at
+        // the fallback size this view reports before layout, and the picture
+        // drew alone and stretched to an aspect the window never had.
+        let requested = model?.charts.openRequest?.paths ?? []
+        let paths = requested.isEmpty ? (model?.charts.initialChartPaths() ?? []) : requested
         didAutoOpen = true
         // No frame restoration for this window: the chart reopens from our own
         // recents, and the fromServer frame restore is exactly the mid-load
@@ -250,7 +265,7 @@ final class ChartNSView: NSView {
             guard let self else { return }
             defer { self.model?.charts.isOpening = false; self.model?.charts.preparingSymbols = false }
             guard self.controller?.handle == nil else { return }
-            self.lastOpenId = self.model?.charts.openRequest?.id ?? 0
+            self.controller?.lastOpenId = self.model?.charts.openRequest?.id ?? 0
             _ = self.controller?.open(charts: paths, in: self)
             self.raiseOverlay()
             self.syncMetalLayerScale()

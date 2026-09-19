@@ -346,6 +346,77 @@ lk_store_save_chart_link_active (const char *url)
   lk_store_wrote ();
 }
 
+/* ---- the NOAA pick ------------------------------------------------------- */
+
+char **
+lk_store_load_noaa_regions (void)
+{
+  return lk_store_load_list (LOOKOUT_STORE_CHARTSETS, "noaa_regions");
+}
+
+void
+lk_store_save_noaa_regions (const char *const *ids)
+{
+  lk_store_save_list (LOOKOUT_STORE_CHARTSETS, "noaa_regions", ids);
+  /* The store drops a key set to an empty list, so an emptied record reads
+   * back as one that was never written. The flag records the difference. */
+  lookout_store_set_flag (lk_store_handle (), LOOKOUT_STORE_CHARTSETS,
+                          "noaa_regions_kept", 1);
+  lk_store_wrote ();
+}
+
+void
+lk_store_forget_noaa_regions (void)
+{
+  static const char *const none[] = { NULL };
+
+  lk_store_save_list (LOOKOUT_STORE_CHARTSETS, "noaa_regions", none);
+  lookout_store_set_flag (lk_store_handle (), LOOKOUT_STORE_CHARTSETS,
+                          "noaa_regions_kept", 0);
+  lk_store_wrote ();
+}
+
+char *
+lk_store_load_noaa_update_check (void)
+{
+  g_autofree char *value =
+      lk_store_load_string (LOOKOUT_STORE_CHARTSETS, "noaa_update_check");
+
+  if (value == NULL || value[0] == '\0')
+    return g_strdup ("daily");
+  return g_steal_pointer (&value);
+}
+
+void
+lk_store_save_noaa_update_check (const char *cadence)
+{
+  lookout_store_set_text (lk_store_handle (), LOOKOUT_STORE_CHARTSETS,
+                          "noaa_update_check", cadence);
+  lk_store_wrote ();
+}
+
+gint64
+lk_store_load_noaa_update_checked (void)
+{
+  return (gint64) lookout_store_number (lk_store_handle (), LOOKOUT_STORE_CHARTSETS,
+                                        "noaa_update_checked", 0);
+}
+
+void
+lk_store_save_noaa_update_checked (gint64 when)
+{
+  lookout_store_set_number (lk_store_handle (), LOOKOUT_STORE_CHARTSETS,
+                            "noaa_update_checked", (double) when);
+  lk_store_wrote ();
+}
+
+gboolean
+lk_store_noaa_regions_recorded (void)
+{
+  return lookout_store_flag (lk_store_handle (), LOOKOUT_STORE_CHARTSETS,
+                             "noaa_regions_kept", 0) != 0;
+}
+
 /* ---- plugin settings ----------------------------------------------------- */
 
 char **

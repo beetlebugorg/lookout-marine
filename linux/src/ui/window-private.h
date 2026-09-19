@@ -22,7 +22,8 @@ typedef struct {
   GtkWidget  *search; /* the floating search capsule, an overlay child */
   GtkWidget  *page;   /* opaque fill over the whole window while no chart draws */
   GtkWidget  *loader;
-  GtkWidget  *empty_state;
+  /* Setup, raised over the chart when the app has nothing to draw. */
+  GtkWidget  *first_run;
   GtkWidget  *scale_bar;
   GtkWidget  *capsule;
 

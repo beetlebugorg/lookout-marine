@@ -8,7 +8,15 @@
 # Every test links the same objects the app links, so what a test proves is
 # what the app runs.
 
-unit_tests = ['format', 'import', 'json', 'store', 'pick']
+# Three real S-57 cells, the ones the core's bake gate uses. A scan of a
+# folder reads the cells themselves, so a name on an empty file proves
+# nothing: the engine reports no chart for it, which is correct and useless to
+# test with.
+test_c_args = shell_c_args + [
+  '-DLK_TEST_CELLS="' + meson.project_source_root() / '..' / 'test' / 'cells' + '"',
+]
+
+unit_tests = ['bands', 'coastline', 'depths', 'format', 'import', 'json', 'library', 'noaa', 'preview', 'store', 'pick']
 
 foreach name : unit_tests
   exe = executable('test-' + name,
@@ -16,13 +24,13 @@ foreach name : unit_tests
     core_headers,
     link_with: [lkshell] + core_archives,
     include_directories: include_directories('../src'),
-    c_args: shell_c_args,
+    c_args: test_c_args,
     dependencies: deps,
   )
   test(name, exe, suite: 'unit', timeout: 60)
 endforeach
 
-widget_tests = ['hud', 'window', 'pick-report']
+widget_tests = ['charts', 'coverage', 'depth-step', 'hud', 'window', 'pick-report', 'noaa-cycle']
 headless = find_program ('run-headless.sh')
 
 foreach name : widget_tests
@@ -31,7 +39,7 @@ foreach name : widget_tests
     core_headers,
     link_with: [lkshell] + core_archives,
     include_directories: include_directories('../src'),
-    c_args: shell_c_args,
+    c_args: test_c_args,
     dependencies: deps,
   )
   # Serial: each widget test spawns its own Xvfb through `xvfb-run -a`, and two

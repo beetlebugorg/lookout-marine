@@ -1,6 +1,6 @@
 //  OpenPanel.swift — the "Open Chart…" file pickers.
 //
-//  macOS: an NSOpenPanel shared by the File menu and the empty-state button so
+//  macOS: an NSOpenPanel shared by the File menu and setup's Files source, so
 //  there's one code path. We deliberately DON'T restrict allowedContentTypes to
 //  a dynamic .pmtiles UTI — that greys out the user's charts if the type isn't
 //  registered. Instead we accept any file or folder and let the engine validate.

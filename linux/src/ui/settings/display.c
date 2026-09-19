@@ -222,7 +222,7 @@ lk_build_display_page (LkSettings *settings)
 
   /* "Colour scheme" here, the reference's settings header spelling, while the
      commands menu says "Color Scheme". Each mirrors macOS as it is. */
-  GtkWidget *scheme_section = lk_section_hinted (page, "Colour scheme", "Ctrl+L steps");
+  GtkWidget *scheme_section = lk_section_hinted (page, "Colour scheme", "Ctrl+L steps", NULL);
   lk_scheme_swatches (scheme_section, settings);
   lk_footer (scheme_section,
              "The palettes switch instantly. Night keeps your eyes dark-adapted.");
@@ -234,7 +234,7 @@ lk_build_display_page (LkSettings *settings)
     "Adds buoys, beacons, lights, restricted areas and ferry routes",
     "Adds spot soundings, contour labels, seabed quality and cables",
   };
-  GtkWidget *detail = lk_section_hinted (page, "Display category", "Ctrl+D adds Other");
+  GtkWidget *detail = lk_section_hinted (page, "Display category", "Ctrl+D adds Other", NULL);
   GtkWidget *cat_group = NULL;
   int cat = lk_mariner_get_display_category (settings->mariner);
   for (int i = 0; i < 3; i++)
@@ -251,7 +251,7 @@ lk_build_display_page (LkSettings *settings)
     "Spot depths, whatever the category",
     "No spot depths, whatever the category",
   };
-  GtkWidget *sound = lk_section_hinted (page, "Soundings", "Ctrl+Shift+S steps");
+  GtkWidget *sound = lk_section_hinted (page, "Soundings", "Ctrl+Shift+S steps", NULL);
   GtkWidget *snd_group = NULL;
   for (int i = 0; i < 3; i++)
     {

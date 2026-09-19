@@ -13,6 +13,35 @@ import UIKit
 
 #if os(iOS)
 
+/// How the settings form comes up: a sheet on a phone, the whole screen on an
+/// iPad.
+///
+/// An iPad page sheet is already nearly the size of the screen, and it gets
+/// there by scaling up out of the middle of it. A cover rises from the bottom
+/// the way the phone's sheet does, and the form is a sidebar and a pane, which
+/// is what the Mac gives a window of its own.
+///
+/// Both presentations are always attached, and the size class decides which
+/// one can be true. Choosing between them with an `if` would rebuild the chrome
+/// under them every time an iPad changed size class in Split View.
+private struct SettingsPresentation<Form: View>: ViewModifier {
+    @Binding var showing: Bool
+    @ViewBuilder let form: () -> Form
+    @Environment(\.horizontalSizeClass) private var width
+
+    func body(content: Content) -> some View {
+        content
+            .sheet(isPresented: shown(whenRegular: false)) { form() }
+            .fullScreenCover(isPresented: shown(whenRegular: true)) { form() }
+    }
+
+    private func shown(whenRegular: Bool) -> Binding<Bool> {
+        Binding(get: { showing && (width == .regular) == whenRegular },
+                set: { if !$0 { showing = false } })
+    }
+}
+
+
 struct ChartView: View {
     let model: AppModel
     /// Held, not taken locally in `body`. A binding cannot be made through
@@ -41,7 +70,7 @@ struct ChartView: View {
         // The form brings its OWN navigation: a stack on a phone, a sidebar
         // and pane on an iPad. It cannot be given one from out here, because
         // only the form knows how wide it came up.
-        .sheet(isPresented: $chrome.showSettings) {
+        .modifier(SettingsPresentation(showing: $chrome.showSettings) {
             SettingsView(model: model)
                 // The form follows the chart's scheme, like the rest of the
                 // chrome. The scheme is set here because OverlayLayer sets it
@@ -52,7 +81,7 @@ struct ChartView: View {
                 // does not remove a preference already applied to an open
                 // sheet. The OS scheme makes a return to Day a change.
                 .preferredColorScheme(model.readouts.scheme == 0 ? osScheme : .dark)
-        }
+        })
         .fileImporter(isPresented: $chrome.showImporter,
                       allowedContentTypes: [.item, .folder]) { result in
             if case .success(let url) = result { model.openImported(url) }
@@ -86,7 +115,6 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate {
     /// The SwiftUI chrome window (set by SceneDelegate) — re-asserted key and
     /// topmost after lookout's chart window appears.
     weak var chromeWindow: UIWindow?
-    var lastOpenId = 0
     private var didAutoOpen = false
     private var lastSizePt = CGSize.zero
 
@@ -167,8 +195,11 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate {
               bounds.width > 1, bounds.height > 1 else { return }
         // A pending open request beats the startup default (it can only exist
         // this early if something opened a chart before first layout).
+        // An install with no charts still opens. The engine draws the basemap
+        // under an empty library, which is what a mariner picking their first
+        // chart should be looking at; returning here left the window grey
+        // until something else asked for a chart.
         let paths = model?.charts.openRequest?.paths ?? model?.charts.initialChartPaths() ?? []
-        guard !paths.isEmpty else { return }
         didAutoOpen = true
         lastSizePt = bounds.size
         model?.charts.openingCells = paths.count
@@ -178,7 +209,7 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate {
             guard let self else { return }
             defer { self.model?.charts.isOpening = false; self.model?.charts.preparingSymbols = false }
             guard self.controller?.handle == nil else { return }
-            self.lastOpenId = self.model?.charts.openRequest?.id ?? 0
+            self.controller?.lastOpenId = self.model?.charts.openRequest?.id ?? 0
             _ = self.controller?.open(charts: paths, in: self)
             self.hostWindowAboveChart()
         }
@@ -383,14 +414,25 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate {
     /// The running total, so each report zooms by its own delta. The
     /// recognizer reports the translation since the scroll began.
     private var lastScrollY: CGFloat = 0
+    /// True while the running scroll began over the chrome, so the rest of it
+    /// belongs to the chrome too.
+    private var scrollOverChrome = false
 
     @objc private func onScroll(_ g: UIPanGestureRecognizer) {
         switch g.state {
         case .began:
+            // A trackpad scroll over the chrome belongs to the chrome, the
+            // same rule the Mac keeps. The window's hit test holds touches
+            // off the chart, and this recognizer listens for indirect scrolls
+            // rather than touches, so it is never asked.
+            scrollOverChrome = ChromeHitMap.shared
+                .contains(inChromeSpace(g.location(in: self)))
+            guard !scrollOverChrome else { return }
             notePointerInput("scroll")
             lastScrollY = 0
             controller?.flingStart(vx: 0, vy: 0)   // a scroll stops any coast
         case .changed:
+            guard !scrollOverChrome else { return }
             let y = g.translation(in: self).y
             let dy = y - lastScrollY
             lastScrollY = y
@@ -398,7 +440,7 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate {
             // Scrolling up zooms in, which is the direction the Mac takes.
             controller?.zoom(Double(dy) * Self.scrollZoom, atPt: g.location(in: self))
         default:
-            break
+            scrollOverChrome = false
         }
     }
 

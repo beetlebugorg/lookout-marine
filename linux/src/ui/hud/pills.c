@@ -142,7 +142,8 @@ lk_bake_notify (GObject *object, GParamSpec *pspec, gpointer user_data)
 {
   const char *name = g_param_spec_get_name (pspec);
 
-  if (!g_str_equal (name, "baking") && !g_str_equal (name, "has-chart"))
+  if (!g_str_equal (name, "baking") && !g_str_equal (name, "removing") &&
+      !g_str_equal (name, "has-chart"))
     return;
 
   LkAppModel *model = LK_APP_MODEL (object);
@@ -151,7 +152,12 @@ lk_bake_notify (GObject *object, GParamSpec *pspec, gpointer user_data)
   if (gtk_widget_in_destruction (panel->root))
     return;
 
-  const LkBakeProgress *p = lk_app_model_get_bake_progress (model);
+  /* A removal first: it is the one the mariner just asked for, and it cannot
+   * be cancelled, so it is the one to say out loud. The reference chooses the
+   * same way (ChartsModel.swift, progressToShow). */
+  const LkBakeProgress *gone = lk_app_model_get_remove_progress (model);
+  const LkBakeProgress *p = gone != NULL ? gone
+                                         : lk_app_model_get_bake_progress (model);
 
   gtk_widget_set_visible (panel->root, p != NULL);
   if (p == NULL)
@@ -169,6 +175,10 @@ lk_bake_notify (GObject *object, GParamSpec *pspec, gpointer user_data)
       panel->compact = compact;
       lk_bake_apply_form (panel);
     }
+
+  /* Nothing stops a removal: the set is off the list already, and half a
+   * deleted library is not a state to leave a mariner in. */
+  gtk_widget_set_visible (panel->stop, p->kind != LK_BAKE_REMOVE);
 
   g_autofree char *title = lk_bake_progress_title (p);
   gtk_label_set_text (GTK_LABEL (panel->head_big), title);

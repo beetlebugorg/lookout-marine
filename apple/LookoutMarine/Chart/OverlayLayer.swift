@@ -243,11 +243,16 @@ struct OverlayLayer: View {
                     }
                 }
                 .overlay {
-                    // The picker asked a question the mariner has answered.
-                    // While the answer is being acted on, the work stands in
-                    // its place.
-                    if model.charts.nothingToDraw, model.charts.chartWork == nil {
-                        EmptyChartState(model: model).chromeHitRegion("empty-state")
+                    // Setup stands over the running app, which keeps drawing
+                    // behind it. It is the whole answer to an empty library:
+                    // a page saying there are no charts said what to do
+                    // without doing any of it, and setup does it.
+                    //
+                    // Set Up Later leaves the chart and the chrome, and the
+                    // next launch with nothing to draw asks again.
+                    if model.firstRun.showing {
+                        FirstRunFlow(model: model, flow: model.firstRun)
+                            .chromeHitRegion("first-run")
                             .transition(.opacity)
                     }
                 }
@@ -256,6 +261,18 @@ struct OverlayLayer: View {
                 // while there is nothing to look at, then it travels to the top
                 // and closes once charts are drawing. Same view, so the move is
                 // something the eye can follow.
+                // The NOAA download, where the bake panel stands. Setup closes
+                // when it starts, so this is the only report of it.
+                .overlay(alignment: model.charts.hasChart ? .top : .center) {
+                    // Setup reports the download in its own step, so this is
+                    // for a download started from the Charts pane.
+                    if model.noaa.state.phase == .downloading, !model.firstRun.showing {
+                        NoaaDownloadPanel(model: model, compact: model.charts.hasChart)
+                            .padding(.top, model.charts.hasChart ? 10 : 0)
+                            .chromeHitRegion("noaa-download")
+                            .transition(.opacity)
+                    }
+                }
                 .overlay(alignment: model.charts.hasChart ? .top : .center) {
                     if let b = model.charts.chartWork {
                         ChartWorkPanel(progress: b, compact: model.charts.hasChart,
@@ -265,6 +282,11 @@ struct OverlayLayer: View {
                             .transition(.opacity)
                     }
                 }
+                // Setup asks to be raised whenever the app's answer to "have
+                // I anything to draw" could have changed.
+                .task { model.considerFirstRun() }
+                .onChange(of: model.charts.nothingToDraw) { model.considerFirstRun() }
+                .animation(.easeInOut(duration: 0.3), value: model.firstRun.showing)
                 .animation(.easeInOut(duration: 0.5), value: model.charts.hasChart)
                 .animation(.easeInOut(duration: 0.25), value: model.charts.chartWork == nil)
                 // The overlay hover tooltip, clear of the pointer. Padding,

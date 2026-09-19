@@ -30,6 +30,7 @@
                         <SolidColorBrush x:Key="LkMutedBrush" Color="#6B6B6B" />
                         <SolidColorBrush x:Key="LkHairlineBrush" Color="#33000000" />
                         <SolidColorBrush x:Key="LkAccentBrush" Color="#1B49C4" />
+                        <SolidColorBrush x:Key="LkScrimBrush" Color="#59000000" />
                     </ResourceDictionary>
                     <ResourceDictionary x:Key="Dark">
                         <SolidColorBrush x:Key="LkCardBrush" Color="#FF121C24" />
@@ -42,6 +43,7 @@
                         <SolidColorBrush x:Key="LkMutedBrush" Color="#9FB0BD" />
                         <SolidColorBrush x:Key="LkHairlineBrush" Color="#33FFFFFF" />
                         <SolidColorBrush x:Key="LkAccentBrush" Color="#7EA1F5" />
+                        <SolidColorBrush x:Key="LkScrimBrush" Color="#8C000000" />
                     </ResourceDictionary>
                 </ResourceDictionary.ThemeDictionaries>
                 <Style x:Key="Bubble" TargetType="Button">
@@ -263,43 +265,118 @@
             </Grid>
         </Border>
 
-        <!-- empty state -->
-        <Border x:Name="EmptyState" CornerRadius="12" Padding="24" MaxWidth="560"
-                Background="{ThemeResource LkPanelStrongBrush}" BorderBrush="{ThemeResource LkHairlineBrush}" BorderThickness="1"
-                HorizontalAlignment="Center" VerticalAlignment="Center"
-                Visibility="Collapsed">
-            <StackPanel Spacing="10">
-                <TextBlock Text="No chart open" FontSize="18" FontWeight="SemiBold" />
-                <StackPanel Orientation="Horizontal" Spacing="10">
-                    <Button x:Name="EmptyOpenBtn" Content="Choose Charts…" />
-                    <TextBlock Text="or drop them anywhere in this window"
-                               FontSize="12" Opacity="0.7" VerticalAlignment="Center" />
-                </StackPanel>
-                <!-- Where the charts come from goes first: a mariner with none
-                     needs that before a list of file extensions. -->
-                <TextBlock FontSize="12" Opacity="0.85" TextWrapping="Wrap">
-                    <Run>NOAA publishes every United States chart at no cost, at</Run>
-                    <Hyperlink NavigateUri="https://www.charts.noaa.gov/ENCs/ENCs.shtml">charts.noaa.gov</Hyperlink><Run>. Most other offices sell theirs.</Run>
-                </TextBlock>
-                <TextBlock Text="A folder of cells (.000), prepared charts (.pmtiles), imagery (.mbtiles) or BSB/KAP sheets. Cells and sheets are converted once on the way in, a few seconds each."
-                           FontSize="12" Opacity="0.85" TextWrapping="Wrap" />
-                <!-- Last, and set apart: the one thing on this page not about
-                     getting started, and the one a mariner must not skim. -->
-                <Border CornerRadius="9" Padding="12" Background="#24F59E0B"
-                        BorderBrush="#8CF59E0B" BorderThickness="1" Margin="0,6,0,0">
-                    <StackPanel Spacing="4">
-                        <TextBlock Text="NOT FOR NAVIGATION" FontSize="12" FontWeight="Bold"
-                                   CharacterSpacing="50" />
-                        <TextBlock Text="By importing charts you accept that Lookout is a prototype and not a certified navigation system, and that the charts it prepares are processed for display and are not the official ENC. They do not meet chart carriage regulations. You remain responsible for the safe navigation of your vessel and for keeping clear of every danger. Verify everything shown here against official, up-to-date charts and publications, and keep a paper backup."
-                                   FontSize="12" TextWrapping="Wrap" />
-                        <TextBlock FontSize="11" Opacity="0.8" TextWrapping="Wrap">
-                            <Run>NOAA ENC® charts come from the NOAA Office of Coast Survey and are updated weekly on a best-efforts basis; you are responsible for holding the current edition and the latest updates. NOAA makes no warranty and assumes no liability for their use. See the</Run>
-                            <Hyperlink NavigateUri="https://www.charts.noaa.gov/ENCs/ENC_Agreement.shtml">NOAA ENC User Agreement</Hyperlink><Run>.</Run>
-                        </TextBlock>
+        <!-- setup: the first run experience.
+             A card over the chart rather than a page replacing it, because the
+             basemap draws from the first frame at whole-world zoom and seeing
+             it behind the card is what tells a mariner the app is working
+             before any chart exists. The steps themselves are built in code
+             (firstrun/ui/FirstRun.cpp) the way the settings pages are: they are
+             mostly prose and a list, and XAML per step runs about four times
+             the length. -->
+        <Grid x:Name="FirstRunPane" Background="{ThemeResource LkScrimBrush}"
+              Visibility="Collapsed">
+            <!-- A floor under the height as well as a ceiling. The steps
+                 differ in length, and the card resized on every step and
+                 again as the Preparing step's bands arrived. -->
+            <Border MinHeight="520" MaxWidth="720" MaxHeight="720" Margin="24"
+                    HorizontalAlignment="Center" VerticalAlignment="Center"
+                    CornerRadius="12" Background="{ThemeResource LkPanelStrongBrush}"
+                    BorderBrush="{ThemeResource LkHairlineBrush}" BorderThickness="1">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <TextBlock x:Name="FirstRunTitle" Grid.Row="0"
+                               Margin="24,20,24,0" FontSize="13" FontWeight="SemiBold"
+                               Foreground="{ThemeResource LkMutedBrush}" CharacterSpacing="40" />
+
+                    <!-- No padding. The welcome hero runs to the edges of the
+                         card, and 4pt here left a sliver of window down its
+                         right side. The scrollbar overlays instead. -->
+                    <Grid Grid.Row="1">
+                        <ScrollViewer x:Name="FirstRunScroll"
+                                      VerticalScrollBarVisibility="Auto">
+                            <StackPanel x:Name="FirstRunBody" Spacing="14" />
+                        </ScrollViewer>
+                        <!-- The fold. A step taller than the card cuts mid
+                             sentence, and on the welcome step what goes under
+                             is the prototype notice and the agreement link, so
+                             a mariner on a short window sees neither. This
+                             fades the bottom edge while there is more below,
+                             and FirstRunUpdateFold keeps the scrollbar up with
+                             it. Both go when the step fits. -->
+                        <!-- The fade goes to the card's own colour, so the
+                             text runs out rather than passing under a grey
+                             smear. FirstRunUpdateFold sets the stops for the
+                             scheme on screen. -->
+                        <Rectangle x:Name="FirstRunFade" Height="24"
+                                   VerticalAlignment="Bottom" IsHitTestVisible="False"
+                                   Visibility="Collapsed">
+                            <Rectangle.Fill>
+                                <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                                    <GradientStop x:Name="FirstRunFadeTop" Offset="0"
+                                                  Color="#00F8F8F8" />
+                                    <GradientStop x:Name="FirstRunFadeBottom" Offset="1"
+                                                  Color="#F2F8F8F8" />
+                                </LinearGradientBrush>
+                            </Rectangle.Fill>
+                        </Rectangle>
+                    </Grid>
+
+                    <!-- The footer has two shapes. The welcome step stacks the
+                         primary action over Set Up Later and centers both. Every
+                         later step puts Back on the left and the primary action
+                         on the right. FirstRunPrimaryBtn moves between the two
+                         containers, so there is one of it. -->
+                    <StackPanel Grid.Row="2">
+                      <!-- The bar reads as a bar by having an edge, the way
+                           the reference's footer does. -->
+                      <Border x:Name="FirstRunFooterRule" Height="1"
+                              Background="{ThemeResource LkHairlineBrush}" />
+                      <Grid Margin="24,14,24,16">
+                        <StackPanel x:Name="FirstRunColumn" Spacing="12"
+                                    HorizontalAlignment="Center" Visibility="Collapsed">
+                            <Button x:Name="FirstRunLaterBtn" Content="Set Up Later"
+                                    HorizontalAlignment="Center"
+                                    Background="Transparent" BorderThickness="0" />
+                        </StackPanel>
+                        <Grid x:Name="FirstRunBar">
+                            <!-- The line beside the action: what the pick
+                                 costs, what a step's numbers mean afterwards,
+                                 the credit a tile host asks for. It stands
+                                 between Back and the action and trims rather
+                                 than pushing either aside. -->
+                            <TextBlock x:Name="FirstRunFootnote" Text=""
+                                       Visibility="Collapsed" FontSize="12.5"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       TextTrimming="CharacterEllipsis"
+                                       MaxWidth="380"
+                                       Foreground="{ThemeResource LkMutedBrush}" />
+                            <Button x:Name="FirstRunBackBtn" Content="Back"
+                                    HorizontalAlignment="Left" Visibility="Collapsed" />
+                            <StackPanel x:Name="FirstRunActions" Orientation="Horizontal"
+                                        Spacing="10" HorizontalAlignment="Right">
+                                <!-- Water wholly here has nothing to add and
+                                     nothing to give back. A mariner repairing a
+                                     damaged download still needs a way to fetch
+                                     it, so the picker offers this beside Apply.
+                                     -->
+                                <Button x:Name="FirstRunAgainBtn"
+                                        Content="Download Again"
+                                        Visibility="Collapsed" />
+                                <Button x:Name="FirstRunPrimaryBtn" Content="Continue"
+                                        Style="{StaticResource AccentButtonStyle}" />
+                            </StackPanel>
+                        </Grid>
+                      </Grid>
                     </StackPanel>
-                </Border>
-            </StackPanel>
-        </Border>
+                </Grid>
+            </Border>
+        </Grid>
 
         <!-- The mariner settings, in the shape every shell wears: a list of
              sections down the left, the section itself on the right, and the

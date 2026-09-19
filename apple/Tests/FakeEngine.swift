@@ -9,11 +9,12 @@
 //  a change (the raster election, say), the test sets what comes back.
 
 import Foundation
+import SwiftUI
 @testable import LookoutMarine
 
 @MainActor
 final class FakeEngine: RasterEngine, ChartLinkEngine, PluginEngine,
-                        ChartOpenEngine, ReadoutEngine, OverlayEngine {
+                        ChartOpenEngine, ReadoutEngine, OverlayEngine, NoaaEngine {
 
     // MARK: What it was asked
     var calls: [String] = []
@@ -85,6 +86,24 @@ final class FakeEngine: RasterEngine, ChartLinkEngine, PluginEngine,
     func importChartLinks(_ json: String) { note("importChartLinks") }
     func chartLinksSnapshot() -> ChartLinkSnapshot? { links }
 
+    /// What chartIsDrawing returns. A test that wants a preview captured
+    /// leaves it false, the way a chart that has settled reads.
+    var drawing = false
+    func chartIsDrawing() -> Bool { drawing }
+
+    /// The pictures. A test sets what the core can name: `previewTiles` maps a
+    /// link's url to the tile url for it, and an absent entry stands for a
+    /// style that names no raster tiles.
+    var previewTiles: [String: String] = [:]
+    var viewCentre: (lon: Double, lat: Double)? = (lon: -76.0, lat: 39.0)
+    func previewChartLinks() { note("previewChartLinks") }
+    func chartLinkPreviewURL(_ url: String, lon: Double, lat: Double, zoom: Int) -> String? {
+        note("chartLinkPreviewURL(\(url))")
+        return previewTiles[url]
+    }
+    func viewCenter() -> (lon: Double, lat: Double)? { viewCentre }
+    func snapshot() -> Image? { nil }
+
     // MARK: Plugins
     var specs: [PluginTableSpec] = []
     var alerts: (seq: Int, alerts: [PluginAlert])?
@@ -102,7 +121,7 @@ final class FakeEngine: RasterEngine, ChartLinkEngine, PluginEngine,
 
     // MARK: Opening
     var reopenSucceeds = true
-    func reopen(charts: [String]) -> Bool {
+    func reopen(charts: [String], requestID: Int) -> Bool {
         note("reopen(\(charts.count))")
         return reopenSucceeds
     }
@@ -137,4 +156,65 @@ final class FakeEngine: RasterEngine, ChartLinkEngine, PluginEngine,
         return true
     }
     func removeMarker(_ id: UInt64) -> Bool { removed.append(id); return true }
+
+    // MARK: NOAA
+
+    /// What noaaState returns: the phase, the catalog and the error the picker
+    /// reads. A test sets the two that matter to it.
+    var noaa = NoaaState()
+    /// What noaaRefresh returns. A device with no network answers false.
+    var noaaRefreshes = true
+    /// What a pick costs, keyed by the region id list as it was asked. The
+    /// model prices the whole pick and each region on its own, so a test that
+    /// wants both sets both keys.
+    var noaaCosts: [String: NoaaCost] = [:]
+    /// The cells each region names, by single region id.
+    var noaaCells: [String: [String]] = [:]
+    var noaaCoverage: [String: [GeoBox]] = [:]
+    var noaaOutdatedCount: UInt32 = 0
+
+    @discardableResult func noaaRefresh() -> Bool {
+        note("noaaRefresh")
+        return noaaRefreshes
+    }
+
+    func noaaState() -> NoaaState { noaa }
+
+    func noaaCost(regionIDs: String) -> NoaaCost? { noaaCosts[regionIDs] }
+
+    func noaaHave(_ names: [String]) {
+        note("noaaHave(\(names.sorted().joined(separator: ",")))")
+    }
+
+    func noaaDownload(regionIDs: String, destination: String, again: Bool) {
+        note("noaaDownload(\(regionIDs), \(destination), again: \(again))")
+    }
+
+    /// The core answers a comma-joined list with the cells of every region in
+    /// it, each name once. Regions overlap, so the join is what a test of the
+    /// spillover rule needs.
+    func noaaRegionCells(regionIDs: String) -> [String] {
+        var out: [String] = []
+        for id in regionIDs.split(separator: ",") {
+            for name in noaaCells[String(id)] ?? [] where !out.contains(name) {
+                out.append(name)
+            }
+        }
+        return out
+    }
+
+    func noaaOutdated(_ have: [NoaaInstalledCell]) -> UInt32 {
+        note("noaaOutdated(\(have.count))")
+        return noaaOutdatedCount
+    }
+
+    func noaaUpdate(_ have: [NoaaInstalledCell], destination: String) {
+        note("noaaUpdate(\(have.count), \(destination))")
+    }
+
+    func noaaCancel() { note("noaaCancel") }
+
+    func noaaRegionCoverage(_ regionID: String) -> [GeoBox] {
+        noaaCoverage[regionID] ?? []
+    }
 }

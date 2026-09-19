@@ -9,7 +9,9 @@
 #include "lk-test.h"
 
 #include "model/app-model.h"
+#include "model/store.h"
 #include "pick-fixture.h"
+#include "ui/firstrun/private.h"
 #include "ui/window.h"
 
 static LkAppModel *model;
@@ -71,20 +73,261 @@ test_activate_no_chart_safe (void)
   lk_test_drain ();
 }
 
-/* The empty state stands when nothing is open, and the readouts stay out of
- * sight until a chart is. */
+/* With nothing installed the mariner gets SETUP. There is a decision to make,
+ * and the flow is what asks it.
+ *
+ * A library whose sets are all switched off gets the basemap with the chrome
+ * over it, so no page stands for that state. */
 static void
-test_empty_state_visible (void)
+test_setup_runs_over_an_empty_library (void)
 {
-  /* The empty state's own title; the loader carries the same card class, so a
-     label is what tells the two apart. */
-  GtkWidget *empty = lk_test_find_label (window, "No charts yet");
+  GtkWidget *setup = lk_test_find_label (window, "Welcome to Lookout Marine");
   GtkWidget *capsule = lk_test_find_css (window, "lk-capsule");
 
-  g_assert_nonnull (empty);
-  g_assert_true (lk_test_shown (empty, window));
+  g_assert_nonnull (setup);
+  g_assert_true (lk_test_shown (setup, window));
+
+  g_assert_null (lk_test_find_label (window, "Every chart set is switched off"));
+
+  /* No chart, no readouts: a capsule reading 1:— over an empty view is chrome
+   * with nothing to report. */
   g_assert_nonnull (capsule);
   g_assert_false (lk_test_shown (capsule, window));
+}
+
+/* Setup asks the three sources, with NOAA the one it recommends. */
+static void
+test_setup_steps (void)
+{
+  GtkWidget *later = lk_test_find_button (window, "Set Up Later");
+  GtkWidget *primary = lk_test_find_button (window, "Continue");
+
+  g_assert_nonnull (later);
+  g_assert_true (lk_test_shown (later, window));
+  g_assert_nonnull (primary);
+
+  /* Continue moves to the source step, which offers the three sources. */
+  g_signal_emit_by_name (primary, "clicked");
+  lk_test_drain ();
+  g_assert_nonnull (lk_test_find_label (window, "How would you like to add charts?"));
+  g_assert_nonnull (lk_test_find_label (window, "NOAA charts"));
+  g_assert_nonnull (lk_test_find_label (window, "Online chart"));
+  g_assert_nonnull (lk_test_find_label (window, "Files on this computer"));
+  g_assert_nonnull (lk_test_find_label (window, "Recommended"));
+
+  /* Set Up Later belongs to the welcome step alone. Past it the mariner is
+     choosing a chart, and Back is what returns them. */
+  g_assert_false (lk_test_shown (lk_test_find_button (window, "Set Up Later"), window));
+  GtkWidget *back = lk_test_find_button (window, "Back");
+  g_assert_nonnull (back);
+  g_assert_true (lk_test_shown (back, window));
+
+  g_signal_emit_by_name (back, "clicked");
+  lk_test_drain ();
+  g_assert_nonnull (lk_test_find_label (window, "Welcome to Lookout Marine"));
+}
+
+/* Set Up Later is "not now", and it leaves a working app behind it. */
+static void
+test_setup_later_puts_it_away (void)
+{
+  GtkWidget *later = lk_test_find_button (window, "Set Up Later");
+
+  g_assert_nonnull (later);
+  g_signal_emit_by_name (later, "clicked");
+  lk_test_drain ();
+
+  /* Setup is down and no page is raised in its place: the mariner asked for
+     the app, and the app is the basemap with the chrome over it. */
+  g_assert_null (lk_test_find_label (window, "Welcome to Lookout Marine"));
+  g_assert_null (lk_test_find_label (window, "Every chart set is switched off"));
+
+  /* And it stays down for the rest of the launch, however often the window
+     reconsiders. */
+  lk_app_model_set_chart_open (model, FALSE, NULL);
+  lk_test_drain ();
+  g_assert_null (lk_test_find_label (window, "Welcome to Lookout Marine"));
+}
+
+/* An open with no charts leaves the saved pose alone.
+ *
+ * With a store attached the engine writes the pose every few seconds and
+ * again at close, and a chart of no charts opens on the whole world. That
+ * pose read as the mariner's own, so the next open with charts restored the
+ * world in place of the water they left. */
+static void
+test_an_empty_open_keeps_the_stored_pose (void)
+{
+  /* This suite opens no charts, so every open here is the empty one. */
+  g_assert_false (lk_store_has_saved_view ());
+}
+
+/* The scrim goes when setup does.
+ *
+ * The fill and the scrim stand on the setup card, and the window read them
+ * from events the model raises. Setup going away is the flow's own move, so
+ * both stayed up until something unrelated redrew them. */
+static void
+test_the_scrim_goes_with_setup (void)
+{
+  GtkWidget *page = lk_test_find_css (window, "lk-scrim");
+
+  /* This runs after Set Up Later, so the card has gone. */
+  g_assert_null (lk_test_find_label (window, "Welcome to Lookout Marine"));
+  g_assert_null (page);
+}
+
+/* Setup comes back when the library goes empty.
+ *
+ * A mariner who removes every chart through the NOAA picker has an empty
+ * library and no way back to the page that builds one, because finishing setup
+ * put it away for the run. This reads the rule directly. Driving it through
+ * the window needs a library to remove.
+ *
+ * Set Up Later is the other half. A mariner who never had charts asked for the
+ * app, so setup stays down for them. */
+static void
+test_setup_returns_when_the_library_empties (void)
+{
+  g_autoptr (LkFirstRun) run = lk_first_run_new ();
+
+  /* A run with charts, put away by finishing setup. */
+  g_assert_false (lk_first_run_should_run (run, FALSE, FALSE));
+  lk_first_run_finish (run);
+  g_assert_false (lk_first_run_should_run (run, FALSE, FALSE));
+
+  /* The charts go. */
+  g_assert_true (lk_first_run_should_run (run, TRUE, FALSE));
+
+  /* Set Up Later over a library that never had charts holds. */
+  g_autoptr (LkFirstRun) later = lk_first_run_new ();
+
+  g_assert_true (lk_first_run_should_run (later, TRUE, FALSE));
+  lk_first_run_finish (later);
+  g_assert_false (lk_first_run_should_run (later, TRUE, FALSE));
+}
+
+/* NOAA's terms are answered before their charts are picked.
+ *
+ * The step went straight to coverage and showed the terms as a note beside
+ * the map, so there was no accept and no decline. The reference moves to
+ * coverage only from the accept. */
+static void
+test_the_noaa_terms_gate_the_coverage_step (void)
+{
+  g_autoptr (LkFirstRun) run = lk_first_run_new ();
+
+  g_setenv ("LOOKOUT_FIRST_RUN", "source", TRUE);
+  lk_first_run_begin (run);
+  g_unsetenv ("LOOKOUT_FIRST_RUN");
+  lk_first_run_set_source (run, LK_FIRST_RUN_NOAA);
+
+  /* Continue asks, and leaves the mariner where they were. */
+  g_assert_false (lk_first_run_advance (run, NULL));
+  g_assert_cmpint (lk_first_run_step (run), ==, LK_FIRST_RUN_SOURCE);
+
+  /* A decline is the same as never answering. */
+  g_assert_cmpint (lk_first_run_step (run), ==, LK_FIRST_RUN_SOURCE);
+
+  lk_first_run_accept_terms (run);
+  g_assert_cmpint (lk_first_run_step (run), ==, LK_FIRST_RUN_COVERAGE);
+
+  /* And the accept applies to that one step alone. */
+  lk_first_run_accept_terms (run);
+  g_assert_cmpint (lk_first_run_step (run), ==, LK_FIRST_RUN_COVERAGE);
+}
+
+/* An import with no chart offers a way out.
+ *
+ * Continue waits on a bake, and the bake starts only once a cell arrives. A
+ * download that failed every cell left the step with Continue dead, Stop with
+ * no job, and Back hidden, so the card stood over an empty library with no
+ * live control. */
+static void
+test_an_import_with_no_chart_can_go_back (void)
+{
+  g_autoptr (LkFirstRun) run = lk_first_run_new ();
+  LkFirstRunFlow flow = { .model = model, .flow = run };
+
+  g_setenv ("LOOKOUT_FIRST_RUN", "importing", TRUE);
+  lk_first_run_begin (run);
+  g_unsetenv ("LOOKOUT_FIRST_RUN");
+
+  /* No download, no bake, and an empty library. */
+  g_assert_true (lk_app_model_get_nothing_to_draw (model));
+  g_assert_false (lk_first_run_saw_bake (run));
+  g_assert_true (lk_first_run_import_stalled (&flow));
+
+  /* Back leaves for the coverage step, where the water is still picked. */
+  lk_first_run_back (run);
+  g_assert_cmpint (lk_first_run_step (run), ==, LK_FIRST_RUN_COVERAGE);
+
+  /* A bake seen is an import doing its job, so the step waits as it did. */
+  g_setenv ("LOOKOUT_FIRST_RUN", "importing", TRUE);
+  lk_first_run_begin (run);
+  g_unsetenv ("LOOKOUT_FIRST_RUN");
+  lk_first_run_note_bake (run);
+  g_assert_false (lk_first_run_import_stalled (&flow));
+}
+
+/* The page fill stands while there is no chart handle. A chart of no charts
+ * draws the basemap, and setup floats over that, so the fill goes.
+ *
+ * The four states, in the order a launch meets them, driven through the model:
+ * the harness opens a handle of its own accord and the assertions here are
+ * about what the window draws for each state. */
+static void
+test_page_follows_nothing_to_draw (void)
+{
+  GtkWidget *page = lk_test_find_css (window, "lk-page");
+  GtkWidget *first_run = lk_test_find_label (window, "Welcome to Lookout Marine");
+  GtkWidget *loader = lk_test_find_label (window, "Opening the chart");
+
+  g_assert_nonnull (page);
+  g_assert_nonnull (first_run);
+  g_assert_nonnull (loader);
+
+  /* No handle and nothing installed: the fill stands, with no basemap under
+     it, and setup stands on the fill. */
+  lk_app_model_set_chart_open (model, FALSE, NULL);
+  lk_app_model_set_opening (model, FALSE, FALSE);
+  lk_test_drain ();
+  g_assert_true (lk_app_model_get_nothing_to_draw (model));
+  g_assert_true (lk_test_shown (page, window));
+  g_assert_true (lk_test_shown (first_run, window));
+
+  /* An open in flight. The loader says which of the three waits this is.
+     Setup STAYS up: it is a card over a running app, and its import step is
+     the page that watches the charts arrive. */
+  lk_app_model_set_opening (model, TRUE, FALSE);
+  lk_test_drain ();
+  g_assert_false (lk_app_model_get_nothing_to_draw (model));
+  g_assert_true (lk_test_shown (loader, window));
+
+  /* Open, and holding no charts. The loader has done its job and the basemap
+     draws. Setup stands over it behind a scrim, so the fill is up and dimming
+     rather than hiding the map. */
+  lk_app_model_set_opening (model, FALSE, FALSE);
+  lk_app_model_set_chart_open (model, TRUE, NULL);
+  lk_app_model_set_first_build_done (model, TRUE);
+  lk_test_drain ();
+  g_assert_true (lk_app_model_get_has_chart (model));
+  g_assert_true (lk_app_model_get_chart_is_empty (model));
+  g_assert_true (lk_app_model_get_nothing_to_draw (model));
+  g_assert_true (lk_test_shown (first_run, window));
+  g_assert_true (lk_test_shown (page, window));
+  g_assert_true (gtk_widget_has_css_class (page, "lk-scrim"));
+
+  /* The chrome that reports on a chart stays down with setup up. */
+  g_assert_false (lk_test_shown (lk_test_find_css (window, "lk-capsule"), window));
+  g_assert_false (g_action_get_enabled (action ("zoom-in")));
+
+  /* The handle gone again: the fill stands on its own, with no basemap under
+     it to dim. */
+  lk_app_model_set_chart_open (model, FALSE, NULL);
+  lk_test_drain ();
+  g_assert_true (lk_test_shown (page, window));
+  g_assert_false (gtk_widget_has_css_class (page, "lk-scrim"));
 }
 
 /* A pick raises the report into the overlay; close-pick clears the set, and the
@@ -110,14 +353,23 @@ test_close_pick_clears_report (void)
 }
 
 /* The scheme action tracks the chart's scheme, so the menu radio marks the one
- * in force even when a cycle or a load moved it. The engine reports the scheme
- * through the readouts push, which is the path a load or a Ctrl+L cycle takes. */
+ * in force even when a cycle or a load moved it.
+ *
+ * Set through the model and wait for the engine to report it back, which is
+ * the path a load or a Ctrl+L cycle takes. Pushing a readout by hand raced the
+ * frame tick: the window opens a chart of no charts for the basemap, and that
+ * tick pushes the engine's scheme over one written by hand. */
 static void
 push_scheme (int scheme)
 {
-  lookout_view view = { .lon = -76.48, .lat = 38.98, .zoom = 14, .rotation_deg = 0 };
-  lk_app_model_push_readouts (model, view, 13267, 1.0, scheme);
-  lk_test_drain ();
+  lk_app_model_set_scheme (model, scheme);
+  for (int i = 0; i < 100; i++)
+    {
+      lk_test_drain ();
+      if (lk_app_model_get_scheme (model) == scheme)
+        return;
+      g_usleep (5000);
+    }
 }
 
 static void
@@ -153,9 +405,23 @@ main (int argc, char *argv[])
   g_test_add_func ("/window/actions-exist", test_actions_exist);
   g_test_add_func ("/window/chart-only-disabled", test_chart_only_disabled);
   g_test_add_func ("/window/activate-no-chart-safe", test_activate_no_chart_safe);
-  g_test_add_func ("/window/empty-state-visible", test_empty_state_visible);
+  g_test_add_func ("/window/setup-runs-over-an-empty-library",
+                   test_setup_runs_over_an_empty_library);
+  g_test_add_func ("/window/setup-steps", test_setup_steps);
+  g_test_add_func ("/window/the-noaa-terms-gate-the-coverage-step",
+                   test_the_noaa_terms_gate_the_coverage_step);
+  g_test_add_func ("/window/an-import-with-no-chart-can-go-back",
+                   test_an_import_with_no_chart_can_go_back);
+  g_test_add_func ("/window/setup-returns-when-the-library-empties",
+                   test_setup_returns_when_the_library_empties);
+  g_test_add_func ("/window/page-follows-nothing-to-draw", test_page_follows_nothing_to_draw);
   g_test_add_func ("/window/close-pick-clears-report", test_close_pick_clears_report);
   g_test_add_func ("/window/scheme-action-follows", test_scheme_action_follows);
+  /* Last: it puts setup away for the rest of the run. */
+  g_test_add_func ("/window/setup-later-puts-it-away", test_setup_later_puts_it_away);
+  g_test_add_func ("/window/the-scrim-goes-with-setup", test_the_scrim_goes_with_setup);
+  g_test_add_func ("/window/an-empty-open-keeps-the-stored-pose",
+                   test_an_empty_open_keeps_the_stored_pose);
 
   return g_test_run ();
 }

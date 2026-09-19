@@ -21,6 +21,7 @@ import org.beetlebug.lookout.pick.pickReportWidth
 import org.beetlebug.lookout.plugins.AlertBanner
 import org.beetlebug.lookout.plugins.PluginTableDialog
 import org.beetlebug.lookout.plugins.PluginInstallDialogs
+import org.beetlebug.lookout.firstrun.FirstRunSetup
 import org.beetlebug.lookout.settings.SettingsSheet
 
 import androidx.compose.foundation.layout.Arrangement
@@ -48,6 +49,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.launch
+import androidx.compose.runtime.rememberCoroutineScope
+import org.beetlebug.lookout.charts.NoaaController
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.key
@@ -95,6 +99,7 @@ fun ChartScreen(
     var capsuleH by remember { mutableStateOf(Chrome.capsule) }
     var viewH by remember { mutableStateOf(0.dp) }
     val density = LocalDensity.current.density
+    val scope = rememberCoroutineScope()
     val topInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
 
     // Apply-and-save on a trailing debounce, mirroring the Swift binding: a
@@ -369,6 +374,50 @@ fun ChartScreen(
         )
     }
 
+    // A NOAA download, then the bake on what it left. One watcher for both the
+    // places a download starts, setup and the Charts pane, because two would
+    // each start a bake on the same directory.
+    val noaa = controller.noaaController
+    var fetching by remember { mutableStateOf(false) }
+    LaunchedEffect(noaa.phase) {
+        if (noaa.phase == NoaaController.Phase.DOWNLOADING) {
+            fetching = true
+            return@LaunchedEffect
+        }
+        if (!fetching) return@LaunchedEffect
+        fetching = false
+        if (noaa.done == 0) return@LaunchedEffect
+        controller.firstRun.sawBake = true
+        charts.importer.start(charts.noaaDir) { out ->
+            if (out != null) scope.launch { charts.add(out) }
+        }
+    }
+
+    // Setup, over the running chart. It comes up on any launch that settles on
+    // nothing to draw, and a published style counts as something: somebody
+    // sailing on one has no empty library to fill.
+    val nothingToDraw = charts.chartPaths.isEmpty() && !charts.scanning
+    val linked = controller.chartLinkController.activeChartLink != null
+    LaunchedEffect(nothingToDraw, linked) {
+        if (!controller.firstRun.showing &&
+            controller.firstRun.shouldRun(nothingToDraw, linked)
+        ) {
+            controller.firstRun.begin()
+        }
+    }
+    if (controller.firstRun.showing) {
+        FirstRunSetup(
+            flow = controller.firstRun,
+            charts = charts,
+            controller = controller,
+            onOpenCharts = {
+                onRequestFileAccess()
+                settingsSection = "charts"
+                showSettings = true
+            },
+        )
+    }
+
     if (showSettings) {
         SettingsSheet(
             m = controller.mariner,
@@ -377,6 +426,7 @@ fun ChartScreen(
             tables = controller.tables,
             links = controller.chartLinkController,
             raster = controller.rasterController,
+            noaa = noaa,
             onRequestAccess = onRequestFileAccess,
             onDismiss = {
                 showSettings = false

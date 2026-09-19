@@ -140,12 +140,14 @@ namespace winrt::LookoutMarine::implementation
                 auto lib = lkw::CollectCells(BakeOutputDir());
                 lib.insert(lib.end(), baked.begin(), baked.end());
                 AdoptBakedRasters(pictures, !lib.empty());
+                open_after_write = true; // a bake wrote into that folder
                 OpenPaths(lib, lkw::ChartLibraryDir(), lkw::AgencyForCells(lib));
                 return;
             }
             if (baked.empty() && pictures.empty())
                 baked = lkw::CellsFor(path);
             AdoptBakedRasters(pictures, !baked.empty());
+            open_after_write = true; // a bake wrote into that folder
             OpenPaths(baked, path, lkw::AgencyForCells(baked));
             return;
         }
@@ -214,6 +216,19 @@ namespace winrt::LookoutMarine::implementation
         if (!p.cancelled)
             BakeEta().Text(winrt::to_hstring(p.Remaining()));
 
+        /* The same three lines on the Charts settings page, which stands over
+         * this panel in a window of its own. Null unless that page is up with
+         * the section built. */
+        if (bake_pane_bar != nullptr)
+        {
+            bake_pane_bar.IsIndeterminate(p.total == 0);
+            bake_pane_bar.Value(p.Fraction());
+            bake_pane_count.Text(winrt::to_hstring(
+                p.total > 0 ? std::to_string(p.done) + " of " + std::to_string(p.total) : p.cell));
+            if (!p.cancelled)
+                bake_pane_eta.Text(winrt::to_hstring(p.Remaining()));
+        }
+
         if (p.running)
             return;
 
@@ -224,6 +239,9 @@ namespace winrt::LookoutMarine::implementation
         auto error = bake_job->Error();
         bake_job.reset();
         BakePanel().Visibility(Visibility::Collapsed);
+        /* The settings page loses its Preparing section with the job. */
+        if (SettingsOpen())
+            BuildSettingsPage();
 
         /* An import that produced nothing says why. Anything partial opens
          * below without a dialog: what landed is a usable library. */
@@ -247,7 +265,10 @@ namespace winrt::LookoutMarine::implementation
                                         : lkw::CollectCells(BakeOutputDir());
         AdoptBakedRasters(rasters, !charts.empty());
         if (!charts.empty())
+        {
+            open_after_write = true; // a bake wrote into that folder
             OpenPaths(charts, lkw::ChartLibraryDir(), lkw::AgencyForCells(charts));
+        }
     }
 
     /* Baked sheets join the raster underlay. When a vector open is about to

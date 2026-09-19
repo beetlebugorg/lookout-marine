@@ -44,6 +44,21 @@ namespace winrt::LookoutMarine::implementation
         raster_pill_shown.clear();
         scalebar_pt = 0;
         scalebar_m = 0;
+
+        FlatChromeButtons();
+    }
+
+    // The buttons the markup leaves with no background of their own: the
+    // pick report's three, the scale panel's close, the scale in the HUD
+    // capsule and Set Up Later. Each gets its state fills in this scheme,
+    // because WinUI fades a button's background between states and a
+    // transparent one fades through a dark wash (lkw::ButtonFills).
+    void MainWindow::FlatChromeButtons()
+    {
+        bool const dark = DarkChrome();
+        for (auto const &b : { PickCopyBtn(), PickCloseBtn(), PickFoldBtn(),
+                               ScaleClose(), HudScaleBtn(), FirstRunLaterBtn() })
+            lkw::FlatFills(b, dark);
     }
 
     void MainWindow::UpdateReadouts()

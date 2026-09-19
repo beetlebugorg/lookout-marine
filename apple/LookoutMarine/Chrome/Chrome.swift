@@ -62,6 +62,11 @@ enum Chrome {
     /// Panel border (XAML #33000000).
     static let edge = dyn(light: (0, 0, 0, 0.20),
                           dark: (1, 1, 1, 0.28))
+    /// The dim over the running app while a sheet stands on it (XAML
+    /// #38000000). The app stays visible through it, so a sheet reads as
+    /// something raised over a running chart.
+    static let scrim = Color.black.opacity(0.22)
+
     /// A control's fill as the pointer finds and presses it.
     static let hoverFill = dyn(light: (0.95, 0.95, 0.95, 1),
                                dark: (0.165, 0.176, 0.196, 1))

@@ -82,6 +82,13 @@ struct SettingsView: View {
                           allowedContentTypes: [.item, .folder]) { result in
                 if case .success(let url) = result { model.openImported(url) }
             }
+            // The NOAA picker, over the whole screen. It is a map of the
+            // country, and the Mac gives it a window of its own for the same
+            // reason: in a sheet on an iPad it came up as a card in the middle
+            // of the screen with the map squeezed into it.
+            .fullScreenCover(isPresented: $chrome.showSettingsNoaaPicker) {
+                NoaaPickerSheet(model: model, noaa: model.noaa)
+            }
             // On its OWN view. Two .fileImporter modifiers on one view collide —
             // SwiftUI presents only the outer, so Add Charts silently did
             // nothing. A background node keeps the two importers apart.

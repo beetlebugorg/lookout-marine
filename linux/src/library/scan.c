@@ -30,6 +30,24 @@ lk_scanned_cell_is_raster (const LkScannedCell *cell)
   return cell->kind == LOOKOUT_FILE_RASTER || cell->kind == LOOKOUT_FILE_RASTER_SOURCE;
 }
 
+char **
+lk_chart_set_picture_paths (const LkChartSet *set)
+{
+  GPtrArray *paths = g_ptr_array_new ();
+
+  if (set != NULL && set->cells != NULL)
+    for (guint i = 0; i < set->cells->len; i++)
+      {
+        const LkScannedCell *cell = g_ptr_array_index (set->cells, i);
+
+        if (cell->kind == LOOKOUT_FILE_RASTER && !cell->archived)
+          g_ptr_array_add (paths, g_strdup (cell->path));
+      }
+
+  g_ptr_array_add (paths, NULL);
+  return (char **) g_ptr_array_free (paths, FALSE);
+}
+
 static void
 lk_scanned_cell_free (gpointer data)
 {

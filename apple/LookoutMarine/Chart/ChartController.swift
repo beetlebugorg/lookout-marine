@@ -69,7 +69,9 @@ final class ChartController: NSObject {
 
     /// The backing view we render into; used for center-anchored zoom and to
     /// build the display link.
-    private weak var view: PlatformView?
+    /// The view the chart draws into. The extensions in this folder read it,
+    /// so `private(set)` rather than `private`.
+    private(set) weak var view: PlatformView?
 
     /// Pushed live readouts to the UI (cursor coord, scale, scheme, rotation…).
     weak var model: AppModel?
@@ -114,6 +116,9 @@ final class ChartController: NSObject {
     /// This shell's whole part in charts by link: fetch bytes for a url the
     /// core hands it. See ChartLinkFetch.swift.
     private let linkFetch = ChartLinkFetch()
+    /// The open request this controller has serviced. Both paths that open a
+    /// chart check it, so one request opens one handle.
+    var lastOpenId = 0
 
     // MARK: - Lifecycle
 
@@ -275,6 +280,7 @@ final class ChartController: NSObject {
         startDisplayLink()
         pushReadouts()
         model?.charts.hasChart = true
+        model?.charts.chartIsEmpty = paths.isEmpty
         model?.charts.chartPath = chartPath
         // What the open library states about its labels. On the model rather
         // than read once by whoever asks: the Settings window may be up while
@@ -322,8 +328,21 @@ final class ChartController: NSObject {
     /// after the first open — the AppModel calls this directly because SwiftUI
     /// stops updating the wrapped content view). False when no view yet.
     @discardableResult
-    func reopen(charts paths: [String]) -> Bool {
+    func reopen(charts paths: [String], requestID: Int) -> Bool {
         guard let view else { return false }
+        // Before the first layout the view reports no usable size and
+        // pointSize falls back to 1280x800, so the engine gets an aspect the
+        // window never has and the chart draws stretched. A library of
+        // pictures alone keeps that open for the whole session, because no
+        // second open follows to correct it. Leaving the request unserved
+        // hands it to maybeAutoOpen, which runs at the first real size.
+        guard Self.hasRealSize(view) else { return false }
+        // Already open for this request. The view's update path and the
+        // model's direct drive both answer it, and the second open destroys
+        // the handle the first one made along with the work running through
+        // it: the NOAA catalog read, a style resolve, a build in progress.
+        if requestID != 0, requestID == lastOpenId { return true }
+        lastOpenId = requestID
         return open(charts: paths, in: view)
     }
 
@@ -847,6 +866,13 @@ final class ChartController: NSObject {
     }
 
     // MARK: - Helpers
+
+    /// True once the view has been laid out and reports a usable size.
+    /// pointSize substitutes a default below this.
+    static func hasRealSize(_ view: PlatformView) -> Bool {
+        let b = view.bounds.size
+        return b.width > 1 && b.height > 1
+    }
 
     /// Logical point size of a view (falls back to a sane default before layout).
     private static func pointSize(of view: PlatformView) -> (Double, Double) {

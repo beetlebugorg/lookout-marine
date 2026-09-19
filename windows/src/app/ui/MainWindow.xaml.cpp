@@ -201,7 +201,7 @@ namespace winrt::LookoutMarine::implementation
 
     void MainWindow::WireChrome()
     {
-        EmptyOpenBtn().Click([this](auto &&, auto &&) { PickChartFolder(); });
+        FirstRunAttach();
         ZoomInBtn().Click([this](auto &&, auto &&) { Command('+'); });
         ZoomOutBtn().Click([this](auto &&, auto &&) { Command('-'); });
         // The north bubble is the follow lock; Ctrl+U stays the plain
@@ -347,6 +347,10 @@ namespace winrt::LookoutMarine::implementation
             });
             Root().KeyboardAccelerators().Append(f11);
         }
+
+        // The markup buttons drawn flat against their panel, in the scheme
+        // the chrome opens in. ApplyChromeTheme does this again on a change.
+        FlatChromeButtons();
     }
 
     void MainWindow::OnRendering(Windows::Foundation::IInspectable const &,
@@ -375,6 +379,11 @@ namespace winrt::LookoutMarine::implementation
             // landing answer raises needs-redraw, so a resolve keeps the render
             // loop ticking until it is done.
             PollChartLinks();
+            // A download the Charts page is reporting. Returns at once unless
+            // that line is on the page.
+            PollNoaaPane();
+            // A removal the page is reporting, for the same reason.
+            PollRemovalPane();
         }
         catch (...)
         {

@@ -197,10 +197,14 @@ pub const Job = struct {
     }
 
     /// tile57's per-chart callback, on its worker threads. False stops the run.
+    ///
+    /// The highest count wins rather than the last one to arrive. Several
+    /// workers report at once, and two stores can land out of the order the
+    /// charts finished in, which walked the progress bar backwards.
     fn progress(ctx: ?*anyopaque, done: u32, total: u32) callconv(.c) bool {
         _ = total;
         const self: *Job = @ptrCast(@alignCast(ctx orelse return false));
-        self.done.store(self.phase_offset + done, .release);
+        _ = self.done.fetchMax(self.phase_offset + done, .release);
         return !self.cancelled.load(.acquire);
     }
 
@@ -357,4 +361,20 @@ test "a job with no paths never starts" {
     defer job.free();
     settle(job);
     try t.expectEqual(@as(u32, 0), job.poll().total);
+}
+
+test "a progress report that lands late does not walk the bar backwards" {
+    const job = try emptyJob(8);
+    defer job.free();
+    settle(job);
+
+    // Two workers finish charts 5 and 3. The store for 3 arrives second.
+    _ = Job.progress(job, 5, 8);
+    try t.expectEqual(@as(u32, 5), job.poll().done);
+    _ = Job.progress(job, 3, 8);
+    try t.expectEqual(@as(u32, 5), job.poll().done);
+
+    // A later chart still moves it.
+    _ = Job.progress(job, 6, 8);
+    try t.expectEqual(@as(u32, 6), job.poll().done);
 }
