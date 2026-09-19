@@ -287,8 +287,20 @@ final class FirstRunModel {
 
     // MARK: What each step says
 
-    /// The primary button's words. The last step names the chart it keeps, so
-    /// the button states what the choice does.
+    /// Whether the online step can continue. Continuing with no chart picked
+    /// finished setup over the basemap and put it away for the run.
+    func canUseOnlineChart(_ links: ChartLinksModel) -> Bool {
+        links.active != nil
+    }
+
+    /// The picked chart's name, for the online step's button.
+    func chosenChartName(_ links: ChartLinksModel) -> String? {
+        guard let url = links.active else { return nil }
+        return links.list.first { $0.url == url }?.name
+    }
+
+    /// The primary button's words. The online step names the chart it keeps,
+    /// so the button states what the choice does.
     func primaryTitle(_ chosenChartName: String?) -> String {
         switch step {
         case .welcome, .source: return "Continue"

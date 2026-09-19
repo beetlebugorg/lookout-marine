@@ -242,9 +242,9 @@ struct FirstRunFlow: View {
             act()
         } label: {
             #if os(macOS)
-            Text(flow.primaryTitle(nil))
+            Text(primaryTitle)
             #else
-            Text(flow.primaryTitle(nil))
+            Text(primaryTitle)
                 .font(.system(size: 17, weight: .semibold))
                 .frame(maxWidth: .infinity)
                 .frame(height: 50)
@@ -263,11 +263,16 @@ struct FirstRunFlow: View {
         .accessibilityIdentifier("first-run-continue")
     }
 
+    private var primaryTitle: String {
+        flow.primaryTitle(step == .onlineChart ? flow.chosenChartName(model.chartLinks) : nil)
+    }
+
     /// Whether the primary action has anything to do. Download with no region
     /// picked, and with no catalog to price it from, does nothing.
     private var primaryEnabled: Bool {
         switch step {
-        case .welcome, .source, .onlineChart: return true
+        case .welcome, .source: return true
+        case .onlineChart: return flow.canUseOnlineChart(model.chartLinks)
         case .coverage:
             return model.noaa.state.haveCatalog && !model.noaa.picked.isEmpty
         // ChartBake opens the library once the import finishes, so there is

@@ -150,4 +150,19 @@ final class FirstRunStepTests: ShellTestCase {
         XCTAssertFalse(flow.sawBake)
         XCTAssertNil(flow.noaaOrder)
     }
+
+    /// The defect: Continue on the online step with no card picked finished
+    /// setup over the basemap and put it away for the run.
+    func testTheOnlineStepNeedsAPickedChart() {
+        let flow = FirstRunModel()
+        let links = ChartLinksModel()
+        flow.step = .onlineChart
+        XCTAssertFalse(flow.canUseOnlineChart(links))
+        XCTAssertEqual(flow.primaryTitle(flow.chosenChartName(links)), "Continue")
+
+        links.list = [.init(url: "https://example.test/style.json", name: "Harbour")]
+        links.active = "https://example.test/style.json"
+        XCTAssertTrue(flow.canUseOnlineChart(links))
+        XCTAssertEqual(flow.primaryTitle(flow.chosenChartName(links)), "Use Harbour")
+    }
 }
