@@ -299,14 +299,17 @@ pub fn planFetches(
     var out: std.ArrayList(Transfer) = .empty;
     errdefer out.deinit(alloc);
 
+    // A bundle counts only the cells this device lacks, so the download's
+    // total matches the picker's count. Its bytes are the whole district's,
+    // because the whole district transfers.
     for (0..256) |d| {
         if (!bundled[d]) continue;
         var cells: u32 = 0;
         var bytes: u64 = 0;
         for (cat.cells) |c| {
             if (c.district != d or c.zip_url.len == 0) continue;
-            cells += 1;
             bytes += c.zip_bytes;
+            if (again or !isHeld(held, c.name)) cells += 1;
         }
         try out.append(alloc, .{ .district = @intCast(d), .cells = cells, .bytes = bytes });
     }
@@ -991,6 +994,46 @@ test "a district mostly held comes cell by cell instead of whole" {
     for (plan) |t| try testing.expect(t.cell != null);
     // The two that are missing, and the straddler next door.
     try testing.expectEqual(@as(usize, 3), plan.len);
+}
+
+test "a bundle over held water counts only the charts it adds" {
+    var cat = try manyDistricts(testing.allocator, 40);
+    defer cat.deinit();
+    const d = regions[0].district;
+
+    // Ten held leaves thirty missing, past bundle_at, so the district still
+    // goes as one bundle.
+    var names: std.ArrayList([]const u8) = .empty;
+    defer names.deinit(testing.allocator);
+    var district_bytes: u64 = 0;
+    for (cat.cells) |c| {
+        if (c.district != d) continue;
+        district_bytes += c.zip_bytes;
+        if (names.items.len < 10) try names.append(testing.allocator, c.name);
+    }
+    std.mem.sort([]const u8, names.items, {}, struct {
+        fn lt(_: void, a: []const u8, b: []const u8) bool {
+            return std.mem.order(u8, a, b) == .lt;
+        }
+    }.lt);
+
+    const plan = try planFetches(testing.allocator, &cat, &.{d}, names.items, false);
+    defer testing.allocator.free(plan);
+    var bundle: ?Transfer = null;
+    for (plan) |t| {
+        if (t.cell == null) bundle = t;
+    }
+    const b = bundle orelse return error.NoBundle;
+    try testing.expectEqual(@as(u32, 30), b.cells);
+    // The whole district still transfers.
+    try testing.expectEqual(district_bytes, b.bytes);
+
+    // Asked again, the held ten count too.
+    const again = try planFetches(testing.allocator, &cat, &.{d}, names.items, true);
+    defer testing.allocator.free(again);
+    for (again) |t| {
+        if (t.cell == null) try testing.expectEqual(@as(u32, 40), t.cells);
+    }
 }
 
 test "repairing a held district fetches the bundle again" {

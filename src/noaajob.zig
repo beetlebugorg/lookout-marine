@@ -36,7 +36,8 @@ pub fn ownsId(id: u64) bool {
 pub const MAX_INFLIGHT = 4;
 
 
-/// A cell zip, or the catalog, larger than this is not the file we asked for.
+/// A cell zip larger than this is not the file we asked for. The catalog has
+/// a limit of its own, noaa.max_catalog_bytes.
 pub const MAX_ZIP_BYTES: u64 = 64 << 20;
 
 /// The same guard for a district bundle. NOAA's largest is Alaska, measured at
@@ -154,6 +155,9 @@ pub const Service = struct {
     checked_at: i64 = 0,
     err: []u8 = &.{},
     phase: Phase = .idle,
+    /// A catalog read is out. Held apart from `phase`, because a read can run
+    /// beside a download and the download's end is read off the phase.
+    catalog_inflight: bool = false,
     /// Raised when the snapshot changes. The shell's frame loop reads it.
     changed: bool = false,
 
@@ -196,6 +200,9 @@ pub const Service = struct {
     unpack_q: std.ArrayList(Pending) = .empty,
     unpack_stop: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     unpack_thread: ?std.Thread = null,
+    /// Set by the unpack thread as it returns, so adopt can join it without
+    /// waiting.
+    unpack_exited: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
     /// The snapshot a shell reads, and the lock that guards it.
     ///
@@ -222,7 +229,7 @@ pub const Service = struct {
     pub fn init(alloc: std.mem.Allocator) Service {
         return .{
             .alloc = alloc,
-            .gather = httpgather.Gather.init(alloc, MAX_ZIP_BYTES),
+            .gather = httpgather.Gather.init(alloc, noaa.max_catalog_bytes),
         };
     }
 
@@ -405,6 +412,7 @@ pub const Service = struct {
         self.reqs.clearRetainingCapacity();
         self.clearStage();
         self.inflight = 0;
+        self.catalog_inflight = false;
         if (self.phase == .downloading or self.phase == .reading_catalog) {
             self.phase = if (self.cat != null) .ready else .idle;
             self.changed = true;
@@ -461,7 +469,7 @@ pub const Service = struct {
 
         const io = std.Io.Threaded.global_single_threaded.io();
         const bytes = std.Io.Dir.cwd().readFileAlloc(io, path, self.alloc,
-                                                     .limited(MAX_ZIP_BYTES)) catch return;
+                                                     .limited(noaa.max_catalog_bytes)) catch return;
         defer self.alloc.free(bytes);
 
         var parsed = noaa.parse(self.alloc, bytes) catch return;
@@ -485,8 +493,12 @@ pub const Service = struct {
     }
 
     /// Read NOAA's product catalog. One request is outstanding at a time.
+    ///
+    /// A read during a download leaves the phase at downloading. Every shell
+    /// reads the download's end off the phase, so a read that moved it ended
+    /// the download there and stranded the rest of the plan.
     pub fn refresh(self: *Service) void {
-        if (self.phase == .reading_catalog) return;
+        if (self.catalog_inflight) return;
         // Load the cached catalog first, so the picker works while the read
         // below is in flight and after it fails.
         self.loadCachedCatalog();
@@ -494,13 +506,23 @@ pub const Service = struct {
             self.setErr("no network provider");
             return;
         }
-        self.freeStr(&self.err);
-        self.phase = .reading_catalog;
+        if (self.phase != .downloading) {
+            self.freeStr(&self.err);
+            self.phase = .reading_catalog;
+        }
+        self.catalog_inflight = true;
         self.changed = true;
         if (self.issue(noaa.catalog_url, .catalog, 0) == 0) {
-            self.phase = if (self.cat != null) .ready else .idle;
+            self.catalogEnded();
             self.setErr("could not start the catalog request");
         }
+    }
+
+    /// End the catalog read, whether or not it succeeded.
+    fn catalogEnded(self: *Service) void {
+        self.catalog_inflight = false;
+        if (self.phase != .downloading) self.phase = if (self.cat != null) .ready else .idle;
+        self.changed = true;
     }
 
     pub fn haveCatalog(self: *const Service) bool {
@@ -670,6 +692,10 @@ pub const Service = struct {
             self.setErr("no catalog yet");
             return;
         });
+        if (self.get == null) {
+            self.setErr("no network provider");
+            return;
+        }
         const stale = noaa.outdated(self.alloc, cat, installed) catch {
             self.setErr("out of memory checking editions");
             return;
@@ -721,7 +747,7 @@ pub const Service = struct {
             const i = self.next_job;
             self.next_job += 1;
             if (self.issue(self.plan.items[i].url, .cell, i) == 0) {
-                self.failed += 1;
+                self.failed += self.plan.items[i].cells;
                 continue;
             }
             self.inflight += 1;
@@ -849,25 +875,51 @@ pub const Service = struct {
             }
             if (!wrote) lock.sleepMs(1);
         }
+        self.unpack_exited.store(true, .release);
     }
 
-    /// Start the unpack thread, once per download.
+    /// Start the unpack thread for a download. A thread stopped at the end of
+    /// the last download may still be draining its queue, so it is joined and
+    /// a new one is spawned.
     fn startUnpacker(self: *Service) void {
-        if (self.unpack_thread != null) return;
+        if (self.unpack_thread != null and !self.unpack_stop.load(.acquire)) return;
+        self.stopUnpacker();
         self.unpack_stop.store(false, .release);
+        self.unpack_exited.store(false, .release);
         self.unpack_thread = std.Thread.spawn(.{}, unpackMain, .{self}) catch null;
     }
 
     /// Stop it and wait for the cell it is on.
+    /// A transfer queued after an idle thread returned is dropped here too.
     fn stopUnpacker(self: *Service) void {
-        const th = self.unpack_thread orelse return;
-        self.unpack_stop.store(true, .release);
-        th.join();
-        self.unpack_thread = null;
+        if (self.unpack_thread) |th| {
+            self.unpack_stop.store(true, .release);
+            th.join();
+            self.unpack_thread = null;
+        }
         self.unpack_mu.lock();
         defer self.unpack_mu.unlock();
         for (self.unpack_q.items) |j| self.alloc.free(j.name);
         self.unpack_q.clearRetainingCapacity();
+    }
+
+    /// Let the unpack thread go once no download runs.
+    ///
+    /// The thread polls its queue every millisecond, so it runs only while a
+    /// download runs. After the stop flag is set it drains the queue and
+    /// exits, and the next adopt joins it without blocking.
+    fn idleUnpacker(self: *Service) void {
+        if (self.phase == .downloading) return;
+        const th = self.unpack_thread orelse return;
+        self.unpack_stop.store(true, .release);
+        if (!self.unpack_exited.load(.acquire)) return;
+        th.join();
+        self.unpack_thread = null;
+    }
+
+    /// True while the unpack thread is alive.
+    pub fn unpackerRunning(self: *const Service) bool {
+        return self.unpack_thread != null;
     }
 
     /// True while an answer waits to be adopted.
@@ -881,6 +933,7 @@ pub const Service = struct {
         if (!self.pending()) {
             // No answer arrived. The api side may still have changed the
             // state since the last frame.
+            self.idleUnpacker();
             if (self.changed) self.publish();
             return;
         }
@@ -906,31 +959,33 @@ pub const Service = struct {
             };
         }
         if (self.phase == .downloading) self.pump();
+        self.idleUnpacker();
         self.publish();
     }
 
     fn tookCatalog(self: *Service, a: Answer) void {
         if (a.status < 200 or a.status >= 300 or a.bytes.len == 0) {
-            self.phase = if (self.cat != null) .ready else .idle;
+            self.catalogEnded();
             self.setErr("could not read NOAA's chart catalog");
             return;
         }
         var parsed = noaa.parse(self.alloc, a.bytes) catch {
-            self.phase = if (self.cat != null) .ready else .idle;
+            self.catalogEnded();
             self.setErr("NOAA's chart catalog did not parse");
             return;
         };
         if (parsed.cells.len == 0) {
             parsed.deinit();
-            self.phase = if (self.cat != null) .ready else .idle;
+            self.catalogEnded();
             self.setErr("NOAA's chart catalog listed no cells");
             return;
         }
+        // A running download's plan owns copies of its names and urls, so the
+        // old catalog can be freed.
         if (self.cat) |*old| old.deinit();
         self.cat = parsed;
         self.checked_at = @divFloor(clock.wallMs(), 1000);
-        self.phase = .ready;
-        self.changed = true;
+        self.catalogEnded();
         self.cacheCatalog(a.bytes);
     }
 
@@ -938,7 +993,9 @@ pub const Service = struct {
         if (job >= self.plan.items.len) return;
         if (!a.stored) {
             if (!a.write_failed and self.expandBundle(job)) return;
-            self.failed += 1;
+            // Count every cell in the transfer, as `done` does, so done plus
+            // failed reaches the total.
+            self.failed += self.plan.items[job].cells;
             if (a.write_failed) self.setErr("could not write a downloaded chart");
             self.changed = true;
             return;
@@ -984,8 +1041,12 @@ pub const Service = struct {
     /// 829 archives, and it bakes a folder of cells or a single archive, so it
     /// refused the pick. Extracting turns the directory into an ordinary
     /// ENC_ROOT, and a district bundle unpacks the same way a cell does.
+    ///
+    /// Each cell directory in the archive is deleted first. An update or a
+    /// repair unpacks over the installed edition, and std.zip does not
+    /// overwrite files, so the old cell stayed and a reissue's update files
+    /// were written beside a base they do not apply to.
     fn unpack(self: *Service, dest: []const u8, name: []const u8) !void {
-        _ = self;
         const io = std.Io.Threaded.global_single_threaded.io();
         var buf: [512]u8 = undefined;
         const tmp = try std.fmt.bufPrint(&buf, "{s}/{s}.zip.part", .{ dest, name });
@@ -998,11 +1059,15 @@ pub const Service = struct {
         var reader_buf: [4096]u8 = undefined;
         var fr = f.reader(io, &reader_buf);
 
+        try self.clearCellDirs(&fr, dir);
+
         // Entry by entry. std.zip.extract stops at the first file already on
         // disk, every cell's exchange set holds its own ENC_ROOT/CATALOG.031,
         // and they all unpack into the one directory. From the second cell on
         // that entry collided and the rest of the archive went unread, so 828
-        // of 829 cells counted as failures.
+        // of 829 cells counted as failures. The cell directories were deleted
+        // above, so the only collisions left are files every exchange set
+        // shares.
         var iter = try std.zip.Iterator.init(&fr);
         var name_buf: [std.fs.max_path_bytes]u8 = undefined;
         while (try iter.next()) |entry| {
@@ -1011,6 +1076,35 @@ pub const Service = struct {
                 else => return e,
             };
         }
+    }
+
+    /// Delete every cell directory under `dir` that this archive holds a cell
+    /// file for.
+    fn clearCellDirs(self: *Service, fr: *std.Io.File.Reader, dir: std.Io.Dir) !void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        var cells: std.ArrayList([]u8) = .empty;
+        defer {
+            for (cells.items) |c| self.alloc.free(c);
+            cells.deinit(self.alloc);
+        }
+
+        var iter = try std.zip.Iterator.init(fr);
+        var name_buf: [std.fs.max_path_bytes]u8 = undefined;
+        while (try iter.next()) |entry| {
+            if (entry.filename_len > name_buf.len) continue;
+            const path = name_buf[0..entry.filename_len];
+            try fr.seekTo(entry.header_zip_offset + @sizeOf(std.zip.CentralDirectoryFileHeader));
+            try fr.interface.readSliceAll(path);
+            std.mem.replaceScalar(u8, path, '\\', '/');
+            const cell = cellDirOf(path) orelse continue;
+            var seen = false;
+            for (cells.items) |c| {
+                if (std.mem.eql(u8, c, cell)) seen = true;
+            }
+            if (seen) continue;
+            try cells.append(self.alloc, try self.alloc.dupe(u8, cell));
+        }
+        for (cells.items) |c| try dir.deleteTree(io, c);
     }
 
     // ---- the snapshot -----------------------------------------------------
@@ -1087,6 +1181,27 @@ pub const Service = struct {
         return s;
     }
 };
+
+/// The cell directory that holds an exchange set entry, or null when the
+/// entry is not a cell file.
+///
+/// A cell file is `<NAME>.<nnn>`, the base at 000 and each update after it, in
+/// a directory named for the cell: `ENC_ROOT/US5MD1MC/US5MD1MC.000`. The shared
+/// `ENC_ROOT/CATALOG.031` and anything else that is not in a directory of its
+/// own name is left alone.
+fn cellDirOf(path: []const u8) ?[]const u8 {
+    const slash = std.mem.lastIndexOfScalar(u8, path, '/') orelse return null;
+    const file = path[slash + 1 ..];
+    const parent = path[0..slash];
+    const dir_name = parent[(if (std.mem.lastIndexOfScalar(u8, parent, '/')) |i| i + 1 else 0)..];
+    if (file.len < 5 or file[file.len - 4] != '.') return null;
+    for (file[file.len - 3 ..]) |ch| {
+        if (!std.ascii.isDigit(ch)) return null;
+    }
+    const stem = file[0 .. file.len - 4];
+    if (dir_name.len == 0 or !std.mem.eql(u8, stem, dir_name)) return null;
+    return parent;
+}
 
 /// Create a directory and every parent it needs.
 fn makeDir(path: []const u8) !void {
@@ -1343,4 +1458,274 @@ test "a bundle part way down counts the charts its bytes have brought" {
 
     s.cancelAll();
     std.Io.Dir.cwd().deleteTree(std.Io.Threaded.global_single_threaded.io(), dest) catch {};
+}
+
+/// One file in a zip a test builds.
+const TestEntry = struct { name: []const u8, data: []const u8 };
+
+/// A zip of stored entries, in the layout of an exchange set. Owned by
+/// `alloc`.
+fn testZip(alloc: std.mem.Allocator, entries: []const TestEntry) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(alloc);
+    var offsets: [16]u32 = undefined;
+    const put16 = struct {
+        fn f(a: std.mem.Allocator, o: *std.ArrayList(u8), v: u16) !void {
+            var b: [2]u8 = undefined;
+            std.mem.writeInt(u16, &b, v, .little);
+            try o.appendSlice(a, &b);
+        }
+    }.f;
+    const put32 = struct {
+        fn f(a: std.mem.Allocator, o: *std.ArrayList(u8), v: u32) !void {
+            var b: [4]u8 = undefined;
+            std.mem.writeInt(u32, &b, v, .little);
+            try o.appendSlice(a, &b);
+        }
+    }.f;
+    for (entries, 0..) |e, i| {
+        offsets[i] = @intCast(out.items.len);
+        const crc = std.hash.Crc32.hash(e.data);
+        try put32(alloc, &out, 0x04034b50);
+        try put16(alloc, &out, 20); // version needed
+        try put16(alloc, &out, 0); // flags
+        try put16(alloc, &out, 0); // stored
+        try put16(alloc, &out, 0); // time
+        try put16(alloc, &out, 0x21); // date
+        try put32(alloc, &out, crc);
+        try put32(alloc, &out, @intCast(e.data.len));
+        try put32(alloc, &out, @intCast(e.data.len));
+        try put16(alloc, &out, @intCast(e.name.len));
+        try put16(alloc, &out, 0);
+        try out.appendSlice(alloc, e.name);
+        try out.appendSlice(alloc, e.data);
+    }
+    const cd_start: u32 = @intCast(out.items.len);
+    for (entries, 0..) |e, i| {
+        try put32(alloc, &out, 0x02014b50);
+        try put16(alloc, &out, 20); // made by
+        try put16(alloc, &out, 20); // needed
+        try put16(alloc, &out, 0);
+        try put16(alloc, &out, 0);
+        try put16(alloc, &out, 0);
+        try put16(alloc, &out, 0x21);
+        try put32(alloc, &out, std.hash.Crc32.hash(e.data));
+        try put32(alloc, &out, @intCast(e.data.len));
+        try put32(alloc, &out, @intCast(e.data.len));
+        try put16(alloc, &out, @intCast(e.name.len));
+        try put16(alloc, &out, 0); // extra
+        try put16(alloc, &out, 0); // comment
+        try put16(alloc, &out, 0); // disk
+        try put16(alloc, &out, 0); // internal attributes
+        try put32(alloc, &out, 0); // external attributes
+        try put32(alloc, &out, offsets[i]);
+        try out.appendSlice(alloc, e.name);
+    }
+    const cd_size: u32 = @as(u32, @intCast(out.items.len)) - cd_start;
+    try put32(alloc, &out, 0x06054b50);
+    try put16(alloc, &out, 0);
+    try put16(alloc, &out, 0);
+    try put16(alloc, &out, @intCast(entries.len));
+    try put16(alloc, &out, @intCast(entries.len));
+    try put32(alloc, &out, cd_size);
+    try put32(alloc, &out, cd_start);
+    try put16(alloc, &out, 0);
+    return out.toOwnedSlice(alloc);
+}
+
+/// Read a file a test expects to exist. Owned by `alloc`.
+fn testRead(alloc: std.mem.Allocator, path: []const u8) ![]u8 {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    return std.Io.Dir.cwd().readFileAlloc(io, path, alloc, .limited(1 << 20));
+}
+
+fn testExists(path: []const u8) bool {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    std.Io.Dir.cwd().access(io, path, .{}) catch return false;
+    return true;
+}
+
+test "a cell directory is named for the cell it holds" {
+    try testing.expectEqualStrings("ENC_ROOT/US5MD1MC", cellDirOf("ENC_ROOT/US5MD1MC/US5MD1MC.000").?);
+    try testing.expectEqualStrings("05CGD_ENCs/ENC_ROOT/US5MD1MC", cellDirOf("05CGD_ENCs/ENC_ROOT/US5MD1MC/US5MD1MC.012").?);
+    try testing.expect(cellDirOf("ENC_ROOT/CATALOG.031") == null);
+    try testing.expect(cellDirOf("ENC_ROOT/US5MD1MC/US5MD1MC.TXT") == null);
+    try testing.expect(cellDirOf("ENC_ROOT/US5MD1MC/README.000") == null);
+    try testing.expect(cellDirOf("US5MD1MC.000") == null);
+}
+
+test "a reissued cell replaces the edition already unpacked" {
+    const alloc = testing.allocator;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const dest = "/tmp/lookout-noaa-reissue";
+    std.Io.Dir.cwd().deleteTree(io, dest) catch {};
+    defer std.Io.Dir.cwd().deleteTree(io, dest) catch {};
+    try makeDir(dest);
+
+    var s = Service.init(alloc);
+    defer s.deinit();
+
+    const first = try testZip(alloc, &.{
+        .{ .name = "ENC_ROOT/CATALOG.031", .data = "catalog 27" },
+        .{ .name = "ENC_ROOT/US5MD1MC/US5MD1MC.000", .data = "edition 27" },
+        .{ .name = "ENC_ROOT/US5MD1MC/US5MD1MC.001", .data = "update 27.1" },
+        .{ .name = "ENC_ROOT/US5MD1MD/US5MD1MD.000", .data = "neighbour" },
+    });
+    defer alloc.free(first);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = dest ++ "/a.zip.part", .data = first });
+    try s.unpack(dest, "a");
+
+    // The reissue has a new base and no update files.
+    const second = try testZip(alloc, &.{
+        .{ .name = "ENC_ROOT/CATALOG.031", .data = "catalog 28" },
+        .{ .name = "ENC_ROOT/US5MD1MC/US5MD1MC.000", .data = "edition 28" },
+    });
+    defer alloc.free(second);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = dest ++ "/b.zip.part", .data = second });
+    try s.unpack(dest, "b");
+
+    const base = try testRead(alloc, dest ++ "/ENC_ROOT/US5MD1MC/US5MD1MC.000");
+    defer alloc.free(base);
+    try testing.expectEqualStrings("edition 28", base);
+    // The old edition's update file is deleted with it.
+    try testing.expect(!testExists(dest ++ "/ENC_ROOT/US5MD1MC/US5MD1MC.001"));
+    // A cell missing from the reissue is untouched.
+    try testing.expect(testExists(dest ++ "/ENC_ROOT/US5MD1MD/US5MD1MD.000"));
+    // The part files are gone.
+    try testing.expect(!testExists(dest ++ "/b.zip.part"));
+}
+
+test "a catalog read during a download leaves the download running" {
+    const alloc = testing.allocator;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const dest = "/tmp/lookout-noaa-refresh-mid";
+    std.Io.Dir.cwd().deleteTree(io, dest) catch {};
+    defer std.Io.Dir.cwd().deleteTree(io, dest) catch {};
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try testCacheRoot(&tmp);
+    defer alloc.free(root);
+
+    var rec = Recorder{ .alloc = alloc };
+    defer rec.deinit();
+
+    var s = Service.init(alloc);
+    defer s.deinit();
+    // Ten cells, under bundle_at, so each is its own request.
+    s.cat = try oneDistrict(alloc, 5, 10);
+    s.phase = .ready;
+    s.setProvider(Recorder.get, null, &rec);
+    s.start(&.{5}, dest, false);
+    try testing.expectEqual(Phase.downloading, s.phase);
+    try testing.expectEqual(@as(usize, MAX_INFLIGHT), rec.ids.items.len);
+
+    // Try Again in the picker reads the catalog mid transfer.
+    s.refresh();
+    try testing.expectEqual(Phase.downloading, s.phase);
+    try testing.expect(s.catalog_inflight);
+    const cat_id = rec.ids.items[rec.ids.items.len - 1];
+    try testing.expect(std.mem.endsWith(u8, rec.urls.items[rec.urls.items.len - 1], "ENCProdCat.xml"));
+    // A second refresh issues no request while the first is out.
+    s.refresh();
+    try testing.expectEqual(@as(usize, MAX_INFLIGHT + 1), rec.ids.items.len);
+
+    s.respond(cat_id, test_catalog, 200);
+    s.adopt();
+    try testing.expect(!s.catalog_inflight);
+    try testing.expectEqual(Phase.downloading, s.phase);
+
+    // Every cell request fails. The plan issues all ten requests and ends,
+    // instead of stopping after the first four.
+    var answered: usize = 0;
+    while (answered < rec.ids.items.len) : (answered += 1) {
+        const id = rec.ids.items[answered];
+        if (id == cat_id) continue;
+        s.respond(id, "", 500);
+        s.adopt();
+    }
+    try testing.expectEqual(@as(usize, 10 + 1), rec.ids.items.len);
+    try testing.expectEqual(Phase.ready, s.phase);
+    try testing.expectEqual(@as(u32, 10), s.failed);
+}
+
+test "an update with no fetcher says so and leaves the phase" {
+    var s = Service.init(testing.allocator);
+    defer s.deinit();
+    s.cat = try oneDistrict(testing.allocator, 5, 3);
+    s.phase = .ready;
+    const installed = [_]noaa.Installed{.{ .name = "US505000", .edition = 0, .update = 0 }};
+    s.startUpdate(&installed, "/tmp/lookout-noaa-test-should-not-exist");
+    try testing.expectEqual(Phase.ready, s.phase);
+    try testing.expectEqualStrings("no network provider", s.err);
+}
+
+test "a bundle that will not unpack fails every chart it stood for" {
+    const alloc = testing.allocator;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const dest = "/tmp/lookout-noaa-bundle-broken";
+    std.Io.Dir.cwd().deleteTree(io, dest) catch {};
+    defer std.Io.Dir.cwd().deleteTree(io, dest) catch {};
+
+    var rec = Recorder{ .alloc = alloc };
+    defer rec.deinit();
+
+    var s = Service.init(alloc);
+    defer s.deinit();
+    s.cat = try oneDistrict(alloc, 5, 30);
+    s.phase = .ready;
+    s.setProvider(Recorder.get, null, &rec);
+    s.start(&.{5}, dest, false);
+    try testing.expectEqual(@as(u32, 30), s.planCells());
+
+    // Bytes arrive and are not a zip.
+    s.respond(rec.ids.items[0], "not a zip at all", 200);
+    var tries: usize = 0;
+    while (s.phase == .downloading and tries < 2000) : (tries += 1) {
+        s.adopt();
+        lock.sleepMs(1);
+    }
+    try testing.expectEqual(Phase.ready, s.phase);
+    const snap = s.snapshot();
+    try testing.expectEqual(@as(u32, 30), snap.failed);
+    try testing.expectEqual(snap.total, snap.done + snap.failed);
+}
+
+test "the unpack thread ends with the download" {
+    const alloc = testing.allocator;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const dest = "/tmp/lookout-noaa-unpacker-ends";
+    std.Io.Dir.cwd().deleteTree(io, dest) catch {};
+    defer std.Io.Dir.cwd().deleteTree(io, dest) catch {};
+
+    var rec = Recorder{ .alloc = alloc };
+    defer rec.deinit();
+
+    var s = Service.init(alloc);
+    defer s.deinit();
+    s.cat = try oneDistrict(alloc, 5, 1);
+    s.phase = .ready;
+    s.setProvider(Recorder.get, null, &rec);
+    s.start(&.{5}, dest, false);
+    try testing.expect(s.unpackerRunning());
+
+    const zip = try testZip(alloc, &.{
+        .{ .name = "ENC_ROOT/US505000/US505000.000", .data = "cell" },
+    });
+    defer alloc.free(zip);
+    s.respond(rec.ids.items[0], zip, 200);
+
+    var tries: usize = 0;
+    while ((s.phase == .downloading or s.unpackerRunning()) and tries < 2000) : (tries += 1) {
+        s.adopt();
+        lock.sleepMs(1);
+    }
+    try testing.expectEqual(Phase.ready, s.phase);
+    try testing.expectEqual(@as(u32, 1), s.done);
+    try testing.expect(!s.unpackerRunning());
+    try testing.expect(testExists(dest ++ "/ENC_ROOT/US505000/US505000.000"));
+
+    // A second download starts a thread of its own.
+    s.start(&.{5}, dest, true);
+    try testing.expect(s.unpackerRunning());
+    s.cancelAll();
 }

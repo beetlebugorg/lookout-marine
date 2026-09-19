@@ -913,7 +913,12 @@ int lookout_noaa_cost(lookout *h, const char *region_ids,
  *
  * Cells named by lookout_noaa_have are left out, so picking water that is
  * partly installed fetches the rest of it. `again` nonzero fetches those too,
- * so a mariner can repair or refresh charts they already hold. */
+ * so a mariner can repair or refresh charts they already hold. A downloaded
+ * cell replaces the copy of it already in `dest_dir`.
+ *
+ * The download belongs to the handle. lookout_close cancels it, so a shell
+ * that reopens the handle while a download runs loses the download. A catalog
+ * read through lookout_noaa_refresh does not end one. */
 void lookout_noaa_download(lookout *h, const char *region_ids,
                            const char *dest_dir, int again);
 
