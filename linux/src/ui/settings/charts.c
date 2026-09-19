@@ -962,6 +962,31 @@ lk_settings_fill_work_list (LkSettings *settings)
                                 gone != NULL);
 }
 
+static char *lk_noaa_checked_text (LkNoaa *noaa);
+
+/* When the catalog was last read, on the row that offers it.
+ *
+ * The caption was lettered once, when the page was built, so a read that
+ * landed while the page stood left it saying what it said at launch, or
+ * saying nothing at all on a device that had never read one. */
+static void
+lk_settings_refresh_noaa_checked (LkSettings *settings)
+{
+  GtkWidget *label;
+
+  if (settings->noaa_row == NULL)
+    return;
+  label = g_object_get_data (G_OBJECT (settings->noaa_row), "lk-trailing");
+  if (label == NULL)
+    return;
+
+  g_autofree char *checked =
+      lk_noaa_checked_text (lk_app_model_get_noaa (settings->model));
+
+  gtk_label_set_text (GTK_LABEL (label), checked);
+  gtk_widget_set_visible (label, checked[0] != '\0');
+}
+
 /* The NOAA service moving. */
 void
 lk_settings_work_changed (gpointer subject, gpointer user_data)
@@ -969,7 +994,10 @@ lk_settings_work_changed (gpointer subject, gpointer user_data)
   LkSettings *settings = g_object_get_data (G_OBJECT (user_data), "lk-settings");
 
   if (settings != NULL)
-    lk_deferred_list_schedule (&settings->work);
+    {
+      lk_deferred_list_schedule (&settings->work);
+      lk_settings_refresh_noaa_checked (settings);
+    }
 }
 
 /* The bake starting or stopping. A ::notify carries the property between the
