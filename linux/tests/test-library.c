@@ -552,6 +552,49 @@ test_the_whole_download_goes (void)
   g_assert_false (g_file_test (prepared, G_FILE_TEST_EXISTS));
 }
 
+static guint removal_reports;
+
+static void
+count_removal (const LkBakeProgress *progress, gpointer user_data)
+{
+  removal_reports++;
+}
+
+/* A removal reports as it goes, and holds what it reports into.
+ *
+ * The panel draws from each report, so a removal that reported once at the
+ * start and once at the end left the count standing at its first value for
+ * the whole run. The owner is reffed, because a removal of thousands of
+ * charts outlives the window that asked for it. */
+static void
+test_a_removal_reports_every_step (void)
+{
+  g_autoptr (GObject) owner = g_object_new (G_TYPE_OBJECT, NULL);
+  g_autofree char *root = g_build_filename (lk_chart_bake_root (), "reported", NULL);
+
+  place_prepared (root, "US3CU1EF/US3CU1EF.pmtiles");
+  place_prepared (root, "US4TE3W0/US4TE3W0.pmtiles");
+  place_prepared (root, "US5MD1MC/US5MD1MC.pmtiles");
+
+  removal_reports = 0;
+  g_assert_true (lk_chart_bake_delete_derived (root, "three", count_removal, owner));
+
+  /* The owner is held for the length of the removal. */
+  g_assert_cmpuint (owner->ref_count, >, 1);
+
+  for (int i = 0; i < 400 && removal_reports < 4; i++)
+    {
+      g_main_context_iteration (NULL, FALSE);
+      g_usleep (5000);
+    }
+
+  /* One per chart, and a last one with an empty name to close the panel. A
+   * report can ride along with one already on its way, so the floor is what
+   * this checks. */
+  g_assert_cmpuint (removal_reports, >=, 2);
+  g_assert_false (g_file_test (root, G_FILE_TEST_EXISTS));
+}
+
 /* A folder the app did not download is never deleted through this. */
 static void
 test_only_the_downloads_directory_is_given_back (void)
@@ -592,6 +635,8 @@ main (int argc, char *argv[])
                    test_a_set_with_prepared_charts_is_derived);
   g_test_add_func ("/library/a-download-states-every-cell-it-holds",
                    test_a_download_states_every_cell_it_holds);
+  g_test_add_func ("/library/a-removal-reports-every-step",
+                   test_a_removal_reports_every_step);
   g_test_add_func ("/library/the-whole-download-goes", test_the_whole_download_goes);
   g_test_add_func ("/library/only-the-downloads-directory-is-given-back",
                    test_only_the_downloads_directory_is_given_back);

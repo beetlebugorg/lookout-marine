@@ -613,7 +613,8 @@ lk_app_model_remove_chart_set (LkAppModel *self, const char *path)
     {
       g_autofree char *name = g_path_get_basename (path);
 
-      lk_chart_bake_delete_derived (prepared, name, lk_app_model_remove_progress, self);
+      lk_chart_bake_delete_derived (prepared, name, lk_app_model_remove_progress,
+                                    G_OBJECT (self));
     }
 
   lk_app_model_recompose_library (self);
@@ -866,8 +867,9 @@ lk_app_model_remove_progress (const LkBakeProgress *progress, gpointer user_data
       lk_app_model_emit_chart_sets_changed (self);
     }
 
-  if (self->removing == !over)
-    return;
+  /* EVERY REPORT, as the bake's progress does. Notifying on the flip alone
+   * left the panel drawing the first count until the removal ended: a set of
+   * 7,000 charts read "1 of 36000" for the whole 3.7 s and then vanished. */
   self->removing = !over;
   g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_REMOVING]);
 }
@@ -905,7 +907,7 @@ lk_app_model_remove_noaa_cells (LkAppModel *self, const char *const *names)
   /* Say so when the removal matched nothing. A silent no-op reads as the app
    * ignoring the press. */
   if (!lk_chart_bake_delete_cells (prepared, source, names, "NOAA charts",
-                                   lk_app_model_remove_progress, self))
+                                   lk_app_model_remove_progress, G_OBJECT (self)))
     {
       g_clear_pointer (&self->remove_rescan, g_free);
       lk_app_model_set_open_error (self, "None of those charts are in the folder "
@@ -942,7 +944,7 @@ lk_app_model_remove_noaa_download (LkAppModel *self)
    * and the chart closes on what is left. */
   lk_chart_sets_remove (self->chart_sets, source, NULL);
   lk_chart_bake_delete_download (prepared, source, "NOAA charts",
-                                 lk_app_model_remove_progress, self);
+                                 lk_app_model_remove_progress, G_OBJECT (self));
   /* Nothing to rescan: the folder itself is going. */
   g_clear_pointer (&self->remove_rescan, g_free);
 

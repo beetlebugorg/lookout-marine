@@ -19,7 +19,7 @@
 
 #include "library/scan.h"
 
-#include <glib.h>
+#include <glib-object.h>
 
 /* One usage band in a bake, and how far the bake has reached into it.
  *
@@ -140,7 +140,7 @@ gboolean lk_chart_bake_delete_cells (const char        *prepared,
                                      const char *const *names,
                                      const char        *label,
                                      LkBakeProgressFunc on_progress,
-                                     gpointer           user_data);
+                                     GObject           *owner);
 
 /* Every cell the download at `source` holds, by name: what its exchange set
  * holds, and what was prepared from it.
@@ -161,7 +161,7 @@ gboolean lk_chart_bake_delete_download (const char        *prepared,
                                         const char        *source,
                                         const char        *name,
                                         LkBakeProgressFunc on_progress,
-                                        gpointer           user_data);
+                                        GObject           *owner);
 
 /* Delete charts this app prepared. Refuses any path it did not make, so a
  * mariner's own folder can never be deleted by removing a set. */
@@ -174,11 +174,15 @@ gboolean lk_chart_bake_delete_download (const char        *prepared,
  *
  * The count is the mariner's own unit: the bake writes a directory per chart,
  * so one gone is one chart gone, and the panel counts the same things coming
- * out that it counted going in. */
+ * out that it counted going in.
+ *
+ * `owner` is what the report is written into, and it is REFFED for the life
+ * of the removal. A removal runs for seconds behind the app, and the window
+ * that asked for it can go first. It reaches the callback as its user data. */
 gboolean lk_chart_bake_delete_derived (const char        *path,
                                        const char        *name,
                                        LkBakeProgressFunc on_progress,
-                                       gpointer           user_data);
+                                       GObject           *owner);
 
 /* Throw away what a previous run renamed but did not finish deleting. Without
  * this, quitting mid-delete leaves gigabytes that nothing will mention again. */

@@ -173,7 +173,9 @@ typedef struct {
   GStrv              mates;
   char              *name; /* the set the mariner removed, for the report */
   LkBakeProgressFunc on_progress;
-  gpointer           user_data;
+  /* REFFED. A removal is thousands of files and outlives the window that
+   * asked for it, and the report writes into the owner. */
+  GObject           *owner;
   gint64             started_us;
 
   GMutex   mu;
@@ -194,6 +196,7 @@ lk_trash_unref (LkTrash *self)
   g_strfreev (self->paths);
   g_strfreev (self->mates);
   g_free (self->name);
+  g_clear_object (&self->owner);
   g_free (self);
 }
 
@@ -217,7 +220,7 @@ lk_trash_report (gpointer data)
   progress.name = over ? "" : self->name;
   progress.elapsed = (g_get_monotonic_time () - self->started_us) / 1e6;
   if (self->on_progress != NULL)
-    self->on_progress (&progress, self->user_data);
+    self->on_progress (&progress, self->owner);
 
   lk_trash_unref (self);
   return G_SOURCE_REMOVE;
@@ -307,7 +310,7 @@ lk_trash_worker (gpointer data)
 /* Start one, on a thread of its own. Takes `paths` and `mates`. */
 static void
 lk_trash_start_paths (char **paths, char **mates, const char *name,
-                      LkBakeProgressFunc on_progress, gpointer user_data)
+                      LkBakeProgressFunc on_progress, GObject *owner)
 {
   LkTrash *self = g_new0 (LkTrash, 1);
   GThread *thread;
@@ -317,7 +320,7 @@ lk_trash_start_paths (char **paths, char **mates, const char *name,
   self->mates = mates;
   self->name = g_strdup (name != NULL ? name : "");
   self->on_progress = on_progress;
-  self->user_data = user_data;
+  self->owner = owner != NULL ? g_object_ref (owner) : NULL;
   self->started_us = g_get_monotonic_time ();
   self->refs = 1;
 
@@ -328,7 +331,7 @@ lk_trash_start_paths (char **paths, char **mates, const char *name,
 /* Start one, on a thread of its own. Takes `path`. */
 static void
 lk_trash_start (char *path, const char *name, LkBakeProgressFunc on_progress,
-                gpointer user_data)
+                GObject *owner)
 {
   LkTrash *self = g_new0 (LkTrash, 1);
   GThread *thread;
@@ -337,7 +340,7 @@ lk_trash_start (char *path, const char *name, LkBakeProgressFunc on_progress,
   self->path = path;
   self->name = g_strdup (name != NULL ? name : "");
   self->on_progress = on_progress;
-  self->user_data = user_data;
+  self->owner = owner != NULL ? g_object_ref (owner) : NULL;
   self->started_us = g_get_monotonic_time ();
   self->refs = 1;
 
@@ -380,7 +383,7 @@ lk_chart_bake_cells_present (const char *prepared, const char *source,
 gboolean
 lk_chart_bake_delete_cells (const char *prepared, const char *source,
                             const char *const *names, const char *label,
-                            LkBakeProgressFunc on_progress, gpointer user_data)
+                            LkBakeProgressFunc on_progress, GObject *owner)
 {
   g_autoptr (GPtrArray) made = g_ptr_array_new_with_free_func (g_free);
   g_autoptr (GPtrArray) raw = g_ptr_array_new_with_free_func (g_free);
@@ -416,7 +419,7 @@ lk_chart_bake_delete_cells (const char *prepared, const char *source,
   g_ptr_array_add (raw, NULL);
   lk_trash_start_paths ((char **) g_ptr_array_free (g_steal_pointer (&made), FALSE),
                         (char **) g_ptr_array_free (g_steal_pointer (&raw), FALSE),
-                        label, on_progress, user_data);
+                        label, on_progress, owner);
   return TRUE;
 }
 
@@ -469,7 +472,7 @@ lk_chart_bake_cells_held (const char *prepared, const char *source)
 gboolean
 lk_chart_bake_delete_download (const char *prepared, const char *source,
                                const char *name, LkBakeProgressFunc on_progress,
-                               gpointer user_data)
+                               GObject *owner)
 {
   const char *root = lk_chart_bake_root ();
   g_autofree char *downloads = g_build_filename (g_get_user_data_dir (),
@@ -493,13 +496,13 @@ lk_chart_bake_delete_download (const char *prepared, const char *source,
     }
 
   if (prepared != NULL && g_file_test (prepared, G_FILE_TEST_EXISTS))
-    return lk_chart_bake_delete_derived (prepared, name, on_progress, user_data);
+    return lk_chart_bake_delete_derived (prepared, name, on_progress, owner);
   return TRUE;
 }
 
 gboolean
 lk_chart_bake_delete_derived (const char *path, const char *name,
-                              LkBakeProgressFunc on_progress, gpointer user_data)
+                              LkBakeProgressFunc on_progress, GObject *owner)
 {
   const char *root = lk_chart_bake_root ();
 
@@ -522,11 +525,11 @@ lk_chart_bake_delete_derived (const char *path, const char *name,
   if (g_rename (path, trash) != 0)
     {
       /* Nowhere to rename it to. Still not on this thread. */
-      lk_trash_start (g_strdup (path), name, on_progress, user_data);
+      lk_trash_start (g_strdup (path), name, on_progress, owner);
       return TRUE;
     }
 
-  lk_trash_start (g_steal_pointer (&trash), name, on_progress, user_data);
+  lk_trash_start (g_steal_pointer (&trash), name, on_progress, owner);
   return TRUE;
 }
 
