@@ -74,10 +74,10 @@ final class FirstRunModel {
     /// What the mariner asked NOAA for, kept from the moment they asked. The
     /// service's own counters are for the transfer, and the panel outlives it.
     var noaaOrder: NoaaOrder?
-    /// True once a NOAA order has stopped with nothing to prepare: the
-    /// transfer is over, no cell landed and no bake ran or will run. Every
-    /// cell failed, Stop came before the first one, or the core refused the
-    /// order. The step then has no work to wait on, so it offers the way back.
+    /// True once a NOAA order has ended with no charts to prepare. The
+    /// transfer is over, no cell arrived, and no bake ran or is about to run.
+    /// This happens when every cell fails, when Stop comes before the first
+    /// cell, or when the core rejects the order. The step then offers Back.
     private(set) var importEnded = false
 
     /// A NOAA download as it was ordered.
@@ -189,8 +189,9 @@ final class FirstRunModel {
 
     /// Read the download and the bake, while the importing step is up.
     ///
-    /// The watcher bakes only a download that landed a cell, so one that
-    /// ended with none never starts the bake that would finish the step.
+    /// The download watcher starts a bake only when at least one cell
+    /// arrived. A download that ends with none never starts the bake that
+    /// finishes the step, so the step reads that state here.
     func noteImport(_ noaa: NoaaState, bakeRunning: Bool) {
         importEnded = step == .importing
             && noaaOrder != nil
@@ -200,7 +201,7 @@ final class FirstRunModel {
             && noaa.done == 0
     }
 
-    /// Forget the last order, so a second one starts from nothing.
+    /// Clear the last order, so a second order starts from a clean state.
     private func resetImport() {
         sawBake = false
         noaaOrder = nil
@@ -254,8 +255,8 @@ final class FirstRunModel {
         switch step {
         case .welcome, .depths: return false
         case .source, .coverage, .onlineChart: return true
-        // Back only once the order has ended with nothing to prepare. While
-        // charts arrive there is nothing to go back to.
+        // Back applies only after the order ends with no charts to prepare.
+        // While charts arrive, the step waits for them.
         case .importing: return importEnded
         }
     }
@@ -288,7 +289,7 @@ final class FirstRunModel {
     // MARK: What each step says
 
     /// Whether the online step can continue. Continuing with no chart picked
-    /// finished setup over the basemap and put it away for the run.
+    /// finishes setup over the basemap and puts it away for the run.
     func canUseOnlineChart(_ links: ChartLinksModel) -> Bool {
         links.active != nil
     }
@@ -299,8 +300,8 @@ final class FirstRunModel {
         return links.list.first { $0.url == url }?.name
     }
 
-    /// The primary button's words. The online step names the chart it keeps,
-    /// so the button states what the choice does.
+    /// The primary button's title. On the online step it names the picked
+    /// chart.
     func primaryTitle(_ chosenChartName: String?) -> String {
         switch step {
         case .welcome, .source: return "Continue"

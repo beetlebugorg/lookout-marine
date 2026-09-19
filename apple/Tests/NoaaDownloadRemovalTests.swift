@@ -118,11 +118,11 @@ final class NoaaDownloadThroughReopenTests: ShellTestCase {
         fake.calls.filter { $0.hasPrefix("noaaDownload") }.count
     }
 
-    /// The defect: Apply removed one region, which asked for a reopen, and
+    /// The defect: Apply removed one region, which requested a reopen, and
     /// then started the download for the other on the handle about to close.
     func testAnApplyThatRemovesAndAddsDownloadsOnTheNewHandle() {
         let (app, fake) = app()
-        // The removal's reopen, on its way.
+        // The removal's reopen is pending.
         app.charts.isOpening = true
         app.startNoaaDownload()
         XCTAssertEqual(downloads(fake), 0)
@@ -132,7 +132,7 @@ final class NoaaDownloadThroughReopenTests: ShellTestCase {
         XCTAssertEqual(downloads(fake), 1)
         XCTAssertFalse(fake.calls.contains("noaaCancel"))
 
-        // Held once, started once.
+        // A second open does not start the download again.
         app.chartDidOpen()
         XCTAssertEqual(downloads(fake), 1)
     }

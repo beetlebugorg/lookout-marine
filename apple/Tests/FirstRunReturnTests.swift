@@ -35,8 +35,8 @@ final class FirstRunReturnTests: ShellTestCase {
 
     /// The defect: finishing setup put it away for the run, so a mariner who
     /// removed every chart had an empty library and no route to the page that
-    /// builds one. The library is noted where the app notes it, from the set
-    /// list changing, and not by hand.
+    /// builds one. The test changes the set list and lets the app record the
+    /// library, as it does at run time.
     func testSetupComesBackWhenTheLibraryGoesEmpty() {
         let app = AppModel()
         app.charts.sets = [drawableSet()]
@@ -80,7 +80,7 @@ final class FirstRunReturnTests: ShellTestCase {
     }
 }
 
-/// The steps' own ways out.
+/// Back and Continue on the importing and online steps.
 @MainActor
 final class FirstRunStepTests: ShellTestCase {
 
@@ -111,9 +111,9 @@ final class FirstRunStepTests: ShellTestCase {
         XCTAssertEqual(flow.step, .importing)
     }
 
-    /// The defect: a download that ended with no cell landed never started a
-    /// bake, and the step waited on one with no control left alive.
-    func testAnOrderThatLandedNothingOffersTheWayBack() {
+    /// The defect: a download that ended with no cell never started a bake,
+    /// and the step waited for one with every control disabled.
+    func testAnOrderWithNoChartsOffersBack() {
         let flow = importing()
         flow.noteImport(state(.ready, error: "no network provider"), bakeRunning: false)
         XCTAssertTrue(flow.importEnded)
@@ -125,8 +125,8 @@ final class FirstRunStepTests: ShellTestCase {
         XCTAssertFalse(flow.importEnded)
     }
 
-    /// A transfer that landed a cell is about to bake, so the step waits.
-    func testAnOrderThatLandedChartsWaitsForTheBake() {
+    /// A download with at least one cell starts a bake, so the step waits.
+    func testAnOrderWithChartsWaitsForTheBake() {
         let flow = importing()
         flow.noteImport(state(.ready, done: 3), bakeRunning: false)
         XCTAssertFalse(flow.importEnded)
@@ -134,7 +134,7 @@ final class FirstRunStepTests: ShellTestCase {
         XCTAssertFalse(flow.importEnded)
     }
 
-    /// Once a bake has run the step finishes through Continue, not Back.
+    /// Once a bake has run, the step finishes through Continue.
     func testASeenBakeIsNotAnEndedOrder() {
         let flow = importing()
         flow.sawBake = true
@@ -142,7 +142,7 @@ final class FirstRunStepTests: ShellTestCase {
         XCTAssertFalse(flow.importEnded)
     }
 
-    /// Setup begun again forgets the last run's bake.
+    /// Beginning setup again clears the last run's bake and order.
     func testBeginForgetsTheLastImport() {
         let flow = importing()
         flow.sawBake = true
@@ -152,7 +152,7 @@ final class FirstRunStepTests: ShellTestCase {
     }
 
     /// The defect: Continue on the online step with no card picked finished
-    /// setup over the basemap and put it away for the run.
+    /// setup over the basemap and put setup away for the run.
     func testTheOnlineStepNeedsAPickedChart() {
         let flow = FirstRunModel()
         let links = ChartLinksModel()
@@ -166,3 +166,4 @@ final class FirstRunStepTests: ShellTestCase {
         XCTAssertEqual(flow.primaryTitle(flow.chosenChartName(links)), "Use Harbour")
     }
 }
+

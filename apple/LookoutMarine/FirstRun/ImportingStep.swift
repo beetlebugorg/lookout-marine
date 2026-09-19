@@ -218,8 +218,8 @@ struct ImportingStep: View {
         flow.noteImport(model.noaa.state, bakeRunning: model.charts.chartWork != nil)
     }
 
-    /// Why an order ended with nothing to prepare, in the core's words where
-    /// it gave some.
+    /// Why an order ended with no charts to prepare. The core's error text is
+    /// used when it has one.
     private var endedText: String? {
         guard flow.importEnded else { return nil }
         return noaa.error.isEmpty ? "No charts arrived." : noaa.error

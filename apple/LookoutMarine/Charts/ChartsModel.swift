@@ -185,9 +185,9 @@ final class ChartsModel {
     var sets: [ChartSet] = [] {
         didSet { onSetsChanged?() }
     }
-    /// Called whenever the set list changes. Setup reads what the library
-    /// holds here, because this is the one moment a list with charts in it is
-    /// sure to be seen.
+    /// Called whenever the set list changes. AppModel records the library
+    /// for setup here, because every list with charts in it passes through
+    /// this property.
     var onSetsChanged: (() -> Void)?
     /// True while a folder is being looked through. The full NOAA library takes
     /// about 3 seconds.

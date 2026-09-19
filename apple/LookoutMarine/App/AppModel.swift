@@ -38,16 +38,16 @@ final class AppModel {
     let noaa = NoaaModel()
     /// Follows a NOAA download to its end. Cancelled when a new one starts.
     private var noaaWatch: Task<Void, Never>?
-    /// A download ordered while the chart handle was being replaced, and
+    /// A download ordered while the chart handle is being replaced, and
     /// whether it fetches held charts again. The NOAA service lives on the
-    /// handle and closing it cancels every transfer, so an Apply that removed
-    /// water and added more lost the download it had just started to the
-    /// reopen the removal asked for. The order waits for the new handle.
+    /// handle, and closing the handle cancels every transfer. An Apply that
+    /// removes water and adds more reopens the handle, so the download starts
+    /// from chartDidOpen on the new handle.
     private var heldNoaaDownload: Bool?
     /// True once the update check has run in this session. A chart reopens
     /// whenever the set list changes, and the check is a launch question.
     private var noaaChecked = false
-    /// True while the check waits for the launch scan to land.
+    /// True while the update check waits for the launch scan to finish.
     private var noaaCheckWaiting = false
     let raster = RasterModel()
     let plugins = PluginsModel()
@@ -133,8 +133,8 @@ final class AppModel {
                 if st.done > 0 {
                     self.charts.openChartDirectory(dest)
                 } else if st.total > 0 {
-                    // Nothing to bake, so nothing else will say the charts
-                    // did not come.
+                    // No bake runs, so the Charts pane reports the failed
+                    // download here.
                     self.charts.openError = st.error.isEmpty
                         ? "The download stopped before any chart arrived." : st.error
                 }
@@ -185,13 +185,13 @@ final class AppModel {
             guard let self else { return }
             defer { self.noaaCheckWaiting = false }
             // The scan at launch fills the set list on a worker of its own, and
-            // an empty list has no editions to ask about. A slow disk takes as
-            // long as it takes, so this waits on the scan rather than a clock.
+            // an empty list has no editions to ask about. The loop waits for
+            // the scan to finish, however long a slow disk makes it.
             while self.charts.scanning || self.charts.chartWork != nil {
                 try? await Task.sleep(for: .milliseconds(250))
             }
             let have = self.charts.installedCells
-            // Nothing to ask about yet. The next chart that opens asks again.
+            // No NOAA cells yet. The check runs again on the next chart open.
             guard !have.isEmpty else { return }
             self.noaaChecked = true
             await self.noaa.checkForUpdates(have)
@@ -246,9 +246,10 @@ final class AppModel {
         // the core store. Once, before anything reads a setting.
         Store.shared.importDefaults()
         charts = ChartsModel(raster: raster)
-        // Setup comes back over a library that went empty, so it has to have
-        // seen the library full. considerFirstRun runs when nothingToDraw
-        // changes, and that is never while a set is drawing.
+        // Setup returns over a library that went empty only if it recorded
+        // the library with charts in it. considerFirstRun runs when
+        // nothingToDraw changes, and nothingToDraw never changes while a set
+        // is drawing, so the library is recorded on every set list change.
         charts.onSetsChanged = { [weak self] in
             guard let self else { return }
             self.firstRun.noteLibrary(self.charts)
