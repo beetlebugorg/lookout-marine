@@ -131,6 +131,28 @@ final class NoaaModelTests: ShellTestCase {
         XCTAssertTrue(m.recorded.isEmpty)
     }
 
+    /// The Mac window builds a new picker, and seeds it again, each time it
+    /// opens. A tick abandoned with Cancel is dropped, and a region downloaded
+    /// since the last open is ticked.
+    func testASecondSeedReadsTheLibraryAsItIsNow() {
+        let (m, _) = model(cells: ["d1": ["US1NE01"], "d5": ["US1MA01"]])
+        m.noteManaged(["US1NE01"])
+        m.recordPicked(["d1"])
+        m.pickInstalled()
+        m.toggle("d5")
+        XCTAssertEqual(m.picked, ["d1", "d5"])
+
+        // Cancelled, and opened again.
+        m.pickInstalled()
+        XCTAssertEqual(m.picked, ["d1"])
+
+        // A download of d5 finishes, and the picker opens again.
+        m.recordPicked(["d5"])
+        m.noteManaged(["US1NE01", "US1MA01"])
+        m.pickInstalled()
+        XCTAssertEqual(m.picked, ["d1", "d5"])
+    }
+
     func testTheRecordSurvivesARelaunch() {
         let (m, _) = model(cells: ["d1": ["US1NE01"]])
         m.recordPicked(["d1", "d5"])

@@ -19,18 +19,20 @@ final class NoaaWindowController: NSObject, NSWindowDelegate {
 
     func show(model: AppModel) {
         if let window {
+            // Closing orders the window out and keeps its view. The picker
+            // seeds its ticks in onAppear, so a reused view showed the last
+            // open's abandoned ticks and the regions held before the last
+            // download. A closed window gets a new view.
+            if !window.isVisible { window.contentView = NSHostingView(rootView: picker(model)) }
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
-        }
-        let picker = NoaaPickerSheet(model: model, noaa: model.noaa) { [weak self] in
-            self?.window?.performClose(nil)
         }
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1040, height: 760),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable],
                               backing: .buffered, defer: false)
         window.title = "NOAA Charts"
-        window.contentView = NSHostingView(rootView: picker)
+        window.contentView = NSHostingView(rootView: picker(model))
         window.contentMinSize = NSSize(width: 820, height: 600)
         window.isReleasedWhenClosed = false // the controller keeps it
         window.setFrameAutosaveName("noaa-charts")
@@ -40,6 +42,12 @@ final class NoaaWindowController: NSObject, NSWindowDelegate {
         self.window = window
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func picker(_ model: AppModel) -> NoaaPickerSheet {
+        NoaaPickerSheet(model: model, noaa: model.noaa) { [weak self] in
+            self?.window?.performClose(nil)
+        }
     }
 }
 #endif
