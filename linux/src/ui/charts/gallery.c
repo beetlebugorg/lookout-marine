@@ -109,6 +109,12 @@ lk_gallery_act (gpointer user_data)
     return G_SOURCE_REMOVE;
 
   self->act_id = 0;
+  /* The pick was retired before this ran. lk_gallery_fill retires one the
+   * moment the core answers for it, and a pick of the chart already drawing
+   * is answered by the fill inside the click itself. */
+  if (self->pending == NULL)
+    return G_SOURCE_REMOVE;
+
   /* A COPY. The pick stays on the row until the core is drawing it or has
    * given up on it: see `pending` in LkGallery. */
   url = g_strdup (self->pending);
@@ -135,6 +141,17 @@ lk_tile_clicked (GtkButton *button, gpointer user_data)
 
   if (self->act_id != 0)
     return; /* one pick at a time: the last one has yet to be made */
+
+  /* The chart this tile names is the one drawing, so there is no pick to
+   * make. Asking the core for it again reads as a reload of a chart the
+   * mariner is already on. */
+  {
+    const char *active = lk_chart_links_active (lk_app_model_get_chart_links (self->model));
+    const char *want = url != NULL ? url : "";
+
+    if (want[0] == '\0' ? active == NULL : g_strcmp0 (active, want) == 0)
+      return;
+  }
 
   g_free (self->pending);
   self->pending = g_strdup (url != NULL ? url : "");

@@ -419,6 +419,40 @@ test_pick_stays_on_the_tile (void)
   g_assert_false (gtk_widget_has_css_class (own, "lk-chart-tile-active"));
 }
 
+/* Clicking the tile of the chart already drawing does nothing at all.
+ *
+ * The click stores the pick and rebuilds the row, and the rebuild retires a
+ * pick the core has already answered for. A pick of the chart on screen is
+ * answered at once, so the act that ran 25 ms later read a pick that had
+ * gone and dereferenced NULL. */
+static void
+test_clicking_the_active_tile_is_ignored (void)
+{
+  GtkWidget *gallery = hosted_gallery ();
+  g_autoptr (GPtrArray) tiles = tiles_of (gallery);
+  GtkWidget *own = g_ptr_array_index (tiles, 0);
+
+  /* Lookout's own chart draws when no link is active, which is this suite. */
+  g_assert_null (lk_chart_links_active (lk_app_model_get_chart_links (model)));
+  g_assert_true (gtk_widget_has_css_class (own, "lk-chart-tile-active"));
+
+  g_signal_emit_by_name (own, "clicked");
+
+  /* Past the 25 ms the act waits, where the crash was. */
+  for (int i = 0; i < 40; i++)
+    {
+      g_main_context_iteration (NULL, FALSE);
+      g_usleep (5000);
+    }
+
+  /* The row still reads as it did, and the core was never asked. */
+  g_autoptr (GPtrArray) after = tiles_of (gallery);
+  own = g_ptr_array_index (after, 0);
+  g_assert_true (gtk_widget_has_css_class (own, "lk-chart-tile-active"));
+  g_assert_null (lk_test_find_label (own, "Reading this chart…"));
+  g_assert_null (lk_chart_links_active (lk_app_model_get_chart_links (model)));
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -438,6 +472,8 @@ main (int argc, char *argv[])
   g_test_add_func ("/charts/add-rows", test_add_rows);
   g_test_add_func ("/charts/a-pick-says-it-is-reading", test_a_pick_says_it_is_reading);
   g_test_add_func ("/charts/empty-library", test_empty_library);
+  g_test_add_func ("/charts/clicking-the-active-tile-is-ignored",
+                   test_clicking_the_active_tile_is_ignored);
   g_test_add_func ("/charts/pick-stays-on-the-tile", test_pick_stays_on_the_tile);
   g_test_add_func ("/charts/pick-holds-the-scroll", test_pick_holds_the_scroll);
   g_test_add_func ("/charts/link-field-off-the-pane", test_link_field_is_not_on_the_pane);
