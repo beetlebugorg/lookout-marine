@@ -41,6 +41,11 @@ gboolean lk_preview_engine_render (LkPreviewEngine *self, const char *url,
 
 gboolean lk_preview_engine_busy (LkPreviewEngine *self);
 
+/* The url being rendered, or NULL when the engine is idle. Borrowed. The
+ * caller uses it to keep the same style out of the queue it was popped
+ * from. */
+const char *lk_preview_engine_url (LkPreviewEngine *self);
+
 /* Close the engine and give its device back. The list that opened it calls
  * this as it goes: a second Vulkan device is not something to hold while
  * nobody is looking at a chart list. */

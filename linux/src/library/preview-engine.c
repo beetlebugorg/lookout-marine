@@ -194,6 +194,12 @@ lk_preview_engine_busy (LkPreviewEngine *self)
   return self != NULL && self->tick_id != 0;
 }
 
+const char *
+lk_preview_engine_url (LkPreviewEngine *self)
+{
+  return self != NULL ? self->url : NULL;
+}
+
 gboolean
 lk_preview_engine_render (LkPreviewEngine *self, const char *url,
                           double lon, double lat, double zoom,

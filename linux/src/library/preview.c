@@ -396,8 +396,10 @@ lk_chart_previews_draw_next (LkChartPreviews *self)
     {
       g_autofree char *url = g_queue_pop_head (self->queue);
 
-      /* A picture arrived while this one waited. */
-      if (g_hash_table_contains (self->pictures, url))
+      /* A picture arrived while this one waited, or the engine gave up on
+       * this style already. */
+      if (g_hash_table_contains (self->pictures, url) ||
+          g_hash_table_contains (self->unavailable, url))
         continue;
       if (lk_preview_engine_render (self->engine, url, lon, lat, LK_PREVIEW_ZOOM,
                                     lk_chart_previews_drawn, self))
@@ -413,6 +415,10 @@ lk_chart_previews_draw_next (LkChartPreviews *self)
 static void
 lk_chart_previews_draw (LkChartPreviews *self, const char *url)
 {
+  /* The one being rendered was popped off the queue, so a check of the queue
+   * alone put it back on every round. */
+  if (g_strcmp0 (lk_preview_engine_url (self->engine), url) == 0)
+    return;
   for (GList *at = self->queue->head; at != NULL; at = at->next)
     if (g_strcmp0 (at->data, url) == 0)
       return;
@@ -515,6 +521,8 @@ lk_chart_previews_ask (gpointer data)
           const char *url = self->wanted[i];
 
           if (url[0] == '\0' || g_hash_table_contains (self->pictures, url))
+            continue;
+          if (g_hash_table_contains (self->unavailable, url))
             continue;
           if (lk_chart_catalog_art (url) != NULL)
             continue;

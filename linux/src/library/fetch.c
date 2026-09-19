@@ -11,24 +11,53 @@ struct _LkFetcher {
    * packs, tiles — so soup's per-host pooling applies to the lot and no source
    * can hold a lane another source's tiles are waiting on. */
   SoupSession *session;
-  GHashTable  *in_flight; /* request id -> GCancellable */
+  /* request id -> LkFetch, borrowed. Each fetch is freed by its own
+   * completion, so the table owns the key alone. */
+  GHashTable  *in_flight;
   gboolean     live;
+  /* TRUE once the owner has let go. A fetch cancelled then still has its
+   * completion to run, and the session and the table are gone by the time it
+   * does. */
+  gboolean     dead;
+  gint         refs;
 
   LkFetcherRespond respond;
   gpointer         respond_data;
 };
 
 typedef struct {
-  LkFetcher   *fetcher;
-  SoupMessage *msg; /* to read the status in the completion; NULL for a file */
-  uint64_t     id;
+  LkFetcher    *fetcher; /* reffed: the completion runs after the owner lets go */
+  SoupMessage  *msg; /* to read the status in the completion; NULL for a file */
+  GCancellable *cancel;
+  uint64_t      id;
 } LkFetch;
+
+static void lk_fetcher_unref (LkFetcher *self);
 
 static void
 lk_fetch_free (LkFetch *fetch)
 {
   g_clear_object (&fetch->msg);
+  g_clear_object (&fetch->cancel);
+  lk_fetcher_unref (fetch->fetcher);
   g_free (fetch);
+}
+
+/* Take this fetch off the list, and only this one.
+ *
+ * A cancelled fetch's completion runs on a later turn of the main loop, and a
+ * new handle issues ids from 1 again. Removing by id alone took the new
+ * handle's request of the same number off the list, and the cancel that
+ * followed found nothing to cancel. */
+static void
+lk_fetcher_forget (LkFetch *fetch)
+{
+  LkFetcher *self = fetch->fetcher;
+
+  if (self->in_flight == NULL)
+    return;
+  if (g_hash_table_lookup (self->in_flight, &fetch->id) == fetch)
+    g_hash_table_remove (self->in_flight, &fetch->id);
 }
 
 /* Every answer funnels through here. `status` is the final HTTP status, or 0
@@ -39,9 +68,29 @@ lk_fetcher_answer (LkFetcher *self, uint64_t id, GBytes *bytes, guint status)
   gsize       length = 0;
   const void *data = bytes != NULL ? g_bytes_get_data (bytes, &length) : NULL;
 
-  g_hash_table_remove (self->in_flight, &id);
+  if (self->in_flight != NULL)
+    g_hash_table_remove (self->in_flight, &id);
   if (self->respond != NULL)
     self->respond (self->respond_data, id, data, length, (int) status);
+}
+
+/* The answer one fetch carries. A dead fetcher answers none: the handle that
+ * asked has gone, and so has the session the status is read from. */
+static void
+lk_fetch_answer (LkFetch *fetch, GBytes *bytes, guint status)
+{
+  LkFetcher *self = fetch->fetcher;
+
+  if (self->dead)
+    return;
+  lk_fetcher_forget (fetch);
+  if (self->respond != NULL)
+    {
+      gsize       length = 0;
+      const void *data = bytes != NULL ? g_bytes_get_data (bytes, &length) : NULL;
+
+      self->respond (self->respond_data, fetch->id, data, length, (int) status);
+    }
 }
 
 static void
@@ -55,15 +104,16 @@ lk_fetcher_fetch_done (GObject *source_object, GAsyncResult *result, gpointer us
   if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
     {
       /* lookout gave up on this one and has already released its slot. */
-      g_hash_table_remove (fetch->fetcher->in_flight, &fetch->id);
+      if (!fetch->fetcher->dead)
+        lk_fetcher_forget (fetch);
     }
   else
     {
-      guint status = soup_message_get_status (fetch->msg);
+      guint status = fetch->fetcher->dead ? 0 : soup_message_get_status (fetch->msg);
 
       if (error != NULL)
         status = 0;
-      lk_fetcher_answer (fetch->fetcher, fetch->id, bytes, status);
+      lk_fetch_answer (fetch, bytes, status);
     }
   lk_fetch_free (fetch);
 }
@@ -80,16 +130,19 @@ lk_fetcher_read_done (GObject *source_object, GAsyncResult *result, gpointer use
                                     &error))
     {
       if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
-        /* As in lk_fetcher_fetch_done: a reopen cancelled this, and the id
-         * would land on the NEW handle's request of the same number. */
-        g_hash_table_remove (fetch->fetcher->in_flight, &fetch->id);
+        {
+          /* As in lk_fetcher_fetch_done: a reopen cancelled this, and the id
+           * lands on the NEW handle's request of the same number. */
+          if (!fetch->fetcher->dead)
+            lk_fetcher_forget (fetch);
+        }
       else
-        lk_fetcher_answer (fetch->fetcher, fetch->id, NULL, 0);
+        lk_fetch_answer (fetch, NULL, 0);
     }
   else
     {
       g_autoptr (GBytes) bytes = g_bytes_new_take (text, length);
-      lk_fetcher_answer (fetch->fetcher, fetch->id, bytes, 200);
+      lk_fetch_answer (fetch, bytes, 200);
     }
   lk_fetch_free (fetch);
 }
@@ -126,12 +179,14 @@ lk_fetcher_http_get (void *user, uint64_t req_id, const char *url, int allow_fil
 
   fetch = g_new0 (LkFetch, 1);
   fetch->fetcher = self;
+  self->refs++;
   fetch->id = req_id;
 
   key = g_new (uint64_t, 1);
   cancel = g_cancellable_new ();
+  fetch->cancel = cancel;
   *key = req_id;
-  g_hash_table_insert (self->in_flight, key, cancel);
+  g_hash_table_insert (self->in_flight, key, fetch);
 
   path = lk_fetcher_local_path (url);
   if (path != NULL)
@@ -170,13 +225,13 @@ void
 lk_fetcher_http_cancel (void *user, uint64_t req_id)
 {
   LkFetcher *self = user;
-  GCancellable *cancel;
+  LkFetch   *fetch;
 
   if (self == NULL)
     return;
-  cancel = g_hash_table_lookup (self->in_flight, &req_id);
-  if (cancel != NULL)
-    g_cancellable_cancel (cancel);
+  fetch = g_hash_table_lookup (self->in_flight, &req_id);
+  if (fetch != NULL)
+    g_cancellable_cancel (fetch->cancel);
 }
 
 void
@@ -189,7 +244,7 @@ lk_fetcher_cancel_all (LkFetcher *self)
 
   g_hash_table_iter_init (&iter, self->in_flight);
   while (g_hash_table_iter_next (&iter, &key, &value))
-    g_cancellable_cancel (value);
+    g_cancellable_cancel (((LkFetch *) value)->cancel);
   g_hash_table_remove_all (self->in_flight);
 }
 
@@ -207,8 +262,10 @@ lk_fetcher_new (LkFetcherRespond respond, gpointer user_data)
 
   self->respond = respond;
   self->respond_data = user_data;
-  self->in_flight = g_hash_table_new_full (g_int64_hash, g_int64_equal, g_free,
-                                           g_object_unref);
+  /* The key alone is owned. Each fetch is freed by its own completion, which
+   * can run after the table has let go of it. */
+  self->in_flight = g_hash_table_new_full (g_int64_hash, g_int64_equal, g_free, NULL);
+  self->refs = 1;
   /* A stalled fetch must not hold a slot forever: the chart is drawn from
    * whatever HAS landed, so a slow tile costs only itself, and a style that
    * asks a base map past the zoom it actually serves fails fast instead of
@@ -225,18 +282,33 @@ lk_fetcher_new (LkFetcherRespond respond, gpointer user_data)
   return self;
 }
 
+/* The last hold goes. A cancelled fetch keeps one until its completion runs,
+ * so the struct outlives the owner by as long as the main loop takes to drain
+ * them. */
+static void
+lk_fetcher_unref (LkFetcher *self)
+{
+  if (self == NULL || --self->refs > 0)
+    return;
+
+  g_clear_pointer (&self->in_flight, g_hash_table_unref);
+  g_free (self);
+}
+
 void
 lk_fetcher_free (LkFetcher *self)
 {
   if (self == NULL)
     return;
 
+  /* Mark it dead before the cancels, so a completion that runs inside
+   * soup_session_abort answers nobody. */
+  self->dead = TRUE;
   self->live = FALSE;
   self->respond = NULL;
   lk_fetcher_cancel_all (self);
   if (self->session != NULL)
     soup_session_abort (self->session);
   g_clear_object (&self->session);
-  g_clear_pointer (&self->in_flight, g_hash_table_unref);
-  g_free (self);
+  lk_fetcher_unref (self);
 }

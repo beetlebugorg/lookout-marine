@@ -9,6 +9,9 @@
  * No display, and no network: the key and the tile arithmetic are pure.
  */
 
+#include <glib/gstdio.h>
+
+#include "library/fetch.h"
 #include "library/preview-engine.h"
 #include "library/preview.h"
 
@@ -162,6 +165,82 @@ test_settle_runs_out_of_patience (void)
   g_assert_false (state.drawn);
 }
 
+/* A fetcher freed with a fetch in flight answers nobody and frees nothing
+ * twice.
+ *
+ * Each completion runs on a later turn of the main loop, and a cancelled one
+ * still runs. It used to read the fetcher's table and session after the free,
+ * which is where a gallery row that went while a style resolved crashed. */
+static void
+answered (gpointer user_data, uint64_t req_id, const void *bytes, gsize len, int status)
+{
+  (*(guint *) user_data)++;
+}
+
+static gboolean
+spin_over (gpointer user_data)
+{
+  *(gboolean *) user_data = TRUE;
+  return G_SOURCE_REMOVE;
+}
+
+/* Run the main loop for `ms`, so the completions queued on it get their turn.
+ * Blocking, because a non-blocking pass returns before a read that is already
+ * on its way has finished. */
+static void
+spin (guint ms)
+{
+  gboolean over = FALSE;
+
+  g_timeout_add (ms, spin_over, &over);
+  while (!over)
+    g_main_context_iteration (NULL, TRUE);
+}
+
+static void
+test_a_freed_fetcher_leaves_its_completions_safe (void)
+{
+  guint answers = 0;
+  LkFetcher *fetcher = lk_fetcher_new (answered, &answers);
+  g_autofree char *path = g_build_filename (g_get_tmp_dir (), "lk-fetch-test.json", NULL);
+  g_autofree char *url = g_strconcat ("file://", path, NULL);
+
+  g_assert_true (g_file_set_contents (path, "{}", -1, NULL));
+
+  /* Two reads in flight, off the main loop. */
+  lk_fetcher_http_get (fetcher, 1, url, 1);
+  lk_fetcher_http_get (fetcher, 2, url, 1);
+
+  lk_fetcher_free (fetcher);
+
+  /* Where the completions land. Under ASan this is the read of freed
+   * memory. */
+  spin (200);
+
+  /* The owner has gone, so none of them is answered. */
+  g_assert_cmpuint (answers, ==, 0);
+  g_remove (path);
+}
+
+/* A fetch answered while the fetcher lives reaches the owner. */
+static void
+test_a_live_fetcher_answers (void)
+{
+  guint answers = 0;
+  LkFetcher *fetcher = lk_fetcher_new (answered, &answers);
+  g_autofree char *path = g_build_filename (g_get_tmp_dir (), "lk-fetch-live.json", NULL);
+  g_autofree char *url = g_strconcat ("file://", path, NULL);
+
+  g_assert_true (g_file_set_contents (path, "{}", -1, NULL));
+  lk_fetcher_http_get (fetcher, 1, url, 1);
+
+  spin (200);
+
+  g_assert_cmpuint (answers, ==, 1);
+  lk_fetcher_free (fetcher);
+  g_remove (path);
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -172,6 +251,9 @@ main (int argc, char *argv[])
 
   g_test_init (&argc, &argv, NULL);
 
+  g_test_add_func ("/preview/a-freed-fetcher-leaves-its-completions-safe",
+                   test_a_freed_fetcher_leaves_its_completions_safe);
+  g_test_add_func ("/preview/a-live-fetcher-answers", test_a_live_fetcher_answers);
   g_test_add_func ("/preview/tile-numbers", test_tile_numbers);
   g_test_add_func ("/preview/cache-key", test_cache_key);
   g_test_add_func ("/preview/zoom-in-the-key", test_zoom_in_the_key);
