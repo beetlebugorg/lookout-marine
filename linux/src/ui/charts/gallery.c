@@ -46,6 +46,9 @@ typedef struct {
   /* The core has begun: from here a resolve that ends retires the pick. */
   gboolean           pending_begun;
   guint              act_id;
+  /* A rebuild waiting on an idle. The links object reports inside the call
+   * that changed it, and a rebuild there destroys the button being clicked. */
+  guint              refill_id;
   /* A pick the core never reports on must not mark the row for ever. */
   guint              pending_id;
 } LkGallery;
@@ -65,6 +68,7 @@ lk_gallery_free (gpointer data)
   g_free (self->drawing);
   g_free (self->signature);
   g_clear_handle_id (&self->act_id, g_source_remove);
+  g_clear_handle_id (&self->refill_id, g_source_remove);
   g_clear_handle_id (&self->restore_id, g_source_remove);
   g_clear_handle_id (&self->pending_id, g_source_remove);
   g_free (self->pending);
@@ -694,6 +698,23 @@ lk_gallery_fill (LkGallery *self)
   lk_gallery_ask_for_pictures (self, mine, catalog, n_catalog);
 }
 
+static gboolean
+lk_gallery_refill (gpointer user_data)
+{
+  GtkWidget *row = user_data;
+  LkGallery *self = g_object_get_data (G_OBJECT (row), "lk-gallery");
+
+  if (self == NULL || gtk_widget_in_destruction (row))
+    return G_SOURCE_REMOVE;
+  self->refill_id = 0;
+  lk_gallery_fill (self);
+  return G_SOURCE_REMOVE;
+}
+
+/* ON AN IDLE. Remove and Refresh call the links object, which reports back
+ * inside the call, and the rebuild that answers destroys every tile including
+ * the menu holding the button being clicked. The Charts page defers its own
+ * rebuilds for the same reason. */
 static void
 lk_gallery_changed (gpointer subject, gpointer user_data)
 {
@@ -702,7 +723,8 @@ lk_gallery_changed (gpointer subject, gpointer user_data)
 
   if (self == NULL || gtk_widget_in_destruction (row))
     return;
-  lk_gallery_fill (self);
+  if (self->refill_id == 0)
+    self->refill_id = g_idle_add (lk_gallery_refill, row);
 }
 
 GtkWidget *
