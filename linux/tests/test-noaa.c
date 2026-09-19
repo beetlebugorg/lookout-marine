@@ -222,6 +222,26 @@ test_download_dir (void)
   g_assert_false (g_str_has_prefix (dir, lk_chart_bake_root ()));
 }
 
+/* With no chart handle the service reads as idle and the poll stops.
+ *
+ * The snapshot kept whatever phase the last handle left, so a phase of
+ * downloading or reading held the 400 ms timer for the life of the process
+ * and the panels went on saying a transfer was running. */
+static void
+test_no_handle_reads_as_idle (void)
+{
+  g_autoptr (LkAppModel) model = lk_app_model_new ();
+  LkNoaa *noaa = noaa_of (model);
+  const LkNoaaState *state = lk_noaa_state (noaa);
+
+  /* This model has no chart open, so every poll finds no handle. */
+  lk_noaa_poll (noaa);
+  g_assert_cmpint (state->phase, ==, LK_NOAA_IDLE);
+  g_assert_false (state->have_catalog);
+  g_assert_cmpuint (state->total, ==, 0);
+  g_assert_cmpuint (state->done, ==, 0);
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -241,6 +261,7 @@ main (int argc, char *argv[])
   g_test_add_func ("/noaa/size-words", test_size_words);
   g_test_add_func ("/noaa/cost-words", test_cost_words);
   g_test_add_func ("/noaa/no-catalog", test_no_catalog);
+  g_test_add_func ("/noaa/no-handle-reads-as-idle", test_no_handle_reads_as_idle);
   g_test_add_func ("/noaa/download-dir", test_download_dir);
 
   return g_test_run ();

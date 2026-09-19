@@ -266,7 +266,20 @@ lk_noaa_take_snapshot (LkNoaa *self)
   gboolean gained;
 
   if (!lk_chart_controller_noaa_poll (self->controller, &raw))
-    return FALSE;
+    {
+      /* NO HANDLE, so there is no service to read. The snapshot kept the
+       * phase the last handle left, and a phase of downloading or reading
+       * keeps the 400 ms timer running for the life of the process. An idle
+       * state stops it and tells the panels the work has gone. */
+      LkNoaaState idle;
+
+      memset (&idle, 0, sizeof idle);
+      if (memcmp (&idle, &self->state, sizeof idle) == 0)
+        return FALSE;
+      self->state = idle;
+      g_signal_emit (self, signals[SIGNAL_CHANGED], 0);
+      return TRUE;
+    }
 
   memset (&next, 0, sizeof next);
   next.phase = (LkNoaaPhase) raw.phase;
