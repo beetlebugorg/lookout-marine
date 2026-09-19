@@ -233,6 +233,11 @@ lk_panel_draw (GtkDrawingArea *area, cairo_t *cr, int width, int height, gpointe
     }
 
   cairo_restore (cr);
+
+  /* The frame again for the outline. cairo_save and cairo_restore do not keep
+   * the path, and every fill above consumed it, so the stroke that ended this
+   * function drew an empty path and the panel had no edge. */
+  lk_panel_frame (cr, width, height, radius);
   cairo_set_source_rgba (cr, LK_EDGE_RGBA);
   cairo_set_line_width (cr, 1.0);
   cairo_stroke (cr);

@@ -90,6 +90,16 @@ lk_band_ramp_width (const guint bands[7], int band, double room)
 
 /* ---- the bar ------------------------------------------------------------- */
 
+/* The bar's rounded outline, as a fresh path. */
+static void
+lk_ramp_frame (cairo_t *cr, double width, double radius)
+{
+  cairo_new_path (cr);
+  cairo_arc (cr, radius, radius, radius, 0.5 * G_PI, 1.5 * G_PI);
+  cairo_arc (cr, width - radius, radius, radius, 1.5 * G_PI, 0.5 * G_PI);
+  cairo_close_path (cr);
+}
+
 static void
 lk_band_bar_draw (GtkDrawingArea *area, cairo_t *cr, int width, int height,
                   gpointer user_data)
@@ -108,16 +118,18 @@ lk_band_bar_draw (GtkDrawingArea *area, cairo_t *cr, int width, int height,
 
   /* Rounded, and clipped to it: the pale end of the ramp needs an edge
    * against the page. */
-  cairo_new_path (cr);
-  cairo_arc (cr, radius, radius, radius, 0.5 * G_PI, 1.5 * G_PI);
-  cairo_arc (cr, width - radius, radius, radius, 1.5 * G_PI, 0.5 * G_PI);
-  cairo_close_path (cr);
+  lk_ramp_frame (cr, width, radius);
   cairo_save (cr);
   cairo_clip_preserve (cr);
 
   /* The hairline shows through as the gap between the segments. */
   cairo_set_source_rgba (cr, 0, 0, 0, 0.20);
   cairo_paint (cr);
+
+  /* The frame path is still current after the clip, and a rectangle appends
+   * to it. The first fill then painted the frame as well, so the whole bar
+   * took band 6's colour. */
+  cairo_new_path (cr);
 
   /* Finest first, so the bar runs from the deep end of the ramp to the pale. */
   for (int band = 6; band >= 1; band--)
@@ -135,6 +147,9 @@ lk_band_bar_draw (GtkDrawingArea *area, cairo_t *cr, int width, int height,
     }
 
   cairo_restore (cr);
+
+  /* The frame again for the outline: each fill above consumed the path. */
+  lk_ramp_frame (cr, width, radius);
   cairo_set_source_rgba (cr, 0, 0, 0, 0.25);
   cairo_set_line_width (cr, 1.0);
   cairo_stroke (cr);
