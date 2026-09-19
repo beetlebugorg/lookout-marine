@@ -338,6 +338,12 @@ lk_noaa_window_download (GtkButton *button, gpointer user_data)
                     "water is off your pick.");
           gtk_alert_dialog_show (none, GTK_WINDOW (self->window));
           g_object_unref (none);
+          /* Seed again from the record this press just wrote. The baseline
+           * still named the dropped regions, so Apply stayed armed over a
+           * press that had already done all it could. */
+          self->seeded = FALSE;
+          lk_noaa_window_seed (self, self->noaa);
+          lk_noaa_window_sync (self->noaa, self->window);
           return;
         }
       lk_noaa_window_fetch (self);
