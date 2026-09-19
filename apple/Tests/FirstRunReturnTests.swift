@@ -35,18 +35,18 @@ final class FirstRunReturnTests: ShellTestCase {
 
     /// The defect: finishing setup put it away for the run, so a mariner who
     /// removed every chart had an empty library and no route to the page that
-    /// builds one.
+    /// builds one. The library is noted where the app notes it, from the set
+    /// list changing, and not by hand.
     func testSetupComesBackWhenTheLibraryGoesEmpty() {
-        let (flow, charts, links) = models()
-        charts.sets = [drawableSet()]
-        flow.noteLibrary(charts)
-        flow.finish()
+        let app = AppModel()
+        app.charts.sets = [drawableSet()]
+        app.firstRun.finish()
 
         // Every chart removed.
-        charts.sets = []
-        flow.noteLibrary(charts)
+        app.charts.sets = []
+        app.considerFirstRun()
 
-        XCTAssertTrue(flow.shouldRun(charts: charts, links: links))
+        XCTAssertTrue(app.firstRun.showing)
     }
 
     /// Set Up Later is "not now" from a mariner who never had charts. Setup

@@ -246,6 +246,13 @@ final class AppModel {
         // the core store. Once, before anything reads a setting.
         Store.shared.importDefaults()
         charts = ChartsModel(raster: raster)
+        // Setup comes back over a library that went empty, so it has to have
+        // seen the library full. considerFirstRun runs when nothingToDraw
+        // changes, and that is never while a set is drawing.
+        charts.onSetsChanged = { [weak self] in
+            guard let self else { return }
+            self.firstRun.noteLibrary(self.charts)
+        }
         // Anything a previous run renamed on its way to being deleted.
         ChartBake.sweepTrash()
         // The panel's list. The open itself does not wait on this: it takes

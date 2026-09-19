@@ -182,7 +182,13 @@ final class ChartsModel {
 
     /// The installed folders of charts, in the order added. A set on this list has
     /// been looked through and holds charts, so it always opens.
-    var sets: [ChartSet] = []
+    var sets: [ChartSet] = [] {
+        didSet { onSetsChanged?() }
+    }
+    /// Called whenever the set list changes. Setup reads what the library
+    /// holds here, because this is the one moment a list with charts in it is
+    /// sure to be seen.
+    var onSetsChanged: (() -> Void)?
     /// True while a folder is being looked through. The full NOAA library takes
     /// about 3 seconds.
     var scanning = false {
