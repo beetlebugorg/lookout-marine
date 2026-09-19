@@ -9,6 +9,7 @@
 #include "lk-test.h"
 
 #include "model/app-model.h"
+#include "model/store.h"
 #include "pick-fixture.h"
 #include "ui/firstrun/private.h"
 #include "ui/window.h"
@@ -146,6 +147,34 @@ test_setup_later_puts_it_away (void)
   lk_app_model_set_chart_open (model, FALSE, NULL);
   lk_test_drain ();
   g_assert_null (lk_test_find_label (window, "Welcome to Lookout Marine"));
+}
+
+/* An open with no charts leaves the saved pose alone.
+ *
+ * With a store attached the engine writes the pose every few seconds and
+ * again at close, and a chart of no charts opens on the whole world. That
+ * pose read as the mariner's own, so the next open with charts restored the
+ * world in place of the water they left. */
+static void
+test_an_empty_open_keeps_the_stored_pose (void)
+{
+  /* This suite opens no charts, so every open here is the empty one. */
+  g_assert_false (lk_store_has_saved_view ());
+}
+
+/* The scrim goes when setup does.
+ *
+ * The fill and the scrim stand on the setup card, and the window read them
+ * from events the model raises. Setup going away is the flow's own move, so
+ * both stayed up until something unrelated redrew them. */
+static void
+test_the_scrim_goes_with_setup (void)
+{
+  GtkWidget *page = lk_test_find_css (window, "lk-scrim");
+
+  /* This runs after Set Up Later, so the card has gone. */
+  g_assert_null (lk_test_find_label (window, "Welcome to Lookout Marine"));
+  g_assert_null (page);
 }
 
 /* Setup comes back when the library goes empty.
@@ -358,6 +387,9 @@ main (int argc, char *argv[])
   g_test_add_func ("/window/scheme-action-follows", test_scheme_action_follows);
   /* Last: it puts setup away for the rest of the run. */
   g_test_add_func ("/window/setup-later-puts-it-away", test_setup_later_puts_it_away);
+  g_test_add_func ("/window/the-scrim-goes-with-setup", test_the_scrim_goes_with_setup);
+  g_test_add_func ("/window/an-empty-open-keeps-the-stored-pose",
+                   test_an_empty_open_keeps_the_stored_pose);
 
   return g_test_run ();
 }

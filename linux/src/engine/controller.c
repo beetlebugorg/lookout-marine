@@ -869,20 +869,36 @@ lk_chart_controller_open (LkChartController *self,
   lookout_set_pixel_density (handle, (float) gtk_widget_get_scale_factor (view));
   lookout_resize (handle, width, height);
 
-  /* The engine keeps the pose and the mariner settings in the store from here:
-   * it restores both now, writes the pose down as the mariner moves, and
-   * writes both again at close. With nothing saved it holds the view it opened
-   * on, so the shell asks for the opening one. */
-  lookout_set_store (handle, lk_store_handle ());
-  /* A chart of no charts opens on the core's default view whatever is saved.
-   * With no charts the default is the whole world, and the saved pose is a
-   * scale the basemap has no detail for. */
-  if (n == 0 || !lk_store_has_saved_view ())
+  if (n == 0)
     {
-      lookout_view opening;
+      /* A CHART OF NO CHARTS KEEPS THE STORE AT ARM'S LENGTH. With a store
+       * attached the core writes the pose every 3 s and again at close, and
+       * this chart's default view is the whole world. That pose then read as
+       * the mariner's saved one, so the next open with charts restored the
+       * world. The mariner settings are still applied, straight from the
+       * store. */
+      tile57_mariner mariner;
 
-      lookout_default_view (handle, &opening);
-      lookout_set_view (handle, &opening);
+      /* The engine's defaults with the mariner's saved choices over them, as
+       * lk_chart_controller_get_mariner reads them with no handle. A bare
+       * struct here is not a mariner. */
+      lookout_mariner_defaults (&mariner);
+      lookout_store_read_mariner (lk_store_handle (), &mariner);
+      lookout_set_mariner (handle, &mariner);
+    }
+  else
+    {
+      /* The engine keeps the pose and the mariner settings in the store from
+       * here: it restores both now, writes the pose down as the mariner
+       * moves, and writes both again at close. */
+      lookout_set_store (handle, lk_store_handle ());
+      if (!lk_store_has_saved_view ())
+        {
+          lookout_view opening;
+
+          lookout_default_view (handle, &opening);
+          lookout_set_view (handle, &opening);
+        }
     }
 
   /* $LOOKOUT_VIEW="lon,lat,zoom[,rot]" pins the opening camera (screenshots). */

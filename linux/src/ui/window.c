@@ -618,6 +618,15 @@ lk_window_chart_sets_changed (LkAppModel *model, gpointer user_data)
   lk_window_update_overlays (self);
 }
 
+static void lk_window_update_overlays (LkWindow *self);
+
+/* The setup card raised or put away. */
+static void
+lk_window_setup_changed (GObject *page, GParamSpec *pspec, gpointer user_data)
+{
+  lk_window_update_overlays (user_data);
+}
+
 static void
 lk_window_update_overlays (LkWindow *self)
 {
@@ -647,13 +656,6 @@ lk_window_update_overlays (LkWindow *self)
      charts draws the basemap, and setup floats over that behind a scrim: the
      card is pale and so is the coastline under it. */
   gboolean has_chart = lk_app_model_get_has_chart (self->model);
-  gboolean setup_up = lk_first_run_page_showing (self->first_run);
-
-  gtk_widget_set_visible (self->page, (!drawing && !has_chart) || setup_up);
-  if (setup_up && has_chart)
-    gtk_widget_add_css_class (self->page, "lk-scrim");
-  else
-    gtk_widget_remove_css_class (self->page, "lk-scrim");
 
   /* Sets installed and every one switched off: the mariner needs the switch
    * they turned off, not setup. */
@@ -662,9 +664,20 @@ lk_window_update_overlays (LkWindow *self)
 
   /* Setup, over the running chart. Considered whenever the answer can have
    * changed rather than once at launch: nothing-to-draw is false for the
-   * first moment of every launch while the scan reads the library. */
+   * first moment of every launch while the scan reads the library.
+   *
+   * BEFORE THE FILL IS READ. Raising setup here and reading the card's state
+   * above it left the fill a pass behind. */
   if (settled && !switched_off)
     lk_first_run_consider (self->first_run);
+
+  gboolean setup_up = lk_first_run_page_showing (self->first_run);
+
+  gtk_widget_set_visible (self->page, (!drawing && !has_chart) || setup_up);
+  if (setup_up && has_chart)
+    gtk_widget_add_css_class (self->page, "lk-scrim");
+  else
+    gtk_widget_remove_css_class (self->page, "lk-scrim");
 
   gboolean loader_up = loading && !baking;
   gtk_widget_set_visible (self->loader, loader_up);
@@ -1244,6 +1257,11 @@ lk_window_new (GtkApplication *app, LkAppModel *model)
                                       G_CALLBACK (lk_window_pick_moved), self), self->window);
   lk_tether (model, g_signal_connect (model, "chart-sets-changed",
                                       G_CALLBACK (lk_window_chart_sets_changed), self), self->window);
+
+  /* Setup going away is the flow's own move, and the fill and the scrim stand
+   * on it. Set Up Later left both up until an unrelated event redrew them. */
+  g_signal_connect (self->first_run, "notify::visible",
+                    G_CALLBACK (lk_window_setup_changed), self);
 
   g_object_get (gtk_widget_get_settings (self->window),
                 "gtk-application-prefer-dark-theme", &self->desktop_prefers_dark, NULL);
