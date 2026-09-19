@@ -246,32 +246,11 @@ namespace
         return b;
     }
 
-    // The first-run pictures, beside the exe. The chart shelf draws the same
-    // files the welcome step does.
+    // One shipped picture. The loader is lkw::ShippedPicture, which setup
+    // reads from as well.
     Media::Imaging::BitmapImage ChartArt(wchar_t const *name)
     {
-        if (name == nullptr)
-            return nullptr;
-        wchar_t exe[MAX_PATH]{};
-        DWORD n = GetModuleFileNameW(nullptr, exe, MAX_PATH);
-        if (n == 0 || n >= MAX_PATH)
-            return nullptr;
-        auto path = std::filesystem::path(exe).parent_path() / L"data" / L"firstrun" / name;
-        std::error_code ec;
-        if (!std::filesystem::exists(path, ec))
-            return nullptr;
-        std::wstring uri = L"file:///" + path.wstring();
-        for (auto &c : uri)
-            if (c == L'\\')
-                c = L'/';
-        try
-        {
-            return Media::Imaging::BitmapImage{ Windows::Foundation::Uri{ uri } };
-        }
-        catch (winrt::hresult_error const &)
-        {
-            return nullptr;
-        }
+        return lkw::ShippedPicture(name);
     }
 }
 

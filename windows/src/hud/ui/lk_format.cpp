@@ -1,6 +1,13 @@
 #include "pch.h"
 #include "lk_format.h"
 
+#include <filesystem>
+#include <system_error>
+
+#include "lk_paths.h"
+#include <winrt/Microsoft.UI.Xaml.Media.Imaging.h>
+#include <winrt/Windows.Foundation.h>
+
 namespace lkw
 {
     winrt::Windows::UI::Color Rgb(uint32_t argb)
@@ -18,6 +25,34 @@ namespace lkw
     {
         c.A = (uint8_t)(alpha * 255.0 + 0.5);
         return c;
+    }
+
+    winrt::Microsoft::UI::Xaml::Media::Imaging::BitmapImage ShippedPicture(
+        wchar_t const *name)
+    {
+        if (name == nullptr)
+            return nullptr;
+        std::string const dir = ShippedDataDir();
+        if (dir.empty())
+            return nullptr;
+        auto path = std::filesystem::path(dir) / name;
+        std::error_code ec;
+        if (!std::filesystem::exists(path, ec))
+            return nullptr;
+        std::wstring uri = L"file:///" + path.wstring();
+        for (auto &c : uri)
+            if (c == L'\\')
+                c = L'/';
+        try
+        {
+            return winrt::Microsoft::UI::Xaml::Media::Imaging::BitmapImage{
+                winrt::Windows::Foundation::Uri{ uri }
+            };
+        }
+        catch (winrt::hresult_error const &)
+        {
+            return nullptr;
+        }
     }
 
     void ButtonFills(winrt::Microsoft::UI::Xaml::Controls::Control const &c, uint32_t flat,

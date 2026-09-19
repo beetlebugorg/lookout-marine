@@ -31,6 +31,11 @@ namespace lkw
      * %LOCALAPPDATA%\lookout-marine\Charts. LOCAL rather than roaming — a baked
      * NOAA library is gigabytes, which has no business following a profile onto
      * another machine. Created on first use. */
+    /* Where the data shipped beside the executable lives: the setup
+     * pictures and the coastline. Two files read it and each had its own
+     * copy of the walk. Empty when the path cannot be read. */
+    std::string ShippedDataDir();
+
     std::string ChartLibraryDir();
 
     /* Where baked BSB/KAP sheets land: %LOCALAPPDATA%\lookout-marine\Rasters.

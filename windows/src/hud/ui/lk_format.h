@@ -7,6 +7,7 @@
 
 #include <winrt/base.h>
 #include <winrt/Microsoft.UI.Xaml.Media.h>
+#include <winrt/Microsoft.UI.Xaml.Media.Imaging.h>
 #include <winrt/Microsoft.UI.Xaml.Controls.h>
 #include <winrt/Microsoft.UI.Xaml.h>
 
@@ -69,6 +70,14 @@ namespace lkw
      * shadow by day, at a resting, a hovered and a pressed alpha. `edge` is
      * the border it keeps in every state, which a button with no border of
      * its own leaves at zero. */
+    /* One picture shipped beside the executable, or nullptr when the file
+     * is absent. The setup steps and the chart shelf both draw these, and
+     * each had its own copy of the loader. A step reads properly without
+     * the picture, which is also what a launch looks like when a file
+     * fails to load. */
+    winrt::Microsoft::UI::Xaml::Media::Imaging::BitmapImage ShippedPicture(
+        wchar_t const *name);
+
     void FlatFills(winrt::Microsoft::UI::Xaml::Controls::Control const &c, bool dark,
                    uint32_t edge = 0x00000000u);
 }

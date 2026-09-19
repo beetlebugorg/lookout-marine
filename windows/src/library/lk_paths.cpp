@@ -12,6 +12,16 @@
 
 namespace lkw
 {
+    std::string ShippedDataDir()
+    {
+        wchar_t exe[MAX_PATH]{};
+        DWORD n = GetModuleFileNameW(nullptr, exe, MAX_PATH);
+        if (n == 0 || n >= MAX_PATH)
+            return {};
+        return (std::filesystem::path(exe).parent_path() / L"data" / L"firstrun")
+            .string();
+    }
+
     std::string ChartLibraryDir()
     {
         wchar_t *base = nullptr;

@@ -68,14 +68,10 @@ namespace
     // so these helpers need no element to ask.
     bool g_dark = false;
 
-    // The accent, as a literal rather than a lookup, for the reason above. The
-    // two values are the LkAccentBrush pair from MainWindow.xaml, kept in step
-    // with it by hand.
-    Windows::UI::Color AccentColor(bool dark)
-    {
-        return dark ? Windows::UI::Color{ 0xFF, 0x7E, 0xA1, 0xF5 }
-                    : Windows::UI::Color{ 0xFF, 0x1B, 0x49, 0xC4 };
-    }
+    // The accent, from the palette both this file and the settings pane
+    // read (lkw::chrome::Accent), which is the LkAccentBrush pair from
+    // MainWindow.xaml kept in step with it by hand.
+    Windows::UI::Color AccentColor(bool dark) { return lkw::Rgb(lkw::chrome::Accent(dark)); }
 
     SolidColorBrush AccentBrush() { return SolidColorBrush{ AccentColor(g_dark) }; }
 
@@ -220,7 +216,7 @@ namespace
         // theme's own hover fill, and an accent one washes out to near white.
         if (on)
         {
-            uint32_t const fill = g_dark ? 0xFF7EA1F5u : 0xFF1B49C4u;
+            uint32_t const fill = lkw::chrome::Accent(g_dark);
             lkw::ButtonFills(b, fill, fill, fill, 0x00000000u);
             b.BorderBrush(SolidColorBrush{ Windows::UI::Colors::Transparent() });
             b.Foreground(SolidColorBrush{ Windows::UI::Colors::White() });
@@ -298,7 +294,7 @@ namespace
         {
             // The pick stays the accent under the pointer, rather than fading
             // to the theme's near-white hover fill. See lkw::ButtonFills.
-            uint32_t const fill = g_dark ? 0xFF7EA1F5u : 0xFF1B49C4u;
+            uint32_t const fill = lkw::chrome::Accent(g_dark);
             lkw::ButtonFills(b, fill, fill, fill, 0x00000000u);
             b.BorderBrush(SolidColorBrush{ Windows::UI::Colors::Transparent() });
         }
@@ -393,41 +389,12 @@ namespace
         return b;
     }
 
-    // The directory the build copies the first-run pictures and the coastline
-    // into, beside the exe. Each shell keeps its own copy of these, as they do
-    // for the icons.
-    std::filesystem::path FirstRunDataDir()
-    {
-        wchar_t exe[MAX_PATH]{};
-        DWORD n = GetModuleFileNameW(nullptr, exe, MAX_PATH);
-        if (n == 0 || n >= MAX_PATH)
-            return {};
-        return std::filesystem::path(exe).parent_path() / L"data" / L"firstrun";
-    }
-
-    // One picture from that directory, or nullptr when the file is absent. The
-    // steps that use these read properly without them. That is also what a
-    // first launch looks like if a file fails to load.
+    // The setup pictures, beside the executable. The loader and the directory
+    // are shared with the chart shelf: lkw::ShippedPicture and
+    // lkw::ShippedDataDir.
     Media::Imaging::BitmapImage FirstRunPicture(wchar_t const *name)
     {
-        auto path = FirstRunDataDir() / name;
-        std::error_code ec;
-        if (path.empty() || !std::filesystem::exists(path, ec))
-            return nullptr;
-        // Uri needs a scheme. A bare drive path throws, and a throw here runs
-        // during the first layout, where it leaves the window blank.
-        std::wstring uri = L"file:///" + path.wstring();
-        for (auto &c : uri)
-            if (c == L'\\')
-                c = L'/';
-        try
-        {
-            return Media::Imaging::BitmapImage{ Windows::Foundation::Uri{ uri } };
-        }
-        catch (winrt::hresult_error const &)
-        {
-            return nullptr;
-        }
+        return lkw::ShippedPicture(name);
     }
 
     // The shape the other shells price a region in, so "1,238 charts,
@@ -1552,7 +1519,9 @@ namespace winrt::LookoutMarine::implementation
     void MainWindow::FirstRunCoverageMap(Controls::StackPanel const &body)
     {
         if (coastline_.empty())
-            coastline_ = lkw::LoadCoastline((FirstRunDataDir() / L"coastline.bin").string());
+            coastline_ = lkw::LoadCoastline(
+                (std::filesystem::path(lkw::ShippedDataDir()) / L"coastline.bin")
+                    .string());
         if (coastline_.empty())
             return;
 
