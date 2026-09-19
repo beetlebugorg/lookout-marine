@@ -94,6 +94,15 @@ gboolean lk_store_noaa_regions_recorded (void);
 /* Clear both the list and the flag, so the device reads as never having
  * downloaded a region. This is the state of a fresh install. */
 void lk_store_forget_noaa_regions (void);
+
+/* How often to ask NOAA for newer editions: "never", "startup" or "daily".
+ * Daily on a device that has never said. Free with g_free. */
+char *lk_store_load_noaa_update_check (void);
+void  lk_store_save_noaa_update_check (const char *cadence);
+
+/* When the last check ran, in unix seconds. 0 for never. */
+gint64 lk_store_load_noaa_update_checked (void);
+void   lk_store_save_noaa_update_checked (gint64 when);
 char *lk_store_load_chart_link_active (void);
 void  lk_store_save_chart_link_active (const char *url);
 

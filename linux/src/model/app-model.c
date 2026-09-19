@@ -24,6 +24,13 @@ struct _LkAppModel {
   /* A download that ended while a scan or a bake was running. The open is
    * refused then, and this is what brings it back. */
   gboolean           noaa_open_held;
+  /* How many managed charts NOAA has reissued, and whether a check is waiting
+   * on the catalog it reads that from. */
+  guint32            noaa_outdated;
+  gboolean           noaa_checking;
+  /* One check per run for the "startup" cadence. The only hook a catalog read
+   * can hang off is a chart opening, and a chart opens more than once. */
+  gboolean           noaa_checked_this_run;
 
   gboolean has_chart;
   char    *chart_path;
@@ -292,6 +299,7 @@ static void lk_app_model_remove_progress (const LkBakeProgress *progress,
                                           gpointer user_data);
 static void lk_app_model_noaa_note_all (LkAppModel *self);
 static void lk_app_model_prepare_noaa_download (LkAppModel *self);
+static void lk_app_model_count_noaa_outdated (LkAppModel *self);
 
 static void
 lk_app_model_emit_chart_sets_changed (LkAppModel *self)
@@ -369,6 +377,10 @@ lk_app_model_noaa_changed (LkNoaa *noaa, gpointer user_data)
 {
   LkAppModel *self = user_data;
   const LkNoaaState *state = lk_noaa_state (noaa);
+
+  /* A check waiting on the catalog it counts against. */
+  if (self->noaa_checking && state->have_catalog)
+    lk_app_model_count_noaa_outdated (self);
 
   if (!self->noaa_watching || state->phase == LK_NOAA_DOWNLOADING)
     return;
@@ -513,6 +525,10 @@ lk_app_model_noaa_chart_did_open (LkAppModel *self)
   lk_app_model_noaa_note_all (self);
 
   lk_noaa_chart_did_open (self->noaa);
+
+  /* The catalog read runs through a handle, so the first chart of the run is
+   * where a due check can start. */
+  lk_app_model_check_noaa_updates (self);
 }
 
 char **
@@ -914,6 +930,106 @@ lk_app_model_remove_noaa_cells (LkAppModel *self, const char *const *names)
                                          "this app downloaded them to, so nothing "
                                          "was removed.");
     }
+}
+
+/* ---- NOAA chart updates --------------------------------------------------- */
+
+guint32
+lk_app_model_noaa_outdated (LkAppModel *self)
+{
+  g_return_val_if_fail (LK_IS_APP_MODEL (self), 0);
+  return self->noaa_outdated;
+}
+
+/* Count the managed charts NOAA has reissued, against the catalog in hand. */
+static void
+lk_app_model_count_noaa_outdated (LkAppModel *self)
+{
+  g_autoptr (GArray) have = lk_chart_sets_managed_editions (self->chart_sets);
+  g_autofree LkNoaaInstalled *installed = NULL;
+
+  self->noaa_checking = FALSE;
+  self->noaa_outdated = 0;
+  lk_store_save_noaa_update_checked (g_get_real_time () / G_USEC_PER_SEC);
+  if (have->len == 0)
+    return;
+
+  installed = g_new0 (LkNoaaInstalled, have->len);
+  for (guint i = 0; i < have->len; i++)
+    {
+      const LkChartSetEdition *one = &g_array_index (have, LkChartSetEdition, i);
+
+      installed[i].name = one->name;
+      installed[i].edition = one->edition;
+      installed[i].update = one->update;
+    }
+  self->noaa_outdated = lk_noaa_outdated (self->noaa, installed, have->len);
+}
+
+void
+lk_app_model_check_noaa_updates (LkAppModel *self)
+{
+  g_autofree char *cadence = NULL;
+  gint64 last, now;
+
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+
+  cadence = lk_store_load_noaa_update_check ();
+  if (g_str_equal (cadence, "never"))
+    return;
+  if (self->noaa_checked_this_run || self->noaa_checking)
+    return;
+
+  /* AT MOST ONCE A DAY, whatever the cadence. NOAA publishes weekly, and a
+   * check reads a catalog of about 10 MB. "startup" asks on every launch,
+   * "daily" once in each 24 hours. */
+  now = g_get_real_time () / G_USEC_PER_SEC;
+  last = lk_store_load_noaa_update_checked ();
+  if (g_str_equal (cadence, "daily") && last > 0 && now - last < 24 * 60 * 60)
+    return;
+
+  self->noaa_checked_this_run = TRUE;
+  self->noaa_checking = TRUE;
+  if (lk_noaa_state (self->noaa)->have_catalog)
+    lk_app_model_count_noaa_outdated (self);
+  else
+    lk_noaa_refresh (self->noaa);
+}
+
+void
+lk_app_model_download_noaa_updates (LkAppModel *self)
+{
+  g_autoptr (GArray) have = NULL;
+  g_autofree LkNoaaInstalled *installed = NULL;
+  g_autofree char *dest = NULL;
+
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+
+  have = lk_chart_sets_managed_editions (self->chart_sets);
+  if (have->len == 0)
+    return;
+
+  dest = lk_noaa_download_dir ();
+  if (g_mkdir_with_parents (dest, 0700) != 0)
+    {
+      lk_app_model_set_open_error (self, "Couldn't make a place to download charts to.");
+      return;
+    }
+
+  installed = g_new0 (LkNoaaInstalled, have->len);
+  for (guint i = 0; i < have->len; i++)
+    {
+      const LkChartSetEdition *one = &g_array_index (have, LkChartSetEdition, i);
+
+      installed[i].name = one->name;
+      installed[i].edition = one->edition;
+      installed[i].update = one->update;
+    }
+
+  g_free (self->noaa_dest);
+  self->noaa_dest = g_strdup (dest);
+  self->noaa_watching = TRUE;
+  lk_noaa_update (self->noaa, installed, have->len, dest);
 }
 
 char **

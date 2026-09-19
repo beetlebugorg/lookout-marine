@@ -39,6 +39,10 @@ typedef struct {
    * through the downloader, not through this list. */
   gboolean managed;
   gboolean on;
+  /* The charts this set holds that another switched-on set draws in their
+   * place, because both hold the same cell and the other copy is newer or is
+   * the downloader's. They stay installed. 0 for a set switched off. */
+  guint    held_back;
   /* Cells per usage band, 1 to 6. Index 0 holds the cells whose name states no
    * band, which is every S-101 dataset: those have no place on a scale ramp
    * and the ramp leaves them out. */
@@ -95,6 +99,19 @@ gboolean lk_chart_sets_is_managed (LkChartSets *self, const char *path);
 /* The dataset names the MANAGED sets hold, uppercased and deduplicated.
  * Transfer full. */
 char **lk_chart_sets_managed_cell_names (LkChartSets *self);
+
+/* One installed cell, with the edition the file states. */
+typedef struct {
+  char   *name;
+  guint32 edition;
+  guint32 update;
+} LkChartSetEdition;
+
+/* Every managed cell that states an edition, for the update check. A file on
+ * disk does not say which edition it is until the scan has read it, so a set
+ * the scan has yet to reach reports none. Transfer full: a GArray of
+ * LkChartSetEdition, with the names owned by the array. */
+GArray *lk_chart_sets_managed_editions (LkChartSets *self);
 
 /* Read a set's folder again. Charts deleted out of a prepared directory, or
  * written into one after the scan read it, are invisible to the composed chart

@@ -227,6 +227,7 @@ lk_chart_sets_rows (LkChartSets *self)
       row->derived = lk_chart_bake_is_derived (set->path) ||
                      (prepared != NULL && g_file_test (prepared, G_FILE_TEST_IS_DIR));
       row->managed = set->managed != 0;
+      row->held_back = (guint) set->held_back;
       row->on = set->on != 0;
       lk_chart_set_count_bands (self, set->path, row->bands);
       g_ptr_array_add (rows, row);
@@ -363,6 +364,48 @@ lk_chart_sets_managed_cell_names (LkChartSets *self)
    * cell read a library whose charts had been deleted as still installed: the
    * pills opened ticked on water that was gone. */
   return lk_chart_sets_names_of (self, TRUE, TRUE);
+}
+
+static void
+lk_chart_set_edition_clear (gpointer data)
+{
+  LkChartSetEdition *one = data;
+
+  g_free (one->name);
+}
+
+GArray *
+lk_chart_sets_managed_editions (LkChartSets *self)
+{
+  GArray *out = g_array_new (FALSE, FALSE, sizeof (LkChartSetEdition));
+  size_t n_sets = 0;
+  const lookout_chart_set *const *sets = lookout_chart_sets_all (self->sets, &n_sets);
+
+  g_array_set_clear_func (out, lk_chart_set_edition_clear);
+
+  for (size_t s = 0; s < n_sets; s++)
+    {
+      if (sets[s]->managed == 0)
+        continue;
+
+      size_t n_files = 0;
+      const lookout_chart_file *const *files =
+          lookout_chart_set_files (self->sets, sets[s]->path, &n_files);
+
+      for (size_t f = 0; f < n_files; f++)
+        {
+          const lookout_chart_file *file = files[f];
+          LkChartSetEdition one;
+
+          if (file->name == NULL || file->name[0] == '\0' || file->edition == 0)
+            continue;
+          one.name = g_ascii_strup (file->name, -1);
+          one.edition = file->edition;
+          one.update = file->update;
+          g_array_append_val (out, one);
+        }
+    }
+  return out;
 }
 
 char **

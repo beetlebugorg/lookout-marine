@@ -81,6 +81,24 @@ char **lk_app_model_noaa_cells_present (LkAppModel *self, const char *const *nam
  * been read again. */
 void lk_app_model_remove_noaa_cells (LkAppModel *self, const char *const *names);
 
+/* ---- NOAA chart updates ----------------------------------------------------
+ *
+ * NOAA reissues a cell when its survey changes, and a mariner sailing on last
+ * season's edition has no way to know. The check reads the catalog and counts
+ * the managed cells whose edition it has passed. */
+
+/* How many managed charts NOAA has reissued, as the last check found. 0 until
+ * a check has run. */
+guint32 lk_app_model_noaa_outdated (LkAppModel *self);
+
+/* Run the check when the cadence asks for one and the last was over a day
+ * ago. The catalog read is the slow part, so the count arrives later, through
+ * ::changed on the NOAA service. */
+void lk_app_model_check_noaa_updates (LkAppModel *self);
+
+/* Fetch the newer editions of every managed chart the check counted. */
+void lk_app_model_download_noaa_updates (LkAppModel *self);
+
 /* Every cell the downloader's own directory holds, by name. A removal of the
  * whole download deletes these, and its warning states the count. Transfer
  * full. */

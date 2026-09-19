@@ -23,6 +23,7 @@
 #include "ui/charts/band-ramp.h"
 #include "ui/charts/gallery.h"
 #include "ui/charts/noaa-window.h"
+#include "model/store.h"
 #include "ui/open-dialogs.h"
 
 /* ---- the ways in --------------------------------------------------------- */
@@ -267,6 +268,29 @@ lk_settings_links_changed (LkChartLinks *links, gpointer user_data)
 }
 
 /* ---- the chart library --------------------------------------------------- */
+
+/* Never, at startup, or daily. */
+static void
+lk_charts_update_cadence_chosen (LkSettings *settings, int chosen)
+{
+  static const char *const keys[] = { "never", "startup", "daily" };
+
+  if (chosen < 0 || chosen > 2)
+    return;
+  lk_store_save_noaa_update_check (keys[chosen]);
+  /* A mariner who just asked for the check gets one now. */
+  if (chosen != 0)
+    lk_app_model_check_noaa_updates (settings->model);
+}
+
+/* Fetch the newer editions the check counted. */
+static void
+lk_charts_update_clicked (GtkButton *button, gpointer user_data)
+{
+  LkSettings *settings = user_data;
+
+  lk_app_model_download_noaa_updates (settings->model);
+}
 
 static void
 lk_chart_set_toggled (GtkSwitch *widget, GParamSpec *pspec, gpointer user_data)
@@ -669,6 +693,24 @@ lk_settings_fill_sets_list (LkSettings *settings)
           gtk_label_set_ellipsize (GTK_LABEL (caption), PANGO_ELLIPSIZE_MIDDLE);
           gtk_box_append (GTK_BOX (column), caption);
         }
+
+      /* What this set holds that another set draws in its place. Two sets can
+       * hold the same cell, and the chart draws one copy, so the count on the
+       * row is more than the chart shows. */
+      if (set->held_back > 0)
+        {
+          g_autofree char *held =
+              g_strdup_printf (set->held_back == 1
+                                   ? "1 chart also in another set"
+                                   : "%u charts also in another set",
+                               set->held_back);
+          GtkWidget *caption = gtk_label_new (held);
+
+          gtk_widget_add_css_class (caption, "dim-label");
+          gtk_widget_add_css_class (caption, "caption");
+          gtk_label_set_xalign (GTK_LABEL (caption), 0.0);
+          gtk_box_append (GTK_BOX (column), caption);
+        }
       gtk_widget_set_hexpand (column, TRUE);
 
       /* The agency title can hide the folder name; the tooltip keeps the
@@ -738,6 +780,38 @@ lk_settings_fill_sets_list (LkSettings *settings)
       gtk_box_append (GTK_BOX (entry), row);
       lk_sets_list_rule (list);
       gtk_box_append (GTK_BOX (list), entry);
+
+      /* WHAT NOAA HAS REISSUED. Only the managed row: it is the set the app
+       * knows the provenance of, and the one it can fetch newer editions
+       * into. */
+      if (set->managed && lk_app_model_noaa_outdated (settings->model) > 0)
+        {
+          guint32 n = lk_app_model_noaa_outdated (settings->model);
+          GtkWidget *line = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
+          g_autofree char *text =
+              g_strdup_printf (n == 1 ? "1 chart has a newer edition"
+                                      : "%u charts have newer editions", n);
+          GtkWidget *label = gtk_label_new (text);
+          GtkWidget *update = gtk_button_new_with_label ("Update");
+
+          gtk_widget_add_css_class (label, "caption");
+          gtk_widget_add_css_class (label, "lk-accent");
+          gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+          gtk_widget_set_hexpand (label, TRUE);
+          gtk_button_set_has_frame (GTK_BUTTON (update), FALSE);
+          gtk_widget_add_css_class (update, "caption");
+          gtk_widget_add_css_class (update, "lk-accent");
+          gtk_widget_set_valign (update, GTK_ALIGN_CENTER);
+          gtk_widget_set_sensitive (update,
+                                    !lk_app_model_get_baking (settings->model));
+          g_signal_connect (update, "clicked", G_CALLBACK (lk_charts_update_clicked),
+                            settings);
+
+          gtk_box_append (GTK_BOX (line), label);
+          gtk_box_append (GTK_BOX (line), update);
+          gtk_widget_set_margin_start (line, 30);
+          gtk_box_append (GTK_BOX (entry), line);
+        }
 
       /* What scales it holds. A set that stops at Coastal does not draw the
        * harbour a passage ends in. */
@@ -1241,6 +1315,18 @@ lk_build_charts_page (LkSettings *settings)
                          "A folder of cells, an archive, a prepared chart, or "
                          "pictures. Or drop any of them anywhere in the chart window.",
                          settings);
+
+  /* HOW OFTEN TO ASK NOAA FOR NEWER EDITIONS. NOAA reissues a cell when its
+   * survey changes, and a mariner sailing on last season's edition has no way
+   * to know. The read is about 10 MB, so it runs once a day at most. */
+  static const char *const cadences[] = { "Never", "At startup", "Daily", NULL };
+  g_autofree char *cadence = lk_store_load_noaa_update_check ();
+  int chosen = g_str_equal (cadence, "never")     ? 0
+               : g_str_equal (cadence, "startup") ? 1
+                                                  : 2;
+
+  lk_choice_row (add_group, settings, "Check for NOAA chart updates", cadences, chosen,
+                 NULL, lk_charts_update_cadence_chosen);
 
   lk_footer (add,
              "S-57 and S-101 cells (.000 with their updates) · charts Lookout has "
