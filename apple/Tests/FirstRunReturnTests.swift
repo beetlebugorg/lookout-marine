@@ -167,3 +167,26 @@ final class FirstRunStepTests: ShellTestCase {
     }
 }
 
+/// The depth step's draft field. The field is parsed on every edit, so Start
+/// Sailing applies a typed draft without Return.
+final class DepthStepDraftTests: XCTestCase {
+
+    func testATypedDraftParses() {
+        XCTAssertEqual(DepthStep.parseDraft("7", feet: true), 7)
+        XCTAssertEqual(DepthStep.parseDraft(" 1.8 ", feet: false), 1.8)
+    }
+
+    func testADraftIsCappedPerUnit() {
+        XCTAssertEqual(DepthStep.parseDraft("250", feet: true), 100)
+        XCTAssertEqual(DepthStep.parseDraft("250", feet: false), 30)
+    }
+
+    /// A cleared field, or one partway through an edit, leaves the draft as
+    /// it was.
+    func testTextThatIsNotADraftParsesToNil() {
+        XCTAssertNil(DepthStep.parseDraft("", feet: true))
+        XCTAssertNil(DepthStep.parseDraft("0", feet: true))
+        XCTAssertNil(DepthStep.parseDraft("-", feet: true))
+        XCTAssertNil(DepthStep.parseDraft("abc", feet: true))
+    }
+}

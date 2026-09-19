@@ -141,6 +141,11 @@ struct DepthStep: View {
                 .frame(width: 84)
                 .padding(.leading, 13)
                 .onSubmit(readDraft)
+                // Start Sailing reads the draft as typed. Parsing only on
+                // Return left the seeded draft in the engine.
+                .onChange(of: draftText) { _, now in
+                    if let v = Self.parseDraft(now, feet: feet), v != draft { draft = v }
+                }
                 .accessibilityIdentifier("draft")
             Text(unit)
                 .font(.system(size: 15))
@@ -470,12 +475,19 @@ struct DepthStep: View {
     }
 
     private func readDraft() {
-        guard let v = Double(draftText.trimmingCharacters(in: .whitespaces)), v > 0 else {
+        guard let v = Self.parseDraft(draftText, feet: feet) else {
             showDraft()
             return
         }
-        draft = min(feet ? 100 : 30, v)
+        draft = v
         showDraft()
+    }
+
+    /// The draft in the field, capped, or nil for text that is not a
+    /// positive number.
+    static func parseDraft(_ text: String, feet: Bool) -> Double? {
+        guard let v = Double(text.trimmingCharacters(in: .whitespaces)), v > 0 else { return nil }
+        return min(feet ? 100 : 30, v)
     }
 
     /// Convert the boat on a change of unit, and snap the clearance to one of
