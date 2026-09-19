@@ -42,11 +42,14 @@ namespace lkw
 
     std::wstring SizeText(uint64_t bytes)
     {
+        // Decimal, the way NOAA states a download and the way the reference
+        // shell states it back. Dividing by 2^20 read 216.0 MB for the same
+        // region the Mac priced at 226.5 MB.
         wchar_t buf[64];
-        if (bytes >= (uint64_t{ 1 } << 30))
-            std::swprintf(buf, 64, L"%.1f GB", (double)bytes / (double)(uint64_t{ 1 } << 30));
+        if (bytes >= 1'000'000'000ull)
+            std::swprintf(buf, 64, L"%.1f GB", (double)bytes / 1e9);
         else
-            std::swprintf(buf, 64, L"%.1f MB", (double)bytes / (double)(1u << 20));
+            std::swprintf(buf, 64, L"%.1f MB", (double)bytes / 1e6);
         return buf;
     }
 

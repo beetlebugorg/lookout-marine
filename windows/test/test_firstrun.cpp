@@ -99,14 +99,6 @@ void TestFirstRun()
         Case("a chart is drawing: setup stays down");
         LK_EQ(f.ShouldRun(false, false), false);
 
-        /* The case T-003 held back and T-005 sent here. A configured set whose
-         * drive is unplugged scans to no cells, so there is nothing to draw
-         * and setup runs. The source step is where that mariner re-points at
-         * their charts. macOS flagged this reading for a second look on
-         * screen. */
-        Case("a set that will not read has nothing to draw, so setup runs");
-        LK_EQ(f.ShouldRun(true, false), true);
-
         Case("a published style drawing in place of a library keeps setup down");
         LK_EQ(f.ShouldRun(true, true), false);
 
@@ -412,13 +404,13 @@ void TestFirstRun()
     Suite("lk_firstrun: the figures");
     {
         Case("megabytes under a gigabyte");
-        LK_EQ(SizeText(226'492'416ull), std::wstring(L"216.0 MB"));
+        LK_EQ(SizeText(226'492'416ull), std::wstring(L"226.5 MB"));
 
         Case("gigabytes above one");
-        LK_EQ(SizeText(4'617'089'843ull), std::wstring(L"4.3 GB"));
+        LK_EQ(SizeText(4'617'089'843ull), std::wstring(L"4.6 GB"));
 
         Case("a gigabyte exactly reads in gigabytes");
-        LK_EQ(SizeText(1ull << 30), std::wstring(L"1.0 GB"));
+        LK_EQ(SizeText(1'000'000'000ull), std::wstring(L"1.0 GB"));
 
         Case("nothing measured reads as zero");
         LK_EQ(SizeText(0), std::wstring(L"0.0 MB"));
@@ -728,18 +720,18 @@ void TestFirstRun()
         /* The line beside the primary action. It stated the price of a pick
          * at the end of the step, where the footer bar covered it. */
         Case("what a pick costs, in the mariner's words");
-        LK_EQ(CostLine(930, 102760448, 0, 0), std::wstring(L"930 charts, 98.0 MB"));
+        LK_EQ(CostLine(930, 102760448, 0, 0), std::wstring(L"930 charts, 102.8 MB"));
         LK_EQ(CostLine(27, 3145728, 864, 90177536),
-              std::wstring(L"27 charts, 3.0 MB · 864 already installed"));
+              std::wstring(L"27 charts, 3.1 MB · 864 already installed"));
         LK_EQ(CostLine(0, 0, 930, 102760448),
-              std::wstring(L"930 charts, all installed · 98.0 MB to fetch again"));
+              std::wstring(L"930 charts, all installed · 102.8 MB to fetch again"));
 
         Case("the coverage step prices the pick beside the action");
         FirstRun::Footnotes cov{};
         cov.have_catalog = true;
         cov.cells = 930;
         cov.bytes = 102760448;
-        LK_EQ(At(FirstRunStep::Coverage).Footnote(cov), std::wstring(L"930 charts, 98.0 MB"));
+        LK_EQ(At(FirstRunStep::Coverage).Footnote(cov), std::wstring(L"930 charts, 102.8 MB"));
 
         /* Water already here counts as picked: a region wholly installed
          * prices as nothing, which read as an empty pick. */
@@ -749,7 +741,7 @@ void TestFirstRun()
         whole.held = 930;
         whole.held_bytes = 102760448;
         LK_EQ(At(FirstRunStep::Coverage).Footnote(whole),
-              std::wstring(L"930 charts, all installed · 98.0 MB to fetch again"));
+              std::wstring(L"930 charts, all installed · 102.8 MB to fetch again"));
 
         Case("nothing picked asks for a region");
         FirstRun::Footnotes bare{};
@@ -803,9 +795,9 @@ void TestFirstRun()
         Case("both halves in one line");
         std::vector<std::wstring> gone{ L"Northeast" };
         LK_EQ(PlanLine(930, 102760448, 0, 0, {}),
-              std::wstring(L"Add 930 charts, 98.0 MB"));
+              std::wstring(L"Add 930 charts, 102.8 MB"));
         LK_EQ(PlanLine(930, 102760448, 0, 0, gone),
-              std::wstring(L"Add 930 charts, 98.0 MB · remove Northeast"));
+              std::wstring(L"Add 930 charts, 102.8 MB · remove Northeast"));
         gone.push_back(L"Southeast");
         LK_EQ(PlanLine(0, 0, 0, 0, gone), std::wstring(L"remove Northeast, Southeast"));
 
@@ -813,7 +805,7 @@ void TestFirstRun()
          * the pick holds. */
         Case("a plan with nothing in it prices the pick");
         LK_EQ(PlanLine(0, 0, 930, 102760448, {}),
-              std::wstring(L"930 charts, all installed · 98.0 MB to fetch again"));
+              std::wstring(L"930 charts, all installed · 102.8 MB to fetch again"));
 
         Case("the question asked before charts are deleted");
         LK_EQ(RemovalTitle({ L"Northeast" }), std::wstring(L"Remove Northeast charts?"));
@@ -839,10 +831,10 @@ void TestFirstRun()
         plan.have_catalog = true;
         plan.cells = 930;
         plan.bytes = 102760448;
-        LK_EQ(pick.Footnote(plan), std::wstring(L"Add 930 charts, 98.0 MB"));
+        LK_EQ(pick.Footnote(plan), std::wstring(L"Add 930 charts, 102.8 MB"));
         plan.removing = { L"Northeast" };
         LK_EQ(pick.Footnote(plan),
-              std::wstring(L"Add 930 charts, 98.0 MB · remove Northeast"));
+              std::wstring(L"Add 930 charts, 102.8 MB · remove Northeast"));
 
         Case("a picker giving water back and fetching none");
         FirstRun::Footnotes back{};

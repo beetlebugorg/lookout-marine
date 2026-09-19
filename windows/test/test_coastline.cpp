@@ -16,6 +16,9 @@
 #include <string>
 #include <vector>
 
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+
 #include "lk_coastline.h"
 
 using namespace lktest;
@@ -45,18 +48,40 @@ namespace
         }
     };
 
-    /* Where the build puts coastline.bin, and where the source copy lives. The
-     * test target runs from the repo, so it reads the source copy. */
+    /* Where the build puts coastline.bin, and where the source copy lives.
+     *
+     * From the test executable rather than the working directory. The runner
+     * starts this from the repo root and the candidates below read from
+     * there, so a run started in windows\test found no file and the whole
+     * suite passed on an empty read. */
     std::string CoastlinePath()
     {
+        std::vector<std::filesystem::path> roots{ std::filesystem::current_path() };
+        {
+            wchar_t self[MAX_PATH]{};
+            if (GetModuleFileNameW(nullptr, self, MAX_PATH) != 0)
+            {
+                std::filesystem::path dir = std::filesystem::path(self).parent_path();
+                for (int up = 0; up < 5 && !dir.empty(); ++up)
+                {
+                    roots.push_back(dir);
+                    dir = dir.parent_path();
+                }
+            }
+        }
         char const *candidates[] = {
             "windows/data/firstrun/coastline.bin",
             "../windows/data/firstrun/coastline.bin",
             "data/firstrun/coastline.bin",
         };
-        for (auto const *c : candidates)
-            if (std::filesystem::exists(c))
-                return c;
+        for (auto const &root : roots)
+            for (auto const *c : candidates)
+            {
+                std::error_code ec;
+                std::filesystem::path p = root / c;
+                if (std::filesystem::exists(p, ec))
+                    return p.string();
+            }
         return "";
     }
 }
