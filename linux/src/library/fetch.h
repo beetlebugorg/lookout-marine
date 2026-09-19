@@ -29,7 +29,23 @@ typedef struct _LkFetcher LkFetcher;
 typedef void (*LkFetcherRespond) (gpointer user_data, uint64_t req_id,
                                   const void *bytes, gsize len, int status);
 
+/* The same answer in pieces, for a body too large to hold whole. A shell that
+ * installs one gets every http body this way, each piece as it arrives, with
+ * `done` set on the last. */
+typedef void (*LkFetcherRespondChunk) (gpointer user_data, uint64_t req_id,
+                                       const void *bytes, gsize len, int status,
+                                       gboolean done);
+
 LkFetcher *lk_fetcher_new (LkFetcherRespond respond, gpointer user_data);
+
+/* Deliver http bodies in pieces through `chunk` instead of whole.
+ *
+ * A NOAA district downloads as one zip of up to a couple of hundred
+ * megabytes, and reading that into one GBytes needs the same again for the
+ * copy the core makes of it. The core writes the pieces of a chart download
+ * to disk as they land, and joins the pieces of a style or a tile itself.
+ * A file:// read stays whole: it is a style the mariner wrote. */
+void lk_fetcher_set_chunk_respond (LkFetcher *self, LkFetcherRespondChunk chunk);
 void       lk_fetcher_free (LkFetcher *self);
 
 /* Pass these to whichever installer the caller has:

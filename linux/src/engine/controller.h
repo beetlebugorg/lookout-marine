@@ -161,6 +161,14 @@ void lk_chart_controller_set_http_provider (LkChartController *self,
 void lk_chart_controller_http_respond (LkChartController *self, guint64 req_id,
                                        const void *bytes, gsize len, int status);
 
+/* The same answer in pieces, for a body too large to hold whole. Each piece
+ * goes in as it arrives, and `done` marks the last. A district bundle runs to
+ * a couple of hundred megabytes, and the core writes the pieces to disk as
+ * they land. */
+void lk_chart_controller_http_respond_chunk (LkChartController *self, guint64 req_id,
+                                             const void *bytes, gsize len, int status,
+                                             gboolean done);
+
 /* The chart-link management surface, straight through to lookout. */
 void  lk_chart_controller_chart_link_add (LkChartController *self, const char *link);
 void  lk_chart_controller_chart_link_select (LkChartController *self, const char *url);

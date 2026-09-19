@@ -21,15 +21,24 @@ struct _LkFetcher {
   gboolean     dead;
   gint         refs;
 
-  LkFetcherRespond respond;
-  gpointer         respond_data;
+  LkFetcherRespond      respond;
+  LkFetcherRespondChunk chunk;
+  gpointer              respond_data;
 };
+
+/* One read of a streamed body. Large enough that a 200 MB bundle is a few
+ * hundred reads, small enough that no piece is a burden on a phone. */
+#define LK_FETCH_PIECE (256 * 1024)
 
 typedef struct {
   LkFetcher    *fetcher; /* reffed: the completion runs after the owner lets go */
   SoupMessage  *msg; /* to read the status in the completion; NULL for a file */
   GCancellable *cancel;
   uint64_t      id;
+  /* The streamed read: the body arrives piece by piece and never sits whole
+   * in memory. */
+  GInputStream *stream;
+  guint         status;
 } LkFetch;
 
 static void lk_fetcher_unref (LkFetcher *self);
@@ -39,6 +48,7 @@ lk_fetch_free (LkFetch *fetch)
 {
   g_clear_object (&fetch->msg);
   g_clear_object (&fetch->cancel);
+  g_clear_object (&fetch->stream);
   lk_fetcher_unref (fetch->fetcher);
   g_free (fetch);
 }
@@ -116,6 +126,105 @@ lk_fetcher_fetch_done (GObject *source_object, GAsyncResult *result, gpointer us
       lk_fetch_answer (fetch, bytes, status);
     }
   lk_fetch_free (fetch);
+}
+
+/* ---- a body read in pieces ----------------------------------------------- */
+
+static void lk_fetcher_read_piece (LkFetch *fetch);
+
+/* Hand one piece to the owner. The last piece carries `done`, and a request
+ * that failed reports its status with no bytes. */
+static void
+lk_fetch_piece (LkFetch *fetch, GBytes *bytes, gboolean done)
+{
+  LkFetcher  *self = fetch->fetcher;
+  gsize       len = 0;
+  const void *data = bytes != NULL ? g_bytes_get_data (bytes, &len) : NULL;
+
+  if (self->dead || self->chunk == NULL)
+    return;
+  if (done)
+    lk_fetcher_forget (fetch);
+  self->chunk (self->respond_data, fetch->id, data, len, (int) fetch->status, done);
+}
+
+static void
+lk_fetcher_piece_done (GObject *source_object, GAsyncResult *result, gpointer user_data)
+{
+  LkFetch *fetch = user_data;
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) bytes =
+      g_input_stream_read_bytes_finish (G_INPUT_STREAM (source_object), result, &error);
+
+  if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
+    {
+      if (!fetch->fetcher->dead)
+        lk_fetcher_forget (fetch);
+      lk_fetch_free (fetch);
+      return;
+    }
+  if (error != NULL)
+    {
+      /* A body that stopped part way. The core is told the request is over,
+       * and a transfer short of its length is a failure to it. */
+      fetch->status = 0;
+      lk_fetch_piece (fetch, NULL, TRUE);
+      lk_fetch_free (fetch);
+      return;
+    }
+
+  /* A read of nothing is the end of the body. */
+  if (bytes == NULL || g_bytes_get_size (bytes) == 0)
+    {
+      lk_fetch_piece (fetch, NULL, TRUE);
+      lk_fetch_free (fetch);
+      return;
+    }
+
+  lk_fetch_piece (fetch, bytes, FALSE);
+  if (fetch->fetcher->dead)
+    {
+      lk_fetch_free (fetch);
+      return;
+    }
+  lk_fetcher_read_piece (fetch);
+}
+
+static void
+lk_fetcher_read_piece (LkFetch *fetch)
+{
+  g_input_stream_read_bytes_async (fetch->stream, LK_FETCH_PIECE, G_PRIORITY_DEFAULT,
+                                   fetch->cancel, lk_fetcher_piece_done, fetch);
+}
+
+static void
+lk_fetcher_send_done (GObject *source_object, GAsyncResult *result, gpointer user_data)
+{
+  LkFetch *fetch = user_data;
+  g_autoptr (GError) error = NULL;
+  GInputStream *stream =
+      soup_session_send_finish (SOUP_SESSION (source_object), result, &error);
+
+  if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
+    {
+      g_clear_object (&stream);
+      if (!fetch->fetcher->dead)
+        lk_fetcher_forget (fetch);
+      lk_fetch_free (fetch);
+      return;
+    }
+
+  fetch->status = fetch->fetcher->dead ? 0 : soup_message_get_status (fetch->msg);
+  if (error != NULL || stream == NULL)
+    {
+      fetch->status = 0;
+      lk_fetch_piece (fetch, NULL, TRUE);
+      lk_fetch_free (fetch);
+      return;
+    }
+
+  fetch->stream = stream;
+  lk_fetcher_read_piece (fetch);
 }
 
 static void
@@ -217,8 +326,22 @@ lk_fetcher_http_get (void *user, uint64_t req_id, const char *url, int allow_fil
   soup_message_headers_append (soup_message_get_request_headers (msg),
                                "Referer", LK_REFERER);
   fetch->msg = msg;
-  soup_session_send_and_read_async (self->session, msg, G_PRIORITY_DEFAULT, cancel,
-                                    lk_fetcher_fetch_done, fetch);
+  /* In pieces where the owner reads them that way: a district bundle runs to
+   * a couple of hundred megabytes, and the whole-body call needs it twice
+   * over. */
+  if (self->chunk != NULL)
+    soup_session_send_async (self->session, msg, G_PRIORITY_DEFAULT, cancel,
+                             lk_fetcher_send_done, fetch);
+  else
+    soup_session_send_and_read_async (self->session, msg, G_PRIORITY_DEFAULT, cancel,
+                                      lk_fetcher_fetch_done, fetch);
+}
+
+void
+lk_fetcher_set_chunk_respond (LkFetcher *self, LkFetcherRespondChunk chunk)
+{
+  g_return_if_fail (self != NULL);
+  self->chunk = chunk;
 }
 
 void

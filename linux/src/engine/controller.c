@@ -1023,6 +1023,18 @@ lk_chart_controller_http_respond (LkChartController *self, guint64 req_id,
 }
 
 void
+lk_chart_controller_http_respond_chunk (LkChartController *self, guint64 req_id,
+                                        const void *bytes, gsize len, int status,
+                                        gboolean done)
+{
+  if (!LK_IS_CHART_CONTROLLER (self) || self->handle == NULL)
+    return;
+  lookout_http_respond_chunk (self->handle, req_id, bytes, len, status, done ? 1 : 0);
+  if (done)
+    lk_chart_controller_kick (self);
+}
+
+void
 lk_chart_controller_chart_link_add (LkChartController *self, const char *link)
 {
   g_return_if_fail (LK_IS_CHART_CONTROLLER (self));
