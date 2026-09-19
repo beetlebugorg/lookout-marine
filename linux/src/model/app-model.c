@@ -21,6 +21,9 @@ struct _LkAppModel {
   /* A reopen asked for while a download ran. The reopen closes the handle the
    * transfer runs on, so it waits for the transfer to end. */
   gboolean           recompose_held;
+  /* A download that ended while a scan or a bake was running. The open is
+   * refused then, and this is what brings it back. */
+  gboolean           noaa_open_held;
 
   gboolean has_chart;
   char    *chart_path;
@@ -288,6 +291,7 @@ lk_app_model_class_init (LkAppModelClass *klass)
 static void lk_app_model_remove_progress (const LkBakeProgress *progress,
                                           gpointer user_data);
 static void lk_app_model_noaa_note_all (LkAppModel *self);
+static void lk_app_model_prepare_noaa_download (LkAppModel *self);
 
 static void
 lk_app_model_emit_chart_sets_changed (LkAppModel *self)
@@ -384,6 +388,27 @@ lk_app_model_noaa_changed (LkNoaa *noaa, gpointer user_data)
   if (state->done == 0 || self->noaa_dest == NULL)
     return;
 
+  lk_app_model_prepare_noaa_download (self);
+}
+
+/* Prepare what the download left. Refused while a scan or a bake runs, so the
+ * ask is held and made again when that work ends.
+ *
+ * Without the retry the cells stayed raw: the set is noted inside the scan,
+ * so a folder that was never scanned is on no list, and
+ * lk_app_model_initial_source cannot resume it at the next launch either. */
+static void
+lk_app_model_prepare_noaa_download (LkAppModel *self)
+{
+  if (self->noaa_dest == NULL)
+    return;
+  if (self->scanning || self->baking)
+    {
+      self->noaa_open_held = TRUE;
+      return;
+    }
+
+  self->noaa_open_held = FALSE;
   lk_app_model_open_chart_directory (self, self->noaa_dest);
   /* The downloader's own set. The picker states what THIS holds. */
   lk_chart_sets_set_managed (self->chart_sets, self->noaa_dest, TRUE);
@@ -944,6 +969,8 @@ lk_app_model_bake_done (const char *out_dir, guint baked, gpointer user_data)
        * next bake's open. */
       g_clear_pointer (&self->pending_open_source, g_free);
       lk_app_model_set_open_error (self, "Those charts could not be prepared.");
+      if (self->noaa_open_held && !self->scanning)
+        lk_app_model_prepare_noaa_download (self);
       return;
     }
 
@@ -956,6 +983,10 @@ lk_app_model_bake_done (const char *out_dir, guint baked, gpointer user_data)
       g_autofree char *src = g_steal_pointer (&self->pending_open_source);
       lk_app_model_open_prepared (self, src, FALSE);
     }
+
+  /* And the download that ended while this bake ran. */
+  if (self->noaa_open_held && !self->scanning && !self->baking)
+    lk_app_model_prepare_noaa_download (self);
 }
 
 typedef struct {
@@ -1032,6 +1063,11 @@ lk_scan_done_idle (gpointer data)
   lk_app_model_open_prepared (self, dir, any_pictures);
 
 out:
+  /* A download that ended while this scan ran asked to be prepared and was
+   * refused. The scan is over, so ask again. */
+  if (self->noaa_open_held && !self->scanning && !self->baking)
+    lk_app_model_prepare_noaa_download (self);
+
   g_object_unref (job->model);
   g_free (job->dir);
   g_free (job);
