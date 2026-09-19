@@ -112,6 +112,9 @@ pub const Entry = struct {
     tiles: []u8 = &.{},
     /// TMS counts y from the south, as askTile's own source flag does.
     tms: bool = false,
+    /// Set when the style was read and has no raster tiles. previewAll skips
+    /// the link.
+    no_tiles: bool = false,
 };
 
 /// Which rule chose a saved preview template. A template saved under an older
@@ -192,7 +195,9 @@ const Kind = union(enum) {
     /// The renderer's own request id for this tile.
     tile: u64,
     /// Index into `preview_jobs`: a style fetched only to read a tile
-    /// template out of, for a shell's thumbnail.
+    /// template out of, for a shell's thumbnail. The slot is emptied when the
+    /// response arrives and is then reused, so an index stays valid while its
+    /// request is out.
     preview: usize,
 };
 
@@ -338,9 +343,11 @@ pub const Links = struct {
         for (self.inbox.items) |a| self.alloc.free(a.bytes);
         self.inbox.deinit(self.alloc);
         if (self.dir) |d| self.alloc.free(d);
-        self.* = undefined;
-        for (self.preview_jobs.items) |u| self.alloc.free(u);
+        for (self.preview_jobs.items) |u| {
+            if (u.len != 0) self.alloc.free(u);
+        }
         self.preview_jobs.deinit(self.alloc);
+        self.* = undefined;
     }
 
     fn freeEntry(self: *Links, e: *Entry) void {
@@ -1103,25 +1110,71 @@ pub const Links = struct {
 
     /// Read the style of every link with no tile template yet, so a shell can
     /// draw a thumbnail of it. Nothing here touches the chart on screen.
+    ///
+    /// A style already read and found to have no raster tiles is skipped, and
+    /// so is one whose read is still out. A shell calls this each time the
+    /// chart list opens, and a vector style was fetched every time.
     pub fn previewAll(self: *Links) void {
         for (self.entries.items) |e| {
-            if (e.tiles.len != 0) continue;
+            if (e.tiles.len != 0 or e.no_tiles) continue;
+            if (self.previewOut(e.url)) continue;
             if (self.previews_inflight >= MAX_PREVIEW_INFLIGHT) return;
             const url = self.alloc.dupe(u8, e.url) catch return;
-            self.preview_jobs.append(self.alloc, url) catch {
+            const idx = self.previewSlot(url) orelse {
                 self.alloc.free(url);
                 return;
             };
-            const idx = self.preview_jobs.items.len - 1;
-            if (self.issue(e.url, isLocalPath(e.url), .{ .preview = idx }) == 0) continue;
+            if (self.issue(e.url, isLocalPath(e.url), .{ .preview = idx }) == 0) {
+                self.freePreviewSlot(idx);
+                continue;
+            }
             self.previews_inflight += 1;
         }
     }
 
+    /// True while a preview read for this url is out.
+    fn previewOut(self: *const Links, url: []const u8) bool {
+        for (self.preview_jobs.items) |u| {
+            if (u.len != 0 and std.mem.eql(u8, u, url)) return true;
+        }
+        return false;
+    }
+
+    /// Put `url` in an empty slot, or a new one. Takes `url` on success.
+    fn previewSlot(self: *Links, url: []u8) ?usize {
+        for (self.preview_jobs.items, 0..) |u, i| {
+            if (u.len == 0) {
+                self.preview_jobs.items[i] = url;
+                return i;
+            }
+        }
+        self.preview_jobs.append(self.alloc, url) catch return null;
+        return self.preview_jobs.items.len - 1;
+    }
+
+    fn freePreviewSlot(self: *Links, idx: usize) void {
+        const u = self.preview_jobs.items[idx];
+        if (u.len != 0) self.alloc.free(u);
+        self.preview_jobs.items[idx] = &.{};
+    }
+
+    /// How many preview slots hold a read, for tests.
+    fn previewJobsOut(self: *const Links) usize {
+        var n: usize = 0;
+        for (self.preview_jobs.items) |u| {
+            if (u.len != 0) n += 1;
+        }
+        return n;
+    }
+
     /// Remember where this chart's tiles come from, for a shell's thumbnail.
     fn keepTemplate(self: *Links, url: []const u8, style: std.json.Value) void {
-        const found = firstRasterTemplate(style) orelse return;
         const e = self.find(url) orelse return;
+        const found = firstRasterTemplate(style) orelse {
+            e.no_tiles = true;
+            return;
+        };
+        e.no_tiles = false;
         if (e.tiles.len != 0 and std.mem.eql(u8, e.tiles, found.template)) return;
         const copy = self.alloc.dupe(u8, found.template) catch return;
         if (e.tiles.len != 0) self.alloc.free(e.tiles);
@@ -1134,11 +1187,22 @@ pub const Links = struct {
         if (self.previews_inflight > 0) self.previews_inflight -= 1;
         if (idx >= self.preview_jobs.items.len) return;
         const url = self.preview_jobs.items[idx];
-        if (!ok or bytes.len == 0) return;
+        defer self.freePreviewSlot(idx);
+        if (url.len == 0 or !ok or bytes.len == 0) return;
         var parsed = std.json.parseFromSlice(std.json.Value, self.alloc, bytes, .{}) catch return;
         defer parsed.deinit();
-        const found = firstRasterTemplate(parsed.value) orelse return;
         const e = self.find(url) orelse return;
+        // A style that parses with no raster tiles is marked, and the next
+        // preview pass skips it. A failed read leaves the mark clear, and the
+        // next pass tries again.
+        const found = firstRasterTemplate(parsed.value) orelse {
+            if (!e.no_tiles) {
+                e.no_tiles = true;
+                self.save();
+            }
+            return;
+        };
+        e.no_tiles = false;
         const copy = self.alloc.dupe(u8, found.template) catch return;
         if (e.tiles.len != 0) self.alloc.free(e.tiles);
         e.tiles = copy;
@@ -1386,6 +1450,8 @@ pub const Links = struct {
                 try jsonString(alloc, out, e.tiles);
                 if (e.tms) try out.appendSlice(alloc, ",\"tms\":true");
                 try out.print(alloc, ",\"tilesrule\":{d}", .{TILES_RULE});
+            } else if (!full and e.no_tiles) {
+                try out.print(alloc, ",\"notiles\":true,\"tilesrule\":{d}", .{TILES_RULE});
             }
             try out.append(alloc, '}');
         }
@@ -1523,12 +1589,18 @@ pub const Links = struct {
                 .bool => |v| v,
                 else => false,
             };
+            const no_tiles = rule == TILES_RULE and t.len == 0 and
+                switch (it.object.get("notiles") orelse std.json.Value{ .bool = false }) {
+                    .bool => |v| v,
+                    else => false,
+                };
             self.entries.append(self.alloc, .{
                 .url = u,
                 .name = n,
                 .has_doc = true,
                 .tiles = t,
                 .tms = tms,
+                .no_tiles = no_tiles,
             }) catch {
                 self.alloc.free(u);
                 self.alloc.free(n);
@@ -2946,4 +3018,80 @@ test "chartlinks: a raster base under vector work is not a preview of it" {
     , 200);
     var buf: [512]u8 = undefined;
     try testing.expect(f.links.previewUrl("https://t.example/style.json", 0, 0, 1, &buf) == null);
+}
+
+test "chartlinks: a vector style is read once for a preview" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try std.fmt.allocPrint(testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer testing.allocator.free(dir);
+
+    const vector =
+        \\{"version":8,"sources":{"v":{"type":"vector",
+        \\ "tiles":["https://t.example/{z}/{x}/{y}.pbf"]}},"layers":[]}
+    ;
+    const styleReads = struct {
+        fn count(f: *Fake) usize {
+            var n: usize = 0;
+            for (f.sent.items) |s| {
+                if (has(s.url, "style.json")) n += 1;
+            }
+            return n;
+        }
+    }.count;
+    {
+        const f = try Fake.open(testing.allocator);
+        defer f.close();
+        f.links.openStore(dir);
+        f.links.add("https://t.example/style.json");
+        try f.answer("style.json", vector, 200);
+        const after_add = styleReads(f);
+
+        // Twenty preview passes, one for each time a shell opens the chart
+        // list. The style has no raster tiles, so no pass fetches it.
+        for (0..20) |_| f.links.previewAll();
+        try testing.expectEqual(after_add, styleReads(f));
+        try testing.expectEqual(@as(usize, 0), f.links.previewJobsOut());
+    }
+    {
+        // The mark is saved with the link.
+        const f = try Fake.open(testing.allocator);
+        defer f.close();
+        f.links.openStore(dir);
+        for (0..3) |_| f.links.previewAll();
+        try testing.expectEqual(@as(usize, 0), styleReads(f));
+    }
+}
+
+test "chartlinks: a preview read that fails is tried again, and its slot is freed" {
+    const raster =
+        \\{"version":8,"sources":{"sea":{"type":"raster",
+        \\ "tiles":["https://t.example/{z}/{x}/{y}.png"]}},"layers":[]}
+    ;
+    const f = try Fake.open(testing.allocator);
+    defer f.close();
+    f.links.add("https://t.example/style.json");
+    try f.answer("style.json", raster, 200);
+    // A link with no known template, as a link saved under an older rule
+    // loads.
+    const e = f.links.find("https://t.example/style.json") orelse return error.NotKept;
+    testing.allocator.free(e.tiles);
+    e.tiles = &.{};
+    try testing.expect(!e.no_tiles);
+
+    f.links.previewAll();
+    // A second pass while the read is out issues no second request.
+    f.links.previewAll();
+    try testing.expectEqual(@as(usize, 1), f.links.previewJobsOut());
+    try f.answer("style.json", "", 503);
+    try testing.expectEqual(@as(usize, 0), f.links.previewJobsOut());
+
+    f.links.previewAll();
+    try testing.expectEqual(@as(usize, 1), f.links.previewJobsOut());
+    try f.answer("style.json", raster, 200);
+    try testing.expectEqual(@as(usize, 0), f.links.previewJobsOut());
+    var buf: [512]u8 = undefined;
+    try testing.expect(f.links.previewUrl("https://t.example/style.json", 0, 0, 1, &buf) != null);
+    // The three reads used the same slot in turn.
+    try testing.expectEqual(@as(usize, 1), f.links.preview_jobs.items.len);
 }
