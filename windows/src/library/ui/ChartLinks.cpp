@@ -17,6 +17,9 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <atomic>
+#include <map>
+#include <memory>
 #include <mutex>
 #include <thread>
 
@@ -37,7 +40,81 @@ namespace
     // same one.
     using ChunkSink = std::function<void(void const *bytes, size_t len, int status)>;
 
-    int FetchUrl(std::wstring const &url, ChunkSink const &sink)
+    // A request in flight, so a cancel or a stop can end it.
+    //
+    // A district arrives as one archive of up to 222 MB. The worker sits
+    // inside WinHttpReadData for as long as the 8 second timeout allows, so
+    // a flag read between pieces ends the transfer at the next piece and no
+    // sooner. Closing the request handle ends the read itself. Both paths
+    // close through one lock, so the handle closes once.
+    struct LiveFetch
+    {
+        std::mutex        mu;
+        HINTERNET         req{ nullptr };
+        std::atomic<bool> ended{ false };
+
+        void Hold(HINTERNET h)
+        {
+            std::lock_guard<std::mutex> lock(mu);
+            if (ended.load())
+            {
+                WinHttpCloseHandle(h);
+                return;
+            }
+            req = h;
+        }
+        void End()
+        {
+            ended.store(true);
+            std::lock_guard<std::mutex> lock(mu);
+            if (req != nullptr)
+            {
+                WinHttpCloseHandle(req);
+                req = nullptr;
+            }
+        }
+    };
+
+    std::mutex                                     g_fetch_mu;
+    std::map<uint64_t, std::shared_ptr<LiveFetch>> g_fetches;
+
+    std::shared_ptr<LiveFetch> BeginFetch(uint64_t id)
+    {
+        auto live = std::make_shared<LiveFetch>();
+        std::lock_guard<std::mutex> lock(g_fetch_mu);
+        g_fetches[id] = live;
+        return live;
+    }
+    void EndFetch(uint64_t id)
+    {
+        std::lock_guard<std::mutex> lock(g_fetch_mu);
+        g_fetches.erase(id);
+    }
+    void AbortFetch(uint64_t id)
+    {
+        std::shared_ptr<LiveFetch> live;
+        {
+            std::lock_guard<std::mutex> lock(g_fetch_mu);
+            auto it = g_fetches.find(id);
+            if (it == g_fetches.end())
+                return;
+            live = it->second;
+        }
+        live->End();
+    }
+    void AbortFetches()
+    {
+        std::vector<std::shared_ptr<LiveFetch>> all;
+        {
+            std::lock_guard<std::mutex> lock(g_fetch_mu);
+            for (auto const &one : g_fetches)
+                all.push_back(one.second);
+        }
+        for (auto const &live : all)
+            live->End();
+    }
+
+    int FetchUrl(std::wstring const &url, ChunkSink const &sink, uint64_t id)
     {
         URL_COMPONENTS parts{};
         wchar_t host[256]{}, path[2048]{}, extra[2048]{};
@@ -80,6 +157,10 @@ namespace
             req = WinHttpOpenRequest(con, L"GET", object.c_str(), nullptr, L"https://beetlebug.org/",
                                      WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
         }
+        // Reachable by a cancel or a stop from this point on.
+        auto live = BeginFetch(id);
+        if (req != nullptr)
+            live->Hold(req);
         if (req != nullptr &&
             WinHttpSendRequest(req, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
                                WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
@@ -129,13 +210,27 @@ namespace
                 {
                     DWORD want = avail < (DWORD)kReadChunk ? avail : (DWORD)kReadChunk;
                     DWORD got  = 0;
-                    if (!WinHttpReadData(req, buf.data(), want, &got))
+                    if (live->ended.load())
+                    {
+                        status = 0; // stopped, and the body is part of one
                         break;
+                    }
+                    if (!WinHttpReadData(req, buf.data(), want, &got))
+                    {
+                        // A body that stopped part way is not a body. The
+                        // status stayed 200 here, so the caller took a
+                        // truncated style or archive for a whole one.
+                        status = 0;
+                        break;
+                    }
                     if (got == 0)
                         break;
                     total += got;
                     if (total > kTransferCap)
+                    {
+                        status = 0; // over the cap, and cut off mid body
                         break;
+                    }
                     // `got`, never `want` and never the buffer size. The
                     // length handed on has to be exactly what was read. The
                     // Android shell passed a length meaning "the whole array"
@@ -147,8 +242,9 @@ namespace
                 }
             }
         }
-        if (req != nullptr)
-            WinHttpCloseHandle(req);
+        // The handle closes here or in End, whichever runs first.
+        live->End();
+        EndFetch(id);
         if (con != nullptr)
             WinHttpCloseHandle(con);
         WinHttpCloseHandle(ses);
@@ -230,6 +326,10 @@ namespace
                     dropped.push_back(job.id);
                 queue_.clear();
             }
+            // The transfers still out. A district is up to 222 MB, and
+            // joining a worker still reading one held the UI thread for
+            // as long as it took.
+            AbortFetches();
             cv_.notify_all();
             for (auto &t : threads_)
             {
@@ -268,6 +368,8 @@ namespace
                     return;
                 }
             }
+            // A job already out. Its read ends when the handle closes.
+            AbortFetch(id);
         }
 
     private:
@@ -371,7 +473,7 @@ namespace winrt::LookoutMarine::implementation
             int status = FetchUrl(winrt::to_hstring(link).c_str(),
                                   [self, req_id](void const *piece, size_t n, int st) {
                                       self->ChartLinkRespondChunk(req_id, piece, n, st, 0);
-                                  });
+                                  }, req_id);
 
             // The terminator, always sent and always exact: no buffer, length
             // 0, `done` set. There is no bufferful of stale bytes in scope at

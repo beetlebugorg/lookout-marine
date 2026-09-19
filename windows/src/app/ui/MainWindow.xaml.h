@@ -321,7 +321,14 @@ namespace winrt::LookoutMarine::implementation
         /* What an interrupted removal left beside the library. Swept once a
          * session, off the UI thread. */
         void SweepRemovedCharts();
-        void AdoptChartSet(std::string const &path);
+        /* Put a folder on the set list. `after_write` asks for a rescan of
+         * one already listed, which only an open that follows a bake needs:
+         * a rescan returns the row to unscanned while it reads, and every
+         * open ran one. */
+        void AdoptChartSet(std::string const &path, bool after_write);
+        /* Set before an open that follows a bake, so the adopt reads the
+         * folder again. Cleared as the open consumes it. */
+        bool open_after_write{ false };
         void SetChartSetOn(std::string const &path, bool on);
         void RemoveChartSet(std::string const &path);
         /* Whether Lookout made the charts in this set, which decides whether

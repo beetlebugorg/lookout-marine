@@ -199,7 +199,10 @@ namespace winrt::LookoutMarine::implementation
             // A folder the mariner opened joins the set list
             // (an existing entry keeps its switch). A single file or a cell
             // path is not a folder and adopts nothing.
-            AdoptChartSet(recent);
+            // Without a rescan: this open wrote nothing. The bake and the
+            // first run ask for one through open_after_write.
+            AdoptChartSet(recent, open_after_write);
+            open_after_write = false;
             if (!pending_plugin_install.empty())
             {
                 // The .lkplug that arrived at the empty state, now that a

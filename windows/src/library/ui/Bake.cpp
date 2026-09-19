@@ -140,12 +140,14 @@ namespace winrt::LookoutMarine::implementation
                 auto lib = lkw::CollectCells(BakeOutputDir());
                 lib.insert(lib.end(), baked.begin(), baked.end());
                 AdoptBakedRasters(pictures, !lib.empty());
+                open_after_write = true; // a bake wrote into that folder
                 OpenPaths(lib, lkw::ChartLibraryDir(), lkw::AgencyForCells(lib));
                 return;
             }
             if (baked.empty() && pictures.empty())
                 baked = lkw::CellsFor(path);
             AdoptBakedRasters(pictures, !baked.empty());
+            open_after_write = true; // a bake wrote into that folder
             OpenPaths(baked, path, lkw::AgencyForCells(baked));
             return;
         }
@@ -263,7 +265,10 @@ namespace winrt::LookoutMarine::implementation
                                         : lkw::CollectCells(BakeOutputDir());
         AdoptBakedRasters(rasters, !charts.empty());
         if (!charts.empty())
+        {
+            open_after_write = true; // a bake wrote into that folder
             OpenPaths(charts, lkw::ChartLibraryDir(), lkw::AgencyForCells(charts));
+        }
     }
 
     /* Baked sheets join the raster underlay. When a vector open is about to

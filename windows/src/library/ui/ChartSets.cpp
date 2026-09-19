@@ -304,7 +304,7 @@ namespace winrt::LookoutMarine::implementation
     // Put `path` on the list (switched on; an existing entry keeps its
     // switch) and refresh the rows. Called after an open or a bake landed a
     // library, so the set list follows what the mariner actually opened.
-    void MainWindow::AdoptChartSet(std::string const &path)
+    void MainWindow::AdoptChartSet(std::string const &path, bool after_write)
     {
         std::error_code ec;
         if (path.empty() || !std::filesystem::is_directory(path, ec))
@@ -319,11 +319,15 @@ namespace winrt::LookoutMarine::implementation
         // that 0 left a set reading 0 charts with the charts on disk, and
         // nothing else asks for a scan (lookout_chart_sets_rescan,
         // lookout-library.h:386).
-        if (!lookout_chart_sets_add(model, path.c_str()))
+        // A path new to the list is scanned by the add. One already on it
+        // is read again only after something wrote into it, which is a bake
+        // finishing. Rescanning on every open returned the row to unscanned
+        // while it read, and the page was rebuilt each time.
+        if (!lookout_chart_sets_add(model, path.c_str()) && after_write)
             lookout_chart_sets_rescan(model, path.c_str());
         LoadChartSets([this] {
             if (SettingsOpen())
-                BuildSettingsPage();
+                RefreshChartsPageOnChange();
         });
     }
 
@@ -441,6 +445,9 @@ namespace winrt::LookoutMarine::implementation
         if (ec)
             return;
 
+        // What a rename refused. Windows returns one for a directory still
+        // mapped by an open handle, and the removal states the count.
+        size_t refused = 0;
         if (std::filesystem::equivalent(std::filesystem::path(path), lib, ec))
         {
             // The set IS the library. Its children are the charts; the
@@ -452,12 +459,16 @@ namespace winrt::LookoutMarine::implementation
                     continue;
                 std::error_code one;
                 std::filesystem::rename(entry.path(), trash / entry.path().filename(), one);
+                if (one)
+                    ++refused;
             }
         }
         else
         {
             std::filesystem::path p{ path };
             std::filesystem::rename(p, trash / p.filename(), ec);
+            if (ec)
+                ++refused;
         }
 
         // Report it while it runs, in the panel an import reports in: a NOAA
@@ -468,7 +479,7 @@ namespace winrt::LookoutMarine::implementation
 
         // Behind the rename, off this thread. Nothing waits for it: every
         // chart it holds is already out of the library.
-        std::thread(EmptyAndRemove, trash, removal_job, (size_t)0).detach();
+        std::thread(EmptyAndRemove, trash, removal_job, refused).detach();
     }
 
     // Give back the water a mariner unticked in the NOAA picker.
@@ -632,10 +643,15 @@ namespace winrt::LookoutMarine::implementation
         if (!lookout_chart_sets_remove(model, path.c_str()))
             return;
         LoadChartSets(nullptr);
-        // Before the delete: the handle holds every chart file open, and
-        // Windows refuses to rename a directory under an open file.
-        ReopenChartSets({});
+        // CLOSE, DELETE, THEN OPEN. The handle maps every archive it opened,
+        // and Windows refuses to rename a directory under a mapped file. The
+        // reopen here used to stand in for the close, and with another set
+        // still on it opens through OpenPaths, which defers the close by 50
+        // ms. The rename then ran under the old handle and failed, and the
+        // charts stayed on the disk for the next import to find.
+        CloseChartHandle();
         DeletePreparedCharts(path, name);
+        ReopenChartSets({});
         if (SettingsOpen())
             BuildSettingsPage();
     }
