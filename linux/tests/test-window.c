@@ -207,6 +207,36 @@ test_setup_returns_when_the_library_empties (void)
   g_assert_false (lk_first_run_should_run (later, TRUE, FALSE));
 }
 
+/* NOAA's terms are answered before their charts are picked.
+ *
+ * The step went straight to coverage and showed the terms as a note beside
+ * the map, so there was no accept and no decline. The reference moves to
+ * coverage only from the accept. */
+static void
+test_the_noaa_terms_gate_the_coverage_step (void)
+{
+  g_autoptr (LkFirstRun) run = lk_first_run_new ();
+
+  g_setenv ("LOOKOUT_FIRST_RUN", "source", TRUE);
+  lk_first_run_begin (run);
+  g_unsetenv ("LOOKOUT_FIRST_RUN");
+  lk_first_run_set_source (run, LK_FIRST_RUN_NOAA);
+
+  /* Continue asks, and leaves the mariner where they were. */
+  g_assert_false (lk_first_run_advance (run, NULL));
+  g_assert_cmpint (lk_first_run_step (run), ==, LK_FIRST_RUN_SOURCE);
+
+  /* A decline is the same as never answering. */
+  g_assert_cmpint (lk_first_run_step (run), ==, LK_FIRST_RUN_SOURCE);
+
+  lk_first_run_accept_terms (run);
+  g_assert_cmpint (lk_first_run_step (run), ==, LK_FIRST_RUN_COVERAGE);
+
+  /* And the accept applies to that one step alone. */
+  lk_first_run_accept_terms (run);
+  g_assert_cmpint (lk_first_run_step (run), ==, LK_FIRST_RUN_COVERAGE);
+}
+
 /* An import with no chart offers a way out.
  *
  * Continue waits on a bake, and the bake starts only once a cell arrives. A
@@ -378,6 +408,8 @@ main (int argc, char *argv[])
   g_test_add_func ("/window/setup-runs-over-an-empty-library",
                    test_setup_runs_over_an_empty_library);
   g_test_add_func ("/window/setup-steps", test_setup_steps);
+  g_test_add_func ("/window/the-noaa-terms-gate-the-coverage-step",
+                   test_the_noaa_terms_gate_the_coverage_step);
   g_test_add_func ("/window/an-import-with-no-chart-can-go-back",
                    test_an_import_with_no_chart_can_go_back);
   g_test_add_func ("/window/setup-returns-when-the-library-empties",

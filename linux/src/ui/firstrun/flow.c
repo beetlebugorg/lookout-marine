@@ -78,11 +78,58 @@ lk_first_run_place_order (LkFirstRunFlow *self)
   lk_app_model_start_noaa_download (self->model, again);
 }
 
+/* The mariner's answer to NOAA's terms. Accept moves to the coverage step;
+ * anything else leaves them on the source step, as the reference does. */
+static void
+lk_first_run_terms_answered (GObject *source_object, GAsyncResult *result,
+                             gpointer user_data)
+{
+  LkFirstRunFlow *self = user_data;
+  g_autoptr (GError) error = NULL;
+  int chosen = gtk_alert_dialog_choose_finish (GTK_ALERT_DIALOG (source_object), result,
+                                               &error);
+
+  /* Cancel is 0, Agree is 1. */
+  if (chosen == 1)
+    lk_first_run_accept_terms (self->flow);
+}
+
+/* NOAA's own terms, in their words, before their charts are picked. */
+static void
+lk_first_run_ask_terms (LkFirstRunFlow *self)
+{
+  GtkRoot *root = gtk_widget_get_root (self->page);
+  static const char *answers[] = { "Cancel", "Agree", NULL };
+  GtkAlertDialog *dialog = gtk_alert_dialog_new ("NOAA ENC\xc2\xae charts");
+
+  gtk_alert_dialog_set_detail (
+      dialog,
+      "They come from the NOAA Office of Coast Survey and are updated weekly on a "
+      "best-efforts basis. You are responsible for holding the current edition and "
+      "the latest updates. NOAA makes no warranty and assumes no liability for their "
+      "use. Lookout prepares them for display: what it draws is not the official ENC "
+      "and does not meet chart carriage regulations.");
+  gtk_alert_dialog_set_buttons (dialog, answers);
+  gtk_alert_dialog_set_cancel_button (dialog, 0);
+  gtk_alert_dialog_set_default_button (dialog, 1);
+  gtk_alert_dialog_choose (dialog, GTK_IS_WINDOW (root) ? GTK_WINDOW (root) : NULL, NULL,
+                           lk_first_run_terms_answered, self);
+  g_object_unref (dialog);
+}
+
 static void
 lk_first_run_primary_clicked (GtkButton *button, gpointer user_data)
 {
   LkFirstRunFlow *self = user_data;
   LkFirstRunSource source;
+
+  /* The terms stand between the source step and NOAA's charts. */
+  if (lk_first_run_step (self->flow) == LK_FIRST_RUN_SOURCE &&
+      lk_first_run_source (self->flow) == LK_FIRST_RUN_NOAA)
+    {
+      lk_first_run_ask_terms (self);
+      return;
+    }
 
   if (!lk_first_run_advance (self->flow, &source))
     return;

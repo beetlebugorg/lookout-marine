@@ -134,6 +134,17 @@ lk_first_run_should_run (LkFirstRun *self, gboolean nothing_to_draw, gboolean on
 }
 
 void
+lk_first_run_accept_terms (LkFirstRun *self)
+{
+  g_return_if_fail (LK_IS_FIRST_RUN (self));
+
+  if (self->step != LK_FIRST_RUN_SOURCE || self->source != LK_FIRST_RUN_NOAA)
+    return;
+  self->step = LK_FIRST_RUN_COVERAGE;
+  g_signal_emit (self, signals[SIGNAL_CHANGED], 0);
+}
+
+void
 lk_first_run_begin (LkFirstRun *self)
 {
   g_return_if_fail (LK_IS_FIRST_RUN (self));
@@ -165,7 +176,8 @@ lk_first_run_advance (LkFirstRun *self, LkFirstRunSource *out_source)
       switch (self->source)
         {
         case LK_FIRST_RUN_NOAA:
-          self->step = LK_FIRST_RUN_COVERAGE;
+          /* The terms are asked first, and the accept is what moves the
+           * step. The shell raises the question. */
           break;
         case LK_FIRST_RUN_ONLINE_CHART:
           self->step = LK_FIRST_RUN_ONLINE;

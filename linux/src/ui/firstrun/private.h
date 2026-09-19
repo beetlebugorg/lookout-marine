@@ -74,6 +74,13 @@ gboolean lk_first_run_showing (LkFirstRun *self);
 gboolean lk_first_run_should_run (LkFirstRun *self, gboolean nothing_to_draw,
                                  gboolean on_a_link);
 
+/* NOAA's terms, answered before their charts are picked.
+ *
+ * The reference asks on the way out of the source step and moves to coverage
+ * only from the accept, so a mariner who declines is left where they were
+ * (apple/LookoutMarine/FirstRun, agreeToEncTerms and declineEncTerms). */
+void lk_first_run_accept_terms (LkFirstRun *self);
+
 /* Raise the flow, on the step `LOOKOUT_FIRST_RUN` names or the first one. */
 void lk_first_run_begin (LkFirstRun *self);
 
