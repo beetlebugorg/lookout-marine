@@ -119,3 +119,49 @@ final class ChartsModelTests: ShellTestCase {
         XCTAssertFalse(m.nothingToDraw)
     }
 }
+
+/// Resuming a bake that a previous run left unfinished.
+@MainActor
+final class ResumeUnpreparedTests: ShellTestCase {
+
+    private func set(managed: Bool, raw: Bool) -> ChartSet {
+        let kind: ScannedCell.Kind = raw ? .source : .baked
+        let ext = raw ? "000" : "pmtiles"
+        return ChartSet(path: "/charts/NOAA",
+                        producer: "US",
+                        preparedPath: nil,
+                        cells: [ScannedCell(path: "/charts/NOAA/US5MA1BO.\(ext)",
+                                            name: "US5MA1BO",
+                                            kind: kind,
+                                            band: 5,
+                                            bytes: 1)],
+                        rasters: [],
+                        on: true,
+                        managed: managed)
+    }
+
+    func testTheManagedSetWithRawCellsResumes() {
+        let charts = ChartsModel(raster: RasterModel())
+        charts.sets = [set(managed: true, raw: true)]
+        XCTAssertEqual(charts.unpreparedSetToResume?.path, "/charts/NOAA")
+    }
+
+    func testAFolderTheMarinerAddedDoesNotResume() {
+        let charts = ChartsModel(raster: RasterModel())
+        charts.sets = [set(managed: false, raw: true)]
+        XCTAssertNil(charts.unpreparedSetToResume)
+    }
+
+    func testAPreparedSetDoesNotResume() {
+        let charts = ChartsModel(raster: RasterModel())
+        charts.sets = [set(managed: true, raw: false)]
+        XCTAssertNil(charts.unpreparedSetToResume)
+    }
+
+    func testTheResumeWaitsForTheScan() {
+        let charts = ChartsModel(raster: RasterModel())
+        charts.sets = [set(managed: true, raw: true)]
+        charts.scanning = true
+        XCTAssertNil(charts.unpreparedSetToResume)
+    }
+}

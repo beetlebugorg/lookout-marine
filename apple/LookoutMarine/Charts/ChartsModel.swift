@@ -467,6 +467,7 @@ final class ChartsModel {
         let managedFirst = sets.filter(\.managed) + sets.filter { !$0.managed }
         if managedFirst.map(\.path) != sets.map(\.path) { sets = managedFirst }
         syncRasterFromSets()
+        resumeUnprepared()
         // The launch walk cannot see a library of pictures: it looks for
         // cells, and finds none. Open what the scan found once it knows, or a
         // mariner carrying only imagery gets the first-run page every time
@@ -487,6 +488,29 @@ final class ChartsModel {
             // and leaves it set, so an empty open holds one for good.
             requestOpen(openPaths)
         }
+    }
+
+    /// Paths of the sets resumed in this run. The bake's rescan calls
+    /// pullChartSets again, and a cell the engine cannot read stays
+    /// unprepared, so each set resumes at most once per launch.
+    private var resumed: Set<String> = []
+
+    /// The downloader's set when it holds unprepared cells from a bake that
+    /// stopped when the app quit. Without a resume the row shows the count
+    /// and the cells stay raw until the mariner downloads the region again.
+    /// Only the managed set resumes: a folder the mariner added is prepared
+    /// when it is added, and a bake the mariner stopped stays stopped.
+    var unpreparedSetToResume: ChartSet? {
+        guard bake == nil, bakeJob == nil, !scanning else { return nil }
+        return sets.first {
+            $0.managed && $0.on && !$0.toPrepare.isEmpty && !resumed.contains($0.path)
+        }
+    }
+
+    private func resumeUnprepared() {
+        guard let set = unpreparedSetToResume else { return }
+        resumed.insert(set.path)
+        beginBake(sourceDir: set.path, cells: set.toPrepare, named: set.title)
     }
 
     /// Look through `path` and put it on the list. A folder with no charts in
