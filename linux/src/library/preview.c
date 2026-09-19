@@ -221,8 +221,11 @@ lk_chart_previews_capture (LkChartPreviews *self, const char *url)
     return FALSE;
 
   /* Written once. A watch takes ten pictures of one chart as it settles, and
-   * ten full-window PNGs is a cache nobody asked for. */
-  if (lk_chart_previews_read (self, url) == NULL)
+   * ten full-window PNGs is a cache nobody asked for. The read hands back a
+   * texture of about 2.7 MB, so it is freed here. */
+  g_autoptr (GdkTexture) cached = lk_chart_previews_read (self, url);
+
+  if (cached == NULL)
     lk_chart_previews_write (self, url, shot);
   lk_chart_previews_keep (self, url, g_steal_pointer (&shot));
   return TRUE;
@@ -279,6 +282,11 @@ typedef struct {
   LkChartPreviews *self;    /* strong */
   SoupMessage     *message; /* to read the status in the completion */
   char            *url;
+  /* THE TILE THIS WAS ASKED FOR. The completion arrives up to seconds later,
+   * and the mariner may have sailed on by then. Writing the picture against
+   * the view's centre at completion filed the old water's tile under the new
+   * water's name. */
+  int              tile_x, tile_y;
 } LkPreviewFetch;
 
 static void
@@ -302,6 +310,14 @@ lk_preview_tile_done (GObject *source, GAsyncResult *result, gpointer user_data)
   guint status = soup_message_get_status (fetch->message);
 
   g_hash_table_remove (self->in_flight, fetch->url);
+
+  /* The view moved while this was on its way. The picture is of water the
+   * mariner has left, and the cache path is built from where they are now. */
+  if (self->have_tile && (fetch->tile_x != self->tile_x || fetch->tile_y != self->tile_y))
+    {
+      lk_preview_fetch_free (fetch);
+      return;
+    }
 
   /* Only 2xx carries a tile. A host that answers 403 with a page saying so
    * would otherwise be filed as this publisher's chart. */
@@ -350,6 +366,8 @@ lk_chart_previews_fetch (LkChartPreviews *self, const char *url, const char *til
   fetch->self = g_object_ref (self);
   fetch->message = g_object_ref (message);
   fetch->url = g_strdup (url);
+  fetch->tile_x = self->tile_x;
+  fetch->tile_y = self->tile_y;
 
   g_hash_table_add (self->in_flight, g_strdup (url));
   soup_session_send_and_read_async (self->session, message, G_PRIORITY_LOW, NULL,
@@ -452,6 +470,11 @@ lk_chart_previews_round (LkChartPreviews *self)
     {
       g_hash_table_remove_all (self->pictures);
       g_hash_table_remove_all (self->unavailable);
+      /* The fetches for the old tile go with them. Each one checks the tile
+       * it was asked for when it lands, and this frees the slots now rather
+       * than at the end of a request nobody wants. */
+      g_hash_table_remove_all (self->in_flight);
+      g_queue_clear_full (self->queue, g_free);
     }
   self->tile_x = x;
   self->tile_y = y;
