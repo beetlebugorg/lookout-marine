@@ -304,17 +304,14 @@ namespace lkw
             step_        = FirstRunStep::Welcome;
             showing_     = true;
             picker_only_ = false;
+            Restart();
         }
-
-        // Open one step on its own, for Get charts from NOAA in the Charts
-        // pane. The mariner already has charts and has answered the welcome
-        // questions, so the run ends when the charts are in rather than going
-        // on to the depth step.
         void BeginAt(FirstRunStep step)
         {
             step_        = step;
             showing_     = true;
             picker_only_ = true;
+            Restart();
         }
 
         // True while setup is one step opened on its own.
@@ -326,6 +323,10 @@ namespace lkw
         // Later instead. Past the import the charts are already arriving.
         bool CanGoBack() const
         {
+            // A stalled import has nothing to wait for. The way out of it is
+            // the step that chose the water.
+            if (step_ == FirstRunStep::Importing)
+                return import_stalled_;
             if (picker_only_)
                 return false;
             return step_ == FirstRunStep::Source || step_ == FirstRunStep::Coverage ||
@@ -405,6 +406,23 @@ namespace lkw
         // start and one that has finished both report no work, and this
         // separates them.
         bool saw_bake() const { return saw_bake_; }
+        // Mark the bake seen when one starts, rather than waiting for a poll
+        // to catch it running. A bake of one or two cells finishes inside the
+        // quarter second between polls, and the step then had no way to know
+        // a bake had ever run.
+        void NoteBakeStarted() { saw_bake_ = true; }
+
+        // The transfer ended and left nothing to bake. `why` is what the
+        // core said about it, for the step to state. A step in this state
+        // has nothing to wait for, so its way out is back to the coverage
+        // step.
+        void NoteImportStalled(std::string why)
+        {
+            import_stalled_ = true;
+            import_why_     = std::move(why);
+        }
+        bool import_stalled() const { return import_stalled_; }
+        std::string const &import_why() const { return import_why_; }
 
         // Hand this every reading of the two services. It keeps the last
         // figures each of them reported.
@@ -433,9 +451,24 @@ namespace lkw
         bool         showing_enc_terms_{ false };
         bool         put_away_{ false };
         bool         saw_bake_{ false };
+        bool         import_stalled_{ false };
+        std::string  import_why_;
         bool         picker_only_{ false };
 
         std::optional<FirstRunOrder> order_;
         FirstRunLive                 shown_;
+
+        // What one run of setup holds. Begin and BeginAt clear it: a second
+        // download in one launch read the first run's bands and counts, and
+        // its bake never started because a bake was already marked seen.
+        void Restart()
+        {
+            showing_enc_terms_ = false;
+            saw_bake_          = false;
+            import_stalled_    = false;
+            import_why_.clear();
+            order_.reset();
+            shown_ = FirstRunLive{};
+        }
     };
 }

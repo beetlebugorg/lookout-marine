@@ -168,8 +168,13 @@ namespace winrt::LookoutMarine::implementation
         }
         if (raster_paths.empty())
         {
-            readout_timer.Stop(); // a basemap under a setup card reads out nothing
-            FirstRunBegin();
+            // A mariner drawing an online chart has one, so setup has no
+            // reason to stand over it. The model states that rule.
+            if (first_run.ShouldRun(true, lk_controller_alt_style_active(controller) != 0))
+            {
+                readout_timer.Stop(); // a basemap under a setup card reads out nothing
+                FirstRunBegin();
+            }
         }
     }
 
@@ -289,13 +294,16 @@ namespace winrt::LookoutMarine::implementation
         // Either way the loader comes down: there is no chart coming, and a
         // spinner over the welcome card says one is.
         HideStartupLoader();
-        readout_timer.Stop(); // nothing to read out
         // The screenshot hooks apply here as well as after a chart opens.
         // $LOOKOUT_WINDOW is what makes a capture the same size on any
         // machine, and setup is a page that needs capturing. It is the page a
         // mariner with no charts sees.
         ApplyDevHooks();
-        FirstRunBegin();
+        if (first_run.ShouldRun(true, lk_controller_alt_style_active(controller) != 0))
+        {
+            readout_timer.Stop(); // nothing to read out under a setup card
+            FirstRunBegin();
+        }
     }
 
     // The core makes its own D3D12 device and composition swapchain; the shell

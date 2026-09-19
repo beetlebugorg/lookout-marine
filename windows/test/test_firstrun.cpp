@@ -873,5 +873,61 @@ void TestFirstRun()
                            L"the disk."));
         LK_EQ(RemovalNote(0, 1),
               std::wstring(L"1 chart is still in use and stayed on the disk."));
+
+        /* A second download in one launch. The first run's state stayed on the
+         * model, so the scan branch read a bake as already seen and no second
+         * bake started. */
+        Case("a second run starts with nothing of the first on it");
+        FirstRun twice;
+        twice.Begin();
+        twice.NoteBakeStarted();
+        twice.set_order(FirstRunOrder{ L"Mid-Atlantic", "d5", 930, 102760448 });
+        LK_EQ(twice.saw_bake(), true);
+        LK_EQ(twice.order().has_value(), true);
+        twice.BeginAt(FirstRunStep::Coverage);
+        LK_EQ(twice.saw_bake(), false);
+        LK_EQ(twice.order().has_value(), false);
+        LK_EQ(twice.shown().found, 0u);
+        twice.Begin();
+        LK_EQ(twice.saw_bake(), false);
+
+        /* A bake of one or two cells finishes inside the quarter second
+         * between polls, so waiting to observe one running left the step with
+         * no way to know a bake had run at all. */
+        Case("a bake counts as seen when it starts");
+        FirstRun quick;
+        quick.BeginAt(FirstRunStep::Importing);
+        LK_EQ(quick.saw_bake(), false);
+        quick.NoteBakeStarted();
+        LK_EQ(quick.saw_bake(), true);
+
+        /* A transfer that ends with nothing to bake leaves the step waiting
+         * for work that never starts. */
+        Case("a stalled import can go back");
+        FirstRun dead;
+        dead.Begin();
+        dead.set_source(ChartSource::Noaa);
+        while (dead.step() != FirstRunStep::Importing)
+        {
+            if (dead.showing_enc_terms())
+                dead.AgreeToEncTerms();
+            else
+                dead.Advance();
+        }
+        LK_EQ(dead.CanGoBack(), false);
+        dead.NoteImportStalled("every chart for those regions is already installed");
+        LK_EQ(dead.import_stalled(), true);
+        LK_EQ(dead.import_why(),
+              std::string("every chart for those regions is already installed"));
+        LK_EQ(dead.CanGoBack(), true);
+        dead.Back();
+        LK_EQ(dead.step(), FirstRunStep::Coverage);
+
+        /* Setup runs when there is nothing to draw. A mariner already on an
+         * online chart has something. */
+        Case("a linked chart is a chart");
+        LK_EQ(At(FirstRunStep::Welcome).ShouldRun(true, false), true);
+        LK_EQ(At(FirstRunStep::Welcome).ShouldRun(true, true), false);
+        LK_EQ(At(FirstRunStep::Welcome).ShouldRun(false, false), false);
     }
 }

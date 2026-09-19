@@ -442,6 +442,9 @@ namespace winrt::LookoutMarine::implementation
          * holds, which the pills state. One cost call per region, answered off
          * the catalog the core holds. */
         void FirstRunRepriceRegions();
+        /* What the scan of the download directory found, back on the UI
+         * thread. Starts the bake, or states why there is none. */
+        void FirstRunStartBake(lkw::ScanResult const &scan, std::string const &why);
         void FirstRunPollStart();
         /* Start or stop that poll by what there is to watch: a catalog read, a
          * transfer, a bake, or an import between its parts. */

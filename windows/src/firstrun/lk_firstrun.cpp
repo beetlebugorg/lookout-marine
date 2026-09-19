@@ -367,12 +367,16 @@ namespace lkw
         case FirstRunStep::Source:
             step_ = FirstRunStep::Welcome;
             break;
+        case FirstRunStep::Importing:
+            // Only a stalled one. CanGoBack is what says so.
+            step_ = FirstRunStep::Coverage;
+            break;
         case FirstRunStep::Coverage:
         case FirstRunStep::OnlineChart:
             step_ = FirstRunStep::Source;
             break;
         default:
-            // Importing and Depths have no way back. The charts are already
+            // The depths step has no way back. The charts are already
             // arriving by then.
             break;
         }
