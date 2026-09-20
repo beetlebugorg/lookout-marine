@@ -141,7 +141,14 @@ void lookout_set_pixel_density(lookout *h, float density);
 void lookout_pan(lookout *h, float dx_px, float dy_px);
 void lookout_zoom_at(lookout *h, double dzoom, float x_px, float y_px);
 void lookout_pan_logical(lookout *h, float dx_pt, float dy_pt);
+/* Zoom by `dzoom` about a point, eased: the camera reaches the new zoom about
+ * 85 ms later. For a wheel click or a keyboard step, so a discrete input draws
+ * as a continuous move. */
 void lookout_zoom_at_logical(lookout *h, double dzoom, float x_pt, float y_pt);
+/* The same zoom with no ease, for a gesture that states the zoom continuously,
+ * such as a pinch. The chart holds the point under the fingers and follows
+ * them frame for frame. Clears an ease already running. */
+void lookout_zoom_about_logical(lookout *h, double dzoom, float x_pt, float y_pt);
 void lookout_screen_to_geo(lookout *h, float x_px, float y_px, double *lon, double *lat);
 void lookout_geo_to_screen(lookout *h, double lon, double lat, float *x_px, float *y_px);
 

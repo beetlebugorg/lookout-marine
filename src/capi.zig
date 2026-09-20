@@ -257,6 +257,11 @@ export fn lookout_zoom_at_logical(h: ?*lookout, dzoom: f64, x_pt: f32, y_pt: f32
     defer l.apiUnlock();
     l.zoomAtLogical(dzoom, x_pt, y_pt);
 }
+export fn lookout_zoom_about_logical(h: ?*lookout, dzoom: f64, x_pt: f32, y_pt: f32) void {
+    const l = locked(h);
+    defer l.apiUnlock();
+    l.zoomAboutLogical(dzoom, x_pt, y_pt);
+}
 export fn lookout_screen_to_geo(h: ?*lookout, x_px: f32, y_px: f32, lon: *f64, lat: *f64) void {
     const l = locked(h);
     defer l.apiUnlock();

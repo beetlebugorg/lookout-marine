@@ -604,6 +604,19 @@ final class ChartController: NSObject {
         kick()
     }
 
+    /// Zoom with no ease, for a gesture that states the zoom continuously.
+    ///
+    /// A pinch reports a scale on every touch move, so the chart has a zoom
+    /// to draw each frame. The eased entry above adds a lag of about 85 ms to
+    /// each of those reports, which reads as the chart trailing the fingers
+    /// and settling after they lift.
+    func zoomTracking(_ dz: Double, atPt pt: CGPoint) {
+        guard let h = handle else { return }
+        lookout_zoom_about_logical(h, dz, Float(pt.x), Float(pt.y))
+        retireChartChrome()
+        kick()
+    }
+
     /// True while a scene rebuild is outstanding, or tiles it needs are still
     /// being composed. What "the chart has finished" means.
     var stillBuilding: Bool {

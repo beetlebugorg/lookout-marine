@@ -2342,7 +2342,18 @@ pub const Lookout = struct {
         self.markDirty();
     }
     pub fn zoomAtLogical(self: *Lookout, dzoom: f64, x_pt: f32, y_pt: f32) void {
-        self.follow.zoomToward(self.cam, dzoom, x_pt, y_pt); // eases in tickAnim, not an instant snap
+        self.follow.zoomToward(self.cam, dzoom, x_pt, y_pt); // eases in tickAnim
+        self.markDirty();
+    }
+
+    /// Zoom by `dzoom` about a logical point, with no ease.
+    ///
+    /// For a gesture that states the zoom continuously, such as a pinch. The
+    /// eased path above sets a target the camera reaches about 85 ms later,
+    /// so the chart trails the fingers and arrives after they stop. This
+    /// entry also clears an ease already running.
+    pub fn zoomAboutLogical(self: *Lookout, dzoom: f64, x_pt: f32, y_pt: f32) void {
+        self.follow.zoomAbout(self.cam, dzoom, x_pt, y_pt);
         self.markDirty();
     }
 
@@ -3936,6 +3947,36 @@ test "a zoom while following pivots on the anchor" {
     const after = cam2.screenToWorld(30, 30);
     try t.expectApproxEqAbs(under.x, after.x, 1e-9);
     try t.expectApproxEqAbs(under.y, after.y, 1e-9);
+}
+
+test "a pinch step moves the camera now, a wheel step eases toward it" {
+    const t = std.testing;
+    const off = Follow{};
+
+    // What a pinch does: the zoom the fingers state is the zoom on screen,
+    // and the point under them does not move.
+    var pinched = followTestCamera();
+    const start = pinched.zoom;
+    const under = pinched.screenToWorld(300, 200);
+    off.zoomAbout(&pinched, 0.4, 300, 200);
+    try t.expectApproxEqAbs(start + 0.4, pinched.zoom, 1e-12);
+    const held = pinched.screenToWorld(300, 200);
+    try t.expectApproxEqAbs(under.x, held.x, 1e-9);
+    try t.expectApproxEqAbs(under.y, held.y, 1e-9);
+    // Nothing is left running, so the chart can go idle.
+    try t.expect(!pinched.animating());
+
+    // What a wheel click does: the camera is where it was, and the ease
+    // moves it over the next few frames.
+    var wheeled = followTestCamera();
+    off.zoomToward(&wheeled, 0.4, 300, 200);
+    try t.expectApproxEqAbs(start, wheeled.zoom, 1e-12);
+    try t.expect(wheeled.animating());
+    var ticks: usize = 0;
+    while (wheeled.animating() and ticks < 60) : (ticks += 1) wheeled.tick(1.0 / 60.0);
+    try t.expectApproxEqAbs(start + 0.4, wheeled.zoom, 1e-4);
+    // The ease spans several frames. That is the lag a pinch had.
+    try t.expect(ticks > 3);
 }
 
 test "a fix older than the staleness window leaves the camera alone" {

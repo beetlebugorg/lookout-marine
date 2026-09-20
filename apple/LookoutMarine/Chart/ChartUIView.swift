@@ -333,7 +333,9 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate {
         case .changed:
             let dz = log2(Double(g.scale / lastPinchScale))
             lastPinchScale = g.scale
-            if dz != 0 { controller?.zoom(dz, atPt: g.location(in: self)) }
+            // Tracking, so the chart holds the scale the fingers state rather
+            // than easing toward it.
+            if dz != 0 { controller?.zoomTracking(dz, atPt: g.location(in: self)) }
         default:
             break
         }
