@@ -46,6 +46,42 @@ enum CoordFormat {
         coreString(LOOKOUT_SCALE_MAX) { lookout_fmt_scale(denominator, $0, $1) }
     }
 
+    /// The scale at the width a phone has for it: `1:4.8M` from 1,000,000 up,
+    /// the full number below that.
+    ///
+    /// The readouts do not fit one line on a phone once the denominator runs
+    /// to seven digits, and the row then falls to two lines. Three significant
+    /// figures state the same scale a mariner reads off it.
+    static func scaleShort(_ denominator: Double) -> String {
+        guard denominator >= 1_000_000 else { return scale(denominator) }
+        let millions = denominator / 1_000_000
+        let text = millions >= 100 ? String(format: "%.0f", millions)
+                                   : String(format: "%.1f", millions)
+        return "1:\(text)M"
+    }
+
+    /// A position at two decimals of minutes: `38°58.58'N 076°28.57'W`.
+    ///
+    /// Two decimals is about two metres, inside any GPS fix. The third is
+    /// what a phone's row spends its last characters on.
+    static func positionShort(lat: Double, lon: Double) -> String {
+        "\(dm2(lat, isLat: true)) \(dm2(lon, isLat: false))"
+    }
+
+    /// One coordinate at two decimals of minutes.
+    static func dm2(_ value: Double, isLat: Bool) -> String {
+        let hemisphere = isLat ? (value < 0 ? "S" : "N") : (value < 0 ? "W" : "E")
+        var degrees = Int(abs(value))
+        var minutes = (abs(value) - Double(degrees)) * 60
+        // 59.999 minutes rounds to 60, so the degree goes up.
+        if (minutes * 100).rounded() >= 6000 {
+            minutes = 0
+            degrees += 1
+        }
+        let width = isLat ? 2 : 3
+        return String(format: "%0\(width)d°%05.2f'%@", degrees, minutes, hemisphere)
+    }
+
     /// The S-52 navigational purpose band for a display scale.
     static func band(_ denominator: Double) -> String {
         String(cString: lookout_band_name(denominator))
