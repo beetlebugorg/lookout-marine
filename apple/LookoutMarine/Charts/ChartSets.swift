@@ -55,9 +55,14 @@ struct ScannedCell: Identifiable, Hashable {
     /// True when `path` is a name INSIDE an archive rather than a file. Such a
     /// chart cannot be opened, whatever it is: it has to come out first.
     var archived: Bool = false
+    /// True when this cell was written after the chart prepared from it, as a
+    /// NOAA update writes one. The prepared chart draws the edition before it
+    /// until this cell is prepared again.
+    var stale: Bool = false
 
     init(path: String, name: String, kind: Kind, band: Int, bytes: Int64,
-         edition: UInt32 = 0, update: UInt32 = 0, archived: Bool = false) {
+         edition: UInt32 = 0, update: UInt32 = 0, archived: Bool = false,
+         stale: Bool = false) {
         self.path = path
         self.name = name
         self.kind = kind
@@ -66,6 +71,7 @@ struct ScannedCell: Identifiable, Hashable {
         self.edition = edition
         self.update = update
         self.archived = archived
+        self.stale = stale
     }
 
     init(_ f: lookout_chart_file, archived: Bool) {
@@ -76,7 +82,8 @@ struct ScannedCell: Identifiable, Hashable {
                   bytes: Int64(f.bytes),
                   edition: f.edition,
                   update: f.update,
-                  archived: archived)
+                  archived: archived,
+                  stale: f.stale != 0)
     }
 
     var id: String { path }
@@ -172,16 +179,23 @@ struct ChartSet: Identifiable, Hashable {
     /// it sits in the same set under the same stem. Reading only the kind of
     /// each file counted every source cell in the folder on every import, so
     /// downloading one region reported the whole library.
+    /// A cell written after the chart prepared from it is prepared again, so
+    /// an update reaches the chart the mariner draws.
     var toPrepare: [ScannedCell] {
         let all = cells + rasters
         let ready = Set(all.filter { !$0.needsPrepare }.map(\.stem))
-        return all.filter { $0.needsPrepare && !ready.contains($0.stem) }
+        return all.filter { $0.needsPrepare && ($0.stale || !ready.contains($0.stem)) }
     }
     var needsBake: Int { toPrepare.count }
     /// What is left over after a prepare has already run for this set: files
     /// the engine would not read. Offering to prepare them again says the work
     /// is unfinished when it is as finished as it will get.
-    var refusedCount: Int { preparedPath == nil ? 0 : toPrepare.count }
+    ///
+    /// A cell written after the chart prepared from it is work still to do, so
+    /// it counts as one to prepare rather than one the engine refused.
+    var refusedCount: Int {
+        preparedPath == nil ? 0 : toPrepare.filter { !$0.stale }.count
+    }
     /// The pictures that are ready to draw now.
     var rasterPaths: [String] { rasters.filter { !$0.needsPrepare }.map(\.path) }
     /// True when this set holds anything that draws now. `openablePaths` and

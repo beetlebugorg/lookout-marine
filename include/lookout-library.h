@@ -267,6 +267,11 @@ typedef struct {
      * is applied. Both 0 when the file states no identity: a baked archive, a
      * picture, or an entry read from a zip listing. */
     uint32_t edition, update;
+    /* 1 when this source cell was written after the chart prepared from it.
+     * The prepared chart still draws, one edition behind, until the shell
+     * prepares the cell again. A NOAA update writes such a cell beside every
+     * chart it refreshes. 0 for every other file. */
+    int stale;
 } lookout_chart_file;
 
 /* The totals, and where the scan started. */

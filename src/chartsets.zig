@@ -633,6 +633,15 @@ pub const Sets = struct {
         return .{ .edition = 0, .update = 0 };
     }
 
+    /// When a file was last written, in nanoseconds, or null when it cannot be
+    /// read. An entry inside an archive has no file to stat.
+    fn modifiedAt(self: *Sets, path: []const u8) ?i128 {
+        const f = std.Io.Dir.cwd().openFile(self.io, path, .{}) catch return null;
+        defer f.close(self.io);
+        const st = f.stat(self.io) catch return null;
+        return st.mtime.nanoseconds;
+    }
+
     /// True when the prepared scan holds a chart made from this file.
     fn readyHas(prepared: *const library.Scan, name: []const u8) bool {
         const stem = library.stemOf(name);
@@ -665,6 +674,29 @@ pub const Sets = struct {
         var files_arena = std.heap.ArenaAllocator.init(self.gpa);
         const fa = files_arena.allocator();
         var found = std.ArrayList(library.File).empty;
+
+        // The stems whose prepared chart is older than the cell it was made
+        // from. An update writes a new base cell beside the chart prepared
+        // from the edition before it, and that chart goes on drawing the old
+        // edition until it is prepared again.
+        var stale = std.StringHashMap(void).init(self.gpa);
+        defer stale.deinit();
+        if (prepared) |p| {
+            for ([_][]const library.Cell{ p.cells, p.raster }) |list| {
+                for (list) |c| {
+                    const at = self.modifiedAt(c.path) orelse continue;
+                    const stem = library.stemOf(c.name);
+                    for (scan.cells) |o| {
+                        if (o.kind != .source) continue;
+                        if (!std.mem.eql(u8, library.stemOf(o.name), stem)) continue;
+                        const src = self.modifiedAt(o.path) orelse continue;
+                        if (src > at) stale.put(stem, {}) catch {};
+                        break;
+                    }
+                }
+            }
+        }
+
         if (prepared) |p| {
             for ([_][]const library.Cell{ p.cells, p.raster }) |list| {
                 for (list) |c| {
@@ -681,11 +713,15 @@ pub const Sets = struct {
         }
         for ([_][]const library.Cell{ scan.cells, scan.raster }) |list| {
             for (list) |c| {
-                if (prepared != null and readyHas(prepared.?, c.name)) continue;
+                const is_stale = stale.contains(library.stemOf(c.name));
+                if (prepared != null and readyHas(prepared.?, c.name) and !is_stale) continue;
                 var f = library.fileOf(fa, c) catch continue;
                 const id = identityOf(c, scan);
                 f.edition = id.edition;
                 f.update = id.update;
+                // A shell prepares this cell again, and the list holds the
+                // chart made from it as well.
+                f.stale = @intFromBool(is_stale);
                 found.append(fa, f) catch {};
             }
         }
@@ -697,7 +733,13 @@ pub const Sets = struct {
         defer ready.deinit();
         if (prepared) |p| {
             for ([_][]const library.Cell{ p.cells, p.raster }) |list| {
-                for (list) |c| ready.put(library.stemOf(c.name), {}) catch {};
+                for (list) |c| {
+                    const stem = library.stemOf(c.name);
+                    // A stale chart draws, and the cell beside it still counts
+                    // as one to prepare.
+                    if (stale.contains(stem)) continue;
+                    ready.put(stem, {}) catch {};
+                }
             }
         }
 
@@ -1045,6 +1087,47 @@ test "a prepared chart wins over the file it was made from" {
     const paths = s.compose();
     try t.expectEqual(@as(usize, 1), paths.len);
     try t.expect(std.mem.endsWith(u8, std.mem.span(paths[0]), ".pmtiles"));
+}
+
+test "a cell written after its prepared chart is prepared again" {
+    var f = try Fixture.init();
+    defer f.deinit();
+
+    const src = try f.folderNamed("Set A", &.{"US5MD1MC.000"});
+    defer t.allocator.free(src);
+    const root = try f.folderNamed("Prepared", &.{});
+    defer t.allocator.free(root);
+    try f.tmp.dir.createDirPath(f.io, "Prepared/Set A/US5MD1MC");
+    try f.tmp.dir.writeFile(f.io, .{
+        .sub_path = "Prepared/Set A/US5MD1MC/US5MD1MC.pmtiles",
+        .data = "x",
+    });
+
+    // The update writes the cell again, after the chart made from it.
+    sleepMs(20);
+    try f.tmp.dir.writeFile(f.io, .{ .sub_path = "Set A/US5MD1MC.000", .data = "edition 28" });
+
+    const s = try Sets.open(t.allocator, f.io, f.store, root, null);
+    defer s.close();
+    try t.expect(s.add(src));
+    settle(s);
+
+    const rows = s.all();
+    try t.expectEqual(@as(usize, 1), rows.len);
+    // The prepared chart still draws, and the cell beside it is one to
+    // prepare.
+    try t.expectEqual(@as(usize, 1), rows[0].charts);
+    try t.expectEqual(@as(usize, 1), rows[0].unprepared);
+
+    // The file list holds both, and says which one to prepare.
+    var stale_cells: usize = 0;
+    var baked: usize = 0;
+    for (s.files(src)) |file| {
+        if (file.stale != 0) stale_cells += 1;
+        if (file.kind == .baked) baked += 1;
+    }
+    try t.expectEqual(@as(usize, 1), stale_cells);
+    try t.expectEqual(@as(usize, 1), baked);
 }
 
 test "a set with nothing prepared still reports what it holds" {

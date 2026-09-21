@@ -659,6 +659,10 @@ pub const File = extern struct {
     /// states no identity.
     edition: u32,
     update: u32,
+    /// 1 when this source cell was written after the chart prepared from it,
+    /// so the chart draws an older edition until it is prepared again. 0 for
+    /// every other file.
+    stale: c_int = 0,
 };
 
 /// What one folder or archive holds.
@@ -1032,10 +1036,6 @@ test "the dataset edition reaches the cell and the C struct" {
     try t.expectEqual(@as(u32, 3), f.update);
 }
 
-test "a file that states no identity reports edition 0" {
-    const io = std.Io.Threaded.global_single_threaded.io();
-    var s = try scanWith(t.allocator, io, "/Charts", null, null, oneBaked, null);
-    defer s.deinit();
 /// A base cell with three update files beside it, as an exchange set holds
 /// them after three updates.
 fn oneUpdatedCell(
@@ -1077,6 +1077,10 @@ test "a cell's update number is the last update written beside it" {
     try t.expectEqual(@as(usize, 3), s.updates);
 }
 
+test "a file that states no identity reports edition 0" {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var s = try scanWith(t.allocator, io, "/Charts", null, null, oneBaked, null);
+    defer s.deinit();
 
     try t.expectEqual(@as(usize, 1), s.cells.len);
     try t.expectEqual(@as(u32, 0), s.cells[0].facts.edition);

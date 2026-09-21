@@ -109,9 +109,31 @@ final class ChartSetTests: XCTestCase {
     }
 
     private func cell(_ name: String, band: Int = 5, kind: ScannedCell.Kind = .baked,
-                      bytes: Int64 = 1_000_000, archived: Bool = false) -> ScannedCell {
+                      bytes: Int64 = 1_000_000, archived: Bool = false,
+                      stale: Bool = false) -> ScannedCell {
         ScannedCell(path: "/charts/\(name)/\(name).pmtiles", name: name, kind: kind,
-                    band: band, bytes: bytes, archived: archived)
+                    band: band, bytes: bytes, archived: archived, stale: stale)
+    }
+
+    /// An update writes a new cell beside the chart prepared from the edition
+    /// before it. The chart draws until the cell is prepared again, and the
+    /// set asks for that work.
+    func testACellWrittenAfterItsChartIsPreparedAgain() {
+        let prepared = cell("a")
+        let updated = cell("a", kind: .source, stale: true)
+        let s = set(cells: [prepared, updated], prepared: "/prepared")
+        XCTAssertEqual(s.needsBake, 1)
+        XCTAssertEqual(s.toPrepare.map(\.stem), ["a"])
+        // Work to do, rather than a file the engine refused.
+        XCTAssertEqual(s.refusedCount, 0)
+        // The prepared chart still opens while the cell waits.
+        XCTAssertEqual(s.openablePaths.count, 1)
+    }
+
+    /// A cell whose chart is current is left alone.
+    func testACellWithACurrentChartIsNotPreparedAgain() {
+        let s = set(cells: [cell("a"), cell("a", kind: .source)], prepared: "/prepared")
+        XCTAssertEqual(s.needsBake, 0)
     }
 
     /// An office not listed keeps the folder name. A wrong agency on a chart
