@@ -317,6 +317,21 @@ pub fn scanWith(
             rows.deinit(alloc);
         }
         if (ask(inventory_ctx, alloc, root, &rows)) {
+            // The highest update file beside each base cell, by stem. A base
+            // cell states UPDN 0 however many updates have been written beside
+            // it, and NOAA's catalog states the number of the last one, so a
+            // cell fully up to date read as one update behind for every update
+            // it had.
+            var applied = std.StringHashMap(u32).init(alloc);
+            defer applied.deinit();
+            for (rows.items) |r| {
+                if (r.kind != .update) continue;
+                const base = std.fs.path.basename(r.path);
+                const p = split(base);
+                const n = std.fmt.parseInt(u32, p.ext, 10) catch continue;
+                const seen = applied.get(p.stem) orelse 0;
+                if (n > seen) applied.put(p.stem, n) catch {};
+            }
             for (rows.items) |r| {
                 switch (r.kind) {
                     .update => {
@@ -359,7 +374,10 @@ pub fn scanWith(
                         .scale = r.scale,
                         .bounds = r.bounds,
                         .edition = r.edition,
-                        .update = r.update,
+                        .update = if (r.kind == .source)
+                            @max(r.update, applied.get(stemOf(std.fs.path.basename(path))) orelse 0)
+                        else
+                            r.update,
                     },
                 };
                 if (r.kind == .raster) try raster.append(alloc, cell) else try cells.append(alloc, cell);
@@ -1018,6 +1036,47 @@ test "a file that states no identity reports edition 0" {
     const io = std.Io.Threaded.global_single_threaded.io();
     var s = try scanWith(t.allocator, io, "/Charts", null, null, oneBaked, null);
     defer s.deinit();
+/// A base cell with three update files beside it, as an exchange set holds
+/// them after three updates.
+fn oneUpdatedCell(
+    _: ?*anyopaque,
+    alloc: std.mem.Allocator,
+    _: []const u8,
+    out: *std.ArrayList(InventoryRow),
+) bool {
+    out.append(alloc, .{
+        .path = alloc.dupe(u8, "/Charts/US1GC09M/US1GC09M.000") catch return false,
+        .name = alloc.dupe(u8, "US1GC09M") catch return false,
+        .kind = .source,
+        .bytes = 900,
+        .edition = 74,
+        .update = 0,
+    }) catch return false;
+    for ([_][]const u8{ "001", "002", "003" }) |ext| {
+        const path = std.fmt.allocPrint(alloc, "/Charts/US1GC09M/US1GC09M.{s}", .{ext}) catch return false;
+        out.append(alloc, .{
+            .path = path,
+            .name = alloc.dupe(u8, "US1GC09M") catch return false,
+            .kind = .update,
+            .bytes = 90,
+        }) catch return false;
+    }
+    return true;
+}
+
+test "a cell's update number is the last update written beside it" {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var s = try scanWith(t.allocator, io, "/Charts", null, null, oneUpdatedCell, null);
+    defer s.deinit();
+
+    try t.expectEqual(@as(usize, 1), s.cells.len);
+    try t.expectEqual(@as(u32, 74), s.cells[0].facts.edition);
+    // The base file states 0. The three updates beside it say otherwise, and
+    // NOAA's catalog states 3 for the same cell.
+    try t.expectEqual(@as(u32, 3), s.cells[0].facts.update);
+    try t.expectEqual(@as(usize, 3), s.updates);
+}
+
 
     try t.expectEqual(@as(usize, 1), s.cells.len);
     try t.expectEqual(@as(u32, 0), s.cells[0].facts.edition);
