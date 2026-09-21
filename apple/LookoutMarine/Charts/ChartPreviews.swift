@@ -223,10 +223,10 @@ final class ChartPreviews {
                   let http = response as? HTTPURLResponse, http.statusCode / 100 == 2,
                   let image = Self.image(from: data)
             else {
-                await MainActor.run { [weak self] in self?.unavailable.insert(url) }
+                _ = await MainActor.run { [weak self] in self?.unavailable.insert(url) }
                 return
             }
-            await MainActor.run { [weak self] in self?.images[url] = image }
+            _ = await MainActor.run { [weak self] in self?.images[url] = image }
         }
     }
 }

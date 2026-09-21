@@ -509,6 +509,10 @@ final class ChartController: NSObject {
 
         if f.verdict == LOOKOUT_FRAME_RENDER {
             let prof = frameProf
+            // The render queue holds the only reference to the handle for the
+            // span of the render, because the gate above admits one render at
+            // a time and the next tick waits on it.
+            nonisolated(unsafe) let h = h
             prof?.tick(gap: gap, dispatched: true, dropped: false, building: building, zoom: zoomNow)
             // The slot passes to the render; it signals the gate when done.
             slotHeld = false

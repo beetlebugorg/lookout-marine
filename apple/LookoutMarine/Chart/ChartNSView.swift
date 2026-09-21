@@ -168,9 +168,15 @@ final class ChartNSView: NSView {
         fsObservers.forEach(nc.removeObserver)
         fsObservers = [NSWindow.didEnterFullScreenNotification, NSWindow.didExitFullScreenNotification].map { name in
             nc.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
-                guard let self else { return }
-                self.syncMetalLayerScale()
-                self.controller?.resize(widthPt: Double(self.bounds.width), heightPt: Double(self.bounds.height))
+                // queue: .main, so this runs on the main actor; assert it so
+                // the main-actor-isolated view and controller are reachable
+                // from the Sendable closure.
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.syncMetalLayerScale()
+                    self.controller?.resize(widthPt: Double(self.bounds.width),
+                                            heightPt: Double(self.bounds.height))
+                }
             }
         }
         maybeAutoOpen()

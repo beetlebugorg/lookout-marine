@@ -58,11 +58,10 @@ protocol ChartLinkEngine: AnyObject {
     func snapshot() -> Image?
 }
 
-/// What PluginsModel asks the chart for.
-@MainActor
 /// NOAA's chart catalog and the downloads run from it. The core reads the
 /// catalog, chooses the cells a region needs and fetches them; these are the
 /// calls that start it and read where it got to.
+@MainActor
 protocol NoaaEngine: AnyObject {
     @discardableResult func noaaRefresh() -> Bool
     func noaaState() -> NoaaState
@@ -77,6 +76,8 @@ protocol NoaaEngine: AnyObject {
     func noaaRegionCoverage(_ regionID: String) -> [GeoBox]
 }
 
+/// What PluginsModel asks the chart for.
+@MainActor
 protocol PluginEngine: AnyObject {
     func tableSpecs() -> [PluginTableSpec]
     func pluginAlerts() -> (seq: Int, alerts: [PluginAlert])?
