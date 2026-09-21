@@ -434,17 +434,23 @@ struct DepthStep: View {
 
     // MARK: The warning
 
+    /// The caution in two weights, as one paragraph that wraps.
+    private var caution: Text {
+        let lead = Text("Shading is not a depth sounder. ")
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundColor(Chrome.ink)
+        let rest = Text("Soundings are not corrected for tide, surge or squat, and a survey can be decades old. Keep your own margin.")
+            .font(.system(size: 12))
+            .foregroundColor(Chrome.muted)
+        return Text("\(lead)\(rest)")
+    }
+
     private var warning: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 13))
                 .foregroundStyle(Chrome.amber)
-            (Text("Shading is not a depth sounder. ")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(Chrome.ink)
-             + Text("Soundings are not corrected for tide, surge or squat, and a survey can be decades old. Keep your own margin.")
-                .font(.system(size: 12))
-                .foregroundColor(Chrome.muted))
+            caution
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.horizontal, 14)

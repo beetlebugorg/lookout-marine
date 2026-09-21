@@ -195,8 +195,7 @@ struct StepWarning: View {
                 .padding(.top, 2)
             VStack(alignment: .leading, spacing: 4) {
                 Group {
-                    Text(lead).fontWeight(.semibold).foregroundStyle(Chrome.ink)
-                    + Text(" ") + Text(body_).foregroundStyle(Chrome.muted)
+                    Text("\(Text(lead).fontWeight(.semibold).foregroundStyle(Chrome.ink)) \(Text(body_).foregroundStyle(Chrome.muted))")
                 }
                 .font(.system(size: 11.5))
                 .lineSpacing(2)
