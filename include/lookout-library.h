@@ -956,9 +956,12 @@ void lookout_noaa_refresh(lookout *h);
 /* Stopped by lookout_noaa_svc_cancel, by a new download, or by clearing the
  * fetcher. */
 #define LOOKOUT_NOAA_CANCELLED 4
-/* No chart arrived, or the order was refused: no catalog, no fetcher, or no
- * download directory. `error` says which. */
+/* The plan ran to its end with no chart arriving, or hit an error. `error`
+ * names the cause. */
 #define LOOKOUT_NOAA_FAILED    5
+/* The order ended before any transfer: no catalog, no fetcher, or no download
+ * directory. `error` names the cause. */
+#define LOOKOUT_NOAA_REFUSED   6
 
 /* What lookout is doing with NOAA's charts. Every field is read in one call. */
 typedef struct {
@@ -978,13 +981,18 @@ typedef struct {
     uint64_t bytes_done;
     /* What went wrong, or an empty string. */
     char error[256];
-    /* A LOOKOUT_NOAA_NONE .. _FAILED value, for the download numbered `run`. */
+    /* A LOOKOUT_NOAA_NONE .. _REFUSED value, for the download numbered `run`. */
     uint8_t outcome;
     /* Counts the downloads and updates ordered on this service, refused ones
      * included. 0 before the first. A shell that ordered one reads its end
      * when `run` has moved past the value it read before ordering and
      * `outcome` is no longer LOOKOUT_NOAA_RUNNING. */
     uint32_t run;
+    /* When `outcome` is LOOKOUT_NOAA_FAILED or LOOKOUT_NOAA_REFUSED: 1 when
+     * ordering again can clear the cause, else 0. It is 1 for a refusal with
+     * no catalog, where the shell refreshes the catalog and then orders again,
+     * and for a download where a transfer failed on the network. */
+    uint8_t retry;
 } lookout_noaa_state;
 
 /* Old path. Does not block on the api lock. */

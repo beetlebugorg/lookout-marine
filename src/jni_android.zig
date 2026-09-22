@@ -2070,6 +2070,7 @@ const lookout_noaa_state = extern struct {
     err: [256]u8,
     outcome: u8,
     run: u32,
+    retry: u8,
 };
 
 extern fn lookout_noaa_regions(out: *?[*]const lookout_noaa_region) usize;

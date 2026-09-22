@@ -67,9 +67,11 @@ pub const Outcome = enum(u8) {
     empty = 3,
     /// Stopped by a cancel, by a new download, or by clearing the fetcher.
     cancelled = 4,
-    /// The plan ran to its end with no chart arriving, or the order was
-    /// refused: no catalog, no fetcher, or no download directory.
+    /// The plan ran to its end with no chart arriving, or hit an error.
     failed = 5,
+    /// The order ended before any transfer: no catalog, no fetcher, or no
+    /// download directory.
+    refused = 6,
 };
 
 /// Called when a response is queued for adopt. From any thread, possibly
@@ -189,6 +191,9 @@ pub const State = extern struct {
     outcome: u8 = 0,
     /// Counts the downloads ordered on this service. The first is 1.
     run: u32 = 0,
+    /// 1 when ordering again can clear the cause of a failed or refused
+    /// download.
+    retry: u8 = 0,
 };
 
 /// The catalog, the plan, and the transfer.
@@ -216,6 +221,9 @@ pub const Service = struct {
     /// The download's number, and how it ended.
     run: u32 = 0,
     outcome: Outcome = .none,
+    /// Ordering again can clear the cause: the catalog was missing, or a
+    /// transfer failed on the network.
+    retry: bool = false,
 
     next_req: u64 = 1,
     reqs: std.ArrayList(Req) = .empty,
@@ -697,6 +705,7 @@ pub const Service = struct {
     fn beginRun(self: *Service) void {
         self.run +%= 1;
         self.outcome = .running;
+        self.retry = false;
         self.changed = true;
     }
 
@@ -707,20 +716,21 @@ pub const Service = struct {
         self.changed = true;
     }
 
-    /// Refuse an order before it starts. A download already running goes on
+    /// End an order before it starts. A download already running goes on
     /// and keeps its number.
-    fn refuse(self: *Service, why: []const u8) void {
+    fn refuse(self: *Service, outcome: Outcome, why: []const u8, retry: bool) void {
         if (self.phase == .downloading) {
             self.setErr(why);
             return;
         }
         self.beginRun();
-        self.endRun(.failed, why);
+        self.retry = retry;
+        self.endRun(outcome, why);
     }
 
     pub fn start(self: *Service, districts: []const u8, dest: []const u8, again: bool) void {
-        const cat = &(self.cat orelse return self.refuse("no catalog yet"));
-        if (self.get == null) return self.refuse("no network provider");
+        const cat = &(self.cat orelse return self.refuse(.refused, "no catalog yet", true));
+        if (self.get == null) return self.refuse(.refused, "no network provider", false);
 
         self.cancelAll();
         self.beginRun();
@@ -764,10 +774,10 @@ pub const Service = struct {
 
     /// Download the cells NOAA has reissued since these were installed.
     pub fn startUpdate(self: *Service, installed: []const noaa.Installed, dest: []const u8) void {
-        const cat = &(self.cat orelse return self.refuse("no catalog yet"));
-        if (self.get == null) return self.refuse("no network provider");
+        const cat = &(self.cat orelse return self.refuse(.refused, "no catalog yet", true));
+        if (self.get == null) return self.refuse(.refused, "no network provider", false);
         const stale = noaa.outdated(self.alloc, cat, installed) catch
-            return self.refuse("out of memory checking editions");
+            return self.refuse(.failed, "out of memory checking editions", false);
         defer self.alloc.free(stale);
 
         self.cancelAll();
@@ -816,8 +826,8 @@ pub const Service = struct {
         }
     }
 
-    /// Create `dest` and point the fetch threads at it. Ends the run as
-    /// failed and returns false when it cannot.
+    /// Create `dest` and point the fetch threads at it. Ends the run and
+    /// returns false when it cannot.
     fn stageAt(self: *Service, dest: []const u8) bool {
         self.freeStr(&self.dest);
         self.dest = self.alloc.dupe(u8, dest) catch {
@@ -825,7 +835,7 @@ pub const Service = struct {
             return false;
         };
         makeDir(dest) catch {
-            self.endRun(.failed, "could not create the download directory");
+            self.endRun(.refused, "could not create the download directory");
             return false;
         };
         self.setStageDest(dest);
@@ -1166,7 +1176,7 @@ pub const Service = struct {
             // Count every cell in the transfer, as `done` does, so done plus
             // failed reaches the total.
             self.failed += self.plan.items[job].cells;
-            if (a.write_failed) self.setErr("could not write a downloaded chart");
+            if (a.write_failed) self.setErr("could not write a downloaded chart") else self.retry = true;
             self.changed = true;
             return;
         }
@@ -1359,6 +1369,7 @@ pub const Service = struct {
             .bytes_done = self.bytes_done + live.bytes,
             .outcome = @intFromEnum(self.outcome),
             .run = self.run,
+            .retry = @intFromBool(self.retry),
         };
         if (self.cat) |*c| {
             s.catalog_cells = @intCast(c.cells.len);
@@ -2284,7 +2295,7 @@ test "each way a download ends sets its outcome and numbers the run" {
 
     // Refused: no catalog.
     s.start(&.{5}, dest, false);
-    try testing.expectEqual(Outcome.failed, s.outcome);
+    try testing.expectEqual(Outcome.refused, s.outcome);
     try testing.expectEqual(@as(u32, 1), s.run);
 
     s.cat = try oneDistrict(alloc, 5, 2);
@@ -2336,6 +2347,59 @@ test "each way a download ends sets its outcome and numbers the run" {
     const snap = s.snapshot();
     try testing.expectEqual(@as(u8, @intFromEnum(Outcome.empty)), snap.outcome);
     try testing.expectEqual(@as(u32, 6), snap.run);
+}
+
+test "a refused order and a failed transfer each set retry by cause" {
+    const alloc = testing.allocator;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const dest = "/tmp/lookout-noaa-retry";
+    std.Io.Dir.cwd().deleteTree(io, dest) catch {};
+    defer std.Io.Dir.cwd().deleteTree(io, dest) catch {};
+
+    var rec = Recorder{ .alloc = alloc };
+    defer rec.deinit();
+    var s = Service.init(alloc);
+    defer s.deinit();
+
+    // No catalog: a refresh can supply one.
+    s.start(&.{5}, dest, false);
+    var snap = s.snapshot();
+    try testing.expectEqual(@as(u8, @intFromEnum(Outcome.refused)), snap.outcome);
+    try testing.expectEqual(@as(u8, 1), snap.retry);
+
+    s.cat = try oneDistrict(alloc, 5, 2);
+    s.phase = .ready;
+
+    // No fetcher.
+    s.start(&.{5}, dest, false);
+    snap = s.snapshot();
+    try testing.expectEqual(@as(u8, @intFromEnum(Outcome.refused)), snap.outcome);
+    try testing.expectEqual(@as(u8, 0), snap.retry);
+
+    // No download directory: its parent is a file.
+    s.setProvider(Recorder.get, null, null, &rec);
+    s.start(&.{5}, "/dev/null/lookout-noaa-retry", false);
+    snap = s.snapshot();
+    try testing.expectEqual(@as(u8, @intFromEnum(Outcome.refused)), snap.outcome);
+    try testing.expectEqual(@as(u8, 0), snap.retry);
+    try testing.expectEqual(@as(usize, 0), rec.ids.items.len);
+
+    // Every transfer fails on the network.
+    s.start(&.{5}, dest, false);
+    for (rec.ids.items) |id| s.respond(id, "", 503);
+    testDrain(&s);
+    snap = s.snapshot();
+    try testing.expectEqual(@as(u8, @intFromEnum(Outcome.failed)), snap.outcome);
+    try testing.expectEqual(@as(u8, 1), snap.retry);
+
+    // Every transfer arrives and cannot be written.
+    const before = rec.ids.items.len;
+    s.start(&.{5}, dest, true);
+    for (rec.ids.items[before..]) |id| s.respond(id, "not a zip", 200);
+    testDrain(&s);
+    snap = s.snapshot();
+    try testing.expectEqual(@as(u8, @intFromEnum(Outcome.failed)), snap.outcome);
+    try testing.expectEqual(@as(u8, 0), snap.retry);
 }
 
 test "changed rises once for each change and stays down while idle" {
