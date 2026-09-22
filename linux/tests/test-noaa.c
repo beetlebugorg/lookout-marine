@@ -8,12 +8,11 @@
  * is everything that does not.
  */
 
-#include <glib/gstdio.h>
-
 #include "library/noaa.h"
 #include "library/sets.h"
 #include "model/app-model.h"
 #include "model/store.h"
+#include "noaa-fixture.h"
 
 static char *home;
 
@@ -186,35 +185,6 @@ test_download_dir (void)
   g_assert_false (g_str_has_prefix (dir, lk_chart_bake_root ()));
 }
 
-/* A catalog of one cell in district 5, as NOAA publishes it. */
-static const char catalog[] =
-    "<ENC_Product_Catalog><date_valid>20250903</date_valid>"
-    "<cell><name>US5MD1MC</name><lname>Chesapeake Bay Entrance</lname>"
-    "<cscale>20000</cscale><edtn>27</edtn><updn>3</updn><isdt>20250801</isdt>"
-    "<zipfile_location>https://charts.noaa.gov/ENCs/US5MD1MC.zip</zipfile_location>"
-    "<zipfile_size>1048576</zipfile_size><coast_guard_district>5</coast_guard_district>"
-    "<panel><vertex><lat>36.0</lat><long>-76.5</long></vertex>"
-    "<vertex><lat>37.0</lat><long>-75.5</long></vertex></panel></cell>"
-    "</ENC_Product_Catalog>";
-
-/* A fetcher that counts requests and cancels, and sends no response. */
-typedef struct {
-  guint gets;
-  guint cancels;
-} FakeFetch;
-
-static void
-fake_get (void *user, uint64_t req_id, const char *url, int allow_file)
-{
-  ((FakeFetch *) user)->gets++;
-}
-
-static void
-fake_cancel (void *user, uint64_t req_id)
-{
-  ((FakeFetch *) user)->cancels++;
-}
-
 static void
 noop_changed (GObject *owner)
 {
@@ -225,9 +195,7 @@ noop_changed (GObject *owner)
 static void
 test_switch_during_download (void)
 {
-  g_autofree char *cache = g_build_filename (g_getenv ("XDG_CACHE_HOME"), "lookout",
-                                             "fetched", NULL);
-  g_autofree char *cached = g_build_filename (cache, "ENCProdCat.xml", NULL);
+  g_autofree char *cached = lk_fixture_catalog_path ();
   g_autofree char *dir = g_build_filename (home, "switch", NULL);
   g_autofree char *from = g_build_filename (LK_TEST_CELLS, "US3CU1EF.000", NULL);
   g_autofree char *to = g_build_filename (dir, "US3CU1EF.000", NULL);
@@ -237,8 +205,7 @@ test_switch_during_download (void)
   LkChartSets *sets;
 
   /* The catalog is read from the cache, and the set is in the store. */
-  g_assert_cmpint (g_mkdir_with_parents (cache, 0700), ==, 0);
-  g_assert_true (g_file_set_contents (cached, catalog, -1, NULL));
+  lk_fixture_cache_catalog ();
   g_assert_cmpint (g_mkdir_with_parents (dir, 0700), ==, 0);
   g_assert_true (g_file_get_contents (from, &cell, &len, NULL));
   g_assert_true (g_file_set_contents (to, cell, (gssize) len, NULL));
@@ -249,10 +216,10 @@ test_switch_during_download (void)
   g_autoptr (LkAppModel) model = lk_app_model_new ();
   LkNoaa *noaa = noaa_of (model);
   lookout_noaa *service = lk_noaa_service (noaa);
-  FakeFetch fake = { 0 };
+  LkFakeFetch fake = { 0 };
   lookout_noaa_state now;
 
-  lookout_noaa_svc_set_http_provider (service, fake_get, fake_cancel, NULL, &fake);
+  lookout_noaa_svc_set_http_provider (service, lk_fake_get, lk_fake_cancel, NULL, &fake);
   lk_noaa_refresh (noaa);
   g_assert_true (lk_noaa_state (noaa)->have_catalog);
 
@@ -285,6 +252,66 @@ test_switch_during_download (void)
   g_assert_cmpint (g_remove (cached), ==, 0);
 }
 
+/* A refusal that a retry cannot clear raises no alert. With a catalog and no
+ * fetcher the core refuses the order with retry 0. */
+static void
+test_a_hopeless_refusal_raises_no_alert (void)
+{
+  g_autoptr (LkAppModel) model = lk_app_model_new ();
+  LkNoaa *noaa = noaa_of (model);
+  lookout_noaa *service = lk_noaa_service (noaa);
+  g_autofree char *cached = lk_fixture_catalog_path ();
+  g_autofree char *error = NULL;
+  LkFakeFetch fake = { 0 };
+
+  lk_fixture_cache_catalog ();
+  lookout_noaa_svc_set_http_provider (service, lk_fake_get, lk_fake_cancel, NULL, &fake);
+  lk_noaa_refresh (noaa);
+  g_assert_true (lk_noaa_state (noaa)->have_catalog);
+  g_assert_cmpint (g_remove (cached), ==, 0);
+  lookout_noaa_svc_set_http_provider (service, NULL, NULL, NULL, NULL);
+  lk_noaa_toggle (noaa, "d5");
+  lk_app_model_start_noaa_download (model, FALSE);
+  g_assert_cmpint (lk_noaa_state (noaa)->outcome, ==, LOOKOUT_NOAA_REFUSED);
+  g_assert_cmpint (lk_noaa_state (noaa)->retry, ==, 0);
+
+  g_object_get (model, "open-error", &error, NULL);
+  g_assert_null (error);
+  g_assert_false (lk_app_model_noaa_alert (model, NULL));
+}
+
+/* A refusal for want of a catalog raises the alert with Retry. Retry reads
+ * the catalog and orders the same regions again. */
+static void
+test_retry_reads_the_catalog_and_orders_again (void)
+{
+  g_autoptr (LkAppModel) model = lk_app_model_new ();
+  LkNoaa *noaa = noaa_of (model);
+  g_autofree char *cached = lk_fixture_catalog_path ();
+  g_autofree char *error = NULL;
+  LkFakeFetch fake = { 0 };
+  gboolean retry = FALSE;
+
+  lookout_noaa_svc_set_http_provider (lk_noaa_service (noaa), lk_fake_get, lk_fake_cancel,
+                                      NULL, &fake);
+  lk_noaa_toggle (noaa, "d5");
+  lk_app_model_start_noaa_download (model, FALSE);
+  lk_noaa_clear_picks (noaa);
+  g_assert_cmpint (lk_noaa_state (noaa)->outcome, ==, LOOKOUT_NOAA_REFUSED);
+
+  g_object_get (model, "open-error", &error, NULL);
+  g_assert_nonnull (error);
+  g_assert_true (lk_app_model_noaa_alert (model, &retry));
+  g_assert_true (retry);
+
+  lk_fixture_cache_catalog ();
+  lk_app_model_retry_noaa (model);
+  g_assert_true (lk_noaa_state (noaa)->have_catalog);
+  g_assert_cmpint (lk_noaa_state (noaa)->outcome, ==, LOOKOUT_NOAA_RUNNING);
+  g_assert_cmpuint (fake.gets, >=, 2);
+
+  g_assert_cmpint (g_remove (cached), ==, 0);
+}
 
 int
 main (int argc, char *argv[])
@@ -304,6 +331,10 @@ main (int argc, char *argv[])
   g_test_add_func ("/noaa/changed-signal", test_changed_signal);
   g_test_add_func ("/noaa/no-catalog", test_no_catalog);
   g_test_add_func ("/noaa/switch-during-download", test_switch_during_download);
+  g_test_add_func ("/noaa/a-hopeless-refusal-raises-no-alert",
+                   test_a_hopeless_refusal_raises_no_alert);
+  g_test_add_func ("/noaa/retry-reads-the-catalog-and-orders-again",
+                   test_retry_reads_the_catalog_and_orders_again);
   g_test_add_func ("/noaa/download-dir", test_download_dir);
 
   return g_test_run ();

@@ -235,6 +235,14 @@ LkNoaa *lk_app_model_get_noaa (LkAppModel *self);
  * join the library as a set that never fills. */
 void lk_app_model_start_noaa_download (LkAppModel *self, gboolean again);
 
+/* TRUE while the open error reports the end of a NOAA download.
+ * `out_retry` is TRUE when ordering again can clear the cause. */
+gboolean lk_app_model_noaa_alert (LkAppModel *self, gboolean *out_retry);
+
+/* Order the last NOAA download or update again. With no catalog loaded this
+ * reads the catalog first and orders when that read ends. */
+void lk_app_model_retry_noaa (LkAppModel *self);
+
 /* Every survey cell this device holds, by dataset name. Transfer full strv.
  *
  * What NOAA is told before it prices a pick, so water already downloaded is

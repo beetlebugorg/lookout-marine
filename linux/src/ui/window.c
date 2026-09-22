@@ -931,19 +931,46 @@ lk_window_raster_changed (LkAppModel *model, gpointer user_data)
   lk_window_update_overlays (self);
 }
 
+/* Button 0 is Retry. */
+static void
+lk_window_open_error_chosen (GObject *source, GAsyncResult *result, gpointer user_data)
+{
+  g_autoptr (LkAppModel) model = user_data;
+
+  if (gtk_alert_dialog_choose_finish (GTK_ALERT_DIALOG (source), result, NULL) == 0)
+    lk_app_model_retry_noaa (model);
+}
+
 static void
 lk_window_show_open_error (LkWindow *self)
 {
   g_autofree char *message = NULL;
+  gboolean retry = FALSE;
+  gboolean noaa;
 
   g_object_get (self->model, "open-error", &message, NULL);
   if (message == NULL)
     return;
+  noaa = lk_app_model_noaa_alert (self->model, &retry);
 
+  /* Setup shows the end of its download in the Preparing step. */
+  if (!noaa || !lk_first_run_page_showing (self->first_run))
     {
       GtkAlertDialog *dialog = gtk_alert_dialog_new ("Couldn't open chart");
       gtk_alert_dialog_set_detail (dialog, message);
-      gtk_alert_dialog_show (dialog, GTK_WINDOW (self->window));
+      if (retry)
+        {
+          static const char *const buttons[] = { "Retry", "OK", NULL };
+
+          gtk_alert_dialog_set_buttons (dialog, buttons);
+          gtk_alert_dialog_set_cancel_button (dialog, 1);
+          gtk_alert_dialog_set_default_button (dialog, 0);
+          gtk_alert_dialog_choose (dialog, GTK_WINDOW (self->window), NULL,
+                                   lk_window_open_error_chosen,
+                                   g_object_ref (self->model));
+        }
+      else
+        gtk_alert_dialog_show (dialog, GTK_WINDOW (self->window));
       g_object_unref (dialog);
     }
 

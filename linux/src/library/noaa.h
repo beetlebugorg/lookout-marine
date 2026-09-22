@@ -79,6 +79,10 @@ char    *lk_noaa_picked_ids (LkNoaa *self);
  * service's wake, and as the pieces of a transfer arrive. */
 const lookout_noaa_state *lk_noaa_state (LkNoaa *self);
 
+/* Read the state when lookout_noaa_svc_changed returns 1, and emit ::changed.
+ * The wake calls this. A test that installs its own fetcher calls it too. */
+void lk_noaa_sync (LkNoaa *self);
+
 /* Read NOAA's product catalog. The result arrives through ::changed. */
 void lk_noaa_refresh (LkNoaa *self);
 
@@ -155,9 +159,10 @@ char *lk_noaa_cost_words (guint32 cells, guint64 bytes, guint32 held, guint64 he
  * app downloaded. NULL forgets the list. */
 void lk_noaa_note_installed (LkNoaa *self, const char *const *names);
 
-/* Download the picked regions into `dest_dir`. `again` fetches the cells
- * already held as well. Does nothing with an empty pick. */
-void lk_noaa_download (LkNoaa *self, const char *dest_dir, gboolean again);
+/* Download `region_ids`, a comma separated list, into `dest_dir`. `again`
+ * fetches the cells already held as well. An empty list orders no download. */
+void lk_noaa_download (LkNoaa *self, const char *region_ids, const char *dest_dir,
+                       gboolean again);
 
 /* Stop the download that is running. The cells already written stay. */
 void lk_noaa_cancel (LkNoaa *self);

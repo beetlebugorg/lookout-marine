@@ -238,12 +238,14 @@ lk_noaa_coverage (LkNoaa *self, const char *id, guint *out_n)
   return (const LkNoaaBox *) boxes->data;
 }
 
-/* Read the state when the service reports a change, and emit ::changed. */
-static void
+void
 lk_noaa_sync (LkNoaa *self)
 {
-  gboolean had_catalog = self->state.have_catalog;
+  gboolean had_catalog;
 
+  g_return_if_fail (LK_IS_NOAA (self));
+
+  had_catalog = self->state.have_catalog;
   if (self->service == NULL || !lookout_noaa_svc_changed (self->service))
     return;
   lookout_noaa_svc_poll (self->service, &self->state);
@@ -586,42 +588,37 @@ lk_noaa_adopt_downloaded (LkNoaa *self)
   return TRUE;
 }
 
-/* Add the pick to what this device has downloaded. */
+/* Add `region_ids` to what this device has downloaded. */
 static void
-lk_noaa_note_downloaded (LkNoaa *self)
+lk_noaa_note_downloaded (const char *region_ids)
 {
   g_auto (GStrv) was = lk_store_load_noaa_regions ();
+  g_auto (GStrv) ids = g_strsplit (region_ids, ",", -1);
   g_autoptr (GHashTable) seen = g_hash_table_new (g_str_hash, g_str_equal);
   g_autoptr (GPtrArray) now = g_ptr_array_new ();
 
   for (guint i = 0; was != NULL && was[i] != NULL; i++)
     if (g_hash_table_add (seen, was[i]))
       g_ptr_array_add (now, was[i]);
-  for (guint i = 0; i < self->n_regions; i++)
-    {
-      const char *id = self->regions[i].id;
-
-      if (lk_noaa_is_picked (self, id) && g_hash_table_add (seen, (gpointer) id))
-        g_ptr_array_add (now, (gpointer) id);
-    }
+  for (guint i = 0; ids[i] != NULL; i++)
+    if (g_hash_table_add (seen, ids[i]))
+      g_ptr_array_add (now, ids[i]);
   g_ptr_array_add (now, NULL);
   lk_store_save_noaa_regions ((const char *const *) now->pdata);
 }
 
 void
-lk_noaa_download (LkNoaa *self, const char *dest_dir, gboolean again)
+lk_noaa_download (LkNoaa *self, const char *region_ids, const char *dest_dir,
+                  gboolean again)
 {
-  g_autofree char *ids = NULL;
-
   g_return_if_fail (LK_IS_NOAA (self));
   g_return_if_fail (dest_dir != NULL);
 
-  if (g_hash_table_size (self->picked) == 0)
+  if (region_ids == NULL || region_ids[0] == '\0')
     return;
 
-  lk_noaa_note_downloaded (self);
-  ids = lk_noaa_picked_ids (self);
-  lookout_noaa_svc_download (self->service, ids, dest_dir, again ? 1 : 0);
+  lk_noaa_note_downloaded (region_ids);
+  lookout_noaa_svc_download (self->service, region_ids, dest_dir, again ? 1 : 0);
   lk_noaa_sync (self);
 }
 

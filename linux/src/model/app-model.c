@@ -18,6 +18,16 @@ struct _LkAppModel {
    * this model follows to its end, or 0 when it follows none. */
   char              *noaa_dest;
   guint32            noaa_run;
+  /* The last order, which Retry repeats: the regions and `again` of a
+   * download, or an update when `noaa_order_ids` is NULL. */
+  char              *noaa_order_ids;
+  gboolean           noaa_order_again;
+  /* Retry found no catalog. It orders again when the catalog read ends. */
+  gboolean           noaa_retry_waiting;
+  /* The open error reports the end of a NOAA download, and Retry can clear
+   * it when `noaa_alert_retry` is set. */
+  gboolean           noaa_alert;
+  gboolean           noaa_alert_retry;
   /* A download that ended while a scan or a bake was running. The open is
    * refused then, and this is what brings it back. */
   gboolean           noaa_open_held;
@@ -213,6 +223,7 @@ lk_app_model_dispose (GObject *object)
   g_clear_pointer (&self->remove_name, g_free);
   g_clear_pointer (&self->remove_rescan, g_free);
   g_clear_pointer (&self->noaa_dest, g_free);
+  g_clear_pointer (&self->noaa_order_ids, g_free);
   g_clear_pointer (&self->recents, g_strfreev);
   g_clear_pointer (&self->overlay_pin, g_free);
   g_clear_pointer (&self->pick_results, g_ptr_array_unref);
@@ -303,6 +314,10 @@ static void lk_app_model_remove_progress (const LkBakeProgress *progress,
 static void lk_app_model_noaa_note_all (LkAppModel *self);
 static void lk_app_model_prepare_noaa_download (LkAppModel *self);
 static void lk_app_model_count_noaa_outdated (LkAppModel *self);
+static void lk_app_model_raise_error (LkAppModel *self, const char *message,
+                                      gboolean noaa, gboolean retry);
+static void lk_app_model_order_noaa_download (LkAppModel *self, const char *ids,
+                                              gboolean again);
 static void lk_app_model_start_import (LkAppModel *self);
 static void lk_app_model_open_prepared (LkAppModel *self, const char *source,
                                         gboolean pictures);
@@ -448,7 +463,11 @@ lk_app_model_recompose_library (LkAppModel *self)
 }
 
 /* End the followed download when its outcome is no longer running, and
- * prepare what arrived. A stop keeps the charts that arrived before it. */
+ * prepare what arrived. A stop keeps the charts that arrived before it.
+ *
+ * A failure raises the open error, and so does a refusal that a retry can
+ * clear. Setup shows the end in its own step, so the window skips this
+ * alert while setup is showing. */
 static void
 lk_app_model_noaa_follow (LkAppModel *self)
 {
@@ -462,6 +481,49 @@ lk_app_model_noaa_follow (LkAppModel *self)
   if (state->outcome == LOOKOUT_NOAA_FINISHED ||
       (state->outcome == LOOKOUT_NOAA_CANCELLED && state->done > 0))
     lk_app_model_prepare_noaa_download (self);
+  else if (state->outcome == LOOKOUT_NOAA_FAILED ||
+           (state->outcome == LOOKOUT_NOAA_REFUSED && state->retry))
+    lk_app_model_raise_error (self,
+                              state->error[0] != '\0'
+                                  ? state->error
+                                  : "The download stopped before any chart arrived.",
+                              TRUE, state->retry != 0);
+}
+
+/* Order the last download or update again. */
+static void
+lk_app_model_noaa_reorder (LkAppModel *self)
+{
+  g_autofree char *ids = g_strdup (self->noaa_order_ids);
+
+  if (ids != NULL)
+    lk_app_model_order_noaa_download (self, ids, self->noaa_order_again);
+  else
+    lk_app_model_download_noaa_updates (self);
+}
+
+void
+lk_app_model_retry_noaa (LkAppModel *self)
+{
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+
+  if (lk_noaa_state (self->noaa)->have_catalog)
+    {
+      lk_app_model_noaa_reorder (self);
+      return;
+    }
+  self->noaa_retry_waiting = TRUE;
+  lk_noaa_refresh (self->noaa);
+}
+
+gboolean
+lk_app_model_noaa_alert (LkAppModel *self, gboolean *out_retry)
+{
+  g_return_val_if_fail (LK_IS_APP_MODEL (self), FALSE);
+
+  if (out_retry != NULL)
+    *out_retry = self->noaa_alert && self->noaa_alert_retry;
+  return self->noaa_alert;
 }
 
 /* Follow the download or update just ordered. `before` is the `run` read
@@ -483,10 +545,17 @@ static void
 lk_app_model_noaa_changed (LkNoaa *noaa, gpointer user_data)
 {
   LkAppModel *self = user_data;
+  const lookout_noaa_state *state = lk_noaa_state (noaa);
 
   /* A check waiting on the catalog it counts against. */
-  if (self->noaa_checking && lk_noaa_state (noaa)->have_catalog)
+  if (self->noaa_checking && state->have_catalog)
     lk_app_model_count_noaa_outdated (self);
+  if (self->noaa_retry_waiting &&
+      (state->have_catalog || state->phase != LOOKOUT_NOAA_READING))
+    {
+      self->noaa_retry_waiting = FALSE;
+      lk_app_model_noaa_reorder (self);
+    }
   lk_app_model_noaa_follow (self);
 }
 
@@ -619,10 +688,19 @@ lk_app_model_noaa_note_all (LkAppModel *self)
 void
 lk_app_model_start_noaa_download (LkAppModel *self, gboolean again)
 {
-  g_autofree char *dest = NULL;
-  guint32 before;
+  g_autofree char *ids = NULL;
 
   g_return_if_fail (LK_IS_APP_MODEL (self));
+
+  ids = lk_noaa_picked_ids (self->noaa);
+  lk_app_model_order_noaa_download (self, ids, again);
+}
+
+static void
+lk_app_model_order_noaa_download (LkAppModel *self, const char *ids, gboolean again)
+{
+  g_autofree char *dest = NULL;
+  guint32 before;
 
   dest = lk_noaa_download_dir ();
   if (g_mkdir_with_parents (dest, 0700) != 0)
@@ -635,8 +713,11 @@ lk_app_model_start_noaa_download (LkAppModel *self, gboolean again)
    * partly hold fetches the rest of it. */
   lk_app_model_noaa_note_all (self);
 
+  g_free (self->noaa_order_ids);
+  self->noaa_order_ids = g_strdup (ids);
+  self->noaa_order_again = again;
   before = lk_noaa_state (self->noaa)->run;
-  lk_noaa_download (self->noaa, dest, again);
+  lk_noaa_download (self->noaa, ids, dest, again);
   lk_app_model_noaa_ordered (self, dest, before);
 }
 
@@ -1069,6 +1150,7 @@ lk_app_model_download_noaa_updates (LkAppModel *self)
       installed[i].update = one->update;
     }
 
+  g_clear_pointer (&self->noaa_order_ids, g_free);
   before = lk_noaa_state (self->noaa)->run;
   lk_noaa_update (self->noaa, installed, have->len, dest);
   lk_app_model_noaa_ordered (self, dest, before);
@@ -1849,6 +1931,15 @@ lk_app_model_set_open_error (LkAppModel *self, const char *message)
 {
   g_return_if_fail (LK_IS_APP_MODEL (self));
 
+  lk_app_model_raise_error (self, message, FALSE, FALSE);
+}
+
+static void
+lk_app_model_raise_error (LkAppModel *self, const char *message, gboolean noaa,
+                          gboolean retry)
+{
+  self->noaa_alert = noaa;
+  self->noaa_alert_retry = retry;
   if (g_strcmp0 (self->open_error, message) == 0)
     return;
   g_free (self->open_error);

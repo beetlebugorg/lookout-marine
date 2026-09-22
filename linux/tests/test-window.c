@@ -11,6 +11,7 @@
 #include "model/app-model.h"
 #include "model/mariner.h"
 #include "model/store.h"
+#include "noaa-fixture.h"
 #include "pick-fixture.h"
 #include "ui/firstrun/private.h"
 #include "ui/window.h"
@@ -301,28 +302,43 @@ test_an_import_with_no_chart_can_go_back (void)
   g_assert_false (lk_first_run_import_stalled (&flow));
 }
 
-/* A download that failed ends the import, and Back leaves the step. */
+/* A download that failed ends the import, and Back leaves the step. The
+ * only transfer fails on the network, so the outcome is FAILED. */
 static void
 test_a_failed_download_can_go_back (void)
 {
   g_autoptr (LkFirstRun) run = lk_first_run_new ();
   LkFirstRunFlow flow = { .model = model, .flow = run };
   LkNoaa *noaa = lk_app_model_get_noaa (model);
+  lookout_noaa *service = lk_noaa_service (noaa);
+  g_autofree char *cached = lk_fixture_catalog_path ();
+  LkFakeFetch fake = { 0 };
 
   g_setenv ("LOOKOUT_FIRST_RUN", "importing", TRUE);
   lk_first_run_begin (run);
   g_unsetenv ("LOOKOUT_FIRST_RUN");
 
-  /* With no fetcher the core refuses the order, and the outcome is FAILED. */
-  lookout_noaa_svc_set_http_provider (lk_noaa_service (noaa), NULL, NULL, NULL, NULL);
+  /* Clearing the fetcher ends a catalog read that an earlier step started. */
+  lk_fixture_cache_catalog ();
+  lookout_noaa_svc_set_http_provider (service, NULL, NULL, NULL, NULL);
+  lookout_noaa_svc_set_http_provider (service, lk_fake_get, lk_fake_cancel, NULL, &fake);
+  lk_noaa_refresh (noaa);
   lk_noaa_toggle (noaa, "d5");
   lk_app_model_start_noaa_download (model, FALSE);
   lk_noaa_clear_picks (noaa);
+  g_assert_cmpint (lk_noaa_state (noaa)->outcome, ==, LOOKOUT_NOAA_RUNNING);
+  g_assert_false (lk_first_run_import_stalled (&flow));
+
+  lookout_noaa_svc_http_respond_chunk (service, fake.last, NULL, 0, 0, 1);
+  lk_noaa_sync (noaa);
   g_assert_cmpint (lk_noaa_state (noaa)->outcome, ==, LOOKOUT_NOAA_FAILED);
 
   g_assert_true (lk_first_run_import_stalled (&flow));
   lk_first_run_back (run);
   g_assert_cmpint (lk_first_run_step (run), ==, LK_FIRST_RUN_COVERAGE);
+
+  lookout_noaa_svc_set_http_provider (service, NULL, NULL, NULL, NULL);
+  g_assert_cmpint (g_remove (cached), ==, 0);
 }
 
 /* The page fill stands while there is no chart handle. A chart of no charts
