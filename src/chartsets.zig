@@ -129,19 +129,17 @@ pub const Sets = struct {
     running: bool = false,
     stopping: bool = false,
 
-    /// What a read hands out. Reset by the next call that changes the list.
+    /// What a read hands out. Reset only by a call that changes the list. A
+    /// shell reads `files` inside a loop over `all`, and a scan can land
+    /// between the two reads.
     reads: std.heap.ArenaAllocator,
-    /// The arenas a landing scan replaced, and whether `reads` holds a
-    /// generation the caller has finished with.
+    /// The arenas a landing scan replaced.
     ///
-    /// A read hands out pointers into a row's files_arena and an array out of
-    /// `reads`. `land` runs on the scan worker, so freeing either there takes
-    /// the list out from under a shell walking it: a background scan landing
-    /// mid-loop is not a call the caller made, and the header promises a
-    /// borrow until the caller's next one. Both are held here instead and
-    /// freed at the head of the next read.
+    /// A read hands out pointers into a row's files_arena. `land` runs on the
+    /// scan worker, so freeing it there takes the list out from under a shell
+    /// walking it. It is held here instead and freed at the head of the next
+    /// read.
     retired: std.ArrayList(std.heap.ArenaAllocator) = .empty,
-    reads_stale: bool = false,
 
     const group = settings.group_chartsets;
     const paths_key = "paths";
@@ -251,10 +249,6 @@ pub const Sets = struct {
     fn releaseRetired(self: *Sets) void {
         for (self.retired.items) |*a| a.deinit();
         self.retired.clearRetainingCapacity();
-        if (self.reads_stale) {
-            _ = self.reads.reset(.retain_capacity);
-            self.reads_stale = false;
-        }
     }
 
     pub fn files(self: *Sets, path: []const u8) []const *const library.File {
@@ -816,7 +810,6 @@ pub const Sets = struct {
                 } else |_| {}
             }
             self.dirty = true;
-            self.reads_stale = true;
             return;
         }
         // The row went while the scan ran.
@@ -1417,17 +1410,46 @@ test "a landing scan retires the file arena rather than freeing it" {
     // arena still holds them.
     s.mu.lock();
     const retired = s.retired.items.len;
-    const stale = s.reads_stale;
     s.mu.unlock();
     try t.expectEqual(@as(usize, 1), retired);
-    try t.expect(stale);
 
     // The caller coming back is what releases the generation before it.
     try t.expect(s.files(dir).len > 0);
     s.mu.lock();
     const after = s.retired.items.len;
-    const stale_after = s.reads_stale;
     s.mu.unlock();
     try t.expectEqual(@as(usize, 0), after);
-    try t.expect(!stale_after);
+}
+
+test "the list stays valid across a file read after a scan lands" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const a = try f.folder("Set A");
+    defer t.allocator.free(a);
+    const b = try f.folder("Set B");
+    defer t.allocator.free(b);
+
+    const s = try f.open();
+    defer s.close();
+    try t.expect(s.add(a));
+    try t.expect(s.add(b));
+    settle(s);
+
+    // The rescan is asked for before the list is read, so the only thing
+    // between the read and the file reads below is the scan landing.
+    try t.expect(s.rescan(a));
+    const rows = s.all();
+    try t.expectEqual(@as(usize, 2), rows.len);
+    const want = [2]Set{ rows[0].*, rows[1].* };
+    settle(s);
+
+    // A shell reads each set's files inside its loop over the list.
+    for (rows) |r| _ = s.files(std.mem.span(r.path));
+    for (rows, want) |r, w| {
+        try t.expectEqual(w.path, r.path);
+        try t.expectEqual(w.title, r.title);
+        try t.expectEqual(w.charts, r.charts);
+        try t.expectEqual(w.band_hi, r.band_hi);
+    }
+    try t.expectEqualStrings(b, std.mem.span(rows[1].path));
 }
