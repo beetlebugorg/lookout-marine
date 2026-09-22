@@ -377,16 +377,17 @@ fun ChartScreen(
     // A NOAA download, then the bake on what it left. One watcher for both the
     // places a download starts, setup and the Charts pane, so one bake starts
     // on the download directory. That directory is the managed set.
+    // The run this screen saw start. Only its end starts a bake.
     val noaa = controller.noaaController
-    var fetching by remember { mutableStateOf(false) }
-    LaunchedEffect(noaa.phase) {
-        if (noaa.phase == NoaaController.Phase.DOWNLOADING) {
-            fetching = true
+    var watching by remember { mutableStateOf(0L) }
+    LaunchedEffect(noaa.run, noaa.outcome) {
+        if (noaa.outcome == NoaaController.OUTCOME_RUNNING) {
+            watching = noaa.run
             return@LaunchedEffect
         }
-        if (!fetching) return@LaunchedEffect
-        fetching = false
-        if (noaa.done == 0) return@LaunchedEffect
+        if (watching == 0L || watching != noaa.run) return@LaunchedEffect
+        watching = 0L
+        if (noaa.outcome != NoaaController.OUTCOME_FINISHED) return@LaunchedEffect
         controller.firstRun.sawBake = true
         scope.launch { charts.add(charts.noaaDir, managed = true) }
     }

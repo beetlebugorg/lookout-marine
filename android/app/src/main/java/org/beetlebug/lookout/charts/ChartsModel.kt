@@ -93,6 +93,7 @@ class ChartsModel(private val appContext: Context) {
         refreshAccess()
         ChartBake.sweepTrash(appContext)
         ChartSets.open(ChartBake.chartsRoot(appContext).absolutePath)
+        NoaaService.open()
         pullSets()
         seedFromTheChosenLibrary()
     }

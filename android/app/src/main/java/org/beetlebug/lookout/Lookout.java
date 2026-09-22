@@ -993,37 +993,49 @@ public final class Lookout implements AutoCloseable {
     /** The region table: id, name, blurb and "west,south,east,north" for each,
      *  four strings per region. Static for the life of the process. */
     public static String[] noaaRegions()         { return nNoaaRegions(); }
+    /** Open the NOAA service over the store and the chart sets. It outlives
+     *  every chart handle, so a download runs while charts reopen. 0 when it
+     *  could not be allocated. */
+    public static long noaaOpen(long store, long sets)  { return nNoaaOpen(store, sets); }
+    public static void noaaClose(long n)                { nNoaaClose(n); }
+    /** Install or remove the service's fetcher. Removing it releases the
+     *  thread waiting in noaaFetchWait. */
+    public static void noaaFetch(long n, boolean on)    { nNoaaFetch(n, on); }
+    /** Block until the service has requests, cancels or a wake. counts[0] is
+     *  how many requests, counts[1] how many cancels. Returns 1 for a wake, 2
+     *  once the fetcher is removed, else 0. */
+    public static int noaaFetchWait(long[] ids, int[] allow, String[] urls, long[] cancelled, int[] counts) {
+        return nNoaaFetchWait(ids, allow, urls, cancelled, counts);
+    }
+    /** One piece of a response, from any thread; buf is read up to len. */
+    public static void noaaRespondChunk(long n, long id, byte[] buf, int len, int status, boolean done) {
+        nNoaaRespondChunk(n, id, buf, len, status, done);
+    }
+    /** Adopt what arrived. True when the state changed since the last call. */
+    public static boolean noaaChanged(long n)           { return nNoaaSvcChanged(n); }
+    /** out[0] phase, [1] checked at, [2] catalog cells, [3] total, [4] done,
+     *  [5] failed, [6] bytes total, [7] bytes done, [8] outcome, [9] run.
+     *  Returns whether a catalog is loaded. */
+    public static boolean noaaPoll(long n, long[] out)  { return nNoaaSvcPoll(n, out); }
+    /** The catalog date and the error, each possibly empty. */
+    public static String[] noaaText(long n)             { return nNoaaSvcText(n); }
+    public static void noaaRefresh(long n)              { nNoaaSvcRefresh(n); }
+    public static void noaaCancel(long n)               { nNoaaSvcCancel(n); }
+    /** out[0] cells, [1] bytes, [2] cells already held, [3] what fetching
+     *  those again costs. */
+    public static boolean noaaCost(long n, String regionIds, long[] out) {
+        return nNoaaSvcCost(n, regionIds, out);
+    }
+    public static void noaaHave(long n, String[] names) { nNoaaSvcHave(n, names); }
+    public static void noaaDownload(long n, String regionIds, String destDir, boolean again) {
+        nNoaaSvcDownload(n, regionIds, destDir, again);
+    }
     /** The boxes of a region's coverage, flattened as west, south, east,
      *  north. Returns how many boxes there are, which may be more than `out`
      *  held. */
-    public int noaaRegionCoverage(String regionId, double[] out) {
-        return h == 0 ? 0 : nNoaaRegionCoverage(h, regionId, out);
+    public static int noaaRegionCoverage(long n, String regionId, double[] out) {
+        return nNoaaSvcRegionCoverage(n, regionId, out);
     }
-    /** Read NOAA's catalog. Non-blocking; watch nNoaaPoll. */
-    public void noaaRefresh()                    { if (h != 0) nNoaaRefresh(h); }
-    /** Where the catalog and the download have got to. out[0] phase, [1]
-     *  checked at, [2] catalog cells, [3] total, [4] done, [5] failed,
-     *  [6] bytes total, [7] bytes done. Returns whether a catalog is loaded. */
-    public boolean noaaPoll(long[] out)          { return h != 0 && nNoaaPoll(h, out); }
-    /** NOAA's validity date for the loaded catalog, or an empty string. */
-    public String noaaDate()                     { return h == 0 ? "" : nNoaaDate(h); }
-    /** What went wrong, or an empty string. */
-    public String noaaError()                    { return h == 0 ? "" : nNoaaError(h); }
-    /** What picking these regions costs: out[0] cells, [1] bytes, [2] cells
-     *  already held, [3] what fetching those again would cost. */
-    public boolean noaaCost(String regionIds, long[] out) {
-        return h != 0 && nNoaaCost(h, regionIds, out);
-    }
-    /** The cells this device holds, as names without an extension. A pick then
-     *  prices what is missing rather than all of it. */
-    public void noaaHave(String[] names)         { if (h != 0) nNoaaHave(h, names); }
-    /** Fetch the cells covering these regions into destDir, one zip each, so
-     *  the whole directory bakes in one order. */
-    public void noaaDownload(String regionIds, String destDir, boolean again) {
-        if (h != 0) nNoaaDownload(h, regionIds, destDir, again);
-    }
-    /** Stop the download. What arrived stays. */
-    public void noaaCancel()                     { if (h != 0) nNoaaCancel(h); }
     /** A live grant flip; a revoked call answers -1 to the running plugin. */
     public boolean pluginGrantSet(String id, String cap, boolean on) {
         return h != 0 && nPluginGrantSet(h, id, cap, on);
@@ -1053,15 +1065,20 @@ public final class Lookout implements AutoCloseable {
     private static native boolean nSnapshotRgba(long h, byte[] dst);
     private static native boolean nS52Color(String token, int scheme, float[] out);
     private static native String[] nNoaaRegions();
-    private static native int nNoaaRegionCoverage(long h, String regionId, double[] out);
-    private static native void nNoaaRefresh(long h);
-    private static native boolean nNoaaPoll(long h, long[] out);
-    private static native String nNoaaDate(long h);
-    private static native String nNoaaError(long h);
-    private static native boolean nNoaaCost(long h, String regionIds, long[] out);
-    private static native void nNoaaHave(long h, String[] names);
-    private static native void nNoaaDownload(long h, String regionIds, String destDir, boolean again);
-    private static native void nNoaaCancel(long h);
+    private static native long nNoaaOpen(long store, long sets);
+    private static native void nNoaaClose(long n);
+    private static native void nNoaaFetch(long n, boolean on);
+    private static native int nNoaaFetchWait(long[] ids, int[] allow, String[] urls, long[] cancelled, int[] counts);
+    private static native void nNoaaRespondChunk(long n, long id, byte[] buf, int len, int status, boolean done);
+    private static native boolean nNoaaSvcChanged(long n);
+    private static native boolean nNoaaSvcPoll(long n, long[] out);
+    private static native String[] nNoaaSvcText(long n);
+    private static native void nNoaaSvcRefresh(long n);
+    private static native void nNoaaSvcCancel(long n);
+    private static native boolean nNoaaSvcCost(long n, String regionIds, long[] out);
+    private static native void nNoaaSvcHave(long n, String[] names);
+    private static native void nNoaaSvcDownload(long n, String regionIds, String destDir, boolean again);
+    private static native int nNoaaSvcRegionCoverage(long n, String regionId, double[] out);
     private static native String[] nTables(long h);
     private static native String[] nTableRows(long h, String id, String key, String sortKey, boolean ascending);
     private static native boolean nPluginTableOpen(long h, String id, String key, boolean open);

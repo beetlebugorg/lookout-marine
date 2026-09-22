@@ -52,7 +52,9 @@ object ChartSets {
         val name: String get() = path.substringAfterLast('/').ifEmpty { path }
     }
 
-    @Volatile private var handle: Long = 0
+    /** The core's list, for lookout_noaa_open. 0 until [open]. */
+    @Volatile var handle: Long = 0
+        private set
 
     /**
      * Open the list off the shell's store and start the background scans.

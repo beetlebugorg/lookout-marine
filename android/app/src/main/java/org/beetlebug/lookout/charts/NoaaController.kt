@@ -6,20 +6,26 @@ import org.beetlebug.lookout.engine.EngineAccess
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import java.util.concurrent.Executors
 
 /**
  * NOAA's charts: the catalog, the regions and the download.
  *
  * THE CORE OWNS ALL OF THIS. It reads NOAA's product catalog, turns a pick
- * into the cells that cover that water, and fetches them through the shell's
- * own fetcher. This holds what the screen reads and asks for changes.
+ * into the cells that cover that water, and fetches them through
+ * [NoaaFetch]. This holds what the screen reads and passes on what the
+ * mariner does.
  *
- * Every call into the engine goes through the render thread, and a call that
- * wants an answer waits for the next [poll] rather than reaching across. That
- * is why picking a region does not price it here: it marks the price stale and
- * the next tick works it out with a live handle.
+ * The service has a handle of its own, [NoaaService], so no call here waits
+ * for a chart handle. Every call runs on one worker thread, because adopting
+ * a catalog parses a few megabytes of XML. After each call, and on each wake
+ * from the fetcher, the worker reads the state only when the core reports it
+ * changed.
  */
-class NoaaController(private val access: EngineAccess) {
+class NoaaController(
+    private val access: EngineAccess,
+    private val noaa: Long = NoaaService.handle,
+) {
 
     /** One region a mariner picks from: a Coast Guard district. */
     data class Region(
@@ -63,6 +69,12 @@ class NoaaController(private val access: EngineAccess) {
         private set
     var bytesDone by mutableStateOf(0L)
         private set
+    /** One of the OUTCOME_ values, for the download numbered [run]. */
+    var outcome by mutableStateOf(OUTCOME_NONE)
+        private set
+    /** Counts the downloads ordered, from 1. 0 before the first. */
+    var run by mutableStateOf(0L)
+        private set
 
     /** What the pick costs. */
     var cells by mutableStateOf(0)
@@ -87,28 +99,37 @@ class NoaaController(private val access: EngineAccess) {
      *  fetches them again, which is how a mariner repairs a set. */
     val allInstalled: Boolean get() = held > 0 && cells == 0
 
-    // What the next tick has to do with a live handle.
-    @Volatile private var wantRefresh = false
-    @Volatile private var wantCost = false
-    @Volatile private var wantCoverage = false
-    @Volatile private var wantHave: Array<String>? = null
-    @Volatile private var order: Triple<String, String, Boolean>? = null
-    @Volatile private var wantCancel = false
-
-    private val pollBuf = LongArray(8)
+    private val worker = Executors.newSingleThreadExecutor { Thread(it, "lookout-noaa") }
+    private val pollBuf = LongArray(10)
     private val costBuf = LongArray(4)
+    /** Whether the last state read had a catalog. Worker only. */
+    private var hadCatalog = false
 
-    /** Read NOAA's catalog. The result arrives through [poll]. */
+    init {
+        if (noaa != 0L) {
+            NoaaService.onWake = { worker.execute { pull() } }
+            worker.execute { pull(force = true) }
+        }
+    }
+
+    /** Run [block] on the worker, then read what changed. */
+    private fun call(block: () -> Unit) {
+        if (noaa == 0L) return
+        worker.execute {
+            block()
+            pull()
+        }
+    }
+
+    /** Read NOAA's catalog. The result arrives through the next change. */
     fun refresh() {
         error = null
-        wantRefresh = true
-        access.wake()
+        call { Lookout.noaaRefresh(noaa) }
     }
 
     fun toggle(id: String) {
         picked = if (picked.contains(id)) picked - id else picked + id
-        wantCost = true
-        access.wake()
+        call { readCost() }
     }
 
     /** The picked ids as the core reads them. */
@@ -119,9 +140,11 @@ class NoaaController(private val access: EngineAccess) {
      * missing from the water rather than all of it.
      */
     fun noteInstalled(names: List<String>) {
-        wantHave = names.toTypedArray()
-        wantCost = true
-        access.wake()
+        val list = names.toTypedArray()
+        call {
+            Lookout.noaaHave(noaa, list)
+            readCost()
+        }
     }
 
     /**
@@ -132,41 +155,23 @@ class NoaaController(private val access: EngineAccess) {
         val ids = pickedIds
         if (ids.isEmpty()) return
         error = null
-        order = Triple(ids, destDir, again)
-        access.wake()
+        call { Lookout.noaaDownload(noaa, ids, destDir, again) }
     }
 
     /** Stop the download. What arrived stays. */
     fun cancel() {
-        wantCancel = true
-        access.wake()
+        call { Lookout.noaaCancel(noaa) }
     }
 
     /**
-     * Take the core's state, and run whatever the screen asked for while no
-     * handle was to hand. RENDER THREAD, off the readout tick.
+     * Take the core's state when it changed, and publish it. WORKER THREAD.
+     * [force] reads it regardless, for the first read.
      */
-    fun poll(l: Lookout) {
-        wantHave?.let { names ->
-            wantHave = null
-            l.noaaHave(names)
-        }
-        if (wantCancel) {
-            wantCancel = false
-            l.noaaCancel()
-        }
-        order?.let { (ids, dest, again) ->
-            order = null
-            l.noaaDownload(ids, dest, again)
-        }
-        if (wantRefresh) {
-            wantRefresh = false
-            l.noaaRefresh()
-        }
-
-        val have = l.noaaPoll(pollBuf)
-        val gained = have && !haveCatalog
-        if (gained) wantCoverage = true
+    private fun pull(force: Boolean = false) {
+        if (!Lookout.noaaChanged(noaa) && !force) return
+        val have = Lookout.noaaPoll(noaa, pollBuf)
+        val gained = have && !hadCatalog
+        hadCatalog = have
 
         val nextPhase = when (pollBuf[0].toInt()) {
             1 -> Phase.READING_CATALOG
@@ -174,21 +179,20 @@ class NoaaController(private val access: EngineAccess) {
             3 -> Phase.DOWNLOADING
             else -> Phase.IDLE
         }
-        val nextDate = if (have) l.noaaDate() else ""
-        val nextError = l.noaaError().ifEmpty { null }
+        val text = Lookout.noaaText(noaa)
+        val nextDate = if (have) text.getOrNull(0) ?: "" else ""
+        val nextError = text.getOrNull(1)?.ifEmpty { null }
         val nCells = pollBuf[2].toInt()
         val nTotal = pollBuf[3].toInt()
         val nDone = pollBuf[4].toInt()
         val nFailed = pollBuf[5].toInt()
         val nBytesTotal = pollBuf[6]
         val nBytesDone = pollBuf[7]
+        val nOutcome = pollBuf[8].toInt()
+        val nRun = pollBuf[9]
 
-        if (gained || wantCost) {
-            wantCost = false
-            readCost(l)
-        }
-        val boxes = if (wantCoverage && have) readCoverage(l) else null
-        if (boxes != null) wantCoverage = false
+        if (gained) readCost()
+        val boxes = if (gained) readCoverage() else null
 
         access.onMain {
             phase = nextPhase
@@ -201,14 +205,16 @@ class NoaaController(private val access: EngineAccess) {
             failed = nFailed
             bytesTotal = nBytesTotal
             bytesDone = nBytesDone
+            outcome = nOutcome
+            run = nRun
             if (boxes != null) coverage = boxes
         }
     }
 
-    /** RENDER THREAD. Publishes through [access]. */
-    private fun readCost(l: Lookout) {
+    /** WORKER THREAD. Publishes through [access]. */
+    private fun readCost() {
         val ids = pickedIds
-        if (ids.isEmpty() || !l.noaaCost(ids, costBuf)) {
+        if (ids.isEmpty() || !Lookout.noaaCost(noaa, ids, costBuf)) {
             access.onMain {
                 cells = 0; bytes = 0; held = 0; heldBytes = 0
             }
@@ -225,16 +231,16 @@ class NoaaController(private val access: EngineAccess) {
 
     /**
      * Every region's coverage. The catalog holds it and it does not change
-     * while the catalog is loaded, so this runs once. RENDER THREAD.
+     * while the catalog is loaded, so this runs once. WORKER THREAD.
      */
-    private fun readCoverage(l: Lookout): Map<String, List<Box>> {
+    private fun readCoverage(): Map<String, List<Box>> {
         val out = HashMap<String, List<Box>>(regions.size)
         var buf = DoubleArray(256 * 4)
         for (r in regions) {
-            var n = l.noaaRegionCoverage(r.id, buf)
+            var n = Lookout.noaaRegionCoverage(noaa, r.id, buf)
             if (n * 4 > buf.size) {
                 buf = DoubleArray(n * 4)
-                n = l.noaaRegionCoverage(r.id, buf)
+                n = Lookout.noaaRegionCoverage(noaa, r.id, buf)
             }
             val boxes = ArrayList<Box>(n)
             for (i in 0 until minOf(n, buf.size / 4)) {
@@ -265,6 +271,14 @@ class NoaaController(private val access: EngineAccess) {
     }
 
     companion object {
+        /** [outcome]: how the download numbered [run] ended. */
+        const val OUTCOME_NONE = 0
+        const val OUTCOME_RUNNING = 1
+        const val OUTCOME_FINISHED = 2
+        const val OUTCOME_EMPTY = 3
+        const val OUTCOME_CANCELLED = 4
+        const val OUTCOME_FAILED = 5
+
         /**
          * A size a mariner reads before agreeing to download it.
          *

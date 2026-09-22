@@ -386,10 +386,6 @@ class ChartController(private val appContext: Context) {
         // landing answer raises needs-redraw, so a resolve keeps this ticking
         // until it is done.
         chartLinkController.poll(l)
-        // NOAA's catalog and whatever the screen asked for while no handle was
-        // to hand. Quiet until something asks: a poll with nothing outstanding
-        // is one call that reads a published copy.
-        noaaController.poll(l)
         if (r == lastPushed) return
         lastPushed = r
         access.onMain {
