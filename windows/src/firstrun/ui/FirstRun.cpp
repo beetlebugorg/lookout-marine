@@ -699,13 +699,17 @@ namespace winrt::LookoutMarine::implementation
         lookout_noaa_svc_poll(noaa, &noaa_state);
         lookout_noaa_state const &st = noaa_state;
 
-        // Retry of an order refused with no catalog: the catalog read it
-        // started has finished with one.
-        if (noaa_retry_waiting && st.have_catalog)
+        // Retry of an order refused with no catalog, once the catalog read it
+        // started has ended. A read that ended with no catalog clears the
+        // retry, so a later read does not repeat the order.
+        if (noaa_retry_waiting && st.phase != LOOKOUT_NOAA_READING)
         {
             noaa_retry_waiting = false;
-            NoaaDownload(noaa_watch_regions, noaa_watch_again);
-            return;
+            if (st.have_catalog)
+            {
+                NoaaDownload(noaa_watch_regions, noaa_watch_again);
+                return;
+            }
         }
 
         // The end of the download being followed. An order that fetched no

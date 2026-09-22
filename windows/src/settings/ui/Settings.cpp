@@ -998,11 +998,7 @@ namespace winrt::LookoutMarine::implementation
         s += bake_job != nullptr ? "|baking" : "|idle";
         // The removal line comes and goes with the job that feeds it.
         s += removal_job != nullptr ? "|removing" : "|kept";
-        if (lk_controller_is_open(controller))
-        {
-            lookout_noaa_state const &nst = noaa_state;
-            s += nst.phase == 3 ? "|downloading" : "|quiet";
-        }
+        s += noaa_state.phase == LOOKOUT_NOAA_DOWNLOADING ? "|downloading" : "|quiet";
         return s;
     }
 
@@ -2011,43 +2007,39 @@ namespace winrt::LookoutMarine::implementation
             // ---- Downloading from NOAA, while a transfer runs -----------------
             // Where it was started. This window stands over the chart, so a
             // transfer begun here otherwise runs behind it.
-            if (lk_controller_is_open(controller))
+            if (noaa_state.phase == LOOKOUT_NOAA_DOWNLOADING)
             {
-                lookout_noaa_state const &nst = noaa_state;
-                if (nst.phase == 3)
-                {
-                    header(L"Downloading from NOAA");
-                    Controls::Grid line;
-                    Controls::ColumnDefinition n0, n1;
-                    n0.Width({ 1, GridUnitType::Star });
-                    n1.Width({ 0, GridUnitType::Auto });
-                    line.ColumnDefinitions().ReplaceAll({ n0, n1 });
+                header(L"Downloading from NOAA");
+                Controls::Grid line;
+                Controls::ColumnDefinition n0, n1;
+                n0.Width({ 1, GridUnitType::Star });
+                n1.Width({ 0, GridUnitType::Auto });
+                line.ColumnDefinitions().ReplaceAll({ n0, n1 });
 
-                    noaa_pane_count = Controls::TextBlock{};
-                    noaa_pane_count.FontSize(12);
-                    noaa_pane_count.VerticalAlignment(VerticalAlignment::Center);
-                    line.Children().Append(noaa_pane_count);
+                noaa_pane_count = Controls::TextBlock{};
+                noaa_pane_count.FontSize(12);
+                noaa_pane_count.VerticalAlignment(VerticalAlignment::Center);
+                line.Children().Append(noaa_pane_count);
 
-                    Controls::Button stop;
-                    stop.Content(winrt::box_value(L"Cancel"));
-                    stop.Click([this](auto &&, auto &&) {
-                        lookout_noaa_svc_cancel(noaa);
-                        BuildSettingsPage();
-                    });
-                    Controls::Grid::SetColumn(stop, 1);
-                    line.Children().Append(stop);
-                    stack.Children().Append(line);
+                Controls::Button stop;
+                stop.Content(winrt::box_value(L"Cancel"));
+                stop.Click([this](auto &&, auto &&) {
+                    lookout_noaa_svc_cancel(noaa);
+                    BuildSettingsPage();
+                });
+                Controls::Grid::SetColumn(stop, 1);
+                line.Children().Append(stop);
+                stack.Children().Append(line);
 
-                    noaa_pane_bar = Controls::ProgressBar{};
-                    noaa_pane_bar.Minimum(0);
-                    noaa_pane_bar.Maximum(1);
-                    noaa_pane_bar.HorizontalAlignment(HorizontalAlignment::Stretch);
-                    noaa_pane_bar.Margin({ 0, 6, 0, 0 });
-                    stack.Children().Append(noaa_pane_bar);
-                    // Fill both from the reading just taken, so the section is
-                    // current on the frame it is built in.
-                    PollNoaaPane();
-                }
+                noaa_pane_bar = Controls::ProgressBar{};
+                noaa_pane_bar.Minimum(0);
+                noaa_pane_bar.Maximum(1);
+                noaa_pane_bar.HorizontalAlignment(HorizontalAlignment::Stretch);
+                noaa_pane_bar.Margin({ 0, 6, 0, 0 });
+                stack.Children().Append(noaa_pane_bar);
+                // Fill both from the reading just taken, so the section is
+                // current on the frame it is built in.
+                PollNoaaPane();
             }
 
             // ---- Preparing charts, while a bake runs --------------------------
@@ -2177,23 +2169,19 @@ namespace winrt::LookoutMarine::implementation
                 // When NOAA's catalog was last read, which is what the prices
                 // in the picker are built from.
                 std::wstring checked;
-                if (lk_controller_is_open(controller))
+                if (noaa_state.checked_at != 0)
                 {
-                    lookout_noaa_state const &nst = noaa_state;
-                    if (nst.checked_at != 0)
+                    std::time_t at = (std::time_t)noaa_state.checked_at;
+                    std::tm when{};
+                    std::tm today{};
+                    std::time_t now = std::time(nullptr);
+                    if (localtime_s(&when, &at) == 0 && localtime_s(&today, &now) == 0)
                     {
-                        std::time_t at = (std::time_t)nst.checked_at;
-                        std::tm when{};
-                        std::tm today{};
-                        std::time_t now = std::time(nullptr);
-                        if (localtime_s(&when, &at) == 0 && localtime_s(&today, &now) == 0)
-                        {
-                            wchar_t buf[64]{};
-                            bool same_day = when.tm_year == today.tm_year &&
-                                            when.tm_yday == today.tm_yday;
-                            std::wcsftime(buf, 64, same_day ? L"%H:%M" : L"%d %b %H:%M", &when);
-                            checked = (same_day ? L"Checked today " : L"Checked ") + std::wstring{ buf };
-                        }
+                        wchar_t buf[64]{};
+                        bool same_day = when.tm_year == today.tm_year &&
+                                        when.tm_yday == today.tm_yday;
+                        std::wcsftime(buf, 64, same_day ? L"%H:%M" : L"%d %b %H:%M", &when);
+                        checked = (same_day ? L"Checked today " : L"Checked ") + std::wstring{ buf };
                     }
                 }
 
