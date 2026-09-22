@@ -47,6 +47,21 @@ namespace lkw
         constexpr uint32_t Accent(bool dark) { return dark ? 0xFF7EA1F5u : kAccent; }
         constexpr uint32_t AccentFill(bool dark) { return dark ? 0x1F7EA1F5u : kAccentFill; }
         constexpr uint32_t Rule(bool dark) { return dark ? 0xFF33414Du : kRule; }
+        /* The hairline a card draws its own edges with: the chrome ink at 20
+         * per cent. LkHairlineBrush in the markup holds the same pair. */
+        constexpr uint32_t Hairline(bool dark) { return dark ? 0x33FFFFFFu : 0x33000000u; }
+        /* A control drawn on a card: its resting fill, the fill under the
+         * pointer and the fill while it is pressed. Chrome.surface in the
+         * reference. */
+        constexpr uint32_t Surface(bool dark) { return dark ? 0xFF16181Cu : 0xFFFFFFFFu; }
+        constexpr uint32_t SurfaceOver(bool dark) { return dark ? 0xFF1E2126u : 0xFFF2F2F2u; }
+        constexpr uint32_t SurfaceDown(bool dark) { return dark ? 0xFF23272Du : 0xFFE9E9E9u; }
+        /* The card a step or a panel stands on, at 95 per cent. LkCardBrush
+         * and the setup fade hold the same pair. */
+        constexpr uint32_t Panel(bool dark) { return dark ? 0xF2121C24u : 0xF2F8F8F8u; }
+        /* A badge over a drawing, at 92 per cent, so the chart shows through
+         * it faintly. */
+        constexpr uint32_t Badge(bool dark) { return dark ? 0xEB202428u : 0xEBF8F8F8u; }
     }
 
     /* Pin a button's four background states, and its border in all of them.

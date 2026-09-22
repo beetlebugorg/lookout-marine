@@ -63,22 +63,17 @@ namespace
         return t;
     }
 
-    // The chrome wears the chart's scheme, which hud/ui/Hud.cpp sets on Root in
-    // one place. FirstRunRender reads it from there each time it builds a step,
-    // so these helpers need no element to ask.
-    bool g_dark = false;
 
     // The accent, from the palette both this file and the settings pane
     // read (lkw::chrome::Accent), which is the LkAccentBrush pair from
     // MainWindow.xaml kept in step with it by hand.
     Windows::UI::Color AccentColor(bool dark) { return lkw::Rgb(lkw::chrome::Accent(dark)); }
 
-    SolidColorBrush AccentBrush() { return SolidColorBrush{ AccentColor(g_dark) }; }
+    SolidColorBrush AccentBrush(bool dark) { return SolidColorBrush{ AccentColor(dark) }; }
 
-    SolidColorBrush HairlineBrush()
+    SolidColorBrush HairlineBrush(bool dark)
     {
-        return SolidColorBrush{ g_dark ? Windows::UI::Color{ 0x33, 0xFF, 0xFF, 0xFF }
-                                       : Windows::UI::Color{ 0x33, 0x00, 0x00, 0x00 } };
+        return SolidColorBrush{ lkw::Rgb(lkw::chrome::Hairline(dark)) };
     }
 
     // A step's title and the one line under it, centered in the card the way
@@ -102,7 +97,8 @@ namespace
     }
 
     // One thing the app does, as a row: the glyph, then what and why.
-    StackPanel Fact(wchar_t const *glyph, std::wstring const &title, std::wstring const &blurb)
+    StackPanel Fact(wchar_t const *glyph, std::wstring const &title, std::wstring const &blurb,
+                    bool dark)
     {
         StackPanel row;
         row.Orientation(Orientation::Horizontal);
@@ -111,7 +107,7 @@ namespace
         FontIcon icon;
         icon.Glyph(glyph);
         icon.FontSize(18);
-        icon.Foreground(AccentBrush());
+        icon.Foreground(AccentBrush(dark));
         icon.VerticalAlignment(VerticalAlignment::Top);
         icon.Margin({ 0, 2, 0, 0 });
         row.Children().Append(icon);
@@ -208,7 +204,7 @@ namespace
     }
 
     // A pill or a segment wearing the pick.
-    void PaintPicked(Button const &b, bool on)
+    void PaintPicked(Button const &b, bool on, bool dark)
     {
         b.BorderThickness({ 1, 1, 1, 1 });
         // A pill keeps one hue through the hover fade. See lkw::ButtonFills:
@@ -216,7 +212,7 @@ namespace
         // theme's own hover fill, and an accent one washes out to near white.
         if (on)
         {
-            uint32_t const fill = lkw::chrome::Accent(g_dark);
+            uint32_t const fill = lkw::chrome::Accent(dark);
             lkw::ButtonFills(b, fill, fill, fill, 0x00000000u);
             b.BorderBrush(SolidColorBrush{ Windows::UI::Colors::Transparent() });
             b.Foreground(SolidColorBrush{ Windows::UI::Colors::White() });
@@ -224,8 +220,8 @@ namespace
         }
         else
         {
-            lkw::FlatFills(b, g_dark, g_dark ? 0x33FFFFFFu : 0x33000000u);
-            b.BorderBrush(HairlineBrush());
+            lkw::FlatFills(b, dark, lkw::chrome::Hairline(dark));
+            b.BorderBrush(HairlineBrush(dark));
             // Back to the theme's own ink rather than a colour of this file's.
             b.ClearValue(Controls::Control::ForegroundProperty());
             b.FontWeight(Windows::UI::Text::FontWeights::Normal());
@@ -245,7 +241,7 @@ namespace
     // while it is in the pick. The reference draws the districts this way in
     // setup and in the settings picker alike.
     Button RegionPill(std::wstring const &name, std::wstring const &blurb,
-                      lkw::RegionHold const &hold, bool on, bool enabled)
+                      lkw::RegionHold const &hold, bool on, bool enabled, bool dark)
     {
         StackPanel row;
         row.Orientation(Orientation::Horizontal);
@@ -294,7 +290,7 @@ namespace
         {
             // The pick stays the accent under the pointer, rather than fading
             // to the theme's near-white hover fill. See lkw::ButtonFills.
-            uint32_t const fill = lkw::chrome::Accent(g_dark);
+            uint32_t const fill = lkw::chrome::Accent(dark);
             lkw::ButtonFills(b, fill, fill, fill, 0x00000000u);
             b.BorderBrush(SolidColorBrush{ Windows::UI::Colors::Transparent() });
         }
@@ -303,11 +299,11 @@ namespace
             // The reference fills an unpicked pill with Chrome.surface, which
             // is white by day and #16181C at night. Opaque, so the hover fade
             // stays in that family.
-            lkw::ButtonFills(b, g_dark ? 0xFF16181Cu : 0xFFFFFFFFu,
-                             g_dark ? 0xFF1E2126u : 0xFFF2F2F2u,
-                             g_dark ? 0xFF23272Du : 0xFFE9E9E9u,
-                             g_dark ? 0x33FFFFFFu : 0x33000000u);
-            b.BorderBrush(HairlineBrush());
+            lkw::ButtonFills(b, lkw::chrome::Surface(dark),
+                             lkw::chrome::SurfaceOver(dark),
+                             lkw::chrome::SurfaceDown(dark),
+                             lkw::chrome::Hairline(dark));
+            b.BorderBrush(HairlineBrush(dark));
         }
         b.IsEnabled(enabled);
         b.Opacity(enabled ? 1.0 : 0.5);
@@ -333,7 +329,7 @@ namespace
     // regions. The border shows the checked state, and the whole card is the
     // click target.
     Button ChoiceCard(wchar_t const *glyph, std::wstring const &title, std::wstring const &blurb,
-                      bool picked, bool recommended)
+                      bool picked, bool recommended, bool dark)
     {
         StackPanel words;
         words.Spacing(3);
@@ -347,7 +343,7 @@ namespace
             Border tag;
             tag.CornerRadius({ 8, 8, 8, 8 });
             tag.Padding({ 7, 1, 7, 2 });
-            tag.Background(AccentBrush());
+            tag.Background(AccentBrush(dark));
             TextBlock tt;
             tt.Text(L"Recommended");
             tt.FontSize(10.5);
@@ -371,7 +367,7 @@ namespace
             icon.VerticalAlignment(VerticalAlignment::Top);
             icon.Margin({ 0, 2, 0, 0 });
             if (picked)
-                icon.Foreground(AccentBrush());
+                icon.Foreground(AccentBrush(dark));
             else
                 icon.Opacity(0.7);
             row.Children().Append(icon);
@@ -385,7 +381,7 @@ namespace
         b.Padding({ 14, 12, 14, 12 });
         b.CornerRadius({ 10, 10, 10, 10 });
         b.BorderThickness(picked ? Thickness{ 2, 2, 2, 2 } : Thickness{ 1, 1, 1, 1 });
-        b.BorderBrush(picked ? AccentBrush() : HairlineBrush());
+        b.BorderBrush(picked ? AccentBrush(dark) : HairlineBrush(dark));
         return b;
     }
 
@@ -494,8 +490,7 @@ namespace winrt::LookoutMarine::implementation
         // this test true: the fade then stayed up on a step that fits.
 
         // The fade goes to the card's colour, which follows the scheme.
-        auto const panel = g_dark ? Windows::UI::Color{ 0xF2, 0x12, 0x1C, 0x24 }
-                                  : Windows::UI::Color{ 0xF2, 0xF8, 0xF8, 0xF8 };
+        auto const panel = lkw::Rgb(lkw::chrome::Panel(DarkChrome()));
         FirstRunFadeTop().Color({ 0, panel.R, panel.G, panel.B });
         FirstRunFadeBottom().Color(panel);
     }
@@ -542,7 +537,6 @@ namespace winrt::LookoutMarine::implementation
         // Setup is a takeover, and the scale bar sat over the Set Up Later
         // button at the bottom of the card.
         FirstRunChartChrome(false);
-        g_dark = Root().ActualTheme() == ElementTheme::Dark;
         FirstRunPane().Visibility(Visibility::Visible);
         FirstRunTitle().Text(first_run.Title());
         FirstRunTitle().Visibility(first_run.step() == lkw::FirstRunStep::Welcome
@@ -1195,19 +1189,19 @@ namespace winrt::LookoutMarine::implementation
         // alignments rather than one.
         body.Children().Append(Heading(L"Welcome to Lookout Marine",
                                        L"Official charts, rendered live on your PC."));
-        body.Children().Append(Fact(L"" /* map pin */,
+        body.Children().Append(Fact(L"" /* map pin */,
                                     L"Official ENC charts, drawn live",
                                     L"Lookout renders S-57 and S-101 cells itself. NOAA publishes "
                                     L"every United States chart at no cost; most other offices "
-                                    L"sell theirs."));
+                                    L"sell theirs.", DarkChrome()));
         body.Children().Append(Fact(L"" /* globe */, L"Or start with an online chart",
                                     L"A published chart style renders straight away, worldwide, "
-                                    L"with nothing to download and nothing stored."));
+                                    L"with nothing to download and nothing stored.", DarkChrome()));
         body.Children().Append(Fact(L"" /* folder */, L"Bring charts you already have",
                                     // A window that takes a drop says so, the
                                     // way the Mac's does.
                                     L"A prepared .pmtiles chart, or a folder of S-57 cells. Or "
-                                    L"drop either anywhere in this window."));
+                                    L"drop either anywhere in this window.", DarkChrome()));
         body.Children().Append(
             Muted(L"Lookout is a prototype and is not a certified navigation system. It does not "
                   L"meet chart carriage regulations. Always carry official charts aboard.",
@@ -1247,7 +1241,7 @@ namespace winrt::LookoutMarine::implementation
         for (auto const &c : choices)
         {
             auto card = ChoiceCard(c.glyph, c.title, c.blurb, first_run.source() == c.src,
-                                   c.recommended);
+                                   c.recommended, DarkChrome());
             auto src = c.src;
             card.Click([this, src](auto &&, auto &&) {
                 first_run.set_source(src);
@@ -1499,7 +1493,7 @@ namespace winrt::LookoutMarine::implementation
             if (geo.Figures().Size() == 0)
                 continue;
 
-            auto c = AccentColor(g_dark);
+            auto c = AccentColor(DarkChrome());
             Shapes::Path shape;
             shape.Data(geo);
             shape.Fill(SolidColorBrush{
@@ -1519,7 +1513,7 @@ namespace winrt::LookoutMarine::implementation
         Border frame;
         frame.CornerRadius({ radius, radius, radius, radius });
         frame.BorderThickness({ 1, 1, 1, 1 });
-        frame.BorderBrush(HairlineBrush());
+        frame.BorderBrush(HairlineBrush(DarkChrome()));
         frame.Child(canvas);
         return frame;
     }
@@ -1734,7 +1728,7 @@ namespace winrt::LookoutMarine::implementation
                     used = 0;
                 }
                 auto pill = RegionPill(name, winrt::to_hstring(r.blurb).c_str(), hold,
-                                       picked, st.have_catalog);
+                                       picked, st.have_catalog, DarkChrome());
                 std::string const rid = r.id;
                 pill.Click([this, rid](auto &&, auto &&) {
                     noaa_region_id = lkw::RegionToggle(noaa_region_id, rid);
@@ -1899,7 +1893,7 @@ namespace winrt::LookoutMarine::implementation
                 FontIcon tick;
                 tick.Glyph(L""); /* check */
                 tick.FontSize(13);
-                tick.Foreground(AccentBrush());
+                tick.Foreground(AccentBrush(DarkChrome()));
                 Grid::SetColumn(tick, 2);
                 row.Children().Append(tick);
 
@@ -1912,7 +1906,7 @@ namespace winrt::LookoutMarine::implementation
         panel.CornerRadius({ 10, 10, 10, 10 });
         panel.Padding({ 12, 12, 12, 12 });
         panel.BorderThickness({ 1, 1, 1, 1 });
-        panel.BorderBrush(HairlineBrush());
+        panel.BorderBrush(HairlineBrush(DarkChrome()));
         panel.Child(bands);
         panel.VerticalAlignment(VerticalAlignment::Top);
         Grid::SetColumn(panel, 1);
@@ -2090,7 +2084,7 @@ namespace winrt::LookoutMarine::implementation
         FontIcon tick;
         tick.Glyph(L""); /* check */
         tick.FontSize(14);
-        tick.Foreground(AccentBrush());
+        tick.Foreground(AccentBrush(DarkChrome()));
         tick.HorizontalAlignment(HorizontalAlignment::Left);
         row.Children().Append(tick);
 
@@ -2235,7 +2229,7 @@ namespace winrt::LookoutMarine::implementation
             Border frame;
             frame.CornerRadius({ 9, 9, 9, 9 });
             frame.BorderThickness({ 1.5, 1.5, 1.5, 1.5 });
-            frame.BorderBrush(AccentBrush());
+            frame.BorderBrush(AccentBrush(DarkChrome()));
             frame.Child(field);
             Grid::SetColumn(frame, 1);
             row.Children().Append(frame);
@@ -2342,7 +2336,7 @@ namespace winrt::LookoutMarine::implementation
             {
                 Border rule;
                 rule.Height(1);
-                rule.Background(HairlineBrush());
+                rule.Background(HairlineBrush(DarkChrome()));
                 derived.Children().Append(rule);
 
                 Grid row;
@@ -2390,15 +2384,13 @@ namespace winrt::LookoutMarine::implementation
             badge.Margin({ 12, 12, 12, 12 });
             badge.HorizontalAlignment(HorizontalAlignment::Left);
             badge.VerticalAlignment(VerticalAlignment::Top);
-            badge.Background(SolidColorBrush{ g_dark
-                                                  ? Windows::UI::Color{ 0xEB, 0x20, 0x24, 0x28 }
-                                                  : Windows::UI::Color{ 0xEB, 0xF8, 0xF8, 0xF8 } });
+            badge.Background(SolidColorBrush{ lkw::Rgb(lkw::chrome::Badge(DarkChrome())) });
             panel.Children().Append(badge);
             water.Children().Append(panel);
 
             Border rule;
             rule.Height(1);
-            rule.Background(HairlineBrush());
+            rule.Background(HairlineBrush(DarkChrome()));
             water.Children().Append(rule);
 
             // The four shades, with the water each one covers.
@@ -2424,7 +2416,7 @@ namespace winrt::LookoutMarine::implementation
                 swatch.CornerRadius({ 3, 3, 3, 3 });
                 swatch.Background(SolidColorBrush{ S52Color(tokens[i], SchemeOf(controller)) });
                 swatch.BorderThickness({ 1, 1, 1, 1 });
-                swatch.BorderBrush(HairlineBrush());
+                swatch.BorderBrush(HairlineBrush(DarkChrome()));
                 swatch.VerticalAlignment(VerticalAlignment::Center);
                 top.Children().Append(swatch);
                 top.Children().Append(Line(names[i], 12, true));
@@ -2443,7 +2435,7 @@ namespace winrt::LookoutMarine::implementation
             Border round;
             round.CornerRadius({ 12, 12, 12, 12 });
             round.BorderThickness({ 1, 1, 1, 1 });
-            round.BorderBrush(HairlineBrush());
+            round.BorderBrush(HairlineBrush(DarkChrome()));
             round.Child(water);
             // As tall as the water it holds. Stretched, it ran the length of
             // the questions beside it and left an empty panel under the key.
@@ -2547,9 +2539,9 @@ namespace winrt::LookoutMarine::implementation
         // The pills and the unit pair wear the pick.
         auto const clearances = d.Clearances();
         for (size_t i = 0; i < depth_pills.size() && i < clearances.size(); ++i)
-            PaintPicked(depth_pills[i], clearances[i] == d.clearance());
+            PaintPicked(depth_pills[i], clearances[i] == d.clearance(), DarkChrome());
         for (size_t i = 0; i < depth_units.size(); ++i)
-            PaintPicked(depth_units[i], (i == 1) == d.feet());
+            PaintPicked(depth_units[i], (i == 1) == d.feet(), DarkChrome());
 
         FirstRunDrawSeabed();
     }
