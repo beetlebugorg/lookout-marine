@@ -137,6 +137,11 @@ const Unpacker = struct {
     stop: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     /// Set by the thread as it returns, so adopt can join it without waiting.
     exited: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// The cells this download leaves alone, sorted, copied from `held` when
+    /// the thread starts. A bundle holds every cell in its district, and the
+    /// ones already held are neither deleted nor extracted. Empty when the
+    /// download fetches held cells as well.
+    skip: [][]u8 = &.{},
 };
 
 /// The snapshot a shell renders. Plain data, copied out under the api lock.
@@ -703,7 +708,7 @@ pub const Service = struct {
             return;
         };
         self.setStageDest(dest);
-        self.startUnpacker();
+        self.startUnpacker(!again);
 
         self.phase = .downloading;
         self.changed = true;
@@ -758,7 +763,7 @@ pub const Service = struct {
             return;
         };
         self.setStageDest(dest);
-        self.startUnpacker();
+        self.startUnpacker(false);
 
         self.phase = .downloading;
         self.changed = true;
@@ -911,7 +916,7 @@ pub const Service = struct {
             return;
         }
         var a: Answer = .{ .id = job.id, .bytes = &.{}, .status = job.status };
-        if (self.unpack(job.dest, job.name)) {
+        if (self.unpack(job.dest, job.name, u.skip)) {
             a.stored = true;
             a.size = @intCast(job.size);
         } else |_| {
@@ -943,12 +948,18 @@ pub const Service = struct {
     /// stopped and left for adopt to join. It ends after the transfer it is
     /// on, and `unpack_work` keeps that transfer from running beside the new
     /// thread's first.
-    fn startUnpacker(self: *Service) void {
+    ///
+    /// `skip_held` leaves the cells in `held` as they are on disk.
+    fn startUnpacker(self: *Service, skip_held: bool) void {
         self.retireUnpacker();
         const u = self.alloc.create(Unpacker) catch return;
         u.* = .{};
-        u.thread = std.Thread.spawn(.{}, unpackMain, .{ self, u }) catch {
+        if (skip_held) u.skip = self.copyHeld() catch {
             self.alloc.destroy(u);
+            return;
+        };
+        u.thread = std.Thread.spawn(.{}, unpackMain, .{ self, u }) catch {
+            self.freeUnpacker(u);
             return;
         };
         self.unpack_mu.lock();
@@ -974,7 +985,28 @@ pub const Service = struct {
     fn joinUnpacker(self: *Service, u: *Unpacker) void {
         u.thread.join();
         self.dropQueue(u);
+        self.freeUnpacker(u);
+    }
+
+    fn freeUnpacker(self: *Service, u: *Unpacker) void {
+        for (u.skip) |n| self.alloc.free(n);
+        self.alloc.free(u.skip);
         self.alloc.destroy(u);
+    }
+
+    /// A copy of `held`, for a thread to read while the api side replaces it.
+    fn copyHeld(self: *Service) ![][]u8 {
+        const out = try self.alloc.alloc([]u8, self.held.items.len);
+        var n: usize = 0;
+        errdefer {
+            for (out[0..n]) |c| self.alloc.free(c);
+            self.alloc.free(out);
+        }
+        for (self.held.items) |h| {
+            out[n] = try self.alloc.dupe(u8, h);
+            n += 1;
+        }
+        return out;
     }
 
     /// Stop every thread and wait for each. For deinit.
@@ -1141,7 +1173,10 @@ pub const Service = struct {
     /// repair unpacks over the installed edition, and std.zip does not
     /// overwrite files, so the old cell stayed and a reissue's update files
     /// were written beside a base they do not apply to.
-    fn unpack(self: *Service, dest: []const u8, name: []const u8) !void {
+    ///
+    /// An entry in the directory of a cell named in `skip` is left out of
+    /// both the delete and the extract.
+    fn unpack(self: *Service, dest: []const u8, name: []const u8, skip: []const []const u8) !void {
         const io = std.Io.Threaded.global_single_threaded.io();
         var buf: [512]u8 = undefined;
         const tmp = try std.fmt.bufPrint(&buf, "{s}/{s}.zip.part", .{ dest, name });
@@ -1154,7 +1189,7 @@ pub const Service = struct {
         var reader_buf: [4096]u8 = undefined;
         var fr = f.reader(io, &reader_buf);
 
-        try self.clearCellDirs(&fr, dir);
+        try self.clearCellDirs(&fr, dir, skip);
 
         // Entry by entry. std.zip.extract stops at the first file already on
         // disk, every cell's exchange set holds its own ENC_ROOT/CATALOG.031,
@@ -1166,6 +1201,10 @@ pub const Service = struct {
         var iter = try std.zip.Iterator.init(&fr);
         var name_buf: [std.fs.max_path_bytes]u8 = undefined;
         while (try iter.next()) |entry| {
+            if (skip.len != 0) {
+                const path = try entryName(&fr, entry, &name_buf) orelse continue;
+                if (inSkippedCell(path, skip)) continue;
+            }
             entry.extract(&fr, .{ .allow_backslashes = true }, &name_buf, dir) catch |e| switch (e) {
                 error.PathAlreadyExists => {},
                 else => return e,
@@ -1175,7 +1214,7 @@ pub const Service = struct {
 
     /// Delete every cell directory under `dir` that this archive holds a cell
     /// file for.
-    fn clearCellDirs(self: *Service, fr: *std.Io.File.Reader, dir: std.Io.Dir) !void {
+    fn clearCellDirs(self: *Service, fr: *std.Io.File.Reader, dir: std.Io.Dir, skip: []const []const u8) !void {
         const io = std.Io.Threaded.global_single_threaded.io();
         var cells: std.ArrayList([]u8) = .empty;
         defer {
@@ -1186,12 +1225,9 @@ pub const Service = struct {
         var iter = try std.zip.Iterator.init(fr);
         var name_buf: [std.fs.max_path_bytes]u8 = undefined;
         while (try iter.next()) |entry| {
-            if (entry.filename_len > name_buf.len) continue;
-            const path = name_buf[0..entry.filename_len];
-            try fr.seekTo(entry.header_zip_offset + @sizeOf(std.zip.CentralDirectoryFileHeader));
-            try fr.interface.readSliceAll(path);
-            std.mem.replaceScalar(u8, path, '\\', '/');
+            const path = try entryName(fr, entry, &name_buf) orelse continue;
             const cell = cellDirOf(path) orelse continue;
+            if (inSkippedCell(path, skip)) continue;
             var seen = false;
             for (cells.items) |c| {
                 if (std.mem.eql(u8, c, cell)) seen = true;
@@ -1296,6 +1332,26 @@ fn cellDirOf(path: []const u8) ?[]const u8 {
     const stem = file[0 .. file.len - 4];
     if (dir_name.len == 0 or !std.mem.eql(u8, stem, dir_name)) return null;
     return parent;
+}
+
+/// The name of a zip entry, with forward slashes. Null when it does not fit
+/// `buf`.
+fn entryName(fr: *std.Io.File.Reader, entry: std.zip.Iterator.Entry, buf: []u8) !?[]u8 {
+    if (entry.filename_len > buf.len) return null;
+    const path = buf[0..entry.filename_len];
+    try fr.seekTo(entry.header_zip_offset + @sizeOf(std.zip.CentralDirectoryFileHeader));
+    try fr.interface.readSliceAll(path);
+    std.mem.replaceScalar(u8, path, '\\', '/');
+    return path;
+}
+
+/// True when `path` is in the directory of a cell named in `skip`.
+fn inSkippedCell(path: []const u8, skip: []const []const u8) bool {
+    if (skip.len == 0) return false;
+    const slash = std.mem.lastIndexOfScalar(u8, path, '/') orelse return false;
+    const parent = path[0..slash];
+    const cell = parent[(if (std.mem.lastIndexOfScalar(u8, parent, '/')) |i| i + 1 else 0)..];
+    return noaa.isHeld(skip, cell);
 }
 
 /// Create a directory and every parent it needs.
@@ -1563,7 +1619,8 @@ const TestEntry = struct { name: []const u8, data: []const u8 };
 fn testZip(alloc: std.mem.Allocator, entries: []const TestEntry) ![]u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(alloc);
-    var offsets: [16]u32 = undefined;
+    const offsets = try alloc.alloc(u32, entries.len);
+    defer alloc.free(offsets);
     const put16 = struct {
         fn f(a: std.mem.Allocator, o: *std.ArrayList(u8), v: u16) !void {
             var b: [2]u8 = undefined;
@@ -1668,7 +1725,7 @@ test "a reissued cell replaces the edition already unpacked" {
     });
     defer alloc.free(first);
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = dest ++ "/a.zip.part", .data = first });
-    try s.unpack(dest, "a");
+    try s.unpack(dest, "a", &.{});
 
     // The reissue has a new base and no update files.
     const second = try testZip(alloc, &.{
@@ -1677,7 +1734,7 @@ test "a reissued cell replaces the edition already unpacked" {
     });
     defer alloc.free(second);
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = dest ++ "/b.zip.part", .data = second });
-    try s.unpack(dest, "b");
+    try s.unpack(dest, "b", &.{});
 
     const base = try testRead(alloc, dest ++ "/ENC_ROOT/US5MD1MC/US5MD1MC.000");
     defer alloc.free(base);
@@ -1890,4 +1947,70 @@ test "a new download starts while the cancelled one's cells are still queued" {
     try testing.expect(!testExists(old ++ "/ENC_ROOT"));
     try testing.expectEqual(@as(usize, 0), try testParts(old));
     s.cancelAll();
+}
+
+test "a bundle leaves the cells already held as they are" {
+    const alloc = testing.allocator;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const dest = "/tmp/lookout-noaa-bundle-held";
+    std.Io.Dir.cwd().deleteTree(io, dest) catch {};
+    defer std.Io.Dir.cwd().deleteTree(io, dest) catch {};
+
+    var rec = Recorder{ .alloc = alloc };
+    defer rec.deinit();
+
+    var s = Service.init(alloc);
+    defer s.deinit();
+    s.cat = try oneDistrict(alloc, 5, 412);
+    s.phase = .ready;
+    s.setProvider(Recorder.get, null, &rec);
+
+    // The first 300 cells are held. Two of them are on disk here.
+    var names: [412][8]u8 = undefined;
+    var held: [300][]const u8 = undefined;
+    for (&names, 0..) |*n, k| _ = try std.fmt.bufPrint(n, "US505{d:0>3}", .{k});
+    for (&held, 0..) |*h, k| h.* = &names[k];
+    s.setHeld(&held);
+    try makeDir(dest ++ "/ENC_ROOT/US505000");
+    try makeDir(dest ++ "/ENC_ROOT/US505299");
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = dest ++ "/ENC_ROOT/US505000/US505000.000", .data = "held" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = dest ++ "/ENC_ROOT/US505299/US505299.000", .data = "held" });
+
+    s.start(&.{5}, dest, false);
+    // 112 missing is past bundle_at, so the district comes as one bundle.
+    try testing.expectEqual(@as(usize, 1), rec.ids.items.len);
+
+    var paths: [412][40]u8 = undefined;
+    var entries: [412]TestEntry = undefined;
+    for (&entries, 0..) |*e, k| e.* = .{
+        .name = try std.fmt.bufPrint(&paths[k], "ENC_ROOT/{s}/{s}.000", .{ &names[k], &names[k] }),
+        .data = "bundle",
+    };
+    const zip = try testZip(alloc, &entries);
+    defer alloc.free(zip);
+    s.respond(rec.ids.items[0], zip, 200);
+
+    var tries: usize = 0;
+    while (s.phase == .downloading and tries < 5000) : (tries += 1) {
+        s.adopt();
+        lock.sleepMs(1);
+    }
+    try testing.expectEqual(Phase.ready, s.phase);
+
+    // The held cells on disk are the ones that were there.
+    for ([_][]const u8{ dest ++ "/ENC_ROOT/US505000/US505000.000", dest ++ "/ENC_ROOT/US505299/US505299.000" }) |p| {
+        const got = try testRead(alloc, p);
+        defer alloc.free(got);
+        try testing.expectEqualStrings("held", got);
+    }
+    // A held cell stored elsewhere is not written here.
+    try testing.expect(!testExists(dest ++ "/ENC_ROOT/US505150"));
+    // Every missing cell is written.
+    var written: usize = 0;
+    for (names[300..]) |*n| {
+        var buf: [96]u8 = undefined;
+        const p = try std.fmt.bufPrint(&buf, dest ++ "/ENC_ROOT/{s}/{s}.000", .{ n, n });
+        if (testExists(p)) written += 1;
+    }
+    try testing.expectEqual(@as(usize, 112), written);
 }
