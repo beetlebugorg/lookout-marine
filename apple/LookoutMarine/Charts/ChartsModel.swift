@@ -31,7 +31,11 @@ final class ChartsModel {
     /// menu of the rest would be a row of settings that do nothing.
     var chartLanguages: [String] = []
     var openRequest: OpenRequest?
-    var openError: String?
+    var openError: String? {
+        didSet { if openError == nil { openRetry = nil } }
+    }
+    /// Offered as a Retry button beside openError. Cleared with it.
+    var openRetry: (() -> Void)?
     private var openSeq = 0
 
     /// True from the moment an open is scheduled until lookout_open returns —

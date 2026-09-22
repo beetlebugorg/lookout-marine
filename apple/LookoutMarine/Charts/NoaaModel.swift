@@ -48,7 +48,8 @@ struct NoaaState: Equatable {
     enum Phase: UInt8 { case idle = 0, readingCatalog = 1, ready = 2, downloading = 3 }
     /// How the download numbered `run` ended. See LOOKOUT_NOAA_NONE.
     enum Outcome: UInt8 {
-        case none = 0, running = 1, finished = 2, empty = 3, cancelled = 4, failed = 5
+        case none = 0, running = 1, finished = 2, empty = 3, cancelled = 4, failed = 5,
+             refused = 6
     }
 
     var phase: Phase = .idle
@@ -67,6 +68,9 @@ struct NoaaState: Equatable {
     var outcome: Outcome = .none
     /// Counts the downloads ordered, refused ones included.
     var run: UInt32 = 0
+    /// True when ordering again can clear the cause of a failed or refused
+    /// download. See lookout_noaa_state.retry.
+    var retry = false
 
     /// True once the download numbered `run` has stopped for any reason.
     var ended: Bool { outcome != .none && outcome != .running }
@@ -170,6 +174,15 @@ final class NoaaModel {
     func refresh() {
         engine?.noaaRefresh()
         pull()
+    }
+
+    /// Read NOAA's catalog when none is loaded, and wait for the read to end.
+    func loadCatalog() async {
+        guard !state.haveCatalog else { return }
+        refresh()
+        if state.phase == .readingCatalog {
+            await withCheckedContinuation { catalogWaiters.append($0) }
+        }
     }
 
     /// Read the core's state when it has changed. The frame loop calls this,

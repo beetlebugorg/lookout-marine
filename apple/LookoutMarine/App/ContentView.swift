@@ -56,6 +56,12 @@ struct ContentView: View {
             .alert("Couldn't open chart", isPresented: Binding(
                 get: { model.charts.openError != nil },
                 set: { if !$0 { model.charts.openError = nil } })) {
+                if let retry = model.charts.openRetry {
+                    Button("Retry") {
+                        model.charts.openError = nil
+                        retry()
+                    }
+                }
                 Button("OK", role: .cancel) { model.charts.openError = nil }
             } message: {
                 Text(model.charts.openError ?? "")

@@ -57,6 +57,7 @@ final class NoaaService: NoaaEngine {
         }
         s.outcome = NoaaState.Outcome(rawValue: raw.outcome) ?? .none
         s.run = raw.run
+        s.retry = raw.retry != 0
         return s
     }
 

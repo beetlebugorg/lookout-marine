@@ -172,5 +172,45 @@ final class NoaaDownloadStopTests: ShellTestCase {
         fake.noaa.error = "could not write a downloaded chart"
         app.noaa.pull()
         XCTAssertEqual(app.charts.openError, "could not write a downloaded chart")
+        XCTAssertNil(app.charts.openRetry)
+    }
+
+    /// A refused order, ended at once, as run 1.
+    private func refused(retry: Bool) -> (AppModel, FakeEngine) {
+        let app = AppModel()
+        let fake = FakeEngine()
+        app.charts.engine = fake
+        app.noaa.engine = fake
+        app.noaa.picked = [app.noaa.regions[0].id]
+        app.charts.hasChart = true
+        fake.noaa.phase = .ready
+        fake.noaa.run = 1
+        fake.noaa.outcome = .refused
+        fake.noaa.retry = retry
+        fake.noaa.error = retry ? "no catalog yet" : "no network provider"
+        app.startNoaaDownload()
+        return (app, fake)
+    }
+
+    private func downloads(_ fake: FakeEngine) -> Int {
+        fake.calls.filter { $0.hasPrefix("noaaDownload(") }.count
+    }
+
+    func testARefusalARetryCannotClearRaisesNoAlert() {
+        let (app, _) = refused(retry: false)
+        XCTAssertNil(app.charts.openError)
+        XCTAssertNil(app.charts.openRetry)
+    }
+
+    func testRetryReadsTheCatalogThenOrdersAgain() async {
+        let (app, fake) = refused(retry: true)
+        XCTAssertEqual(app.charts.openError, "no catalog yet")
+        guard let retry = app.charts.openRetry else { return XCTFail("no Retry") }
+        app.charts.openError = nil
+        XCTAssertNil(app.charts.openRetry)
+        retry()
+        for _ in 0..<100 where downloads(fake) < 2 { await Task.yield() }
+        XCTAssertTrue(fake.calls.contains("noaaRefresh"))
+        XCTAssertEqual(downloads(fake), 2)
     }
 }

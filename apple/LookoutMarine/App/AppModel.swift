@@ -39,8 +39,10 @@ final class AppModel {
     /// reopening leaves its download running.
     private var noaaService: NoaaService?
     /// The download being followed to its end: its run number, where it
-    /// writes, and whether an update check follows. A new order replaces it.
-    private var noaaWatch: (run: UInt32, dest: String, thenRecheck: Bool)?
+    /// writes, whether an update check follows, and how to order it again.
+    /// A new order replaces it.
+    private var noaaWatch: (run: UInt32, dest: String, thenRecheck: Bool,
+                            order: () -> Void)?
     /// True once the update check has run in this session. A chart reopens
     /// whenever the set list changes, and the check is a launch question.
     private var noaaChecked = false
@@ -82,7 +84,9 @@ final class AppModel {
         }
         let before = noaa.state.run
         noaa.download(to: dest, again: again)
-        watchNoaaDownload(dest, after: before)
+        watchNoaaDownload(dest, after: before) { [weak self] in
+            self?.startNoaaDownload(again: again)
+        }
     }
 
     /// Fetch the reissued editions of every installed cell, and prepare what
@@ -100,7 +104,9 @@ final class AppModel {
         guard !have.isEmpty else { return }
         let before = noaa.state.run
         noaa.update(have, to: dest)
-        watchNoaaDownload(dest, after: before, thenRecheck: true)
+        watchNoaaDownload(dest, after: before, thenRecheck: true) { [weak self] in
+            self?.startNoaaUpdate()
+        }
     }
 
     /// Follow the download just ordered to its end, and bake the directory
@@ -108,9 +114,10 @@ final class AppModel {
     /// is the run number read before ordering: an order the model did not
     /// pass on leaves it as it was, and there is no download to follow.
     private func watchNoaaDownload(_ dest: String, after before: UInt32,
-                                   thenRecheck: Bool = false) {
+                                   thenRecheck: Bool = false,
+                                   order: @escaping () -> Void) {
         guard noaa.state.run != before else { return }
-        noaaWatch = (noaa.state.run, dest, thenRecheck)
+        noaaWatch = (noaa.state.run, dest, thenRecheck, order)
         noaaChanged()
     }
 
@@ -126,17 +133,31 @@ final class AppModel {
         case .cancelled:
             // A stop is the mariner's own. What arrived before it is kept.
             if st.done > 0 { charts.openChartDirectory(w.dest) }
-        case .failed:
-            // No bake runs, so the Charts pane reports the failed download
-            // here. Setup reports the end in its own step.
-            if !firstRun.showing {
+        case .failed, .refused:
+            // No bake runs, so the Charts pane reports the end here. Setup
+            // reports it in its own step. A refusal a retry cannot clear
+            // raises no alert.
+            if !firstRun.showing, st.outcome == .failed || st.retry {
                 charts.openError = st.error.isEmpty
                     ? "The download stopped before any chart arrived." : st.error
+                if st.retry {
+                    let order = w.order
+                    charts.openRetry = { [weak self] in self?.retryNoaa(order) }
+                }
             }
         case .empty, .none, .running:
             break
         }
         if w.thenRecheck { Task { await recheckNoaaUpdates() } }
+    }
+
+    /// Order a download again. With no catalog loaded, read it first.
+    private func retryNoaa(_ order: @escaping () -> Void) {
+        guard !noaa.state.haveCatalog else { return order() }
+        Task {
+            await noaa.loadCatalog()
+            order()
+        }
     }
 
     /// Count the reissued charts again, once the new editions are in the
