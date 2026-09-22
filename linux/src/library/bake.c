@@ -612,6 +612,12 @@ lk_chart_bake_to_prepare (const char *source, const LkChartSet *set)
   return todo;
 }
 
+const lookout_bake *
+lk_chart_bake_job (LkChartBake *bake)
+{
+  return bake != NULL ? bake->job : NULL;
+}
+
 static void
 lk_chart_bake_free (LkChartBake *bake)
 {
@@ -667,29 +673,65 @@ lk_chart_bake_poll (gpointer data)
   return G_SOURCE_REMOVE;
 }
 
+/* The work one scan row states. */
+static lookout_prepare
+lk_prepare_for_kind (lookout_file_kind kind)
+{
+  if (kind == LOOKOUT_FILE_SOURCE)
+    return LOOKOUT_PREPARE_CELL;
+  if (kind == LOOKOUT_FILE_RASTER_SOURCE)
+    return LOOKOUT_PREPARE_SHEET;
+  return LOOKOUT_PREPARE_LIFT;
+}
+
 LkChartBake *
 lk_chart_bake_start (const char        *source,
                      const LkChartSet  *set,
+                     LkChartSets       *sets,
                      LkBakeProgressFunc on_progress,
                      LkBakeDoneFunc     on_done,
                      gpointer           user_data)
 {
-  if (source == NULL || set == NULL || set->cells == NULL)
+  if (source == NULL)
     return NULL;
 
-  g_autoptr (GPtrArray) todo = lk_chart_bake_to_prepare (source, set);
   g_autoptr (GArray) items = g_array_new (FALSE, FALSE, sizeof (lookout_bake_item));
-  for (guint i = 0; i < todo->len; i++)
-    {
-      const LkScannedCell *cell = g_ptr_array_index (todo, i);
+  gsize n_listed = 0;
+  const lookout_chart_file *const *listed =
+      lk_chart_sets_to_prepare (sets, source, &n_listed);
 
+  for (gsize i = 0; i < n_listed; i++)
+    {
+      const lookout_chart_file *file = listed[i];
       lookout_bake_item item = {
-        .path = cell->path,
-        .name = cell->name,
-        .band = cell->band,
-        .work = lk_prepare_for (cell),
+        .path = file->path,
+        .name = file->name,
+        .band = file->band,
+        .work = lk_prepare_for_kind (file->kind),
       };
+
       g_array_append_val (items, item);
+    }
+
+  /* The core lists a set once it is on the list and its scan has read the
+   * folder. A folder on its first import is neither, so the shell's own scan
+   * of it is what the bake reads. */
+  if (n_listed == 0 && set != NULL && set->cells != NULL)
+    {
+      g_autoptr (GPtrArray) todo = lk_chart_bake_to_prepare (source, set);
+
+      for (guint i = 0; i < todo->len; i++)
+        {
+          const LkScannedCell *cell = g_ptr_array_index (todo, i);
+          lookout_bake_item item = {
+            .path = cell->path,
+            .name = cell->name,
+            .band = cell->band,
+            .work = lk_prepare_for (cell),
+          };
+
+          g_array_append_val (items, item);
+        }
     }
   if (items->len == 0)
     return NULL;

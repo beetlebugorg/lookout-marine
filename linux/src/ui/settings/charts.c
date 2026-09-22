@@ -832,9 +832,9 @@ lk_settings_fill_sets_list (LkSettings *settings)
         }
 
       /* What is still to prepare. */
-      if (set->unprepared > 0)
+      if (set->to_prepare > 0)
         {
-          g_autofree char *text = g_strdup_printf ("%u to prepare", set->unprepared);
+          g_autofree char *text = g_strdup_printf ("%u to prepare", set->to_prepare);
           GtkWidget *label = gtk_label_new (text);
 
           gtk_widget_add_css_class (label, "dim-label");

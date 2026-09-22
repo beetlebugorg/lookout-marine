@@ -595,6 +595,78 @@ test_a_removal_reports_every_step (void)
   g_assert_false (g_file_test (root, G_FILE_TEST_EXISTS));
 }
 
+/* Wait for a set's row to report `want` files to prepare. Bounded, because
+ * the scan runs on the core's own thread. */
+static gboolean
+wait_for_to_prepare (LkChartSets *sets, const char *path, guint want)
+{
+  for (int i = 0; i < 400; i++)
+    {
+      g_autoptr (GPtrArray) rows = lk_chart_sets_rows (sets);
+
+      for (guint r = 0; r < rows->len; r++)
+        {
+          const LkChartSetRow *row = g_ptr_array_index (rows, r);
+
+          if (g_strcmp0 (row->path, path) == 0 && row->scanned &&
+              row->to_prepare == want)
+            return TRUE;
+        }
+      g_main_context_iteration (NULL, FALSE);
+      g_usleep (5000);
+    }
+  return FALSE;
+}
+
+/* The core lists the files a set has to prepare, and names them.
+ *
+ * The list includes a cell whose prepared chart is older than it, which a
+ * NOAA update leaves behind. A prepared chart that the core accepts is a real
+ * pmtiles of a few megabytes, and this suite ships none, so the stale half of
+ * the rule is checked by hand against a prepared library. */
+static void
+test_the_core_lists_what_a_set_has_to_prepare (void)
+{
+  g_autoptr (GObject) owner = g_object_new (G_TYPE_OBJECT, NULL);
+  LkChartSets *sets = lk_chart_sets_new (noop_changed, owner);
+  g_autofree char *dir = g_build_filename (home, "to-prepare", NULL);
+
+  place_cell (dir, "US3CU1EF.000");
+  g_assert_true (lk_chart_sets_note (sets, dir));
+  g_assert_true (wait_for_to_prepare (sets, dir, 1));
+
+  gsize n = 0;
+  const lookout_chart_file *const *listed = lk_chart_sets_to_prepare (sets, dir, &n);
+
+  g_assert_cmpuint (n, ==, 1);
+  g_assert_cmpstr (listed[0]->name, ==, "US3CU1EF");
+  g_assert_cmpint (listed[0]->kind, ==, LOOKOUT_FILE_SOURCE);
+
+  lk_chart_sets_free (sets);
+}
+
+/* A set whose prepare the mariner stopped is left alone by the resume. */
+static void
+test_a_cancelled_bake_stops_the_resume (void)
+{
+  g_autoptr (GObject) owner = g_object_new (G_TYPE_OBJECT, NULL);
+  LkChartSets *sets = lk_chart_sets_new (noop_changed, owner);
+  g_autofree char *dir = g_build_filename (home, "stopped", NULL);
+
+  place_cell (dir, "US4TE3W0.000");
+  g_assert_true (lk_chart_sets_note (sets, dir));
+  g_assert_true (lk_chart_sets_set_managed (sets, dir, TRUE));
+  g_assert_true (wait_for_to_prepare (sets, dir, 1));
+
+  /* The core picks a managed, switched-on, scanned set with work left. */
+  g_assert_cmpstr (lk_chart_sets_resume (sets), ==, dir);
+
+  lk_chart_sets_note_cancel (sets, dir);
+  g_assert_null (lk_chart_sets_resume (sets));
+
+  lk_chart_sets_free (sets);
+}
+
 /* A folder the app did not download is never deleted through this. */
 static void
 test_only_the_downloads_directory_is_given_back (void)
@@ -635,6 +707,10 @@ main (int argc, char *argv[])
                    test_a_set_with_prepared_charts_is_derived);
   g_test_add_func ("/library/a-download-states-every-cell-it-holds",
                    test_a_download_states_every_cell_it_holds);
+  g_test_add_func ("/library/the-core-lists-what-a-set-has-to-prepare",
+                   test_the_core_lists_what_a_set_has_to_prepare);
+  g_test_add_func ("/library/a-cancelled-bake-stops-the-resume",
+                   test_a_cancelled_bake_stops_the_resume);
   g_test_add_func ("/library/a-removal-reports-every-step",
                    test_a_removal_reports_every_step);
   g_test_add_func ("/library/the-whole-download-goes", test_the_whole_download_goes);

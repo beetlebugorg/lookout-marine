@@ -212,6 +212,10 @@ lk_chart_sets_rows (LkChartSets *self)
       row->detail = lk_chart_set_detail (set);
       row->charts = (guint) set->charts;
       row->unprepared = (guint) set->unprepared;
+      row->to_prepare = (guint) set->to_prepare;
+      row->refused = (guint) set->refused;
+      for (guint b = 0; b < G_N_ELEMENTS (row->band_todo); b++)
+        row->band_todo[b] = (guint) set->band_todo[b];
       row->pictures = (guint) set->pictures;
       row->bytes = (gint64) set->bytes;
       row->scanned = set->scanned != 0;
@@ -233,6 +237,41 @@ lk_chart_sets_rows (LkChartSets *self)
       g_ptr_array_add (rows, row);
     }
   return rows;
+}
+
+const lookout_chart_file *const *
+lk_chart_sets_to_prepare (LkChartSets *self, const char *path, gsize *out_n)
+{
+  size_t n = 0;
+  const lookout_chart_file *const *files = NULL;
+
+  if (self != NULL && path != NULL)
+    files = lookout_chart_set_to_prepare (self->sets, path, &n);
+  if (out_n != NULL)
+    *out_n = (gsize) n;
+  return files;
+}
+
+void
+lk_chart_sets_note_bake (LkChartSets *self, const char *path, const lookout_bake *bake)
+{
+  if (self == NULL || path == NULL || bake == NULL)
+    return;
+  lookout_chart_sets_note_bake (self->sets, path, bake);
+}
+
+void
+lk_chart_sets_note_cancel (LkChartSets *self, const char *path)
+{
+  if (self == NULL || path == NULL)
+    return;
+  lookout_chart_sets_note_cancel (self->sets, path);
+}
+
+const char *
+lk_chart_sets_resume (LkChartSets *self)
+{
+  return self != NULL ? lookout_chart_sets_resume (self->sets) : NULL;
 }
 
 gboolean

@@ -29,6 +29,14 @@ typedef struct {
                     * "" until the background scan lands */
   guint    charts;     /* prepared cells, 0 until the scan lands */
   guint    unprepared; /* cells that bake before they draw */
+  /* The files the core lists to prepare: `unprepared` less the ones a
+   * finished bake refused. */
+  guint    to_prepare;
+  /* Files a finished bake could not prepare. They stay out of `to_prepare`
+   * until a new edition of the cell arrives. */
+  guint    refused;
+  /* `to_prepare` by usage band, band_todo[0] is band 1. */
+  guint    band_todo[6];
   guint    pictures;
   gint64   bytes;
   gboolean scanned;    /* the background scan has read this folder */
@@ -112,6 +120,26 @@ typedef struct {
  * the scan has yet to reach reports none. Transfer full: a GArray of
  * LkChartSetEdition, with the names owned by the array. */
 GArray *lk_chart_sets_managed_editions (LkChartSets *self);
+
+/* The files one set still has to prepare, as the core lists them: each file
+ * that bakes before it draws and has no prepared chart, or whose prepared
+ * chart is older than it. Empty until the core's scan has read the folder.
+ * Borrowed until the next call that changes the list. */
+const lookout_chart_file *const *lk_chart_sets_to_prepare (LkChartSets *self,
+                                                           const char  *path,
+                                                           gsize       *out_n);
+
+/* Record how a bake of this set ended, before the bake is freed and before
+ * the rescan. A finished bake marks what it could not prepare as refused, and
+ * a cancelled one records a stop. */
+void lk_chart_sets_note_bake (LkChartSets *self, const char *path,
+                              const lookout_bake *bake);
+
+/* Record that the mariner stopped this set's prepare. */
+void lk_chart_sets_note_cancel (LkChartSets *self, const char *path);
+
+/* The set whose prepare to finish, or NULL. Borrowed. */
+const char *lk_chart_sets_resume (LkChartSets *self);
 
 /* Read a set's folder again. Charts deleted out of a prepared directory, or
  * written into one after the scan read it, are invisible to the composed chart

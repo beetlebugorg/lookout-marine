@@ -300,6 +300,8 @@ static void lk_app_model_remove_progress (const LkBakeProgress *progress,
 static void lk_app_model_noaa_note_all (LkAppModel *self);
 static void lk_app_model_prepare_noaa_download (LkAppModel *self);
 static void lk_app_model_count_noaa_outdated (LkAppModel *self);
+static void lk_app_model_bake_progress (const LkBakeProgress *progress, gpointer user_data);
+static void lk_app_model_bake_done (const char *out_dir, guint baked, gpointer user_data);
 
 static void
 lk_app_model_emit_chart_sets_changed (LkAppModel *self)
@@ -313,6 +315,38 @@ lk_app_model_emit_chart_sets_changed (LkAppModel *self)
  * The NOAA service is told as well. What this device holds comes from the
  * scan, and a set it had yet to reach reported no cells: the picker priced
  * water the mariner already had, and read their regions as gone. */
+/* Finish a set the core states still has files to prepare.
+ *
+ * The core picks it: a managed set, switched on and scanned, with a file to
+ * prepare and no stop recorded since it last changed. The bake reads the
+ * core's own list, so this needs no scan of its own. */
+static void
+lk_app_model_resume_prepare (LkAppModel *self)
+{
+  const char *path;
+
+  if (self->baking || self->scanning || self->is_opening)
+    return;
+
+  path = lk_chart_sets_resume (self->chart_sets);
+  if (path == NULL)
+    return;
+
+  g_free (self->pending_open_source);
+  self->pending_open_source = g_strdup (path);
+  self->bake = lk_chart_bake_start (path, NULL, self->chart_sets,
+                                    lk_app_model_bake_progress,
+                                    lk_app_model_bake_done, self);
+  if (self->bake == NULL)
+    {
+      g_clear_pointer (&self->pending_open_source, g_free);
+      return;
+    }
+  self->baking = TRUE;
+  lk_app_model_set_open_error (self, NULL);
+  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_BAKING]);
+}
+
 static void
 lk_app_model_sets_changed (GObject *owner)
 {
@@ -321,6 +355,7 @@ lk_app_model_sets_changed (GObject *owner)
   if (!lk_chart_sets_scanning (self->chart_sets))
     lk_app_model_noaa_note_all (self);
   lk_app_model_emit_chart_sets_changed (self);
+  lk_app_model_resume_prepare (self);
 }
 
 /* Reopen the chart from the current library. If every set is off, close
@@ -661,7 +696,7 @@ lk_app_model_initial_source (LkAppModel *self)
     {
       const LkChartSetRow *row = g_ptr_array_index (rows, i);
 
-      if (row->on && row->scanned && row->unprepared > 0)
+      if (row->on && row->scanned && row->to_prepare > 0)
         return g_strdup (row->path);
     }
   return NULL;
@@ -1073,6 +1108,16 @@ lk_app_model_bake_done (const char *out_dir, guint baked, gpointer user_data)
 {
   LkAppModel *self = user_data;
 
+  /* How the bake ended, before it is freed: a finished one records what it
+     could not prepare as refused, and a cancelled one records a stop. The
+     rescan is what counts them. */
+  if (self->pending_open_source != NULL)
+    {
+      lk_chart_sets_note_bake (self->chart_sets, self->pending_open_source,
+                               lk_chart_bake_job (self->bake));
+      lk_chart_sets_rescan (self->chart_sets, self->pending_open_source);
+    }
+
   /* The job leaked here for its whole life once: path arrays, labels, a
      mutex and the thread handle, per import. Destroy joins the worker (it
      has just returned) and frees the lot. */
@@ -1176,7 +1221,7 @@ lk_scan_done_idle (gpointer data)
       g_free (self->pending_open_source);
       self->pending_open_source = g_strdup (dir);
 
-      self->bake = lk_chart_bake_start (dir, set,
+      self->bake = lk_chart_bake_start (dir, set, self->chart_sets,
                                         lk_app_model_bake_progress,
                                         lk_app_model_bake_done, self);
       if (self->bake != NULL)
@@ -2025,8 +2070,13 @@ void
 lk_app_model_cancel_bake (LkAppModel *self)
 {
   g_return_if_fail (LK_IS_APP_MODEL (self));
-  if (self->bake != NULL)
-    lk_chart_bake_cancel (self->bake);
+  if (self->bake == NULL)
+    return;
+  /* The stop is recorded so the resume leaves this set alone until a scan
+     finds a file to prepare that was not there when it stopped. */
+  if (self->pending_open_source != NULL)
+    lk_chart_sets_note_cancel (self->chart_sets, self->pending_open_source);
+  lk_chart_bake_cancel (self->bake);
 }
 int         lk_app_model_get_view_width (LkAppModel *self)        { return self->view_width; }
 int         lk_app_model_get_view_height (LkAppModel *self)       { return self->view_height; }

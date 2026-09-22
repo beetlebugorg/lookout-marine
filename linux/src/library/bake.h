@@ -18,6 +18,7 @@
 #define LK_CHART_BAKE_H
 
 #include "library/scan.h"
+#include "library/sets.h"
 
 #include <glib-object.h>
 
@@ -80,14 +81,23 @@ typedef struct _LkChartBake LkChartBake;
 typedef void (*LkBakeProgressFunc) (const LkBakeProgress *progress, gpointer user_data);
 typedef void (*LkBakeDoneFunc) (const char *out_dir, guint baked, gpointer user_data);
 
-/* Bake everything in `set` that needs preparing, out of `source`. NULL when
- * there is nothing to do or the output directory cannot be made. The set is
- * borrowed for the length of the call only. */
+/* Bake everything that needs preparing out of `source`. NULL when there is
+ * none or the output directory cannot be made.
+ *
+ * The list comes from `sets`, which reads it off the core's own scan and
+ * includes a cell whose prepared chart is older than it. A folder on its
+ * first import is on no list and has had no core scan, so `set` is what the
+ * bake reads for that one. Both are borrowed for the length of the call. */
 LkChartBake *lk_chart_bake_start (const char        *source,
                                   const LkChartSet  *set,
+                                  LkChartSets       *sets,
                                   LkBakeProgressFunc on_progress,
                                   LkBakeDoneFunc     on_done,
                                   gpointer           user_data);
+
+/* The core's job behind this bake, for lk_chart_sets_note_bake. Borrowed, and
+ * valid until lk_chart_bake_destroy. */
+const lookout_bake *lk_chart_bake_job (LkChartBake *bake);
 
 /* Ask the bake to stop. tile57 stops at the next chart boundary, so this lands
  * within roughly one chart's bake time, not instantly. */
