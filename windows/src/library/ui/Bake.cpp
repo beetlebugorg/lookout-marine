@@ -54,11 +54,17 @@ namespace winrt::LookoutMarine::implementation
          * points share one buffer in the core and are not reentrant. */
         import_scanning = true;
         auto queue = DispatcherQueue();
-        std::thread([this, queue, path] {
+        // A weak reference across the thread: the window can close while the
+        // read is out, and the continuation runs after that.
+        auto weak = get_weak();
+        std::thread([weak, queue, path] {
             auto scan = std::make_shared<lkw::ScanResult>(lkw::ScanCharts(path));
-            queue.TryEnqueue([this, path, scan] {
-                import_scanning = false;
-                FinishImport(path, *scan);
+            queue.TryEnqueue([weak, path, scan] {
+                auto self = weak.get();
+                if (self == nullptr)
+                    return;
+                self->import_scanning = false;
+                self->FinishImport(path, *scan);
             });
         }).detach();
     }

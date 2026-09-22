@@ -900,11 +900,17 @@ namespace winrt::LookoutMarine::implementation
             auto queue = DispatcherQueue();
             std::string const dir = noaa_dest_dir;
             std::string const why = st.error;
-            std::thread([this, queue, dir, why] {
+            // A weak reference across the thread: the window can close while
+            // the read is out, and the continuation runs after that.
+            auto weak = get_weak();
+            std::thread([weak, queue, dir, why] {
                 auto scan = std::make_shared<lkw::ScanResult>(lkw::ScanCharts(dir));
-                queue.TryEnqueue([this, scan, why] {
-                    import_scanning = false;
-                    FirstRunStartBake(*scan, why);
+                queue.TryEnqueue([weak, scan, why] {
+                    auto self = weak.get();
+                    if (self == nullptr)
+                        return;
+                    self->import_scanning = false;
+                    self->FirstRunStartBake(*scan, why);
                 });
             }).detach();
         }
