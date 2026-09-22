@@ -207,11 +207,8 @@ lk_importing_fill_bands (LkImporting *self, const LkBakeProgress *work, gboolean
 
   if (work == NULL || work->n_bands == 0)
     {
-      GtkWidget *empty = gtk_label_new ("Counted once the folder has been read.");
+      GtkWidget *empty = lk_caption ("Counted once the folder has been read.");
 
-      gtk_widget_add_css_class (empty, "dim-label");
-      gtk_widget_add_css_class (empty, "caption");
-      gtk_label_set_xalign (GTK_LABEL (empty), 0.0);
       gtk_box_append (GTK_BOX (self->bands), empty);
       return;
     }
@@ -456,12 +453,9 @@ lk_first_run_importing_new (LkFirstRunFlow *flow)
   gtk_widget_set_margin_top (phases, 18);
   gtk_box_append (GTK_BOX (column), phases);
 
-  GtkWidget *note = gtk_label_new ("Lookout stores the prepared charts in its own "
+  GtkWidget *note = lk_caption ("Lookout stores the prepared charts in its own "
                                    "folder and never writes to your download.");
-  gtk_widget_add_css_class (note, "dim-label");
-  gtk_widget_add_css_class (note, "caption");
   gtk_label_set_wrap (GTK_LABEL (note), TRUE);
-  gtk_label_set_xalign (GTK_LABEL (note), 0.0);
   gtk_widget_set_margin_top (note, 18);
   gtk_box_append (GTK_BOX (column), note);
 

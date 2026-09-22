@@ -185,14 +185,11 @@ lk_radio_row (GtkWidget    *section,
   GtkWidget *check = gtk_check_button_new ();
   GtkWidget *stack = gtk_box_new (GTK_ORIENTATION_VERTICAL, 1);
   GtkWidget *label = gtk_label_new (title);
-  GtkWidget *sub = gtk_label_new (desc);
+  GtkWidget *sub = lk_caption (desc);
   LkRadioBinding *binding = g_new0 (LkRadioBinding, 1);
 
   gtk_label_set_xalign (GTK_LABEL (label), 0.0);
-  gtk_label_set_xalign (GTK_LABEL (sub), 0.0);
   gtk_label_set_wrap (GTK_LABEL (sub), TRUE);
-  gtk_widget_add_css_class (sub, "dim-label");
-  gtk_widget_add_css_class (sub, "caption");
   gtk_box_append (GTK_BOX (stack), label);
   gtk_box_append (GTK_BOX (stack), sub);
 

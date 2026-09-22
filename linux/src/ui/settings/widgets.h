@@ -7,6 +7,7 @@
  */
 #pragma once
 
+#include "ui/caption.h"
 #include "ui/settings/private.h"
 
 G_BEGIN_DECLS

@@ -220,13 +220,10 @@ lk_settings_fill_links_list (LkSettings *settings)
     {
       GtkWidget *row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
       GtkWidget *spinner = gtk_spinner_new ();
-      GtkWidget *label = gtk_label_new ("Reading the chart…");
+      GtkWidget *label = lk_caption ("Reading the chart…");
 
       gtk_spinner_set_spinning (GTK_SPINNER (spinner), TRUE);
       gtk_widget_set_valign (spinner, GTK_ALIGN_CENTER);
-      gtk_widget_add_css_class (label, "dim-label");
-      gtk_widget_add_css_class (label, "caption");
-      gtk_label_set_xalign (GTK_LABEL (label), 0.0);
       gtk_box_append (GTK_BOX (row), spinner);
       gtk_box_append (GTK_BOX (row), label);
       gtk_box_append (GTK_BOX (list), row);
@@ -245,14 +242,11 @@ lk_settings_fill_links_list (LkSettings *settings)
 
   if (lk_chart_links_active (links) != NULL)
     {
-      GtkWidget *label = gtk_label_new (
+      GtkWidget *label = lk_caption (
           "While a linked chart draws, the display, depth and symbol settings do not "
           "shape it. You are seeing its publisher's own portrayal.");
 
-      gtk_widget_add_css_class (label, "dim-label");
-      gtk_widget_add_css_class (label, "caption");
       gtk_label_set_wrap (GTK_LABEL (label), TRUE);
-      gtk_label_set_xalign (GTK_LABEL (label), 0.0);
       gtk_box_append (GTK_BOX (list), label);
     }
 }
@@ -481,7 +475,7 @@ lk_raster_group_row (LkSettings *settings, GtkWidget *list, const LkRasterGroup 
    * and the pill is how a mariner tells them apart without a heading
    * splitting the list in two. */
   GtkWidget *kind = gtk_label_new ("RASTER");
-  GtkWidget *name = gtk_label_new (group->name);
+  GtkWidget *name = lk_caption (group->name);
   g_autofree char *count = g_strdup_printf (group->paths->len == 1 ? "%u file" : "%u files",
                                             group->paths->len);
   GtkWidget *files = gtk_label_new (count);
@@ -490,10 +484,7 @@ lk_raster_group_row (LkSettings *settings, GtkWidget *list, const LkRasterGroup 
   gtk_widget_add_css_class (kind, "lk-type-pill");
   gtk_widget_add_css_class (kind, "dim-label");
   gtk_widget_set_valign (kind, GTK_ALIGN_CENTER);
-  gtk_widget_add_css_class (name, "caption");
   if (!any_on)
-    gtk_widget_add_css_class (name, "dim-label");
-  gtk_label_set_xalign (GTK_LABEL (name), 0.0);
   gtk_label_set_ellipsize (GTK_LABEL (name), PANGO_ELLIPSIZE_END);
   gtk_widget_add_css_class (files, "dim-label");
   gtk_widget_add_css_class (files, "caption");
@@ -573,6 +564,169 @@ lk_sets_list_rule (GtkWidget *list)
     gtk_box_append (GTK_BOX (list), gtk_separator_new (GTK_ORIENTATION_HORIZONTAL));
 }
 
+/* The title, the mark on a managed set, and the lines under them. */
+static void
+lk_set_row_column (LkSettings *settings, const LkChartSetRow *set, GtkWidget *column)
+{
+    GtkWidget *title = gtk_label_new (set->title);
+    GtkWidget *action;
+
+    gtk_widget_add_css_class (title, "heading");
+    gtk_label_set_xalign (GTK_LABEL (title), 0.0);
+    gtk_label_set_ellipsize (GTK_LABEL (title), PANGO_ELLIPSIZE_END);
+
+    /* WHO OWNS THIS SET. Charts go in and out of a managed set through the
+     * NOAA chart downloader. Without the mark a mariner reads the download
+     * as a folder they picked, and looks for it on the disk
+     * (apple/LookoutMarine/Charts/ChartsSection.swift, ManagedBadge). */
+    if (set->managed)
+      {
+        GtkWidget *line = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
+        /* Two words here, where the reference uses a sentence. This pane
+         * is about 430 points wide against the reference's 460. The title
+         * is the only label on the line that can shrink, so a five-word
+         * pill reduced it to an ellipsis. The full sentence is in the
+         * tooltip and the accessible label. */
+        GtkWidget *pill = gtk_label_new ("NOAA downloader");
+
+        gtk_widget_add_css_class (pill, "lk-managed-pill");
+        gtk_widget_set_valign (pill, GTK_ALIGN_CENTER);
+        gtk_widget_set_tooltip_text (pill, "Managed by the NOAA chart downloader.");
+        gtk_accessible_update_property (GTK_ACCESSIBLE (pill),
+                                        GTK_ACCESSIBLE_PROPERTY_LABEL,
+                                        "Managed by the NOAA chart downloader", -1);
+        gtk_box_append (GTK_BOX (line), title);
+        gtk_box_append (GTK_BOX (line), pill);
+        gtk_box_append (GTK_BOX (column), line);
+      }
+    else
+      gtk_box_append (GTK_BOX (column), title);
+
+    /* ONE line under the title, not two. Where it came from and what it
+     * holds are both about the same set, and stacking them made a row three
+     * lines deep that read as three facts. The folder shows only when the
+     * agency title has replaced it (apple/…/ChartsSection.swift). */
+    g_autofree char *under = NULL;
+
+    if (g_strcmp0 (set->title, set->name) != 0 && set->detail[0] != '\0')
+      under = g_strdup_printf ("%s · %s", set->name, set->detail);
+    else if (g_strcmp0 (set->title, set->name) != 0)
+      under = g_strdup (set->name);
+    else if (set->detail[0] != '\0')
+      under = g_strdup (set->detail);
+
+    if (under != NULL)
+      {
+        GtkWidget *caption = lk_caption (under);
+
+        gtk_label_set_ellipsize (GTK_LABEL (caption), PANGO_ELLIPSIZE_MIDDLE);
+        gtk_box_append (GTK_BOX (column), caption);
+      }
+
+    /* What this set holds that another set draws in its place. Two sets can
+     * hold the same cell, and the chart draws one copy, so the count on the
+     * row is more than the chart shows. */
+    if (set->held_back > 0)
+      {
+        g_autofree char *held =
+            g_strdup_printf (set->held_back == 1
+                                 ? "1 chart also in another set"
+                                 : "%u charts also in another set",
+                             set->held_back);
+        GtkWidget *caption = lk_caption (held);
+
+        gtk_box_append (GTK_BOX (column), caption);
+      }
+}
+
+/* The one control at the right of a set's row. */
+static GtkWidget *
+lk_set_row_action (LkSettings *settings, const LkChartSetRow *set)
+{
+  GtkWidget *action;
+
+    /* The managed set is removed through the NOAA picker, so this row
+     * opens it. Remove on this row deleted the prepared charts and left the
+     * downloaded cells under downloads/NOAA, which no page lists. The
+     * picker's region record still counted that water as held. The
+     * reference gives the managed row the same button
+     * (apple/LookoutMarine/Charts/ChartsSection.swift, ChartSetRow). */
+    if (set->managed)
+      {
+        action = gtk_button_new_with_label ("Manage…");
+
+        gtk_button_set_has_frame (GTK_BUTTON (action), FALSE);
+        gtk_widget_add_css_class (action, "caption");
+        /* Accent color, because a frameless button beside dimmed text
+         * reads as disabled. */
+        gtk_widget_add_css_class (action, "lk-accent");
+        gtk_widget_set_valign (action, GTK_ALIGN_CENTER);
+        gtk_widget_set_tooltip_text (action, "Add or remove this water in the NOAA "
+                                             "chart downloader.");
+        gtk_accessible_update_property (GTK_ACCESSIBLE (action),
+                                        GTK_ACCESSIBLE_PROPERTY_LABEL,
+                                        "Manage the NOAA charts", -1);
+        g_signal_connect (action, "clicked", G_CALLBACK (lk_charts_noaa_clicked),
+                          settings);
+      }
+    else
+      {
+        action = gtk_button_new_from_icon_name ("lk-remove-symbolic");
+
+        gtk_button_set_has_frame (GTK_BUTTON (action), FALSE);
+        gtk_widget_set_valign (action, GTK_ALIGN_CENTER);
+        gtk_widget_set_tooltip_text (action,
+                                     set->derived
+                                         ? "Remove from the library. Charts Lookout "
+                                           "prepared from it are deleted; your folder "
+                                           "is not touched."
+                                         : "Take these charts out of the list. Your "
+                                           "files stay where they are.");
+        gtk_accessible_update_property (GTK_ACCESSIBLE (action),
+                                        GTK_ACCESSIBLE_PROPERTY_LABEL, "Remove chart set",
+                                        -1);
+
+        g_object_set_data_full (G_OBJECT (action), "lk-path", g_strdup (set->path),
+                                g_free);
+        g_object_set_data_full (G_OBJECT (action), "lk-set-title", g_strdup (set->title),
+                                g_free);
+        g_object_set_data (G_OBJECT (action), "lk-set-charts",
+                           GUINT_TO_POINTER (set->charts));
+        if (set->derived)
+          g_object_set_data (G_OBJECT (action), "lk-set-derived", GINT_TO_POINTER (1));
+        g_signal_connect (action, "clicked", G_CALLBACK (lk_chart_set_remove_clicked),
+                          settings);
+      }
+  return action;
+}
+
+/* What hangs under a set's row: the scales it holds, what NOAA has reissued,
+ * and the count still to prepare. */
+static void
+lk_set_row_extras (LkSettings *settings, const LkChartSetRow *set, GtkWidget *entry)
+{
+    /* What scales it holds. A set that stops at Coastal does not draw the
+     * harbour a passage ends in. */
+    if (lk_band_ramp_count (set->bands) > 0)
+      {
+        GtkWidget *ramp = lk_band_ramp_new (set->bands);
+
+        gtk_widget_set_margin_start (ramp, 30);
+        gtk_widget_set_opacity (ramp, set->on ? 1.0 : 0.5);
+        gtk_box_append (GTK_BOX (entry), ramp);
+      }
+
+    /* What is still to prepare. */
+    if (set->to_prepare > 0)
+      {
+        g_autofree char *text = g_strdup_printf ("%u to prepare", set->to_prepare);
+        GtkWidget *label = lk_caption (text);
+
+        gtk_widget_set_margin_start (label, 30);
+        gtk_box_append (GTK_BOX (entry), label);
+      }
+}
+
 static void
 lk_settings_fill_sets_list (LkSettings *settings)
 {
@@ -636,81 +790,8 @@ lk_settings_fill_sets_list (LkSettings *settings)
       GtkWidget *row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 10);
       GtkWidget *toggle = lk_settings_switch (set->on);
       GtkWidget *column = gtk_box_new (GTK_ORIENTATION_VERTICAL, 2);
-      GtkWidget *title = gtk_label_new (set->title);
       GtkWidget *action;
-
-      gtk_widget_add_css_class (title, "heading");
-      gtk_label_set_xalign (GTK_LABEL (title), 0.0);
-      gtk_label_set_ellipsize (GTK_LABEL (title), PANGO_ELLIPSIZE_END);
-
-      /* WHO OWNS THIS SET. Charts go in and out of a managed set through the
-       * NOAA chart downloader. Without the mark a mariner reads the download
-       * as a folder they picked, and looks for it on the disk
-       * (apple/LookoutMarine/Charts/ChartsSection.swift, ManagedBadge). */
-      if (set->managed)
-        {
-          GtkWidget *line = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
-          /* Two words here, where the reference uses a sentence. This pane
-           * is about 430 points wide against the reference's 460. The title
-           * is the only label on the line that can shrink, so a five-word
-           * pill reduced it to an ellipsis. The full sentence is in the
-           * tooltip and the accessible label. */
-          GtkWidget *pill = gtk_label_new ("NOAA downloader");
-
-          gtk_widget_add_css_class (pill, "lk-managed-pill");
-          gtk_widget_set_valign (pill, GTK_ALIGN_CENTER);
-          gtk_widget_set_tooltip_text (pill, "Managed by the NOAA chart downloader.");
-          gtk_accessible_update_property (GTK_ACCESSIBLE (pill),
-                                          GTK_ACCESSIBLE_PROPERTY_LABEL,
-                                          "Managed by the NOAA chart downloader", -1);
-          gtk_box_append (GTK_BOX (line), title);
-          gtk_box_append (GTK_BOX (line), pill);
-          gtk_box_append (GTK_BOX (column), line);
-        }
-      else
-        gtk_box_append (GTK_BOX (column), title);
-
-      /* ONE line under the title, not two. Where it came from and what it
-       * holds are both about the same set, and stacking them made a row three
-       * lines deep that read as three facts. The folder shows only when the
-       * agency title has replaced it (apple/…/ChartsSection.swift). */
-      g_autofree char *under = NULL;
-
-      if (g_strcmp0 (set->title, set->name) != 0 && set->detail[0] != '\0')
-        under = g_strdup_printf ("%s · %s", set->name, set->detail);
-      else if (g_strcmp0 (set->title, set->name) != 0)
-        under = g_strdup (set->name);
-      else if (set->detail[0] != '\0')
-        under = g_strdup (set->detail);
-
-      if (under != NULL)
-        {
-          GtkWidget *caption = gtk_label_new (under);
-
-          gtk_widget_add_css_class (caption, "dim-label");
-          gtk_widget_add_css_class (caption, "caption");
-          gtk_label_set_xalign (GTK_LABEL (caption), 0.0);
-          gtk_label_set_ellipsize (GTK_LABEL (caption), PANGO_ELLIPSIZE_MIDDLE);
-          gtk_box_append (GTK_BOX (column), caption);
-        }
-
-      /* What this set holds that another set draws in its place. Two sets can
-       * hold the same cell, and the chart draws one copy, so the count on the
-       * row is more than the chart shows. */
-      if (set->held_back > 0)
-        {
-          g_autofree char *held =
-              g_strdup_printf (set->held_back == 1
-                                   ? "1 chart also in another set"
-                                   : "%u charts also in another set",
-                               set->held_back);
-          GtkWidget *caption = gtk_label_new (held);
-
-          gtk_widget_add_css_class (caption, "dim-label");
-          gtk_widget_add_css_class (caption, "caption");
-          gtk_label_set_xalign (GTK_LABEL (caption), 0.0);
-          gtk_box_append (GTK_BOX (column), caption);
-        }
+      lk_set_row_column (settings, set, column);
       gtk_widget_set_hexpand (column, TRUE);
 
       /* The agency title can hide the folder name; the tooltip keeps the
@@ -721,58 +802,7 @@ lk_settings_fill_sets_list (LkSettings *settings)
       g_signal_connect (toggle, "notify::active", G_CALLBACK (lk_chart_set_toggled),
                         settings);
 
-      /* The managed set is removed through the NOAA picker, so this row
-       * opens it. Remove on this row deleted the prepared charts and left the
-       * downloaded cells under downloads/NOAA, which no page lists. The
-       * picker's region record still counted that water as held. The
-       * reference gives the managed row the same button
-       * (apple/LookoutMarine/Charts/ChartsSection.swift, ChartSetRow). */
-      if (set->managed)
-        {
-          action = gtk_button_new_with_label ("Manage…");
-
-          gtk_button_set_has_frame (GTK_BUTTON (action), FALSE);
-          gtk_widget_add_css_class (action, "caption");
-          /* Accent color, because a frameless button beside dimmed text
-           * reads as disabled. */
-          gtk_widget_add_css_class (action, "lk-accent");
-          gtk_widget_set_valign (action, GTK_ALIGN_CENTER);
-          gtk_widget_set_tooltip_text (action, "Add or remove this water in the NOAA "
-                                               "chart downloader.");
-          gtk_accessible_update_property (GTK_ACCESSIBLE (action),
-                                          GTK_ACCESSIBLE_PROPERTY_LABEL,
-                                          "Manage the NOAA charts", -1);
-          g_signal_connect (action, "clicked", G_CALLBACK (lk_charts_noaa_clicked),
-                            settings);
-        }
-      else
-        {
-          action = gtk_button_new_from_icon_name ("lk-remove-symbolic");
-
-          gtk_button_set_has_frame (GTK_BUTTON (action), FALSE);
-          gtk_widget_set_valign (action, GTK_ALIGN_CENTER);
-          gtk_widget_set_tooltip_text (action,
-                                       set->derived
-                                           ? "Remove from the library. Charts Lookout "
-                                             "prepared from it are deleted; your folder "
-                                             "is not touched."
-                                           : "Take these charts out of the list. Your "
-                                             "files stay where they are.");
-          gtk_accessible_update_property (GTK_ACCESSIBLE (action),
-                                          GTK_ACCESSIBLE_PROPERTY_LABEL, "Remove chart set",
-                                          -1);
-
-          g_object_set_data_full (G_OBJECT (action), "lk-path", g_strdup (set->path),
-                                  g_free);
-          g_object_set_data_full (G_OBJECT (action), "lk-set-title", g_strdup (set->title),
-                                  g_free);
-          g_object_set_data (G_OBJECT (action), "lk-set-charts",
-                             GUINT_TO_POINTER (set->charts));
-          if (set->derived)
-            g_object_set_data (G_OBJECT (action), "lk-set-derived", GINT_TO_POINTER (1));
-          g_signal_connect (action, "clicked", G_CALLBACK (lk_chart_set_remove_clicked),
-                            settings);
-        }
+      action = lk_set_row_action (settings, set);
 
       gtk_box_append (GTK_BOX (row), toggle);
       gtk_box_append (GTK_BOX (row), column);
@@ -820,29 +850,7 @@ lk_settings_fill_sets_list (LkSettings *settings)
           gtk_box_append (GTK_BOX (entry), line);
         }
 
-      /* What scales it holds. A set that stops at Coastal does not draw the
-       * harbour a passage ends in. */
-      if (lk_band_ramp_count (set->bands) > 0)
-        {
-          GtkWidget *ramp = lk_band_ramp_new (set->bands);
-
-          gtk_widget_set_margin_start (ramp, 30);
-          gtk_widget_set_opacity (ramp, set->on ? 1.0 : 0.5);
-          gtk_box_append (GTK_BOX (entry), ramp);
-        }
-
-      /* What is still to prepare. */
-      if (set->to_prepare > 0)
-        {
-          g_autofree char *text = g_strdup_printf ("%u to prepare", set->to_prepare);
-          GtkWidget *label = gtk_label_new (text);
-
-          gtk_widget_add_css_class (label, "dim-label");
-          gtk_widget_add_css_class (label, "caption");
-          gtk_label_set_xalign (GTK_LABEL (label), 0.0);
-          gtk_widget_set_margin_start (label, 30);
-          gtk_box_append (GTK_BOX (entry), label);
-        }
+      lk_set_row_extras (settings, set, entry);
 
       /* The pictures this set came in with. */
       for (guint g = 0; g < groups->len; g++)
@@ -1134,7 +1142,7 @@ lk_add_chart_face (const char *icon_name, const char *title, const char *detail,
   GtkWidget *icon = gtk_image_new_from_icon_name (icon_name);
   GtkWidget *column = gtk_box_new (GTK_ORIENTATION_VERTICAL, 3);
   GtkWidget *name = gtk_label_new (title);
-  GtkWidget *blurb = gtk_label_new (detail);
+  GtkWidget *blurb = lk_caption (detail);
   GtkWidget *chevron = gtk_image_new_from_icon_name ("go-next-symbolic");
 
   gtk_image_set_pixel_size (GTK_IMAGE (icon), 17);
@@ -1143,9 +1151,6 @@ lk_add_chart_face (const char *icon_name, const char *title, const char *detail,
 
   gtk_widget_add_css_class (name, "heading");
   gtk_label_set_xalign (GTK_LABEL (name), 0.0);
-  gtk_widget_add_css_class (blurb, "dim-label");
-  gtk_widget_add_css_class (blurb, "caption");
-  gtk_label_set_xalign (GTK_LABEL (blurb), 0.0);
   gtk_label_set_wrap (GTK_LABEL (blurb), TRUE);
   /* A GtkMenuButton measures its child at no width, so a line that wraps
    * reports one line's height and the second line is clipped. A cap on the

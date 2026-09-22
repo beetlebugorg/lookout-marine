@@ -12,6 +12,7 @@
 #include "model/mariner.h"
 
 #include <gtk/gtk.h>
+#include "ui/caption.h"
 
 G_BEGIN_DECLS
 

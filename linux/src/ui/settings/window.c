@@ -357,11 +357,8 @@ lk_settings_window_new (LkAppModel *model, GtkWindow *parent, const char *tab)
 
   /* The one thing the whole window promises. It stands under the list of
    * sections rather than repeating itself inside every one of them. */
-  GtkWidget *promise = gtk_label_new ("Applies at once · kept for next launch");
-  gtk_widget_add_css_class (promise, "dim-label");
-  gtk_widget_add_css_class (promise, "caption");
+  GtkWidget *promise = lk_caption ("Applies at once · kept for next launch");
   gtk_label_set_wrap (GTK_LABEL (promise), TRUE);
-  gtk_label_set_xalign (GTK_LABEL (promise), 0.0);
   gtk_widget_set_margin_start (promise, 14);
   gtk_widget_set_margin_end (promise, 14);
   gtk_widget_set_margin_bottom (promise, 10);

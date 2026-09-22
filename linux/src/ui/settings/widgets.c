@@ -55,12 +55,9 @@ lk_group (GtkWidget *section, int spacing)
 GtkWidget *
 lk_footer (GtkWidget *section, const char *text)
 {
-  GtkWidget *label = gtk_label_new (text);
+  GtkWidget *label = lk_caption (text);
 
-  gtk_widget_add_css_class (label, "dim-label");
-  gtk_widget_add_css_class (label, "caption");
   gtk_label_set_wrap (GTK_LABEL (label), TRUE);
-  gtk_label_set_xalign (GTK_LABEL (label), 0.0);
   /* Clear of the shelf or the last row above it. A note that runs straight on
    * from the edge over it reads as part of that, and not as a note on the
    * whole section. */

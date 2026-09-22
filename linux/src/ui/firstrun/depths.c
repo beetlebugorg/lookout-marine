@@ -270,7 +270,7 @@ lk_depth_fill_derived (LkDepthStep *step)
       GtkWidget *head = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 10);
       GtkWidget *name = gtk_label_new (rows[i].name);
       GtkWidget *value = gtk_label_new (rows[i].value);
-      GtkWidget *why = gtk_label_new (rows[i].why);
+      GtkWidget *why = lk_caption (rows[i].why);
 
       gtk_widget_add_css_class (name, "dim-label");
       gtk_label_set_xalign (GTK_LABEL (name), 0.0);
@@ -279,10 +279,7 @@ lk_depth_fill_derived (LkDepthStep *step)
       gtk_box_append (GTK_BOX (head), name);
       gtk_box_append (GTK_BOX (head), value);
 
-      gtk_widget_add_css_class (why, "dim-label");
-      gtk_widget_add_css_class (why, "caption");
       gtk_label_set_wrap (GTK_LABEL (why), TRUE);
-      gtk_label_set_xalign (GTK_LABEL (why), 0.0);
 
       gtk_box_append (GTK_BOX (box), head);
       gtk_box_append (GTK_BOX (box), why);
@@ -424,11 +421,8 @@ lk_first_run_depths_new (LkFirstRunFlow *flow)
   gtk_widget_set_margin_top (unit_row, 9);
   gtk_box_append (GTK_BOX (boat), unit_row);
 
-  GtkWidget *draft_why = gtk_label_new ("Deepest point of the hull below the "
+  GtkWidget *draft_why = lk_caption ("Deepest point of the hull below the "
                                         "waterline, keel included.");
-  gtk_widget_add_css_class (draft_why, "dim-label");
-  gtk_widget_add_css_class (draft_why, "caption");
-  gtk_label_set_xalign (GTK_LABEL (draft_why), 0.0);
   gtk_label_set_wrap (GTK_LABEL (draft_why), TRUE);
   gtk_widget_set_margin_top (draft_why, 8);
   gtk_box_append (GTK_BOX (boat), draft_why);

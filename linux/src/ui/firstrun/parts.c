@@ -151,7 +151,7 @@ lk_step_note (const char *icon_name, const char *markup)
 {
   GtkWidget *row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
   GtkWidget *icon = gtk_image_new_from_icon_name (icon_name);
-  GtkWidget *text = gtk_label_new (NULL);
+  GtkWidget *text = lk_caption (NULL);
 
   gtk_image_set_pixel_size (GTK_IMAGE (icon), 13);
   gtk_widget_add_css_class (icon, "dim-label");
@@ -159,10 +159,7 @@ lk_step_note (const char *icon_name, const char *markup)
   gtk_widget_set_margin_top (icon, 2);
 
   gtk_label_set_markup (GTK_LABEL (text), markup);
-  gtk_widget_add_css_class (text, "dim-label");
-  gtk_widget_add_css_class (text, "caption");
   gtk_label_set_wrap (GTK_LABEL (text), TRUE);
-  gtk_label_set_xalign (GTK_LABEL (text), 0.0);
   gtk_widget_set_hexpand (text, TRUE);
 
   gtk_box_append (GTK_BOX (row), icon);
