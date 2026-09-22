@@ -133,13 +133,13 @@ pub const Sets = struct {
     /// shell reads `files` inside a loop over `all`, and a scan can land
     /// between the two reads.
     reads: std.heap.ArenaAllocator,
-    /// The arenas a landing scan replaced.
+    /// What landing scans replaced.
     ///
-    /// A read hands out pointers into a row's files_arena. `land` runs on the
-    /// scan worker, so freeing it there takes the list out from under a shell
-    /// walking it. It is held here instead and freed at the head of the next
-    /// read.
-    retired: std.ArrayList(std.heap.ArenaAllocator) = .empty,
+    /// A read hands out pointers into a row's files_arena, its openable paths
+    /// and its producer. `land` runs on the scan worker, and a shell may be
+    /// walking the list on its own thread. They are held here and freed at
+    /// the head of the next read.
+    retired: std.ArrayList(Retired) = .empty,
 
     const group = settings.group_chartsets;
     const paths_key = "paths";
@@ -207,7 +207,7 @@ pub const Sets = struct {
         self.rows.deinit(self.gpa);
         for (self.queue.items) |p| self.gpa.free(p);
         self.queue.deinit(self.gpa);
-        for (self.retired.items) |*a| a.deinit();
+        for (self.retired.items) |*x| x.free(self.gpa);
         self.retired.deinit(self.gpa);
         self.gpa.free(self.prepared_root);
         self.reads.deinit();
@@ -218,11 +218,7 @@ pub const Sets = struct {
         self.gpa.free(r.path);
         self.gpa.free(r.title);
         self.gpa.free(r.producer);
-        for (r.openable) |o| {
-            self.gpa.free(o.path);
-            self.gpa.free(o.name);
-        }
-        self.gpa.free(r.openable);
+        freeOpenable(self.gpa, r.openable);
         if (r.files_arena) |*a| a.deinit();
     }
 
@@ -247,7 +243,7 @@ pub const Sets = struct {
     /// the lock, so the generation a caller was handed last time goes only
     /// once that caller has come back for another.
     fn releaseRetired(self: *Sets) void {
-        for (self.retired.items) |*a| a.deinit();
+        for (self.retired.items) |*x| x.free(self.gpa);
         self.retired.clearRetainingCapacity();
     }
 
@@ -781,18 +777,8 @@ pub const Sets = struct {
         defer self.mu.unlock();
         for (self.rows.items) |*r| {
             if (!std.mem.eql(u8, r.path, path)) continue;
-            for (r.openable) |o| {
-                self.gpa.free(o.path);
-                self.gpa.free(o.name);
-            }
-            self.gpa.free(r.openable);
+            var old: Retired = .{ .arena = r.files_arena, .openable = r.openable };
             r.openable = openable.toOwnedSlice(self.gpa) catch &.{};
-            if (r.files_arena) |old_arena| {
-                self.retired.append(self.gpa, old_arena) catch {
-                    var tmp = old_arena;
-                    tmp.deinit();
-                };
-            }
             r.files_arena = files_arena;
             r.files = found.items;
             r.charts = charts;
@@ -805,10 +791,11 @@ pub const Sets = struct {
             // The agency when the charts agree on one, else the folder name.
             if (scan.producer) |p| {
                 if (self.gpa.dupeZ(u8, &p)) |owned| {
-                    self.gpa.free(r.producer);
+                    old.producer = r.producer;
                     r.producer = owned;
                 } else |_| {}
             }
+            self.retired.append(self.gpa, old) catch old.free(self.gpa);
             self.dirty = true;
             return;
         }
@@ -821,6 +808,28 @@ pub const Sets = struct {
         files_arena.deinit();
     }
 };
+
+/// What one landing scan replaced on a row. A read may still point into any
+/// of it.
+const Retired = struct {
+    arena: ?std.heap.ArenaAllocator = null,
+    openable: []Openable = &.{},
+    producer: ?[:0]u8 = null,
+
+    fn free(self: *Retired, gpa: std.mem.Allocator) void {
+        if (self.arena) |*a| a.deinit();
+        freeOpenable(gpa, self.openable);
+        if (self.producer) |p| gpa.free(p);
+    }
+};
+
+fn freeOpenable(gpa: std.mem.Allocator, list: []Openable) void {
+    for (list) |o| {
+        gpa.free(o.path);
+        gpa.free(o.name);
+    }
+    gpa.free(list);
+}
 
 // ---- tests ---------------------------------------------------------------------
 
@@ -871,6 +880,75 @@ const Fixture = struct {
 
     fn open(self: *Fixture) !*Sets {
         return Sets.open(t.allocator, self.io, self.store, "", null);
+    }
+};
+
+/// A test allocator over `t.allocator` that records the ranges freed and the
+/// bytes live. The scan worker allocates as well, so it locks.
+///
+/// It never resizes in place, so every change of size is an alloc and a free
+/// that it sees.
+const Watch = struct {
+    mu: Lock = .{},
+    live: usize = 0,
+    freed: std.ArrayList([2]usize) = .empty,
+
+    fn allocator(self: *Watch) std.mem.Allocator {
+        return .{ .ptr = self, .vtable = &.{
+            .alloc = alloc,
+            .resize = std.mem.Allocator.noResize,
+            .remap = std.mem.Allocator.noRemap,
+            .free = free,
+        } };
+    }
+
+    fn deinit(self: *Watch) void {
+        self.freed.deinit(t.allocator);
+    }
+
+    /// True when `ptr` lies in memory freed since it was last allocated.
+    fn wasFreed(self: *Watch, ptr: *const anyopaque) bool {
+        const at = @intFromPtr(ptr);
+        self.mu.lock();
+        defer self.mu.unlock();
+        for (self.freed.items) |r| {
+            if (at >= r[0] and at < r[1]) return true;
+        }
+        return false;
+    }
+
+    fn liveBytes(self: *Watch) usize {
+        self.mu.lock();
+        defer self.mu.unlock();
+        return self.live;
+    }
+
+    fn alloc(ctx: *anyopaque, len: usize, al: std.mem.Alignment, ra: usize) ?[*]u8 {
+        const self: *Watch = @ptrCast(@alignCast(ctx));
+        const p = t.allocator.rawAlloc(len, al, ra) orelse return null;
+        self.mu.lock();
+        defer self.mu.unlock();
+        self.live += len;
+        // Memory handed out again is no longer freed.
+        const lo = @intFromPtr(p);
+        var i: usize = 0;
+        while (i < self.freed.items.len) {
+            const r = self.freed.items[i];
+            if (r[0] < lo + len and lo < r[1]) {
+                _ = self.freed.swapRemove(i);
+            } else i += 1;
+        }
+        return p;
+    }
+
+    fn free(ctx: *anyopaque, mem: []u8, al: std.mem.Alignment, ra: usize) void {
+        const self: *Watch = @ptrCast(@alignCast(ctx));
+        self.mu.lock();
+        self.live -= mem.len;
+        const at = @intFromPtr(mem.ptr);
+        self.freed.append(t.allocator, .{ at, at + @max(mem.len, 1) }) catch {};
+        self.mu.unlock();
+        t.allocator.rawFree(mem, al, ra);
     }
 };
 
@@ -1452,4 +1530,32 @@ test "the list stays valid across a file read after a scan lands" {
         try t.expectEqual(w.band_hi, r.band_hi);
     }
     try t.expectEqualStrings(b, std.mem.span(rows[1].path));
+}
+
+test "a list held across a finished scan keeps its producer" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const dir = try f.folder("Set A");
+    defer t.allocator.free(dir);
+
+    var w: Watch = .{};
+    defer w.deinit();
+    const s = try Sets.open(w.allocator(), f.io, f.store, "", null);
+    defer s.close();
+    try t.expect(s.add(dir));
+    settle(s);
+
+    // The list is read after the rescan is asked for, so the only thing
+    // between it and the checks below is the worker landing the scan.
+    try t.expect(s.rescan(dir));
+    const rows = s.all();
+    const producer = rows[0].producer;
+    const composed = s.compose();
+    try t.expectEqual(@as(usize, 1), composed.len);
+    settle(s);
+
+    // The scan replaced both, and freed neither.
+    try t.expect(!w.wasFreed(producer));
+    try t.expectEqualStrings("US", std.mem.span(producer));
+    try t.expect(!w.wasFreed(composed[0]));
 }
