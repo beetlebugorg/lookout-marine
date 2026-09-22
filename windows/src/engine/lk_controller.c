@@ -19,7 +19,7 @@ struct lk_controller {
  *
  * MADE ONCE, BEFORE EITHER THREAD LOOKS AT IT. The wait runs on the render
  * thread and the kick on the UI thread, so creating it lazily inside the wait
- * was one thread writing the handle while the other read it — and every kick
+ * was one thread writing the handle while the other read it, and every kick
  * before the render thread's first park was dropped on the floor. InitOnce
  * makes the creation happen exactly once, whichever thread arrives first. */
 static INIT_ONCE render_wake_once = INIT_ONCE_STATIC_INIT;
@@ -92,7 +92,7 @@ apply_env_view(lookout *h)
 lk_controller *
 lk_controller_new(void)
 {
-    /* The core's cache-dir fallbacks are XDG_CACHE_HOME then HOME — neither
+    /* The core's cache-dir fallbacks are XDG_CACHE_HOME then HOME: neither
      * exists on Windows, so without this the atlas cache has nowhere to live
      * and every launch pays the one-time bake again (the Android shell makes
      * the same call with its Context cache dir). */
@@ -161,7 +161,7 @@ load_bundled_plugins(lookout *h)
 
 /* Bundled first, then installed. The order is the precedence the core
  * documents: LOOKOUT_PLUGINS (which loads at open, before this runs), then
- * bundled, then installed — on an id collision the first copy loaded wins. */
+ * bundled, then installed: on an id collision the first copy loaded wins. */
 static void
 load_plugins(lookout *h)
 {
@@ -205,7 +205,7 @@ lk_controller_set_plugin_config(lk_controller *self, const char *id, const char 
 }
 
 /* Every const char* a plugin query returns is borrowed into ONE shared scratch
- * buffer, invalidated by the next query — whichever query that is. So every
+ * buffer, invalidated by the next query, whichever query that is. So every
  * wrapper that still hands back a string copies out before it returns. A read
  * owns its own arena and needs none of this. */
 static char *
@@ -479,7 +479,7 @@ lk_controller_open(lk_controller *self, const char *const *paths, int n,
     /* A first run (no saved pose) takes the core's default view, not
      * fit_chart: fitting a big library lands on an arbitrary harbor cell, and
      * the default keeps that centre but pulls back to an overview (the one
-     * piece of this policy the core keeps in one place — see lookout.h). */
+     * piece of this policy the core keeps in one place: see lookout.h). */
     if (!lk_store_has_saved_view()) {
         lookout_view v;
         lookout_default_view(h, &v);
@@ -651,7 +651,7 @@ lk_controller_screen_of(lk_controller *self, double lon, double lat, double *x, 
     if (!lk_controller_is_open(self) || x == NULL || y == NULL)
         return 0;
     /* Camera px are logical points in this shell (lookout_resize is given
-     * points; density scales only the swapchain) — same space geo_at reads. */
+     * points; density scales only the swapchain): same space geo_at reads. */
     float fx = 0, fy = 0;
     lookout_geo_to_screen(self->handle, lon, lat, &fx, &fy);
     *x = fx;
@@ -927,7 +927,7 @@ lk_controller_http_respond(lk_controller *self, unsigned long long req_id,
                            const void *bytes, size_t len, int status)
 {
     /* lookout_http_respond takes no lock of the core's and ignores an unknown
-     * id, so a fetch landing late is harmless — but never after close: the
+     * id, so a fetch landing late is harmless, but never after close: the
      * shell detaches the provider and joins its fetches first. */
     if (!lk_controller_is_open(self))
         return;

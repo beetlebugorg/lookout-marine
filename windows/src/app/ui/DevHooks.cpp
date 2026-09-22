@@ -2,7 +2,7 @@
 // that drive the app with nobody clicking.
 //
 // These are how a capture is made reproducible on any machine, and how the
-// paths a mariner reaches by hand get exercised where nobody can click — an
+// paths a mariner reaches by hand get exercised where nobody can click: an
 // import, a chart set added and then removed while its own charts are still
 // baking, a pick at a fixed point of the view.
 //
@@ -67,11 +67,11 @@ namespace winrt::LookoutMarine::implementation
         }
 
         // Dev hooks: LOOKOUT_ADD=PATH adds that folder as a chart set
-        // once the window is up — the Add Charts… panel without the
+        // once the window is up: the Add Charts… panel without the
         // panel; raw cells bake, so it also drives the bake pill.
         // LOOKOUT_REMOVE=PATH takes one off, as the Charts list does;
         // "PATH@8" waits eight seconds first, which is the only way to
-        // run the case that matters — a set removed while its own charts
+        // run the case that matters: a set removed while its own charts
         // are still baking (the reference's hooks, delay for delay).
         {
             char add[1024];

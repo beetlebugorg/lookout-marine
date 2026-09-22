@@ -24,7 +24,7 @@ namespace winrt::LookoutMarine::implementation
     // chart. The settings pane is the reason: it is declared inside Root but
     // detached from it at construction and handed to a window of its own
     // (settings/ui/Settings.cpp), so it never sees Root's RequestedTheme and
-    // resolved its ThemeDictionary brushes against the SYSTEM theme instead —
+    // resolved its ThemeDictionary brushes against the SYSTEM theme instead:
     // while the rows built inside it in code asked DarkChrome(), which is the
     // chart's. A night chart under a light system theme gave a light pane
     // with night ink on it: white on white.
@@ -77,7 +77,7 @@ namespace winrt::LookoutMarine::implementation
             ApplyChromeTheme(want);
 
         // A pick report describes the objects under one point of one view:
-        // any camera move the MARINER makes — pan, fling, zoom, rotate —
+        // any camera move the MARINER makes, pan, fling, zoom, rotate,
         // retires it. Follow moving the chart under way does not: the core
         // drops follow the moment they pan, so while follow is active every
         // pose change is the boat's, and a report they just opened must stay

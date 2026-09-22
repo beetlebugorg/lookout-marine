@@ -1,10 +1,10 @@
-/* lk_pick_layout — where the pick report card stands.
+/* lk_pick_layout: where the pick report card stands.
  *
  * The card is a CALLOUT: it belongs to the point the mariner tapped, so it
  * has to sit clear of the mark, inside the view, above the readouts, and it
  * must not jump around as the selection changes. That is arithmetic, and
  * arithmetic that is wrong by a few points puts a report over the water the
- * report is about — so it lives here with a test rather than inside the
+ * report is about, so it lives here with a test rather than inside the
  * layout code.
  *
  * The same numbers as OverlayLayer.calloutLayout (macOS) and
@@ -36,7 +36,7 @@ namespace lkw
     /* `view_w`/`view_h` are the chart view in logical points, `mark_x`/`mark_y`
      * the picked point in the same space, `count` how many objects the pick
      * found, and `height_floor` the tallest this card has stood for THIS pick
-     * — it never shrinks below that, so the controls and the chart under the
+     *: it never shrinks below that, so the controls and the chart under the
      * pointer do not move as the selection changes. */
     PickPlacement PlacePick(double view_w, double view_h, double mark_x, double mark_y,
                             int count, double height_floor);

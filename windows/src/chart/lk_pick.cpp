@@ -1,4 +1,4 @@
-// lk_pick — see lk_pick.h.
+// lk_pick: see lk_pick.h.
 #include "lk_pick.h"
 
 #include "lk_utf8.h"

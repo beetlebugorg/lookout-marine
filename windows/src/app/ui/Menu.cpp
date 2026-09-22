@@ -2,7 +2,7 @@
 //
 // The Mac takes its menus from the system bar, which stands outside the
 // window. Windows has no such bar, and a bar inside the window would take a
-// strip of water on every screen of an app whose whole point is the chart —
+// strip of water on every screen of an app whose whole point is the chart:
 // so the commands hang off a bubble in the same chrome the zoom and the
 // compass live in. It is also the one shape every shell can wear: the Mac,
 // the iPad and the phone have no menu bar to put this in either.
@@ -10,7 +10,7 @@
 // The items are the Mac's, in the Mac's order, saying the Mac's words
 // (apple/LookoutMarine/Commands.swift): Chart and Vessels keep their own
 // submenus so the two read the same, and what a mariner reaches for at the
-// helm — open a chart, go full screen, settings — sits at the top level.
+// helm (open a chart, go full screen, settings) sits at the top level.
 //
 // Every item already had a keystroke; a keystroke nobody can find is not a
 // command, so each one says what it is.
@@ -88,7 +88,7 @@ namespace winrt::LookoutMarine::implementation
         chart.Items().Append(scheme);
 
         // The raster sets covering THIS view, the drawn one marked, then the
-        // way back to no picture at all — the same list the pill opens.
+        // way back to no picture at all: the same list the pill opens.
         MenuFlyoutSubItem raster;
         raster.Text(L"Raster Chart");
         {
@@ -201,7 +201,7 @@ namespace winrt::LookoutMarine::implementation
         menu.Items().Append(MenuItem(L"Open Charts…", L"Ctrl+O", [this] { PickChartFolder(); }));
         menu.Items().Append(MenuItem(L"Open Chart File…", L"Ctrl+Shift+O", [this] { PickChartFile(); }));
 
-        // The installed sets, each with its switch — the same list Settings >
+        // The installed sets, each with its switch: the same list Settings >
         // Charts manages, reachable without opening Settings (the reference's
         // File > Charts submenu).
         MenuFlyoutSubItem sets;
@@ -231,7 +231,7 @@ namespace winrt::LookoutMarine::implementation
                 std::string path = list[i];
                 std::string name = std::filesystem::path(path).filename().string();
                 // The library's own entry gets the office's name when that is
-                // what is open ("NOAA") — its directory name ("Charts") says
+                // what is open ("NOAA"): its directory name ("Charts") says
                 // nothing. A label never carries a path separator; a path
                 // fallback in open_chart_label does.
                 if (path == lkw::ChartLibraryDir())

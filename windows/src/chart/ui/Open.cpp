@@ -45,7 +45,7 @@ namespace winrt::LookoutMarine::implementation
 
         // LOOKOUT_IMPORT=<folder|.zip> drives the import at startup, the way
         // LOOKOUT_OPEN drives the open. It is the same call the Open Charts
-        // picker makes, so a scripted run exercises the real path — which is
+        // picker makes, so a scripted run exercises the real path, which is
         // the only way to test an import on a machine where nobody can click.
         {
             char env[1024];
@@ -58,7 +58,7 @@ namespace winrt::LookoutMarine::implementation
         }
 
         // The installed sets decide the startup open: the UNION of the
-        // switched-on ones. With none saved (or none answering — a drive not
+        // switched-on ones. With none saved (or none answering: a drive not
         // plugged in), fall through to the recents-based walk.
         LoadChartSets([this] {
             auto set_paths = ChartSetOpenPaths();
@@ -90,7 +90,7 @@ namespace winrt::LookoutMarine::implementation
 
     // The open itself is synchronous on the UI thread (the core mmaps and
     // builds its device), so the loader is shown first and the real open is
-    // deferred one timer tick — XAML gets a frame to paint the loader card
+    // deferred one timer tick: XAML gets a frame to paint the loader card
     // before the thread blocks.
     void MainWindow::OpenPaths(std::vector<std::string> const &paths, std::string const &recent,
                                std::string const &label)
@@ -109,7 +109,7 @@ namespace winrt::LookoutMarine::implementation
             ShowStartupLoader(paths.size());
 
         // The handler holds the timer so it survives this scope, and the
-        // registration is REMOVED when it fires — Stop() alone leaves the
+        // registration is REMOVED when it fires: Stop() alone leaves the
         // handler registered, and a handler that holds its own timer is a
         // cycle nothing collects. One leaked timer per chart open, otherwise.
         auto defer = std::make_shared<Microsoft::UI::Xaml::DispatcherTimer>();
@@ -226,7 +226,7 @@ namespace winrt::LookoutMarine::implementation
             // The core reads its chart-link list at open and resolves the
             // selected one as soon as this installs the fetcher.
             // $LOOKOUT_CHART_LINK is the dev hook the screenshot protocol
-            // needs — a style url or file drawn at launch with nobody
+            // needs: a style url or file drawn at launch with nobody
             // clicking.
             ChartLinksAttach();
             {

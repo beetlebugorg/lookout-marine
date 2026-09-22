@@ -1,4 +1,4 @@
-/* lk_controller — the one lookout* handle, and the seam to the engine's frame
+/* lk_controller: the one lookout* handle, and the seam to the engine's frame
  * loop.
  *
  * Host-agnostic C (no WinUI): the C++/WinRT shell owns the window, the
@@ -50,7 +50,7 @@ lk_controller *lk_controller_new(void);
 void           lk_controller_free(lk_controller *self);
 
 /* 1 if the one-time symbol/font atlas bake is already cached; 0 means the
- * next open pays it (~1.3s at 1x) — show the first-run loader phase. */
+ * next open pays it (~1.3s at 1x): show the first-run loader phase. */
 int lk_controller_atlas_ready(void);
 
 /* Open n baked cells (1 = single, >1 = composed library). The core makes its
@@ -87,19 +87,19 @@ void lk_controller_kick(void);
 void lk_controller_resize(lk_controller *self, unsigned width_pt, unsigned height_pt);
 void lk_controller_set_density(lk_controller *self, float density);
 
-/* Interaction — logical points, origin top-left (see lookout.h). */
+/* Interaction: logical points, origin top-left (see lookout.h). */
 void lk_controller_pan(lk_controller *self, double dx, double dy);
 void lk_controller_zoom_at(lk_controller *self, double dzoom, double x, double y);
 void lk_controller_zoom_centered(lk_controller *self, double dzoom, unsigned w_px, unsigned h_px);
 void lk_controller_rotate_drag(lk_controller *self, double x0, double y0, double x1, double y1);
-/* Geo to logical points (the inverse of geo_at) — anchors chart-pinned chrome. */
+/* Geo to logical points (the inverse of geo_at): anchors chart-pinned chrome. */
 int  lk_controller_screen_of(lk_controller *self, double lon, double lat, double *x, double *y);
 
 /* ---- charts by link (an online map AS the chart) ------------------------- */
 
 /* One url lookout wants: the style, a TileJSON, a sprite pack, a tile. Called
  * on the render thread with the core's lock held: copy the url, start the
- * fetch, return. Answer from any thread with lk_controller_http_respond — the
+ * fetch, return. Answer from any thread with lk_controller_http_respond: the
  * one call that is safe from there. `allow_file` is 1 only when the url may be
  * read off local disk; see lookout.h (lookout_http_get). */
 typedef void (*lk_http_get)(void *user, unsigned long long req_id,
@@ -176,7 +176,7 @@ void   lk_controller_noaa_cancel(lk_controller *self);
 typedef struct lk_marker {
     uint64_t id;
     double   lon, lat;
-    char     name[64]; /* copied out — the engine's string is borrowed */
+    char     name[64]; /* copied out: the engine's string is borrowed */
 } lk_marker;
 
 /* Drop a marker, placed AND named by the core in one call ("Mark 1", …): the
@@ -256,7 +256,7 @@ int lk_controller_alert_ack(lk_controller *self, unsigned long long id);
 /* Plugin tables (the AIS Targets list). tables_read lists the declarations;
  * table_rows_read answers one dialog's rows ALREADY ORDERED by the core
  * (sort_key NULL = the declared default); table_open tells the plugin somebody
- * is looking — call it with 1 on open and 0 on close, or the plugin builds no
+ * is looking: call it with 1 on open and 0 on close, or the plugin builds no
  * rows. Each read is freed by its own core call; NULL when unreadable. */
 lookout_tables *lk_controller_tables_read(lk_controller *self);
 lookout_table_rows *lk_controller_table_rows_read(lk_controller *self, const char *plugin,
@@ -278,12 +278,12 @@ int  lk_controller_plugin_grant_set(lk_controller *self, const char *id, const c
  * Charts always answer 0. */
 int lk_controller_open_file(lk_controller *self, const char *path);
 
-/* Own ship: 0 no source (show the fix-it), 1 fix lost, 2 live — lon/lat are
+/* Own ship: 0 no source (show the fix-it), 1 fix lost, 2 live, lon/lat are
  * written only for live. A readout shows these or nothing, never the map
  * centre. */
 int lk_controller_own_ship(lk_controller *self, double *lon, double *lat);
 /* Follow / course-up: 0 off, 1 on, 2 waiting for a fix. THE CORE CANCELS
- * follow on a pan and course-up on manual rotation — poll every tick, or a
+ * follow on a pan and course-up on manual rotation: poll every tick, or a
  * button tracks only its own taps and goes wrong. */
 void lk_controller_follow_set(lk_controller *self, int on);
 int  lk_controller_follow_active(lk_controller *self);
@@ -292,7 +292,7 @@ int  lk_controller_course_up_active(lk_controller *self);
 
 /* Overlay objects a plugin drew (vessels, markers). at = hover payload JSON
  * within ~14 pt (malloc'd, NULL when nothing is there). hit/info fill
- * lk_overlay_obj with MALLOC'D id and info (info may be NULL) — free both
+ * lk_overlay_obj with MALLOC'D id and info (info may be NULL): free both
  * with lk_controller_overlay_free. info returns 0 once the object is gone;
  * re-read it every tick, the anchor moves. Logical points. A hit here must
  * suppress the chart pick report. */
@@ -307,7 +307,7 @@ int  lk_controller_overlay_info(lk_controller *self, const char *id, lk_overlay_
 void lk_controller_overlay_free(lk_overlay_obj *obj);
 
 /* Raster underlay (see lookout.h). add installs one .mbtiles and returns 1 on
- * success — persistence is the host's job (lk_store_note_raster). The set
+ * success: persistence is the host's job (lk_store_note_raster). The set
  * names are copied into `out` (truncated, always NUL-terminated); in_view and
  * the active index build the pill's menu. */
 int  lk_controller_raster_add(lk_controller *self, const char *path);

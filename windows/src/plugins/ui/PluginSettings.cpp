@@ -2,7 +2,7 @@
 //
 // A plugin declares a settings schema in its manifest; the core hands the whole
 // registry over as structs through lookout_plugins_read, and this turns that
-// into WinUI controls. The shell knows nothing about what any plugin does — a
+// into WinUI controls. The shell knows nothing about what any plugin does: a
 // number with a unit and a range, a toggle, a text box, and a list the mariner
 // adds rows to, is the whole vocabulary.
 //
@@ -15,7 +15,7 @@
 // lookout_plugin_config_set, which the plugin handles live: no restart. They are
 // saved as the config object the plugin last accepted (see lk_store.h).
 //
-// A LIST is a setting the mariner adds ROWS to — the NMEA connections are the
+// A LIST is a setting the mariner adds ROWS to: the NMEA connections are the
 // first. The rows are the shell's: it assigns each one an id when it is added,
 // keeps the id for the row's whole life, and sends the whole array on every
 // edit. The plugin reports each row's state back under the same id, which is how
@@ -40,7 +40,7 @@ namespace
 
     // The brush a state reads in: green while it works, amber while it is
     // trying, grey while it is switched off, red when it has given up. WHICH
-    // of the four a state is, is the model's to say (lk_plugin_registry.h) —
+    // of the four a state is, is the model's to say (lk_plugin_registry.h):
     // this only carries the colours.
     winrt::Windows::UI::Color StateColor(std::string const &state)
     {
@@ -116,7 +116,7 @@ namespace winrt::LookoutMarine::implementation
 
     // One setting: a list becomes a repeating group with its own rows, and
     // anything else a control filed under a heading. A TEXT setting is only
-    // ever a column of a list — the core refuses a scalar one, so there is
+    // ever a column of a list: the core refuses a scalar one, so there is
     // nothing to draw for it.
     void MainWindow::ReadPluginSetting(lkw::PluginInfo &info, lookout_plugin_setting const &s)
     {
@@ -267,7 +267,7 @@ namespace winrt::LookoutMarine::implementation
     // becomes "Connected" is how a mariner learns the address is wrong.
     //
     // A status that has not moved rebuilds nothing, and one that has moved
-    // rebuilds the pane — but NOT while the mariner is in a text box. A
+    // rebuilds the pane, but NOT while the mariner is in a text box. A
     // gateway that keeps flapping would otherwise take the keyboard away
     // mid-address, which is the one moment the address is being fixed. The line
     // is a second late in that case, and the rebuild happens as soon as the
@@ -335,7 +335,7 @@ namespace winrt::LookoutMarine::implementation
     }
 
     // One row of a list: what it is called and what it is doing, a switch that
-    // pauses it, and — folded away until it is wanted — the address behind it.
+    // pauses it, and, folded away until it is wanted, the address behind it.
     // The mariner reads the first line and touches nothing else most days.
     void MainWindow::BuildPluginRow(Controls::StackPanel const &stack,
                                     lkw::PluginInfo &p,
@@ -723,7 +723,7 @@ namespace winrt::LookoutMarine::implementation
                     footnote(std::to_string(list.max_rows) +
                              " is the most this list holds. Remove one to add another.");
                 // The plugin's own sentence, never the pane's. Connections holds
-                // two lists — NMEA gateways and Signal K servers — and a line
+                // two lists, NMEA gateways and Signal K servers, and a line
                 // about WiFi gateways under a list of Signal K servers sends the
                 // mariner to the wrong port.
                 if (!list.footer.empty())
@@ -764,7 +764,7 @@ namespace winrt::LookoutMarine::implementation
 
     // The one section that talks ABOUT plugins rather than about the chart:
     // what is installed, what each copy may do, and the way to add or remove
-    // one. The plugins that ship with the app are not here — their settings
+    // one. The plugins that ship with the app are not here: their settings
     // are filed under the mariner sections, where they read as chart
     // settings, and there is nothing to install or remove about them.
     //
@@ -1042,8 +1042,8 @@ namespace winrt::LookoutMarine::implementation
     //
     // A HOST the list points at is not offered again, whatever port the row
     // uses. One machine announces the port it wants to be reached on and is
-    // often reachable on another — a Signal K server announces its websocket on
-    // 3000 and carries the same boat on 8375 — so a second row to it would send
+    // often reachable on another: a Signal K server announces its websocket on
+    // 3000 and carries the same boat on 8375, so a second row to it would send
     // everything twice.
     std::vector<lkw::Discovered> MainWindow::NearbyFor(lkw::PluginInfo const &p,
                                                       lkw::PluginList const &list)

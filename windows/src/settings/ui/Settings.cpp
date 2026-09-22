@@ -806,7 +806,7 @@ namespace winrt::LookoutMarine::implementation
         apply_timer.Start();
     }
 
-    // The band strip, redrawn in place: which shades exist for the current
+    // The band strip, redrawn in place, which shades exist for the current
     // settings and which contour separates each pair, labelled in the
     // mariner's unit. Colours approximate the day palette: a legend rather
     // than the palette itself.
@@ -975,7 +975,7 @@ namespace winrt::LookoutMarine::implementation
         }
     }
 
-    // The page's SHAPE: which tiles, which sets, which pictures, and which
+    // The page's SHAPE, which tiles, which sets, which pictures, and which
     // sections are on it. Nothing here moves on its own. Every count, every
     // size, which chart draws and which is being read are values, and the
     // refresh below states them without building a control.
@@ -1434,7 +1434,7 @@ namespace winrt::LookoutMarine::implementation
         }
         else if (tab == "charts")
         {
-            // The pane in the order the reference orders it: which chart draws, what
+            // The pane in the order the reference orders it, which chart draws, what
             // it is built from, what is arriving, and last where to get more. Adding
             // belongs at the bottom, because a mariner reads what they have before
             // reading how to get more.

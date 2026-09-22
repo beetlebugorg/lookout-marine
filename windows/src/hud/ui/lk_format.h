@@ -1,4 +1,4 @@
-/* lk_format — the chrome palette, and brushes for chrome built in code.
+/* lk_format: the chrome palette, and brushes for chrome built in code.
  *
  * What the readouts SAY is the core's format kit (lookout-shell.h). This is
  * what they are drawn in.
@@ -18,12 +18,12 @@ namespace lkw
      * (a pill's fill is its ink at 18 %). */
     winrt::Windows::UI::Color Rgb(uint32_t argb);
 
-    /* `c` at `alpha` of its opacity — how every pill in this shell gets its
+    /* `c` at `alpha` of its opacity: how every pill in this shell gets its
      * fill from its own ink. */
     winrt::Windows::UI::Color WithAlpha(winrt::Windows::UI::Color c, double alpha);
 
     /* The light-theme chrome literals the markup uses, for code-built chrome
-     * (the shared palette every shell carries — see Chrome.swift). */
+     * (the shared palette every shell carries: see Chrome.swift). */
     namespace chrome
     {
         constexpr uint32_t kInk = 0xFF1A1A1A;

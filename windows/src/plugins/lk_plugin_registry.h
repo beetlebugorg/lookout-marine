@@ -1,4 +1,4 @@
-/* lk_plugin_registry — the wasm plugin registry, read and written.
+/* lk_plugin_registry: the wasm plugin registry, read and written.
  *
  * A plugin declares a settings schema in its manifest; the core hands the
  * whole registry over as structs (lookout_plugins_read) and takes a config
@@ -56,7 +56,7 @@ namespace lkw
     };
     StateTone ToneFor(std::string const &state);
 
-    /* The plugin's own status line and the state behind it — "Stopped" for a
+    /* The plugin's own status line and the state behind it: "Stopped" for a
      * dead one whatever its last words were. */
     std::string PluginStatusLine(PluginInfo const &p, std::string *state_out);
 

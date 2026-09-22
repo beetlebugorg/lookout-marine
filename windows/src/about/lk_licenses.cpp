@@ -1,6 +1,6 @@
 // The licence manifest's model: the shape of one entry, and the labels the two
 // screens put on a row. See lk_licenses.h. Where the entries come from is
-// lk_licenses_baked.cpp — this file calls no core function, and no WinRT, so
+// lk_licenses_baked.cpp: this file calls no core function, and no WinRT, so
 // the labels can be tested.
 #include "lk_licenses.h"
 

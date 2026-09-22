@@ -15,7 +15,7 @@
                  pick card at night would undo the night palette's whole point.
                  Day chrome is light; dusk and night flip Root's RequestedTheme
                  to Dark (hud/ui/Hud.cpp) and these dictionaries carry the
-                 rest — menus and dialogs follow the element theme on their
+                 rest: menus and dialogs follow the element theme on their
                  own. -->
             <ResourceDictionary>
                 <ResourceDictionary.ThemeDictionaries>
@@ -123,7 +123,7 @@
             </Button>
         </StackPanel>
         <!-- Chart opening lives in the empty state, Ctrl+O, and Settings ▸
-             Charts — the chart chrome carries no open button, matching the
+             Charts: the chart chrome carries no open button, matching the
              macOS and Android shells. -->
         <Button x:Name="SettingsBtn" Style="{StaticResource Bubble}"
                 HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,16,16">
@@ -495,7 +495,7 @@
                     <TextBlock x:Name="HudOverscaleText" FontSize="12" Text="×1.0" />
                 </Border>
                 <!-- the raster pill: shown while a raster chart set covers the
-                     view — amber when it is switched off, blue while it is
+                     view: amber when it is switched off, blue while it is
                      drawn. The chevron is a promise: a press opens a list
                      (library/ui/Raster.cpp). -->
                 <Rectangle x:Name="RasterPillSep" Width="1" Height="20" Fill="#DDDDDD"

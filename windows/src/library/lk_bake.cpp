@@ -164,7 +164,7 @@ namespace lkw
 
     /* An import that produced NOTHING must say why, not just take the panel
      * down: a folder of malformed cells otherwise looks like an app that did
-     * nothing. A partial bake is not an error — what landed is a library — so
+     * nothing. A partial bake is not an error, what landed is a library, so
      * only the all-failed case keeps the message. */
     std::string BakeJob::Error() const
     {

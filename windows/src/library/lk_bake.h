@@ -1,4 +1,4 @@
-/* lk_bake — turning raw S-57 cells into charts the app can draw.
+/* lk_bake: turning raw S-57 cells into charts the app can draw.
  *
  * A cell as a hydrographic office publishes it is an S-57 dataset: the survey,
  * not a picture of it. The app draws baked archives, so a folder or an archive
@@ -16,7 +16,7 @@
  *
  * THE UI POLLS RATHER THAN BEING CALLED. No callback crosses back out of the
  * engine, and a XAML element may only be touched on the UI thread anyway, so
- * the panel reads one snapshot on a timer — which also throttles a 7,000 cell
+ * the panel reads one snapshot on a timer, which also throttles a 7,000 cell
  * import to the handful of updates an eye can follow.
  */
 #pragma once
@@ -62,7 +62,7 @@ namespace lkw
     };
 
     /* One chart the scan found. `path` is a filesystem path for a folder, or an
-     * ENTRY NAME for an archive — which is what the engine's zip bake takes back. */
+     * ENTRY NAME for an archive, which is what the engine's zip bake takes back. */
     struct ScannedCell
     {
         std::string path;
@@ -92,7 +92,7 @@ namespace lkw
     bool IsArchive(std::string const &path);
 
     /* Look through a folder or a .zip and report the charts in it. Reads only the
-     * archive's central directory — nothing is inflated and nothing is written. */
+     * archive's central directory: nothing is inflated and nothing is written. */
     ScanResult ScanCharts(std::string const &path);
 
     /* A removal, reported while it runs.
@@ -146,7 +146,7 @@ namespace lkw
         BakeJob &operator=(BakeJob const &) = delete;
 
         /* Bake every source under `source`: cells into `out_dir`, BSB/KAP
-         * sheets into `raster_out_dir` — separate roots, because the vector
+         * sheets into `raster_out_dir`: separate roots, because the vector
          * open globs the chart library for .pmtiles and a picture archive it
          * swallowed would join the composed chart library. False when there is
          * nothing to bake, in which case no bake starts. */
@@ -167,12 +167,12 @@ namespace lkw
          * success, on cancel, and on a partial result (what landed is a
          * library). Valid once Running() is false. */
         std::string Error() const;
-        /* Every VECTOR chart archive that finished — what the open takes.
+        /* Every VECTOR chart archive that finished: what the open takes.
          * Valid once Running() is false. */
         std::vector<std::string> Finished() const;
         /* What landed, of one kind. */
         std::vector<std::string> Landed(bool raster) const;
-        /* Every baked raster sheet — these belong to the raster underlay
+        /* Every baked raster sheet: these belong to the raster underlay
          * (lookout_raster_add), never to the vector open. */
         std::vector<std::string> FinishedRasters() const;
 

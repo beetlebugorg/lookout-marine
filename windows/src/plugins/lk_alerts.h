@@ -1,4 +1,4 @@
-/* lk_alerts — what the plugins are shouting about.
+/* lk_alerts: what the plugins are shouting about.
  *
  * AN ALARM IS AUDIBLE AND A WARNING IS VISIBLE. The plugins decide what is
  * dangerous; the shell only makes sure the decision reaches the helm. The core
