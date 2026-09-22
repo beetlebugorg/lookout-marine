@@ -369,8 +369,8 @@ namespace winrt::LookoutMarine::implementation
                 // Between a close and the open that follows it there is
                 // nothing to read out. The open itself is driven by layout,
                 // not by this clock, so the poll stands down until one lands,
-                // unless a settings page is up with a scan still to land.
-                if (!SettingsOpen() || !ChartSetsScanning())
+                // unless a picked set or a settings page is waiting on a scan.
+                if (pending_set.empty() && (!SettingsOpen() || !ChartSetsScanning()))
                     readout_timer.Stop();
                 return;
             }

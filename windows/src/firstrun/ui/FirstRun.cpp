@@ -495,7 +495,7 @@ namespace winrt::LookoutMarine::implementation
             {
                 auto paths = ChartSetOpenPaths();
                 if (!paths.empty())
-                    OpenPaths(paths, lkw::ChartLibraryDir(), lkw::AgencyForCells(paths));
+                    OpenPaths(paths, paths.front(), lkw::AgencyForCells(paths));
             }
 
             // The readouts run again. Setup stops that clock while it holds
@@ -668,13 +668,11 @@ namespace winrt::LookoutMarine::implementation
             }
             first_run.set_order(std::move(order));
 
-            // The zips go beside the library rather than in it. They are
-            // the source a bake reads. The vector open globs the library for
-            // .pmtiles, so a zip inside it joins the composed chart library.
-            auto dest = std::filesystem::path(lkw::ChartLibraryDir()).parent_path() / "Downloads";
+            // The download directory is the managed chart set, and its charts
+            // are prepared into the library.
+            noaa_dest_dir = lkw::NoaaDownloadDir();
             std::error_code ec;
-            std::filesystem::create_directories(dest, ec);
-            noaa_dest_dir = dest.string();
+            std::filesystem::create_directories(noaa_dest_dir, ec);
 
             // `again` fetches the cells this device already holds as well,
             // which is what a pick of water that is wholly installed asks for.
@@ -722,6 +720,7 @@ namespace winrt::LookoutMarine::implementation
             want = st.phase == 1 ||                                 // a catalog read
                    st.phase == 3 ||                                 // a transfer
                    (bake_job != nullptr && bake_job->Running()) ||  // a bake
+                   !pending_set.empty() ||                          // a set scan
                    // An import between its parts. The bake is STARTED by the
                    // poll itself, from the tick that finds the transfer over,
                    // so the clock has to outlive the transfer: stopping it on
@@ -747,72 +746,12 @@ namespace winrt::LookoutMarine::implementation
         first_run_timer.Start();
     }
 
-    // What the scan of the download directory found, back on the UI thread.
-    //
-    // `why` is what the core last said about the transfer, for the step to
-    // state when the transfer left nothing to bake.
-    void MainWindow::FirstRunStartBake(lkw::ScanResult const &scan, std::string const &why)
-    {
-        // The run may have ended while the scan was out.
-        if (!first_run.showing() || bake_job != nullptr || first_run.saw_bake())
-            return;
-
-        // Drop the cells the library already holds a prepared chart for, the
-        // same merge library/ui/Bake.cpp runs before an import. The download
-        // directory is one fixed folder, so a mariner who picks a second
-        // region finds the first region's zips still in it, and without this
-        // the bake reprocesses every chart they already have. The core does
-        // the same at src/chartsets.zig:503.
-        std::set<std::string> ready;
-        {
-            std::error_code ec;
-            std::filesystem::path root(BakeOutputDir());
-            if (std::filesystem::is_directory(root, ec))
-                for (auto it = std::filesystem::recursive_directory_iterator(root, ec);
-                     !ec && it != std::filesystem::recursive_directory_iterator();
-                     it.increment(ec))
-                    if (it->is_regular_file(ec))
-                        ready.insert(it->path().stem().string());
-        }
-        lkw::ScanResult fresh = scan;
-        fresh.cells.clear();
-        for (auto const &c : scan.cells)
-            if (!c.NeedsPrepare() ||
-                ready.count(std::filesystem::path(c.name).stem().string()) == 0)
-                fresh.cells.push_back(c);
-
-        noaa_scan_bands.clear();
-        noaa_scan_bands.reserve(fresh.cells.size());
-        for (auto const &c : fresh.cells)
-            noaa_scan_bands.push_back(c.band);
-
-        if (!fresh.cells.empty())
-        {
-            bake_job = std::make_unique<lkw::BakeJob>();
-            if (bake_job->Start(fresh, noaa_dest_dir, lkw::ChartLibraryDir(),
-                                lkw::RasterLibraryDir()))
-            {
-                // Marked when it starts. A bake of one or two cells finishes
-                // inside the quarter second between polls, and a step waiting
-                // to observe one running then waited for ever.
-                first_run.NoteBakeStarted();
-                FirstRunRender();
-                return;
-            }
-            bake_job.reset();
-        }
-
-        // The transfer left nothing to bake. Every cell failed, or the core
-        // refused the pick, or the mariner stopped it before one landed. The
-        // step says so and offers the way back to the water it asked for.
-        first_run.NoteImportStalled(
-            why.empty() ? std::string("The download produced no charts.") : why);
-        first_run_import_idle = true;
-        FirstRunRender();
-    }
-
     void MainWindow::FirstRunPoll()
     {
+        // PollChartSets runs here while setup holds the screen and the
+        // readout tick is stopped.
+        PollChartSets();
+
         lkw::FirstRunLive live;
 
         lookout_noaa_state st{};
@@ -836,60 +775,33 @@ namespace winrt::LookoutMarine::implementation
 
         first_run.Observe(live);
 
-        // The bake has finished. Hand the library to the shell the way an
-        // ordinary import does (library/ui/Bake.cpp). Without this the charts
-        // it wrote have no chart set and no recent, and the next launch finds
-        // an empty library and runs setup over the top of them.
-        if (first_run.saw_bake() && !live.baking && bake_job != nullptr &&
-            !bake_job->Running() && !noaa_handed_over)
+        // The set bake has ended. FinishPendingSet opens the set when its
+        // rescan ends. A successful open puts setup away, and setup has the
+        // depth step left, so it is rendered again.
+        if (first_run.saw_bake() && bake_job == nullptr && !noaa_handed_over)
         {
             noaa_handed_over = true;
-            bake_job.reset();
-            first_run_timer.Stop();
-            // The whole library rather than this run's output alone, and the
-            // recent is the library rather than the download it was baked from.
-            auto charts = lkw::CollectCells(BakeOutputDir());
-            if (!charts.empty())
-            {
-                open_after_write = true; // the bake wrote into the library
-                OpenPaths(charts, lkw::ChartLibraryDir(), lkw::AgencyForCells(charts));
-            }
-            // A successful open puts setup away. Setup has the depth step left
-            // to ask, so put it back.
             FirstRunRender();
             return;
         }
 
-        // The transfer is over and no bake is running. Read the destination
-        // and start one. `saw_bake` stops this firing again after the bake has
-        // finished.
-        //
-        // OFF THE UI THREAD. The download directory holds a folder per cell,
-        // and a region is up to 1,238 of them, so the walk froze the window
-        // for as long as it ran. The two scan entry points share one buffer in
-        // the core and are not reentrant, so one at a time (`import_scanning`,
-        // library/ui/Bake.cpp).
-        if (!live.downloading && !live.baking && !first_run.saw_bake() &&
-            !noaa_dest_dir.empty() && first_run.order().has_value() && !import_scanning &&
-            bake_job == nullptr)
+        // The transfer is over. The download directory goes on the set list,
+        // and FinishPendingSet bakes its to_prepare list or opens it. When the
+        // transfer fetched no chart, the step shows the service's error.
+        if (!live.downloading && !first_run.saw_bake() && !noaa_dest_dir.empty() &&
+            first_run.order().has_value() && !noaa_handed_over && !first_run_import_idle &&
+            pending_set.empty() && bake_job == nullptr)
         {
-            import_scanning = true;
-            auto queue = DispatcherQueue();
-            std::string const dir = noaa_dest_dir;
-            std::string const why = st.error;
-            // A weak reference across the thread: the window can close while
-            // the read is out, and the continuation runs after that.
-            auto weak = get_weak();
-            std::thread([weak, queue, dir, why] {
-                auto scan = std::make_shared<lkw::ScanResult>(lkw::ScanCharts(dir));
-                queue.TryEnqueue([weak, scan, why] {
-                    auto self = weak.get();
-                    if (self == nullptr)
-                        return;
-                    self->import_scanning = false;
-                    self->FirstRunStartBake(*scan, why);
-                });
-            }).detach();
+            if (st.done == 0)
+            {
+                first_run.NoteImportStalled(st.error[0] != '\0'
+                                                ? std::string(st.error)
+                                                : std::string("The download produced no charts."));
+                first_run_import_idle = true;
+                FirstRunRender();
+            }
+            else
+                PrepareChartSet(noaa_dest_dir);
         }
 
         // The Preparing step moves four times a second. Its values are

@@ -36,10 +36,11 @@ namespace winrt::LookoutMarine::implementation
         {
             chart_sets_model =
                 lookout_chart_sets_open(lk_store_handle(), lkw::ChartLibraryDir().c_str());
-            // Which set the downloader owns is marked in LoadChartSets, where
-            // the list is read: the library is not on that list until
-            // something adopts it, and a mark has nothing to land on before
-            // then.
+            // The download directory is the downloader's set. The core skips
+            // the mark when the directory is not on the saved list yet, and
+            // PrepareChartSet marks it when a download adds it.
+            if (chart_sets_model != nullptr)
+                lookout_chart_sets_set_managed(chart_sets_model, lkw::NoaaDownloadDir().c_str(), 1);
             SweepRemovedCharts();
         }
         return chart_sets_model;
@@ -105,27 +106,6 @@ namespace winrt::LookoutMarine::implementation
                 chart_sets.push_back(std::move(row));
             }
         }
-
-        // The mark that says which set the downloader owns, applied whenever
-        // the list is read rather than once when the model opens. The library
-        // is not on the list at all until something adopts it, so on a device
-        // whose first act is a NOAA download the mark had nothing to land on
-        // and the picker would have read every region as water the mariner
-        // does not hold.
-        //
-        // AFTER the copy above, never during it: the call resets the arena
-        // the borrowed list points into.
-        if (lookout_chart_sets *model = ChartSetsModel())
-        {
-            std::string const lib = lkw::ChartLibraryDir();
-            for (auto &row : chart_sets)
-            {
-                if (row.path != lib || row.managed)
-                    continue;
-                lookout_chart_sets_set_managed(model, lib.c_str(), 1);
-                row.managed = true;
-            }
-        }
         if (then)
             then();
     }
@@ -153,6 +133,7 @@ namespace winrt::LookoutMarine::implementation
         lkw::ScanResult scan;
         scan.root = path;
         scan.ok = true;
+        noaa_scan_bands.clear();
         for (size_t i = 0; i < n; ++i)
         {
             if (files[i] == nullptr)
@@ -162,21 +143,128 @@ namespace winrt::LookoutMarine::implementation
             cell.name = files[i]->name;
             cell.kind = files[i]->kind;
             cell.band = files[i]->band;
+            noaa_scan_bands.push_back(cell.band);
             scan.cells.push_back(std::move(cell));
             ++scan.sources;
         }
         if (scan.cells.empty())
             return false;
 
+        // Charts go in the set's prepared directory, where the core's scan
+        // reads them. Sheets go in a raster directory of the same name, as an
+        // archive import writes them.
+        std::string const raster_out =
+            (std::filesystem::path(lkw::RasterLibraryDir()) /
+             std::filesystem::path(PreparedDirFor(path)).filename())
+                .string();
         bake_job = std::make_unique<lkw::BakeJob>();
-        if (!bake_job->Start(scan, path, lkw::ChartLibraryDir(), lkw::RasterLibraryDir()))
+        if (!bake_job->Start(scan, path, PreparedDirFor(path), raster_out))
         {
             bake_job.reset();
             return false;
         }
         bake_source = path;
+        bake_for_set = true;
         WatchBake();
         return true;
+    }
+
+    // Where a bake of the set at `path` writes: the library directory named
+    // by lookout_bake_prepared_name. The core scans the same directory beside
+    // the set.
+    std::string MainWindow::PreparedDirFor(std::string const &path)
+    {
+        char name[512];
+        if (lookout_bake_prepared_name(path.c_str(), name, sizeof name) == 0)
+            return {};
+        return (std::filesystem::path(lkw::ChartLibraryDir()) / name).string();
+    }
+
+    // Put a folder on the list and prepare it when the core's scan of it
+    // ends. PollChartSets finishes it in FinishPendingSet.
+    void MainWindow::PrepareChartSet(std::string const &path)
+    {
+        lookout_chart_sets *model = ChartSetsModel();
+        if (model == nullptr || path.empty())
+            return;
+        if (!lookout_chart_sets_add(model, path.c_str()))
+            lookout_chart_sets_rescan(model, path.c_str());
+        if (path == lkw::NoaaDownloadDir())
+            lookout_chart_sets_set_managed(model, path.c_str(), 1);
+        AwaitSetScan(path, true);
+        LoadChartSets(nullptr);
+    }
+
+    // Finish the set at `path` in FinishPendingSet when its scan ends.
+    // PollChartSets runs on the readout tick, which is stopped while no chart
+    // is open, so this starts it. Setup polls from FirstRunPoll.
+    void MainWindow::AwaitSetScan(std::string const &path, bool bake)
+    {
+        pending_set = path;
+        pending_set_bake = bake;
+        if (!first_run.showing())
+            readout_timer.Start();
+    }
+
+    // The pending set's scan has ended. Bake its to_prepare list, or open
+    // the switched-on sets when the list is empty or a bake of it just ended.
+    // A folder that holds no charts leaves the list.
+    void MainWindow::FinishPendingSet()
+    {
+        auto row = std::find_if(chart_sets.begin(), chart_sets.end(),
+                                [this](ChartSetRow const &r) { return r.path == pending_set; });
+        if (row == chart_sets.end())
+        {
+            pending_set.clear();
+            return;
+        }
+        if (!row->scanned || bake_job != nullptr)
+            return;
+        std::string const path = pending_set;
+        bool const bake = pending_set_bake;
+        pending_set.clear();
+        BakePanel().Visibility(Visibility::Collapsed);
+
+        bool const importing =
+            first_run.showing() && first_run.step() == lkw::FirstRunStep::Importing;
+        if (bake && BakeSetToPrepare(path))
+        {
+            if (importing)
+            {
+                first_run.NoteBakeStarted();
+                FirstRunRender();
+            }
+            return;
+        }
+
+        if (row->charts == 0 && row->pictures == 0 && row->to_prepare == 0 && !row->managed)
+        {
+            if (lookout_chart_sets_remove(chart_sets_model, path.c_str()))
+                LoadChartSets(nullptr);
+            return;
+        }
+
+        std::vector<std::string> pictures;
+        size_t n = 0;
+        auto const *files = lookout_chart_set_files(chart_sets_model, path.c_str(), &n);
+        for (size_t i = 0; files != nullptr && i < n; ++i)
+            if (files[i] != nullptr && files[i]->kind == LOOKOUT_FILE_RASTER)
+                pictures.push_back(files[i]->path);
+        auto charts = ChartSetOpenPaths();
+        AdoptBakedRasters(pictures, !charts.empty());
+        if (!charts.empty())
+            OpenPaths(charts, charts.front(), lkw::AgencyForCells(charts));
+        if (importing)
+        {
+            if (charts.empty())
+            {
+                first_run.NoteImportStalled("The download produced no charts.");
+                first_run_import_idle = true;
+            }
+            else
+                noaa_handed_over = true;
+            FirstRunRender();
+        }
     }
     // A background scan landing is the only change the model announces on its
     // own, and the counts a row shows are what it landed. Polled beside the
@@ -200,6 +288,11 @@ namespace winrt::LookoutMarine::implementation
             // Only when the composition differs from what is open. An open
             // that already composed the library records it, and reopening on
             // top of that ends a NOAA transfer in flight.
+            if (!pending_set.empty())
+            {
+                FinishPendingSet();
+                return;
+            }
             auto composed = ChartSetOpenPaths();
             if (!composed.empty() && composed != opened_set_paths)
                 ReopenChartSets({});
@@ -270,8 +363,8 @@ namespace winrt::LookoutMarine::implementation
     // The safe source while a scan is in flight. The core hands out its file
     // list as pointers into an arena, and a scan LANDING on its own worker
     // frees that arena (Sets.land: files_arena.deinit and reads.reset), so a
-    // read racing a landing walks freed memory. The library is this shell's
-    // managed set, so its own directory answers the same question.
+    // read racing a landing walks freed memory. Every chart this shell
+    // prepared is under the library directory.
     std::set<std::string> MainWindow::LibraryCellsOnDisk()
     {
         std::set<std::string> out;
@@ -465,18 +558,23 @@ namespace winrt::LookoutMarine::implementation
             job->Finish(winrt::to_string(lkw::RemovalNote(gone, failed)));
     }
 
-    // Delete the charts Lookout prepared for one set.
+    // Delete the charts Lookout prepared for one set: the set itself when it
+    // is under the library, else its prepared directory.
     //
     // Renamed first and deleted behind. A NOAA library is thousands of
     // directories, and this runs on the UI thread: the rename is one step, so
     // the charts are gone from where anything looks for them before this
     // returns, and a set added straight back writes into a fresh directory
     // rather than racing the delete.
-    void MainWindow::DeletePreparedCharts(std::string const &path, std::string const &name)
+    void MainWindow::DeletePreparedCharts(std::string const &set_path, std::string const &name)
     {
-        if (!lookout_bake_is_derived(lkw::ChartLibraryDir().c_str(), path.c_str()))
-            return;
+        std::string const path =
+            lookout_bake_is_derived(lkw::ChartLibraryDir().c_str(), set_path.c_str())
+                ? set_path
+                : PreparedDirFor(set_path);
         std::error_code ec;
+        if (path.empty() || !std::filesystem::is_directory(path, ec))
+            return;
         std::filesystem::path lib = lkw::ChartLibraryDir();
         // The name a delete in flight goes under. Skipped by the sweep below,
         // so two removals in a row do not fight over each other's work.
@@ -532,7 +630,8 @@ namespace winrt::LookoutMarine::implementation
     // added is removed a set at a time in the Charts pane.
     //
     // BOTH HALVES of every cell, resolved by name:
-    //   <library>/<CELL>            the prepared chart
+    //   <prepared>/<CELL>           the prepared chart, under PreparedDirFor
+    //                               the download directory
     //   <downloads>/**/<CELL>       the cell it was made from, a level down
     //                               under ENC_ROOT
     // A prepared chart stands in for its source in a set's file list, so a
@@ -549,6 +648,8 @@ namespace winrt::LookoutMarine::implementation
             return took;
         std::error_code ec;
         std::filesystem::path lib = lkw::ChartLibraryDir();
+        std::string const downloads = lkw::NoaaDownloadDir();
+        std::filesystem::path const prepared = PreparedDirFor(downloads);
         if (!std::filesystem::is_directory(lib, ec))
             return took;
 
@@ -591,14 +692,9 @@ namespace winrt::LookoutMarine::implementation
             return names.find(stem) != names.end() ? stem : std::string{};
         };
 
-        // The prepared half: one directory per cell in the library, named
-        // after it. A file sitting loose counts too, because an older import
-        // wrote them that way.
-        for (auto const &entry : std::filesystem::directory_iterator(lib, ec))
+        // The prepared half: one directory per cell, named after it.
+        for (auto const &entry : std::filesystem::directory_iterator(prepared, ec))
         {
-            std::string const leaf = entry.path().filename().string();
-            if (leaf.rfind(prefix, 0) == 0)
-                continue;
             std::string const cell = cell_of(entry);
             if (cell.empty())
                 continue;
@@ -608,8 +704,7 @@ namespace winrt::LookoutMarine::implementation
 
         // The source half, under the download directory. NOAA's zips unpack to
         // ENC_ROOT/<CELL>/, so this walks rather than assuming the depth.
-        std::filesystem::path const downloads =
-            noaa_dest_dir.empty() ? holding / "Downloads" : std::filesystem::path(noaa_dest_dir);
+        ec.clear();
         if (std::filesystem::is_directory(downloads, ec))
         {
             std::vector<std::filesystem::path> hits;
@@ -645,23 +740,11 @@ namespace winrt::LookoutMarine::implementation
         // out of the library.
         std::thread(EmptyAndRemove, trash, removal_job, took.failed).detach();
 
-        if (took.prepared != 0)
-        {
-            // Ask for a scan by the path the model itself reported, not by the
-            // library's name as this file spells it: the core knows a set by
-            // its own string. A rescan of a set that did not change raises the
-            // same flag rather than reporting a lie.
-            //
-            // AND THEN LEAVE IT ALONE. The counts a row shows arrive with that
-            // scan, announced by lookout_chart_sets_changed, and PollChartSets
-            // is what reads them. Copying the list here instead put a read of
-            // the core's borrowed file lists right beside the scan that frees
-            // them (Sets.land, on its own worker, calls files_arena.deinit and
-            // reads.reset), and the app died with an access violation.
+        // PollChartSets copies the row's counts when the rescan ends. The
+        // rescan frees the file lists a copy made here reads.
+        if (took.prepared != 0 || took.sources != 0)
             if (lookout_chart_sets *model = ChartSetsModel())
-                for (auto const &row : chart_sets)
-                    lookout_chart_sets_rescan(model, row.path.c_str());
-        }
+                lookout_chart_sets_rescan(model, downloads.c_str());
         ReopenChartSets({});
         return took;
     }

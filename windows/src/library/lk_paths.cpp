@@ -27,6 +27,11 @@ namespace lkw
         return root.string();
     }
 
+    std::string NoaaDownloadDir()
+    {
+        return (std::filesystem::path(ChartLibraryDir()).parent_path() / "Downloads").string();
+    }
+
     namespace
     {
         std::string LowerExtOf(std::filesystem::path const &p)

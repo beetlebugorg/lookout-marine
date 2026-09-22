@@ -33,6 +33,11 @@ namespace lkw
      * onto another machine. Created on first use. */
     std::string ChartLibraryDir();
 
+    /* Where NOAA downloads unpack: %LOCALAPPDATA%\lookout-marine\Downloads.
+     * This folder is the downloader's managed chart set, and its charts are
+     * prepared into ChartLibraryDir. Not created here. */
+    std::string NoaaDownloadDir();
+
     /* Where baked BSB/KAP sheets land: %LOCALAPPDATA%\lookout-marine\Rasters.
      * Separate from ChartLibraryDir on purpose: the vector open globs that
      * directory for .pmtiles, and a picture archive it swallowed would join

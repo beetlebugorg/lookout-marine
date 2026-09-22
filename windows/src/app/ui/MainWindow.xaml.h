@@ -342,6 +342,19 @@ namespace winrt::LookoutMarine::implementation
         /* Bake the files the core lists to prepare for one set. False when
          * the list is empty or the bake does not start. */
         bool BakeSetToPrepare(std::string const &path);
+        /* The library directory a bake of the set at `path` writes into. */
+        static std::string PreparedDirFor(std::string const &path);
+        /* Add a folder to the list, then bake or open it once it is scanned. */
+        void PrepareChartSet(std::string const &path);
+        void AwaitSetScan(std::string const &path, bool bake);
+        void FinishPendingSet();
+        /* The set PollChartSets finishes when its scan ends, and whether it
+         * may bake. A set whose bake just ended only opens. */
+        std::string pending_set;
+        bool pending_set_bake{ false };
+        /* The running bake is a set's to_prepare list, which opens through
+         * pending_set when it ends. */
+        bool bake_for_set{ false };
         /* Set before an open that follows a bake, so the adopt reads the
          * folder again. Cleared as the open consumes it. */
         bool open_after_write{ false };
@@ -466,9 +479,6 @@ namespace winrt::LookoutMarine::implementation
          * holds, which the pills state. One cost call per region, answered off
          * the catalog the core holds. */
         void FirstRunRepriceRegions();
-        /* What the scan of the download directory found, back on the UI
-         * thread. Starts the bake, or states why there is none. */
-        void FirstRunStartBake(lkw::ScanResult const &scan, std::string const &why);
         void FirstRunPollStart();
         /* Start or stop that poll by what there is to watch: a catalog read, a
          * transfer, a bake, or an import between its parts. */
@@ -595,12 +605,11 @@ namespace winrt::LookoutMarine::implementation
         // What the online step has been given, so the button can read Skip
         // until there is something to continue with.
         std::string chart_link_url;
-        // Where the district zips go. Beside the library rather than in it:
-        // they are the source a bake reads, and the vector open globs the
-        // library for .pmtiles.
+        // The download directory of this run's order, lkw::NoaaDownloadDir.
         std::string noaa_dest_dir;
-        // The usage band of every chart the scan found, which with the bake's
-        // own count gives the by-band breakdown. See lkw::FirstRunBands.
+        // The usage band of every file the running set bake prepares, which
+        // with the bake's own count gives the by-band breakdown. See
+        // lkw::FirstRunBands.
         std::vector<int> noaa_scan_bands;
         // GSHHG rings for the coverage map, read once and kept: a step
         // rebuild redraws the map and the file is a quarter of a megabyte.
