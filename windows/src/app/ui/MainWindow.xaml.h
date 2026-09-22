@@ -12,6 +12,7 @@
 #include "lk_table.h"
 
 #include <atomic>
+#include <array>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -161,6 +162,8 @@ namespace winrt::LookoutMarine::implementation
         /* Baked sheets join the underlay: noted for the coming open, or added
          * to the chart on screen when no open follows. */
         void AdoptBakedRasters(std::vector<std::string> const &rasters, bool opening);
+        /* The panel's Stop and the clock a running bake reports through. */
+        void WatchBake();
         void TickBake();
         static std::string BakeOutputDir();
         void SubmitSearch();
@@ -295,6 +298,12 @@ namespace winrt::LookoutMarine::implementation
             // Files that bake before they draw, and what the folder holds on
             // disk. Both are the core's own figures for the set.
             size_t unprepared{ 0 };
+            /* What the core lists to prepare for this set, and the files a
+             * finished bake did not prepare. `to_prepare` is `unprepared`
+             * less `refused`, and band_todo splits it by usage band. */
+            size_t to_prepare{ 0 };
+            size_t refused{ 0 };
+            std::array<size_t, 6> band_todo{};
             uint64_t bytes{ 0 };
             // How many prepared charts this set holds in each usage band,
             // keyed 1 to 6. A set that stops at Coastal does not draw the
@@ -326,6 +335,9 @@ namespace winrt::LookoutMarine::implementation
          * a rescan returns the row to unscanned while it reads, and every
          * open ran one. */
         void AdoptChartSet(std::string const &path, bool after_write);
+        /* Bake the files the core lists to prepare for one set. False when
+         * the list is empty or the bake does not start. */
+        bool BakeSetToPrepare(std::string const &path);
         /* Set before an open that follows a bake, so the adopt reads the
          * folder again. Cleared as the open consumes it. */
         bool open_after_write{ false };

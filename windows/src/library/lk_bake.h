@@ -159,6 +159,9 @@ namespace lkw
         void Cancel();
 
         BakeProgress Snapshot() const;
+        /* The core's job, for lookout_chart_sets_note_bake. Freed when this
+         * is destroyed, so read it before the reset. */
+        lookout_bake const *Handle() const { return job_; }
         bool Running() const;
         /* Why an import produced nothing, one sentence ready to show. Empty on
          * success, on cancel, and on a partial result (what landed is a

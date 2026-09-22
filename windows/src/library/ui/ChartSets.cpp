@@ -64,6 +64,10 @@ namespace winrt::LookoutMarine::implementation
                 row.managed = all[i]->managed != 0;
                 row.scanned = all[i]->scanned != 0;
                 row.unprepared = all[i]->unprepared;
+                row.to_prepare = all[i]->to_prepare;
+                row.refused = all[i]->refused;
+                for (size_t b = 0; b < 6; ++b)
+                    row.band_todo[b] = all[i]->band_todo[b];
                 row.bytes = all[i]->bytes;
                 // What the row says it holds. The engine's own counts split a
                 // file that bakes first out of both halves, and this line has
@@ -126,6 +130,54 @@ namespace winrt::LookoutMarine::implementation
             then();
     }
 
+
+    // Bake what the core lists for one set.
+    //
+    // The list is every file of the set that bakes before it draws and has no
+    // prepared chart, or whose chart is older than the file. An update
+    // leaves a cell in that state. Files a finished bake refused are left
+    // out, so a bake started here has work to do.
+    //
+    // False when the list is empty or the bake does not start.
+    bool MainWindow::BakeSetToPrepare(std::string const &path)
+    {
+        lookout_chart_sets *model = ChartSetsModel();
+        if (model == nullptr || bake_job != nullptr || path.empty())
+            return false;
+
+        size_t n = 0;
+        auto const *files = lookout_chart_set_to_prepare(model, path.c_str(), &n);
+        if (files == nullptr || n == 0)
+            return false;
+
+        lkw::ScanResult scan;
+        scan.root = path;
+        scan.ok = true;
+        for (size_t i = 0; i < n; ++i)
+        {
+            if (files[i] == nullptr)
+                continue;
+            lkw::ScannedCell cell;
+            cell.path = files[i]->path;
+            cell.name = files[i]->name;
+            cell.kind = files[i]->kind;
+            cell.band = files[i]->band;
+            scan.cells.push_back(std::move(cell));
+            ++scan.sources;
+        }
+        if (scan.cells.empty())
+            return false;
+
+        bake_job = std::make_unique<lkw::BakeJob>();
+        if (!bake_job->Start(scan, path, lkw::ChartLibraryDir(), lkw::RasterLibraryDir()))
+        {
+            bake_job.reset();
+            return false;
+        }
+        bake_source = path;
+        WatchBake();
+        return true;
+    }
     // A background scan landing is the only change the model announces on its
     // own, and the counts a row shows are what it landed. Polled beside the
     // chart links, off the readout tick.
@@ -138,12 +190,12 @@ namespace winrt::LookoutMarine::implementation
             // found before raises the same flag.
             RefreshChartsPageOnChange();
 
-            // A scan landing is often the first moment the library composes at
-            // all. The open at startup asks the model what the switched-on sets
-            // hold, and before the scan the answer is empty, so the chart drew
-            // a recent and the library stayed shut for the rest of the run. The
-            // release build loses that race every time: it reaches the open
-            // sooner than the debug build does.
+            // A scan completing is often the first moment the library composes
+            // at all. The open at startup asks the model what the switched-on
+            // sets hold, and before the scan the answer is empty, so the chart
+            // opened a recent and the library stayed shut for the rest of the
+            // run. The release build loses that race every time: it reaches
+            // the open sooner than the debug build does.
             //
             // Only when the composition differs from what is open. An open
             // that already composed the library records it, and reopening on
@@ -151,6 +203,15 @@ namespace winrt::LookoutMarine::implementation
             auto composed = ChartSetOpenPaths();
             if (!composed.empty() && composed != opened_set_paths)
                 ReopenChartSets({});
+
+            // A set with files still to prepare and no stop recorded since it
+            // changed. An import cut short by a quit or a crash finishes here,
+            // on the first scan after the app opens.
+            if (bake_job == nullptr && chart_sets_model != nullptr)
+            {
+                if (char const *resume = lookout_chart_sets_resume(chart_sets_model))
+                    BakeSetToPrepare(resume);
+            }
         });
     }
 

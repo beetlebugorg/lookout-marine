@@ -1851,6 +1851,11 @@ namespace winrt::LookoutMarine::implementation
             stop.Click([this](auto &&, auto &&) {
                 lk_controller_noaa_cancel(controller);
                 if (bake_job)
+                    // The mariner stopped it. The core skips this set on resume until a
+                    // scan of it finds a file to prepare that was not there before.
+                    if (lookout_chart_sets *model = ChartSetsModel(); model != nullptr &&
+                        !bake_source.empty())
+                        lookout_chart_sets_note_cancel(model, bake_source.c_str());
                     bake_job->Cancel();
                 FirstRunRender();
             });

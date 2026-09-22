@@ -1149,8 +1149,12 @@ namespace winrt::LookoutMarine::implementation
                 sum = folder + (sum.empty() ? "" : " · ") + sum;
             row.summary.Text(winrt::to_hstring(sum));
 
-            row.prepare.Text(winrt::hstring{ lkw::Thousands(set.unprepared) + L" to prepare" });
-            row.prepare.Visibility(set.unprepared == 0 ? Visibility::Collapsed
+            // What the core lists to prepare, which leaves out the files a
+            // finished bake refused. Those stay on the disk and off this line
+            // until a new edition of the cell arrives.
+            row.prepare.Text(winrt::hstring{ lkw::Thousands(set.to_prepare) +
+                                             L" to prepare" });
+            row.prepare.Visibility(set.to_prepare == 0 ? Visibility::Collapsed
                                                        : Visibility::Visible);
             // The set's title. The core names a set after the office whose
             // charts it holds once the scan has read them, and after the folder
@@ -2109,6 +2113,11 @@ namespace winrt::LookoutMarine::implementation
                 stop.Content(winrt::box_value(L"Cancel"));
                 stop.Click([this](auto &&, auto &&) {
                     if (bake_job != nullptr)
+                        // The mariner stopped it. The core skips this set on resume until a
+                        // scan of it finds a file to prepare that was not there before.
+                        if (lookout_chart_sets *model = ChartSetsModel(); model != nullptr &&
+                            !bake_source.empty())
+                            lookout_chart_sets_note_cancel(model, bake_source.c_str());
                         bake_job->Cancel();
                 });
                 Controls::Grid::SetColumn(stop, 1);

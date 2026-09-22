@@ -171,14 +171,25 @@ namespace winrt::LookoutMarine::implementation
         }
         bake_source = path;
 
-        // Registered once. Wiring it per import would stack a handler on every
-        // one and cancel the job as many times as the mariner had imported.
+        WatchBake();
+    }
+
+
+    // The panel's Stop and the clock a running bake reports through. Called
+    // wherever a bake starts.
+    void MainWindow::WatchBake()
+    {
         if (!bake_cancel_wired)
         {
             bake_cancel_wired = true;
             BakeCancel().Click([this](auto &&, auto &&) {
                 if (bake_job != nullptr)
                 {
+                    // The mariner stopped it. The core skips this set on resume until a
+                    // scan of it finds a file to prepare that was not there before.
+                    if (lookout_chart_sets *model = ChartSetsModel(); model != nullptr &&
+                        !bake_source.empty())
+                        lookout_chart_sets_note_cancel(model, bake_source.c_str());
                     bake_job->Cancel();
                     BakeEta().Text(L"Stopping after the cells already started…");
                 }
@@ -241,6 +252,15 @@ namespace winrt::LookoutMarine::implementation
         bake_timer.Stop();
         auto rasters = bake_job->FinishedRasters();
         auto error = bake_job->Error();
+        // How this bake ended, before the job is freed. A bake that ran to
+        // the end records the files it did not prepare as refused, and the
+        // rescan after it reads the folder with those refusals in place.
+        if (lookout_chart_sets *model = ChartSetsModel(); model != nullptr &&
+            !bake_source.empty())
+        {
+            lookout_chart_sets_note_bake(model, bake_source.c_str(), bake_job->Handle());
+            lookout_chart_sets_rescan(model, bake_source.c_str());
+        }
         bake_job.reset();
         BakePanel().Visibility(Visibility::Collapsed);
         /* The settings page loses its Preparing section with the job. */
@@ -329,31 +349,7 @@ namespace winrt::LookoutMarine::implementation
         }
         bake_source.clear();
 
-        if (!bake_cancel_wired)
-        {
-            bake_cancel_wired = true;
-            BakeCancel().Click([this](auto &&, auto &&) {
-                if (bake_job != nullptr)
-                {
-                    bake_job->Cancel();
-                    BakeEta().Text(L"Stopping after the cells already started…");
-                }
-            });
-        }
-
-        BakeTitle().Text(winrt::to_hstring("Importing " + folder));
-        BakeCount().Text(L"");
-        BakeEta().Text(L"");
-        BakeBar().IsIndeterminate(false);
-        BakePanel().Visibility(Visibility::Visible);
-
-        if (bake_timer == nullptr)
-        {
-            bake_timer = DispatcherTimer{};
-            bake_timer.Interval(std::chrono::milliseconds(200));
-            bake_timer.Tick([this](auto &&, auto &&) { TickBake(); });
-        }
-        bake_timer.Start();
+        WatchBake();
     }
 
     /* An exchange set as a chart agency publishes it: one .zip. Nothing is
