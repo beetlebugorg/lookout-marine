@@ -363,6 +363,16 @@ typedef struct {
      * edition or is in the managed set: "12 charts also in the NOAA
      * download". They stay installed. 0 for a set switched off. */
     size_t held_back;
+    /* The files lookout_chart_set_to_prepare lists: `unprepared` less
+     * `refused`. */
+    size_t to_prepare;
+    /* Files a finished bake of this set did not prepare. They stay out of
+     * `to_prepare` until a new edition or update of the cell arrives. See
+     * lookout_chart_sets_note_bake. */
+    size_t refused;
+    /* `to_prepare` by usage band: band_todo[0] is band 1. A file with no band
+     * is in no entry. */
+    size_t band_todo[6];
 } lookout_chart_set;
 
 /* Load the saved list off `store` and start the background scans.
@@ -398,6 +408,47 @@ const lookout_chart_set *const *lookout_chart_sets_all(lookout_chart_sets *s, si
 const lookout_chart_file *const *lookout_chart_set_files(lookout_chart_sets *s,
                                                          const char *path,
                                                          size_t *out_n);
+
+/* The files one set still has to prepare: each file that bakes before it
+ * draws and has no prepared chart, or whose prepared chart is older than it,
+ * as an update leaves it. A file a finished bake refused is left out. This is
+ * the list to hand lookout_bake_start, and its length is the set's
+ * `to_prepare`.
+ *
+ * Empty until the scan has read the folder. Borrowed until the next call that
+ * changes the list, as lookout_chart_sets_all is. */
+const lookout_chart_file *const *lookout_chart_set_to_prepare(lookout_chart_sets *s,
+                                                              const char *path,
+                                                              size_t *out_n);
+
+/* Record how a bake of the set at `path` ended. Call it once the bake has
+ * stopped running and before lookout_bake_free, then call
+ * lookout_chart_sets_rescan for the set.
+ *
+ * A bake that ran to the end records as REFUSED each of its `ins` that the
+ * rescan still lists to prepare, keyed by the dataset name, edition and update
+ * number. A refusal is saved: that edition of the cell leaves
+ * lookout_chart_set_to_prepare and counts in `refused`, on this launch and the
+ * next. A cancelled or failed bake records a stop, as
+ * lookout_chart_sets_note_cancel does. The set need not be on the list yet: a
+ * refusal waits for the set's next scan.
+ *
+ * 1 when recorded. 0 when `b` is NULL or still running. */
+int lookout_chart_sets_note_bake(lookout_chart_sets *s, const char *path,
+                                 const lookout_bake *b);
+
+/* Record that the mariner stopped the prepare of the set at `path`.
+ * lookout_chart_sets_resume skips the set until a scan of it finds a file to
+ * prepare that was not there when it stopped: a new cell, or a new edition of
+ * one. A stop lasts until the app closes the sets. */
+void lookout_chart_sets_note_cancel(lookout_chart_sets *s, const char *path);
+
+/* The set whose prepare to finish, or NULL. It is a managed set, switched on
+ * and scanned, with a file to prepare and no stop recorded since it last
+ * changed. A shell calls this when no bake is running, typically after
+ * lookout_chart_sets_changed, and bakes lookout_chart_set_to_prepare for the
+ * path. Borrowed until the next call that changes the list. */
+const char *lookout_chart_sets_resume(lookout_chart_sets *s);
 
 /* Put a folder on the list and scan it. 1 when it joined, 0 when it was
  * already there. The paths and the switches are saved; the CELLS are not,

@@ -34,6 +34,19 @@ pub fn setRow(out: anytype, set: *const Set) void {
     out.print("{d}", .{set.held_back});
 }
 
+/// Strings per set in `todoRow`.
+pub const todo_fields = 9;
+
+/// What one set still has to prepare: path, toPrepare, refused, then the six
+/// bands' toPrepare, band 1 first. Apart from `setRow`, so its thirteen
+/// strings keep their indices.
+pub fn todoRow(out: anytype, set: *const Set) void {
+    out.str(set.path);
+    out.print("{d}", .{set.to_prepare});
+    out.print("{d}", .{set.refused});
+    for (set.band_todo) |n| out.print("{d}", .{n});
+}
+
 /// Strings per file in `fileRow`.
 pub const file_fields = 12;
 
@@ -105,6 +118,31 @@ test "a set row reads every field from the core's struct" {
         "/charts/NOAA", "NOAA", "US", "1", "3", "4", "5", "6", "7", "8", "9", "2", "10",
     }, &rows);
     try t.expectEqual(@as(usize, set_fields), rows.list.items.len);
+}
+
+test "a to-prepare row reads every field from the core's struct" {
+    const set: Set = .{
+        .path = "/charts/NOAA",
+        .title = "NOAA",
+        .producer = "US",
+        .on = 1,
+        .managed = 1,
+        .scanned = 1,
+        .charts = 0,
+        .pictures = 0,
+        .unprepared = 9,
+        .bytes = 0,
+        .band_lo = 1,
+        .band_hi = 6,
+        .to_prepare = 7,
+        .refused = 2,
+        .band_todo = .{ 1, 2, 0, 0, 3, 1 },
+    };
+    var rows: Rows = .{};
+    defer rows.deinit();
+    todoRow(&rows, &set);
+    try expectRow(&.{ "/charts/NOAA", "7", "2", "1", "2", "0", "0", "3", "1" }, &rows);
+    try t.expectEqual(@as(usize, todo_fields), rows.list.items.len);
 }
 
 test "a file row reads every field from the core's struct" {

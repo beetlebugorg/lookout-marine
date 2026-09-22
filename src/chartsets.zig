@@ -54,6 +54,14 @@ pub const Set = extern struct {
     /// edition or is in the managed set. They stay installed. 0 for a set
     /// switched off.
     held_back: usize = 0,
+    /// The files `Sets.toPrepare` lists: `unprepared` less `refused`.
+    to_prepare: usize = 0,
+    /// Files a finished bake of this set did not prepare. They stay out of
+    /// `to_prepare` until a new edition or update of the cell arrives.
+    refused: usize = 0,
+    /// `to_prepare` by usage band: `band_todo[0]` is band 1. A file with no
+    /// band is in no entry.
+    band_todo: [6]usize = @splat(0),
 };
 
 /// One chart that can be handed to the engine, and the dataset it holds.
@@ -103,6 +111,32 @@ const Row = struct {
     files: []library.File = &.{},
     /// The arena the files' strings live in, freed with them.
     files_arena: ?std.heap.ArenaAllocator = null,
+    /// The files that bake before they draw and have no current prepared
+    /// chart, as indices into `files`. In `files_arena`. Refused files are
+    /// left out when read, because a refusal can arrive after the scan.
+    todo: []const u32 = &.{},
+    /// The files to prepare when the last bake of this set was cancelled or
+    /// failed, as hashes of `refusalKey`. Null when none is recorded. A
+    /// landing scan that finds a file to prepare outside it clears it.
+    stopped: ?std.AutoHashMapUnmanaged(u64, void) = null,
+};
+
+/// The files a finished bake was given, for the next scan of its set to
+/// resolve. A file among them that the scan still lists to prepare was
+/// refused.
+const Note = struct {
+    set: [:0]u8,
+    /// The scans started when the note was made. Only a scan started after
+    /// it reads the bake's output.
+    after: u64,
+    paths: std.StringHashMapUnmanaged(void) = .empty,
+
+    fn free(self: *Note, gpa: std.mem.Allocator) void {
+        var it = self.paths.keyIterator();
+        while (it.next()) |k| gpa.free(k.*);
+        self.paths.deinit(gpa);
+        gpa.free(self.set);
+    }
 };
 
 pub const Sets = struct {
@@ -148,11 +182,22 @@ pub const Sets = struct {
     /// walking the list on its own thread. They are held here and freed with
     /// the read arena, by the next call that changes the list.
     retired: std.ArrayList(Retired) = .empty,
+    /// One per set path read, as `files_reads` is.
+    todo_reads: std.ArrayList(Kept(*const library.File)) = .empty,
+
+    /// The cells a bake did not prepare, by `refusalKey`. Saved, so a refused
+    /// cell is not baked again on every launch.
+    refused: std.StringHashMapUnmanaged(void) = .empty,
+    /// Bake results waiting for the scan that reads their output.
+    notes: std.ArrayList(Note) = .empty,
+    /// How many scans the worker has started.
+    scans: u64 = 0,
 
     const group = settings.group_chartsets;
     const paths_key = "paths";
     const off_key = "off";
     const managed_key = "managed";
+    const refused_key = "refused";
 
     /// Load the saved list and start scanning it.
     pub fn open(
@@ -189,6 +234,14 @@ pub const Sets = struct {
         }
         for (managed) |p| try managed_owned.append(gpa, try gpa.dupeZ(u8, p));
 
+        for (store.list(group, refused_key)) |k| {
+            const owned = try gpa.dupe(u8, k);
+            self.refused.put(gpa, owned, {}) catch {
+                gpa.free(owned);
+                return error.OutOfMemory;
+            };
+        }
+
         for (store.list(group, paths_key)) |p| {
             var on = true;
             for (off_owned.items) |o| {
@@ -218,6 +271,12 @@ pub const Sets = struct {
         for (self.retired.items) |*x| x.free(self.gpa);
         self.retired.deinit(self.gpa);
         self.files_reads.deinit(self.gpa);
+        self.todo_reads.deinit(self.gpa);
+        var keys = self.refused.keyIterator();
+        while (keys.next()) |k| self.gpa.free(k.*);
+        self.refused.deinit(self.gpa);
+        for (self.notes.items) |*n| n.free(self.gpa);
+        self.notes.deinit(self.gpa);
         self.gpa.free(self.prepared_root);
         self.reads.deinit();
         self.gpa.destroy(self);
@@ -229,6 +288,7 @@ pub const Sets = struct {
         self.gpa.free(r.producer);
         freeOpenable(self.gpa, r.openable);
         if (r.files_arena) |*a| a.deinit();
+        if (r.stopped) |*m| m.deinit(self.gpa);
     }
 
     // ---- the list --------------------------------------------------------
@@ -249,6 +309,7 @@ pub const Sets = struct {
         self.all_read = null;
         self.compose_read = null;
         self.files_reads.clearRetainingCapacity();
+        self.todo_reads.clearRetainingCapacity();
         for (self.retired.items) |*x| x.free(self.gpa);
         self.retired.clearRetainingCapacity();
     }
@@ -264,7 +325,7 @@ pub const Sets = struct {
         defer self.mu.unlock();
         for (self.rows.items) |r| {
             if (!std.mem.eql(u8, r.path, path)) continue;
-            const kept = self.keptFiles(r.path) orelse return &.{};
+            const kept = self.keptFor(&self.files_reads, r.path) orelse return &.{};
             if (kept.gen == self.gen) return kept.out;
             const out = self.reads.allocator().alloc(*const library.File, r.files.len) catch return &.{};
             for (r.files, out) |*f, *dst| dst.* = f;
@@ -275,15 +336,132 @@ pub const Sets = struct {
         return &.{};
     }
 
-    /// The kept `files` read for one set path, made stale when new. `path` is
-    /// the row's own, which outlives the entry. Called with `mu` held.
-    fn keptFiles(self: *Sets, path: []const u8) ?*Kept(*const library.File) {
-        for (self.files_reads.items) |*k| {
+    /// The kept read for one set path in `list`, made stale when new. `path`
+    /// is the row's own, which outlives the entry. Called with `mu` held.
+    fn keptFor(
+        self: *Sets,
+        list: *std.ArrayList(Kept(*const library.File)),
+        path: []const u8,
+    ) ?*Kept(*const library.File) {
+        for (list.items) |*k| {
             if (k.path.ptr == path.ptr) return k;
         }
-        const k = self.files_reads.addOne(self.gpa) catch return null;
+        const k = list.addOne(self.gpa) catch return null;
         k.* = .{ .gen = self.gen -% 1, .out = &.{}, .path = path };
         return k;
+    }
+
+    /// The files one set still has to prepare: each file that bakes before it
+    /// draws and has no prepared chart, or whose prepared chart is older than
+    /// it. A file a finished bake refused is left out.
+    ///
+    /// Borrowed until the next call that changes the list, as `files` is.
+    pub fn toPrepare(self: *Sets, path: []const u8) []const *const library.File {
+        self.mu.lock();
+        defer self.mu.unlock();
+        for (self.rows.items) |r| {
+            if (!std.mem.eql(u8, r.path, path)) continue;
+            const kept = self.keptFor(&self.todo_reads, r.path) orelse return &.{};
+            if (kept.gen == self.gen) return kept.out;
+            const a = self.reads.allocator();
+            var out = std.ArrayList(*const library.File).initCapacity(a, r.todo.len) catch return &.{};
+            for (r.todo) |i| {
+                const f = &r.files[i];
+                if (!self.isRefused(f)) out.appendAssumeCapacity(f);
+            }
+            kept.gen = self.gen;
+            kept.out = out.items;
+            return out.items;
+        }
+        return &.{};
+    }
+
+    /// The counts `toPrepare` answers to, for one row. Called with `mu` held.
+    fn countTodo(self: *Sets, r: Row) struct { to_prepare: usize, refused: usize, bands: [6]usize } {
+        var to_prepare: usize = 0;
+        var refused: usize = 0;
+        var bands: [6]usize = @splat(0);
+        for (r.todo) |i| {
+            const f = &r.files[i];
+            if (self.isRefused(f)) {
+                refused += 1;
+                continue;
+            }
+            to_prepare += 1;
+            if (f.band >= 1 and f.band <= 6) bands[@intCast(f.band - 1)] += 1;
+        }
+        return .{ .to_prepare = to_prepare, .refused = refused, .bands = bands };
+    }
+
+    /// Called with `mu` held.
+    fn isRefused(self: *Sets, f: *const library.File) bool {
+        if (self.refused.size == 0) return false;
+        var buf: [refusal_key_max]u8 = undefined;
+        return self.refused.contains(refusalKey(&buf, f));
+    }
+
+    /// Record how a bake of one set ended. `ins` is what it was given.
+    ///
+    /// A bake that ran to the end leaves a note. The next scan of the set that
+    /// starts after it records each file of `ins` it still lists to prepare as
+    /// refused, keyed by `refusalKey`. A shell rescans the set after a bake,
+    /// so that scan is the one. A cancelled or failed bake records a stop, as
+    /// `noteCancel` does.
+    pub fn noteBake(self: *Sets, path: []const u8, ins: []const [:0]const u8, finished: bool) void {
+        if (!finished) {
+            self.noteCancel(path);
+            return;
+        }
+        var note: Note = .{ .set = self.gpa.dupeZ(u8, path) catch return, .after = 0 };
+        for (ins) |p| {
+            const owned = self.gpa.dupe(u8, p) catch break;
+            const gop = note.paths.getOrPut(self.gpa, owned) catch {
+                self.gpa.free(owned);
+                break;
+            };
+            if (gop.found_existing) self.gpa.free(owned);
+        }
+        self.mu.lock();
+        defer self.mu.unlock();
+        note.after = self.scans;
+        for (self.notes.items, 0..) |*n, i| {
+            if (!std.mem.eql(u8, n.set, path)) continue;
+            n.free(self.gpa);
+            self.notes.items[i] = note;
+            return;
+        }
+        self.notes.append(self.gpa, note) catch note.free(self.gpa);
+    }
+
+    /// Record that the prepare of one set was stopped. `resumePath` then skips
+    /// the set until a scan of it finds a file to prepare that was not there
+    /// when it stopped: a new cell, or a new edition of one.
+    pub fn noteCancel(self: *Sets, path: []const u8) void {
+        self.mu.lock();
+        defer self.mu.unlock();
+        for (self.rows.items) |*r| {
+            if (!std.mem.eql(u8, r.path, path)) continue;
+            var held: std.AutoHashMapUnmanaged(u64, void) = .empty;
+            for (r.todo) |i| {
+                held.put(self.gpa, keyHash(&r.files[i]), {}) catch break;
+            }
+            if (r.stopped) |*m| m.deinit(self.gpa);
+            r.stopped = held;
+            return;
+        }
+    }
+
+    /// A managed set, switched on and scanned, with files to prepare and no
+    /// stop recorded since it last changed. Null when there is none. The
+    /// path is the row's own.
+    pub fn resumePath(self: *Sets) ?[:0]const u8 {
+        self.mu.lock();
+        defer self.mu.unlock();
+        for (self.rows.items) |r| {
+            if (!r.managed or !r.on or !r.scanned or r.stopped != null) continue;
+            if (self.countTodo(r).to_prepare > 0) return r.path;
+        }
+        return null;
     }
 
     /// The list, in the order added. Borrowed until the next call that changes
@@ -300,6 +478,7 @@ pub const Sets = struct {
         const held_back = a.alloc(usize, out.len) catch return &.{};
         self.countHeldBack(held_back);
         for (self.rows.items, out, by_ptr, held_back) |r, *dst, *p, held| {
+            const todo = self.countTodo(r);
             dst.* = .{
                 .path = r.path.ptr,
                 .title = r.title.ptr,
@@ -314,6 +493,9 @@ pub const Sets = struct {
                 .band_lo = r.band_lo,
                 .band_hi = r.band_hi,
                 .held_back = held,
+                .to_prepare = todo.to_prepare,
+                .refused = todo.refused,
+                .band_todo = todo.bands,
             };
             p.* = dst;
         }
@@ -396,6 +578,12 @@ pub const Sets = struct {
             self.freeRow(r);
             _ = self.rows.orderedRemove(i);
             found = true;
+            break;
+        }
+        for (self.notes.items, 0..) |*n, i| {
+            if (!std.mem.eql(u8, n.set, path)) continue;
+            n.free(self.gpa);
+            _ = self.notes.swapRemove(i);
             break;
         }
         self.resetReads();
@@ -600,6 +788,8 @@ pub const Sets = struct {
                 return;
             }
             const path = self.queue.orderedRemove(0);
+            self.scans += 1;
+            const number = self.scans;
             self.mu.unlock();
             defer self.gpa.free(path);
 
@@ -615,7 +805,7 @@ pub const Sets = struct {
                 defer self.gpa.free(dir);
                 prepared = library.scanWith(self.gpa, self.io, dir, null, null, self.inventory, null) catch null;
             }
-            self.land(path, &scan, if (prepared) |*p| p else null);
+            self.land(path, number, &scan, if (prepared) |*p| p else null);
         }
     }
 
@@ -663,17 +853,6 @@ pub const Sets = struct {
         return st.mtime.nanoseconds;
     }
 
-    /// True when the prepared scan holds a chart made from this file.
-    fn readyHas(prepared: *const library.Scan, name: []const u8) bool {
-        const stem = library.stemOf(name);
-        for ([_][]const library.Cell{ prepared.cells, prepared.raster }) |list| {
-            for (list) |c| {
-                if (std.mem.eql(u8, library.stemOf(c.name), stem)) return true;
-            }
-        }
-        return false;
-    }
-
     /// Where the shell would have put what it prepared from `path`, or null
     /// when it prepares nowhere. The caller frees it.
     fn preparedPath(self: *Sets, path: []const u8) ?[]u8 {
@@ -682,11 +861,46 @@ pub const Sets = struct {
         return std.fs.path.join(self.gpa, &.{ self.prepared_root, name }) catch null;
     }
 
+    /// Record as refused each file of `r` to prepare that the set's bake note
+    /// names, and drop the note. Only a scan started after the note resolves
+    /// it. Called with `mu` held.
+    fn resolveNote(self: *Sets, r: Row, number: u64) void {
+        const at = for (self.notes.items, 0..) |n, i| {
+            if (std.mem.eql(u8, n.set, r.path)) break i;
+        } else return;
+        var note = self.notes.items[at];
+        if (number <= note.after) return;
+        _ = self.notes.swapRemove(at);
+        defer note.free(self.gpa);
+        var added = false;
+        for (r.todo) |i| {
+            const f = &r.files[i];
+            if (!note.paths.contains(std.mem.span(f.path))) continue;
+            var buf: [refusal_key_max]u8 = undefined;
+            const key = refusalKey(&buf, f);
+            if (self.refused.contains(key)) continue;
+            const owned = self.gpa.dupe(u8, key) catch continue;
+            self.refused.put(self.gpa, owned, {}) catch {
+                self.gpa.free(owned);
+                continue;
+            };
+            added = true;
+        }
+        if (!added) return;
+        var keys = std.ArrayList([]const u8).empty;
+        defer keys.deinit(self.gpa);
+        var it = self.refused.keyIterator();
+        while (it.next()) |k| keys.append(self.gpa, k.*) catch return;
+        self.store.setList(group, refused_key, keys.items);
+    }
+
     /// Put what a scan found on its row. `prepared` is the same set as the
-    /// shell prepared it, when there is one.
+    /// shell prepared it, when there is one. `number` is the scan's, counted
+    /// from the first the worker started.
     fn land(
         self: *Sets,
         path: []const u8,
+        number: u64,
         scan: *const library.Scan,
         prepared: ?*const library.Scan,
     ) void {
@@ -695,6 +909,16 @@ pub const Sets = struct {
         var files_arena = std.heap.ArenaAllocator.init(self.gpa);
         const fa = files_arena.allocator();
         var found = std.ArrayList(library.File).empty;
+        var todo = std.ArrayList(u32).empty;
+
+        // The first source cell of each stem, for the stale test below.
+        var sources = std.StringHashMap(*const library.Cell).init(self.gpa);
+        defer sources.deinit();
+        for (scan.cells) |*o| {
+            if (o.kind != .source) continue;
+            const gop = sources.getOrPut(library.stemOf(o.name)) catch continue;
+            if (!gop.found_existing) gop.value_ptr.* = o;
+        }
 
         // The stems whose prepared chart is older than the cell it was made
         // from. An update writes a new base cell beside the chart prepared
@@ -705,15 +929,28 @@ pub const Sets = struct {
         if (prepared) |p| {
             for ([_][]const library.Cell{ p.cells, p.raster }) |list| {
                 for (list) |c| {
-                    const at = self.modifiedAt(c.path) orelse continue;
                     const stem = library.stemOf(c.name);
-                    for (scan.cells) |o| {
-                        if (o.kind != .source) continue;
-                        if (!std.mem.eql(u8, library.stemOf(o.name), stem)) continue;
-                        const src = self.modifiedAt(o.path) orelse continue;
-                        if (src > at) stale.put(stem, {}) catch {};
-                        break;
-                    }
+                    const o = sources.get(stem) orelse continue;
+                    const at = self.modifiedAt(c.path) orelse continue;
+                    const src = self.modifiedAt(o.path) orelse continue;
+                    if (src > at) stale.put(stem, {}) catch {};
+                }
+            }
+        }
+
+        // A prepared chart WINS over the file it was made from, matched by the
+        // name without its extension. Otherwise a set that has been imported
+        // reports every cell as still needing one.
+        var ready = std.StringHashMap(void).init(self.gpa);
+        defer ready.deinit();
+        if (prepared) |p| {
+            for ([_][]const library.Cell{ p.cells, p.raster }) |list| {
+                for (list) |c| {
+                    const stem = library.stemOf(c.name);
+                    // A stale chart draws, and the cell beside it still counts
+                    // as one to prepare.
+                    if (stale.contains(stem)) continue;
+                    ready.put(stem, {}) catch {};
                 }
             }
         }
@@ -734,33 +971,18 @@ pub const Sets = struct {
         }
         for ([_][]const library.Cell{ scan.cells, scan.raster }) |list| {
             for (list) |c| {
-                const is_stale = stale.contains(library.stemOf(c.name));
-                if (prepared != null and readyHas(prepared.?, c.name) and !is_stale) continue;
+                const stem = library.stemOf(c.name);
+                if (ready.contains(stem)) continue;
                 var f = library.fileOf(fa, c) catch continue;
                 const id = identityOf(c, scan);
                 f.edition = id.edition;
                 f.update = id.update;
                 // A shell prepares this cell again, and the list holds the
                 // chart made from it as well.
-                f.stale = @intFromBool(is_stale);
-                found.append(fa, f) catch {};
-            }
-        }
-
-        // A prepared chart WINS over the file it was made from, matched by the
-        // name without its extension. Otherwise a set that has been imported
-        // reports every cell as still needing one.
-        var ready = std.StringHashMap(void).init(self.gpa);
-        defer ready.deinit();
-        if (prepared) |p| {
-            for ([_][]const library.Cell{ p.cells, p.raster }) |list| {
-                for (list) |c| {
-                    const stem = library.stemOf(c.name);
-                    // A stale chart draws, and the cell beside it still counts
-                    // as one to prepare.
-                    if (stale.contains(stem)) continue;
-                    ready.put(stem, {}) catch {};
-                }
+                f.stale = @intFromBool(stale.contains(stem));
+                const at: u32 = @intCast(found.items.len);
+                found.append(fa, f) catch continue;
+                if (c.kind == .source or c.kind == .raster_source) todo.append(fa, at) catch {};
             }
         }
 
@@ -812,6 +1034,18 @@ pub const Sets = struct {
             r.openable = openable.toOwnedSlice(self.gpa) catch &.{};
             r.files_arena = files_arena;
             r.files = found.items;
+            r.todo = todo.items;
+            self.resolveNote(r.*, number);
+            // A file to prepare that was not there when the prepare stopped
+            // is a change, and the set may resume.
+            if (r.stopped) |*held| {
+                for (r.todo) |i| {
+                    if (held.contains(keyHash(&r.files[i]))) continue;
+                    held.deinit(self.gpa);
+                    r.stopped = null;
+                    break;
+                }
+            }
             r.charts = charts;
             r.pictures = pictures;
             r.unprepared = unprepared;
@@ -840,6 +1074,24 @@ pub const Sets = struct {
         files_arena.deinit();
     }
 };
+
+/// The longest `refusalKey`: an 8 character name with room to spare, and two
+/// u32s.
+const refusal_key_max = 96;
+
+/// What a refusal is recorded under: the dataset name without its extension,
+/// the edition and the update number. A new edition of a refused cell is a new
+/// key, so it is prepared.
+fn refusalKey(buf: *[refusal_key_max]u8, f: *const library.File) []const u8 {
+    var name = library.stemOf(std.mem.span(f.name));
+    if (name.len > refusal_key_max - 24) name = name[0 .. refusal_key_max - 24];
+    return std.fmt.bufPrint(buf, "{s}/{d}/{d}", .{ name, f.edition, f.update }) catch unreachable;
+}
+
+fn keyHash(f: *const library.File) u64 {
+    var buf: [refusal_key_max]u8 = undefined;
+    return std.hash.Wyhash.hash(0, refusalKey(&buf, f));
+}
 
 /// A read's result, and the generation it was made in.
 fn Kept(comptime T: type) type {
@@ -1670,4 +1922,190 @@ test "reads between two changes allocate once" {
     const live = w.liveBytes();
     for (0..1000) |_| Reads.round(s, a, b);
     try t.expectEqual(live, w.liveBytes());
+}
+
+// ---- what a set still has to prepare ------------------------------------------
+
+/// Write a prepared chart for `stem` under the fixture's prepared root.
+fn prepare(f: *Fixture, set: []const u8, stem: []const u8) !void {
+    var buf: [256]u8 = undefined;
+    const dir = try std.fmt.bufPrint(&buf, "Prepared/{s}/{s}", .{ set, stem });
+    try f.tmp.dir.createDirPath(f.io, dir);
+    var file_buf: [256]u8 = undefined;
+    const file = try std.fmt.bufPrint(&file_buf, "{s}/{s}.pmtiles", .{ dir, stem });
+    try f.tmp.dir.writeFile(f.io, .{ .sub_path = file, .data = "x" });
+}
+
+test "a stale cell is listed to prepare" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const src = try f.folderNamed("Set A", &.{"US5MD1MC.000"});
+    defer t.allocator.free(src);
+    const root = try f.folderNamed("Prepared", &.{});
+    defer t.allocator.free(root);
+    try prepare(&f, "Set A", "US5MD1MC");
+    // The update writes the cell again, after the chart made from it.
+    sleepMs(20);
+    try f.tmp.dir.writeFile(f.io, .{ .sub_path = "Set A/US5MD1MC.000", .data = "edition 28" });
+
+    const s = try Sets.open(t.allocator, f.io, f.store, root, null);
+    defer s.close();
+    try t.expect(s.add(src));
+    settle(s);
+
+    const list = s.toPrepare(src);
+    try t.expectEqual(@as(usize, 1), list.len);
+    try t.expectEqual(library.FileKind.source, list[0].kind);
+    try t.expectEqual(@as(c_int, 1), list[0].stale);
+    const row = s.all()[0];
+    try t.expectEqual(@as(usize, 1), row.to_prepare);
+    try t.expectEqual(@as(usize, 1), row.band_todo[4]);
+}
+
+test "a refused cell is not listed after its bake result is noted" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const src = try f.folderNamed("Set A", &.{ "US5MD1MC.000", "US5MD2MC.000" });
+    defer t.allocator.free(src);
+    const root = try f.folderNamed("Prepared", &.{});
+    defer t.allocator.free(root);
+    const one = try std.fmt.allocPrintSentinel(t.allocator, "{s}/US5MD1MC.000", .{src}, 0);
+    defer t.allocator.free(one);
+    const two = try std.fmt.allocPrintSentinel(t.allocator, "{s}/US5MD2MC.000", .{src}, 0);
+    defer t.allocator.free(two);
+
+    {
+        const s = try Sets.open(t.allocator, f.io, f.store, root, null);
+        defer s.close();
+        try t.expect(s.add(src));
+        settle(s);
+        try t.expectEqual(@as(usize, 2), s.toPrepare(src).len);
+
+        // The bake is given both cells and writes a chart for one.
+        try prepare(&f, "Set A", "US5MD1MC");
+        s.noteBake(src, &.{ one, two }, true);
+        // The note waits for the scan that reads the bake's output.
+        try t.expectEqual(@as(usize, 2), s.toPrepare(src).len);
+        try t.expect(s.rescan(src));
+        settle(s);
+
+        try t.expectEqual(@as(usize, 0), s.toPrepare(src).len);
+        const row = s.all()[0];
+        try t.expectEqual(@as(usize, 0), row.to_prepare);
+        try t.expectEqual(@as(usize, 1), row.refused);
+        try t.expectEqual(@as(usize, 1), row.unprepared);
+    }
+
+    // The refusal is saved, so the next launch does not bake the cell again.
+    const s = try Sets.open(t.allocator, f.io, f.store, root, null);
+    defer s.close();
+    settle(s);
+    try t.expectEqual(@as(usize, 0), s.toPrepare(src).len);
+    try t.expectEqual(@as(usize, 1), s.all()[0].refused);
+}
+
+test "a bake noted while an earlier scan runs waits for the next one" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const src = try f.folderNamed("Set A", &.{"US5MD1MC.000"});
+    defer t.allocator.free(src);
+    const cell = try std.fmt.allocPrintSentinel(t.allocator, "{s}/US5MD1MC.000", .{src}, 0);
+    defer t.allocator.free(cell);
+
+    const s = try f.open();
+    defer s.close();
+    try t.expect(s.add(src));
+    settle(s);
+
+    // A scan that started before the note read the folder before the bake
+    // wrote anything, so it cannot say what the bake refused.
+    s.mu.lock();
+    s.scans += 1;
+    const early = s.scans;
+    s.mu.unlock();
+    s.noteBake(src, &.{cell}, true);
+    s.mu.lock();
+    s.resolveNote(s.rows.items[0], early);
+    const waiting = s.notes.items.len;
+    s.mu.unlock();
+    try t.expectEqual(@as(usize, 1), waiting);
+    try t.expectEqual(@as(usize, 1), s.toPrepare(src).len);
+}
+
+test "a cancel stops the resume until the set changes" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const src = try f.folderNamed("NOAA", &.{ "US5MD1MC.000", "US5MD2MC.000" });
+    defer t.allocator.free(src);
+    const root = try f.folderNamed("Prepared", &.{});
+    defer t.allocator.free(root);
+
+    const s = try Sets.open(t.allocator, f.io, f.store, root, null);
+    defer s.close();
+    try t.expect(s.add(src));
+    settle(s);
+    // Only a downloader's set resumes. The mariner's own is prepared when
+    // it is added.
+    try t.expect(s.resumePath() == null);
+    try t.expect(s.setManaged(src, true));
+    try t.expectEqualStrings(src, s.resumePath().?);
+
+    // The mariner stops the bake after one chart, and the set is read again.
+    s.noteCancel(src);
+    try t.expect(s.resumePath() == null);
+    try prepare(&f, "NOAA", "US5MD1MC");
+    try t.expect(s.rescan(src));
+    settle(s);
+    try t.expectEqual(@as(usize, 1), s.all()[0].to_prepare);
+    try t.expect(s.resumePath() == null);
+
+    // A download brings a cell that was not there when the bake stopped.
+    try f.tmp.dir.writeFile(f.io, .{ .sub_path = "NOAA/US4MD1PM.000", .data = "x" });
+    try t.expect(s.rescan(src));
+    // Not while the set is being read.
+    try t.expect(s.resumePath() == null);
+    settle(s);
+    try t.expectEqualStrings(src, s.resumePath().?);
+
+    // A bake that failed stops it the same way.
+    s.noteBake(src, &.{}, false);
+    try t.expect(s.resumePath() == null);
+}
+
+test "the counts match the list" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const src = try f.folderNamed("Set A", &.{
+        "US3EC1AA.000", "US5MD1MC.000", "US5MD2MC.000", "11013_1.KAP", "US4MD1PM.pmtiles",
+    });
+    defer t.allocator.free(src);
+    const root = try f.folderNamed("Prepared", &.{});
+    defer t.allocator.free(root);
+    const refused = try std.fmt.allocPrintSentinel(t.allocator, "{s}/US5MD2MC.000", .{src}, 0);
+    defer t.allocator.free(refused);
+
+    const s = try Sets.open(t.allocator, f.io, f.store, root, null);
+    defer s.close();
+    try t.expect(s.add(src));
+    settle(s);
+    s.noteBake(src, &.{refused}, true);
+    try t.expect(s.rescan(src));
+    settle(s);
+
+    const list = s.toPrepare(src);
+    const row = s.all()[0];
+    // Two cells and the sheet. The chart draws now, and one cell was
+    // refused.
+    try t.expectEqual(@as(usize, 3), list.len);
+    try t.expectEqual(list.len, row.to_prepare);
+    try t.expectEqual(@as(usize, 1), row.refused);
+    try t.expectEqual(row.unprepared, row.to_prepare + row.refused);
+
+    var bands: [6]usize = @splat(0);
+    for (list) |x| {
+        if (x.band >= 1 and x.band <= 6) bands[@intCast(x.band - 1)] += 1;
+    }
+    try t.expectEqualSlices(usize, &bands, &row.band_todo);
+    try t.expectEqual(@as(usize, 1), row.band_todo[2]);
+    try t.expectEqual(@as(usize, 1), row.band_todo[4]);
 }

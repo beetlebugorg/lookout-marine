@@ -3600,6 +3600,10 @@ extern fn lookout_chart_sets_remove(s: ?*c_sets, path: ?[*:0]const u8) c_int;
 extern fn lookout_chart_sets_set_on(s: ?*c_sets, path: ?[*:0]const u8, on: c_int) c_int;
 extern fn lookout_chart_sets_is_on(s: ?*c_sets, path: ?[*:0]const u8) c_int;
 extern fn lookout_chart_sets_compose(s: ?*c_sets, out_n: *usize) ?[*]const ?[*:0]const u8;
+extern fn lookout_chart_set_to_prepare(s: ?*c_sets, path: ?[*:0]const u8, out_n: *usize) ?[*]const ?*const CChartFile;
+extern fn lookout_chart_sets_resume(s: ?*c_sets) ?[*:0]const u8;
+extern fn lookout_chart_sets_note_cancel(s: ?*c_sets, path: ?[*:0]const u8) void;
+extern fn lookout_chart_sets_note_bake(s: ?*c_sets, path: ?[*:0]const u8, b: ?*const bakejob.Job) c_int;
 
 fn setsOf(s: j.jlong) ?*c_sets {
     if (s == 0) return null;
@@ -3699,6 +3703,68 @@ export fn Java_org_beetlebug_lookout_Lookout_nChartSetsCompose(env: [*c]j.JNIEnv
     var n: usize = 0;
     const paths = lookout_chart_sets_compose(setsOf(s), &n) orelse return jstrArray(env, &.{});
     return jstrArray(env, paths[0..n]);
+}
+
+/// String[] nChartSetsTodo(long s) -- what each set still has to prepare, in
+/// the order nChartSetsAll lists them. Nine strings per set:
+///
+///   path, toPrepare, refused, band1 .. band6
+export fn Java_org_beetlebug_lookout_Lookout_nChartSetsTodo(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong) j.jobjectArray {
+    _ = cls;
+    var n: usize = 0;
+    const all = lookout_chart_sets_all(setsOf(s), &n) orelse return jstrArray(env, &.{});
+
+    var out = Strings.init();
+    defer out.deinit();
+
+    for (all[0..n]) |sp| {
+        jrows.todoRow(&out, sp orelse continue);
+    }
+    return out.toArray(env);
+}
+
+/// String[] nChartSetToPrepare(long s, String path) -- the files one set still
+/// has to prepare, in nChartSetFiles' row shape.
+export fn Java_org_beetlebug_lookout_Lookout_nChartSetToPrepare(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong, path: j.jstring) j.jobjectArray {
+    _ = cls;
+    const p = Borrowed.get(env, path) orelse return jstrArray(env, &.{});
+    defer p.release(env);
+    var n: usize = 0;
+    const files = lookout_chart_set_to_prepare(setsOf(s), p.ptr(), &n) orelse return jstrArray(env, &.{});
+
+    var out = Strings.init();
+    defer out.deinit();
+    scanFiles(&out, files[0..n]);
+    return out.toArray(env);
+}
+
+/// String nChartSetsResume(long s) -- the set whose prepare to finish, or
+/// null.
+export fn Java_org_beetlebug_lookout_Lookout_nChartSetsResume(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong) j.jstring {
+    _ = cls;
+    const p = lookout_chart_sets_resume(setsOf(s)) orelse return null;
+    return env_(env).NewStringUTF.?(env, p);
+}
+
+/// void nChartSetsNoteCancel(long s, String path) -- the mariner stopped this
+/// set's prepare.
+export fn Java_org_beetlebug_lookout_Lookout_nChartSetsNoteCancel(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong, path: j.jstring) void {
+    _ = cls;
+    const p = Borrowed.get(env, path) orelse return;
+    defer p.release(env);
+    lookout_chart_sets_note_cancel(setsOf(s), p.ptr());
+}
+
+/// boolean nChartSetsNoteBake(long s, String path, long job) -- how a bake of
+/// this set ended. False while the bake runs. Call before nBakeFree, then
+/// rescan the set.
+export fn Java_org_beetlebug_lookout_Lookout_nChartSetsNoteBake(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong, path: j.jstring, jl: j.jlong) j.jboolean {
+    _ = cls;
+    if (jl == 0) return 0;
+    const p = Borrowed.get(env, path) orelse return 0;
+    defer p.release(env);
+    const job: *const bakejob.Job = @ptrFromInt(@as(usize, @bitCast(jl)));
+    return if (lookout_chart_sets_note_bake(setsOf(s), p.ptr(), job) != 0) 1 else 0;
 }
 
 // ---- what a bake prepared, and removing it ----------------------------------
