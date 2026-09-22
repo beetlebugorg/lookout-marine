@@ -413,8 +413,9 @@ pub const Sets = struct {
             return;
         }
         var note: Note = .{ .set = self.gpa.dupeZ(u8, path) catch return, .after = 0 };
+        var norm: [std.fs.max_path_bytes]u8 = undefined;
         for (ins) |p| {
-            const owned = self.gpa.dupe(u8, p) catch break;
+            const owned = self.gpa.dupe(u8, sepNormal(&norm, p)) catch break;
             const gop = note.paths.getOrPut(self.gpa, owned) catch {
                 self.gpa.free(owned);
                 break;
@@ -875,7 +876,8 @@ pub const Sets = struct {
         var added = false;
         for (r.todo) |i| {
             const f = &r.files[i];
-            if (!note.paths.contains(std.mem.span(f.path))) continue;
+            var norm: [std.fs.max_path_bytes]u8 = undefined;
+            if (!note.paths.contains(sepNormal(&norm, std.mem.span(f.path)))) continue;
             var buf: [refusal_key_max]u8 = undefined;
             const key = refusalKey(&buf, f);
             if (self.refused.contains(key)) continue;
@@ -1078,6 +1080,16 @@ pub const Sets = struct {
 /// The longest `refusalKey`: an 8 character name with room to spare, and two
 /// u32s.
 const refusal_key_max = 96;
+
+/// One path in the form a bake note keys on: every separator a forward
+/// slash. A shell hands the bake the paths a scan gave it, and on Windows a
+/// scan writes a backslash while a shell that built the path itself writes
+/// either. A path longer than the buffer is returned unchanged.
+fn sepNormal(buf: []u8, p: []const u8) []const u8 {
+    if (p.len > buf.len) return p;
+    for (p, 0..) |c, i| buf[i] = if (c == '\\') '/' else c;
+    return buf[0..p.len];
+}
 
 /// What a refusal is recorded under: the dataset name without its extension,
 /// the edition and the update number. A new edition of a refused cell is a new
