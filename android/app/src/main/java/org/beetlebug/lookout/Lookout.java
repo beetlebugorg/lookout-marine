@@ -274,7 +274,7 @@ public final class Lookout implements AutoCloseable {
     public static boolean chartSetsChanged(long s) {
         return s != 0 && nChartSetsChanged(s);
     }
-    /** The list, in the order added: eleven strings per set. */
+    /** The list, in the order added: thirteen strings per set. */
     public static String[] chartSetsAll(long s)   {
         return s == 0 ? new String[0] : nChartSetsAll(s);
     }

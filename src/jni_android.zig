@@ -25,6 +25,17 @@ const j = @cImport({
 // struct's ABI has moved twice; a redeclaration here would rot silently.
 const cc = @import("c.zig").c;
 const bakejob = @import("bakejob.zig");
+const jrows = @import("jni_rows.zig");
+
+// The chart set and file structs are the core's own, the same types the
+// C ABI exports. A hand-copied layout drifts silently when the core adds a
+// field, and every field after it reads one slot off.
+const CChartSet = jrows.Set;
+const CChartFile = jrows.File;
+comptime {
+    std.debug.assert(CChartSet == @import("capi/chartsets.zig").lookout_chart_set);
+    std.debug.assert(CChartFile == @import("capi/library.zig").lookout_chart_file);
+}
 
 // The C ABI (capi.zig exports, same archive — resolved at link).
 const lookout_view = extern struct { lon: f64, lat: f64, zoom: f64, rotation_deg: f64 };
@@ -2869,14 +2880,14 @@ const Strings = struct {
         self.list.deinit(gpa);
     }
 
-    fn str(self: *Strings, s: ?[*:0]const u8) void {
+    pub fn str(self: *Strings, s: ?[*:0]const u8) void {
         const src = if (s) |p| std.mem.span(p) else "";
         const copy = gpa.alloc(u8, src.len) catch return;
         @memcpy(copy, src);
         self.list.append(gpa, copy) catch gpa.free(copy);
     }
 
-    fn print(self: *Strings, comptime fmt: []const u8, args: anytype) void {
+    pub fn print(self: *Strings, comptime fmt: []const u8, args: anytype) void {
         const s = std.fmt.allocPrint(gpa, fmt, args) catch return;
         self.list.append(gpa, s) catch gpa.free(s);
     }
@@ -3172,21 +3183,6 @@ extern fn lookout_scan_raster(s: ?*const c_scan, out_n: *usize) ?[*]const ?*cons
 extern fn lookout_bake_order(items: [*]CBakeItem, n: usize) void;
 extern fn lookout_bake_output_path(out_dir: ?[*:0]const u8, source: ?[*:0]const u8, item: *const CBakeItem, out: [*]u8, cap: usize) usize;
 
-const CChartFile = extern struct {
-    path: ?[*:0]const u8,
-    name: ?[*:0]const u8,
-    kind: c_int,
-    band: c_int,
-    band_name: ?[*:0]const u8,
-    bytes: u64,
-    scale: f64,
-    located: c_int,
-    west: f64,
-    south: f64,
-    east: f64,
-    north: f64,
-};
-
 const CScanSummary = extern struct {
     root: ?[*:0]const u8,
     updates: usize,
@@ -3205,21 +3201,7 @@ const CBakeItem = extern struct {
 };
 
 fn scanFiles(out: *Strings, files: []const ?*const CChartFile) void {
-    for (files) |fp| {
-        const f = fp orelse continue;
-        out.str(f.path);
-        out.str(f.name);
-        out.print("{d}", .{f.kind});
-        out.print("{d}", .{f.band});
-        out.str(f.band_name);
-        out.print("{d}", .{f.bytes});
-        out.print("{d}", .{f.scale});
-        out.print("{d}", .{f.located});
-        out.print("{d}", .{f.west});
-        out.print("{d}", .{f.south});
-        out.print("{d}", .{f.east});
-        out.print("{d}", .{f.north});
-    }
+    for (files) |fp| jrows.fileRow(out, fp orelse continue);
 }
 
 /// String[] nScanRead(String path, boolean zip) -- what a folder or one .zip
@@ -3619,20 +3601,6 @@ extern fn lookout_chart_sets_set_on(s: ?*c_sets, path: ?[*:0]const u8, on: c_int
 extern fn lookout_chart_sets_is_on(s: ?*c_sets, path: ?[*:0]const u8) c_int;
 extern fn lookout_chart_sets_compose(s: ?*c_sets, out_n: *usize) ?[*]const ?[*:0]const u8;
 
-const CChartSet = extern struct {
-    path: ?[*:0]const u8,
-    title: ?[*:0]const u8,
-    producer: ?[*:0]const u8,
-    on: c_int,
-    scanned: c_int,
-    charts: usize,
-    pictures: usize,
-    unprepared: usize,
-    bytes: u64,
-    band_lo: c_int,
-    band_hi: c_int,
-};
-
 fn setsOf(s: j.jlong) ?*c_sets {
     if (s == 0) return null;
     return @ptrFromInt(@as(usize, @bitCast(s)));
@@ -3660,11 +3628,11 @@ export fn Java_org_beetlebug_lookout_Lookout_nChartSetsChanged(env: [*c]j.JNIEnv
     return if (lookout_chart_sets_changed(setsOf(s)) != 0) 1 else 0;
 }
 
-/// String[] nChartSetsAll(long s) -- the list, in the order added. Eleven
+/// String[] nChartSetsAll(long s) -- the list, in the order added. Thirteen
 /// strings per set:
 ///
 ///   path, title, producer, on, scanned, charts, pictures, unprepared,
-///   bytes, bandLo, bandHi
+///   bytes, bandLo, bandHi, managed, heldBack
 export fn Java_org_beetlebug_lookout_Lookout_nChartSetsAll(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong) j.jobjectArray {
     _ = cls;
     var n: usize = 0;
@@ -3674,18 +3642,7 @@ export fn Java_org_beetlebug_lookout_Lookout_nChartSetsAll(env: [*c]j.JNIEnv, cl
     defer out.deinit();
 
     for (all[0..n]) |sp| {
-        const set: *const CChartSet = @ptrCast(@alignCast(sp orelse continue));
-        out.str(set.path);
-        out.str(set.title);
-        out.str(set.producer);
-        out.print("{d}", .{set.on});
-        out.print("{d}", .{set.scanned});
-        out.print("{d}", .{set.charts});
-        out.print("{d}", .{set.pictures});
-        out.print("{d}", .{set.unprepared});
-        out.print("{d}", .{set.bytes});
-        out.print("{d}", .{set.band_lo});
-        out.print("{d}", .{set.band_hi});
+        jrows.setRow(&out, sp orelse continue);
     }
     return out.toArray(env);
 }

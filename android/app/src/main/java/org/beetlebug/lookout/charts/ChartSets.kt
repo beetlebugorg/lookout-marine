@@ -43,6 +43,11 @@ object ChartSets {
          *  holds no cell with a band in its name. */
         val bandLo: Int,
         val bandHi: Int,
+        /** True when a downloader owns this set rather than the mariner. */
+        val managed: Boolean = false,
+        /** The charts this set holds that another switched-on set draws
+         *  instead. 0 for a set switched off. */
+        val heldBack: Int = 0,
     ) {
         val name: String get() = path.substringAfterLast('/').ifEmpty { path }
     }
@@ -100,7 +105,7 @@ object ChartSets {
     fun compose(): List<String> = Lookout.chartSetsCompose(handle).toList()
 
     /**
-     * The flat read: eleven strings per set. `internal` so the suite drives the
+     * The flat read: thirteen strings per set. `internal` so the suite drives the
      * same walk with no core.
      */
     internal fun decode(flat: Array<String>?): List<Set> {
@@ -121,6 +126,8 @@ object ChartSets {
                     bytes = flat[k + 8].toLongOrNull() ?: 0L,
                     bandLo = flat[k + 9].toIntOrNull() ?: 0,
                     bandHi = flat[k + 10].toIntOrNull() ?: 0,
+                    managed = flat[k + 11] != "0",
+                    heldBack = flat[k + 12].toIntOrNull() ?: 0,
                 ),
             )
             k += FIELDS
@@ -128,5 +135,5 @@ object ChartSets {
         return out
     }
 
-    private const val FIELDS = 11
+    private const val FIELDS = 13
 }
