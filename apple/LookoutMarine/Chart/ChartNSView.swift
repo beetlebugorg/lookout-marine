@@ -510,7 +510,8 @@ final class ChartNSView: NSView {
     override func magnify(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
         if overChrome(p) { return }
-        controller?.zoom(Double(event.magnification) * 3.0, atPt: p)
+        // A trackpad pinch reports continuously, so it zooms with no ease.
+        controller?.zoomTracking(Double(event.magnification) * 3.0, atPt: p)
     }
 }
 
