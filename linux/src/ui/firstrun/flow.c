@@ -182,10 +182,10 @@ lk_first_run_stop_clicked (GtkButton *button, gpointer user_data)
 static gboolean
 lk_first_run_import_finished (LkFirstRunFlow *self)
 {
-  const LkNoaaState *noaa = lk_noaa_state (lk_app_model_get_noaa (self->model));
+  const lookout_noaa_state *noaa = lk_noaa_state (lk_app_model_get_noaa (self->model));
 
   return lk_first_run_saw_bake (self->flow) &&
-         noaa->phase != LK_NOAA_DOWNLOADING &&
+         noaa->outcome != LOOKOUT_NOAA_RUNNING &&
          !lk_app_model_get_baking (self->model) &&
          !lk_app_model_get_nothing_to_draw (self->model);
 }
@@ -199,11 +199,11 @@ lk_first_run_import_finished (LkFirstRunFlow *self)
 gboolean
 lk_first_run_import_stalled (LkFirstRunFlow *self)
 {
-  const LkNoaaState *noaa = lk_noaa_state (lk_app_model_get_noaa (self->model));
+  const lookout_noaa_state *noaa = lk_noaa_state (lk_app_model_get_noaa (self->model));
 
   return lk_first_run_step (self->flow) == LK_FIRST_RUN_IMPORTING &&
          !lk_first_run_saw_bake (self->flow) &&
-         noaa->phase != LK_NOAA_DOWNLOADING &&
+         noaa->outcome != LOOKOUT_NOAA_RUNNING &&
          !lk_app_model_get_baking (self->model) &&
          lk_app_model_get_nothing_to_draw (self->model);
 }

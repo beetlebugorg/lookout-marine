@@ -1,20 +1,24 @@
 /* library/noaa.c — NOAA's charts. See library/noaa.h. */
 #include "library/noaa.h"
 
+#include "library/fetch.h"
 #include "model/store.h"
 
 #include <string.h>
 
-/* How often the shell asks where the core has got to. The core reports
- * progress and takes no callback across the C ABI, so a read and a download
- * are both watched by asking. The timer runs only while one of them is in
- * flight: idle means idle. */
-#define LK_NOAA_POLL_MS 400
+/* The shortest gap between two reads of a transfer's progress. A piece of a
+ * transfer does not wake the service, so the pieces drive these reads. */
+#define LK_NOAA_PROGRESS_MS 250
 
 struct _LkNoaa {
   GObject parent_instance;
 
-  LkChartController *controller; /* strong: a late poll must find it alive */
+  lookout_noaa *service;
+  LkFetcher    *fetcher;
+  /* 1 while an idle is queued to read the state after a wake. */
+  gint          wake_queued;
+  /* When a transfer's piece last read the state, in monotonic microseconds. */
+  gint64        progress_us;
 
   /* The region table. The core's strings are static, so the rows hold them
    * rather than copies. */
@@ -24,7 +28,7 @@ struct _LkNoaa {
   /* The ids picked, as a set. Keys are the static region ids. */
   GHashTable *picked;
 
-  LkNoaaState state;
+  lookout_noaa_state state;
 
   /* Each region's real coverage, read once when the catalog lands.
    * id -> GArray of LkNoaaBox. */
@@ -42,19 +46,6 @@ struct _LkNoaa {
   gboolean regions_costed;
   /* The dataset names the downloader's own set holds. */
   GHashTable *managed;
-
-  /* A read asked for before a chart was open. Every call here runs through a
-   * chart handle, so a read asked for at launch had nothing to run through. */
-  gboolean wants_catalog;
-  /* True once anything has asked in this session. The catalog belongs to the
-   * chart handle, so a chart that closes takes it, and the read has to be
-   * asked for again on the next handle. */
-  gboolean asked;
-
-  guint poll_id;
-
-  LkNoaaNeedChart need_chart;
-  gpointer        need_chart_data;
 };
 
 enum {
@@ -68,7 +59,6 @@ G_DEFINE_FINAL_TYPE (LkNoaa, lk_noaa, G_TYPE_OBJECT)
 
 static void lk_noaa_recost (LkNoaa *self);
 static void lk_noaa_recost_regions (LkNoaa *self);
-static void lk_noaa_watch (LkNoaa *self);
 
 /* ---- the region table ---------------------------------------------------- */
 
@@ -192,21 +182,13 @@ lk_noaa_picked_ids (LkNoaa *self)
 
 /* ---- the snapshot -------------------------------------------------------- */
 
-const LkNoaaState *
+const lookout_noaa_state *
 lk_noaa_state (LkNoaa *self)
 {
-  static const LkNoaaState empty = { 0 };
+  static const lookout_noaa_state empty = { 0 };
 
   g_return_val_if_fail (LK_IS_NOAA (self), &empty);
   return &self->state;
-}
-
-/* True while the core has work in flight that only a poll will report. */
-static gboolean
-lk_noaa_working (LkNoaa *self)
-{
-  return self->state.phase == LK_NOAA_READING_CATALOG ||
-         self->state.phase == LK_NOAA_DOWNLOADING;
 }
 
 /* Every region's coverage. The catalog holds it and does not change while it
@@ -220,12 +202,12 @@ lk_noaa_load_coverage (LkNoaa *self)
     {
       const char *id = self->regions[i].id;
       /* Ask once for the count, then once for the boxes. */
-      gsize n = lk_chart_controller_noaa_coverage (self->controller, id, NULL, 0);
+      gsize n = lookout_noaa_svc_region_coverage (self->service, id, NULL, 0);
       if (n == 0)
         continue;
 
       g_autofree lookout_noaa_box *raw = g_new0 (lookout_noaa_box, n);
-      gsize got = lk_chart_controller_noaa_coverage (self->controller, id, raw, n);
+      gsize got = lookout_noaa_svc_region_coverage (self->service, id, raw, n);
       GArray *boxes = g_array_sized_new (FALSE, FALSE, sizeof (LkNoaaBox), MIN (got, n));
 
       for (gsize b = 0; b < MIN (got, n); b++)
@@ -256,91 +238,82 @@ lk_noaa_coverage (LkNoaa *self, const char *id, guint *out_n)
   return (const LkNoaaBox *) boxes->data;
 }
 
-/* Read the core's snapshot into the shell's. No timer work here: the tick and
- * the public poll each decide what to do with the result. */
-static gboolean
-lk_noaa_take_snapshot (LkNoaa *self)
+/* Read the state when the service reports a change, and emit ::changed. */
+static void
+lk_noaa_sync (LkNoaa *self)
 {
-  lookout_noaa_state raw;
-  LkNoaaState next;
-  gboolean gained;
+  gboolean had_catalog = self->state.have_catalog;
 
-  if (!lk_chart_controller_noaa_poll (self->controller, &raw))
-    {
-      /* NO HANDLE, so there is no service to read. The snapshot kept the
-       * phase the last handle left, and a phase of downloading or reading
-       * keeps the 400 ms timer running for the life of the process. An idle
-       * state stops it and tells the panels the work has gone. */
-      LkNoaaState idle;
-
-      memset (&idle, 0, sizeof idle);
-      if (memcmp (&idle, &self->state, sizeof idle) == 0)
-        return FALSE;
-      self->state = idle;
-      g_signal_emit (self, signals[SIGNAL_CHANGED], 0);
-      return TRUE;
-    }
-
-  memset (&next, 0, sizeof next);
-  next.phase = (LkNoaaPhase) raw.phase;
-  next.have_catalog = raw.have_catalog != 0;
-  g_strlcpy (next.date, raw.date, sizeof next.date);
-  next.checked_at = raw.checked_at;
-  next.catalog_cells = raw.catalog_cells;
-  next.total = raw.total;
-  next.done = raw.done;
-  next.failed = raw.failed;
-  next.bytes_total = raw.bytes_total;
-  next.bytes_done = raw.bytes_done;
-  g_strlcpy (next.error, raw.error, sizeof next.error);
-
-  /* Nothing moved. A poll runs several times a second, and telling every
-   * watcher that nothing happened is what makes a panel redraw for no
-   * reason. */
-  if (memcmp (&next, &self->state, sizeof next) == 0)
-    return FALSE;
-
-  gained = next.have_catalog && !self->state.have_catalog;
-  self->state = next;
-  if (gained)
+  if (self->service == NULL || !lookout_noaa_svc_changed (self->service))
+    return;
+  lookout_noaa_svc_poll (self->service, &self->state);
+  if (self->state.have_catalog && !had_catalog)
     {
       lk_noaa_recost_regions (self);
       lk_noaa_recost (self);
       lk_noaa_load_coverage (self);
     }
   g_signal_emit (self, signals[SIGNAL_CHANGED], 0);
-  return TRUE;
 }
 
 static gboolean
-lk_noaa_poll_tick (gpointer data)
+lk_noaa_woken (gpointer data)
 {
   LkNoaa *self = data;
 
-  lk_noaa_take_snapshot (self);
-  if (lk_noaa_working (self))
-    return G_SOURCE_CONTINUE;
-
-  self->poll_id = 0;
+  g_atomic_int_set (&self->wake_queued, 0);
+  lk_noaa_sync (self);
   return G_SOURCE_REMOVE;
 }
 
-/* Watch while a read or a download is in flight, and not otherwise. */
+/* The service's fetcher. The core passes one `user` to get, cancel and wake,
+ * so get and cancel reach the LkFetcher through this object. */
 static void
-lk_noaa_watch (LkNoaa *self)
+lk_noaa_http_get (void *user, uint64_t req_id, const char *url, int allow_file)
 {
-  if (self->poll_id != 0 || !lk_noaa_working (self))
-    return;
-  self->poll_id = g_timeout_add (LK_NOAA_POLL_MS, lk_noaa_poll_tick, self);
+  lk_fetcher_http_get (((LkNoaa *) user)->fetcher, req_id, url, allow_file);
 }
 
-void
-lk_noaa_poll (LkNoaa *self)
+static void
+lk_noaa_http_cancel (void *user, uint64_t req_id)
 {
-  g_return_if_fail (LK_IS_NOAA (self));
+  lk_fetcher_http_cancel (((LkNoaa *) user)->fetcher, req_id);
+}
 
-  lk_noaa_take_snapshot (self);
-  lk_noaa_watch (self);
+/* The service queued a response. Called from any thread, so this queues one
+ * idle on the main loop. The idle holds a reference until it runs. */
+static void
+lk_noaa_wake (void *user)
+{
+  LkNoaa *self = user;
+
+  if (g_atomic_int_compare_and_exchange (&self->wake_queued, 0, 1))
+    g_idle_add_full (G_PRIORITY_DEFAULT_IDLE, lk_noaa_woken, g_object_ref (self),
+                     g_object_unref);
+}
+
+static void
+lk_noaa_respond (gpointer user_data, uint64_t req_id, const void *bytes, gsize len,
+                 int status)
+{
+  LkNoaa *self = user_data;
+
+  lookout_noaa_svc_http_respond_chunk (self->service, req_id, bytes, len, status, 1);
+}
+
+static void
+lk_noaa_respond_chunk (gpointer user_data, uint64_t req_id, const void *bytes,
+                       gsize len, int status, gboolean done)
+{
+  LkNoaa *self = user_data;
+  gint64 now = g_get_monotonic_time ();
+
+  lookout_noaa_svc_http_respond_chunk (self->service, req_id, bytes, len, status,
+                                       done ? 1 : 0);
+  if (done || now - self->progress_us < LK_NOAA_PROGRESS_MS * 1000)
+    return;
+  self->progress_us = now;
+  lk_noaa_sync (self);
 }
 
 /* ---- reading the catalog ------------------------------------------------- */
@@ -350,34 +323,8 @@ lk_noaa_refresh (LkNoaa *self)
 {
   g_return_if_fail (LK_IS_NOAA (self));
 
-  if (!lk_chart_controller_noaa_refresh (self->controller))
-    {
-      /* No handle. Every call here runs through one, so on a first run the
-       * read had nothing to use and the coverage step sat with its regions
-       * dim and no line to say why. Ask the owner for a chart of no charts
-       * and replay this from lk_noaa_chart_did_open. */
-      self->wants_catalog = TRUE;
-      if (self->need_chart != NULL)
-        self->need_chart (self->need_chart_data);
-      return;
-    }
-
-  self->wants_catalog = FALSE;
-  self->asked = TRUE;
-  /* The core set the phase to reading when it took the call. Read it back, so
-   * the line watching the phase starts its own poll. */
-  lk_noaa_poll (self);
-}
-
-void
-lk_noaa_chart_did_open (LkNoaa *self)
-{
-  g_return_if_fail (LK_IS_NOAA (self));
-
-  lk_noaa_poll (self);
-  /* A read held for want of a handle, or one the old handle took with it. */
-  if (self->wants_catalog || (self->asked && !self->state.have_catalog))
-    lk_noaa_refresh (self);
+  lookout_noaa_svc_refresh (self->service);
+  lk_noaa_sync (self);
 }
 
 /* ---- what a pick costs --------------------------------------------------- */
@@ -403,8 +350,7 @@ lk_noaa_recost_regions (LkNoaa *self)
 
   for (guint i = 0; i < self->n_regions; i++)
     {
-      g_auto (GStrv) cells = lk_chart_controller_noaa_region_cells (self->controller,
-                                                                    self->regions[i].id);
+      g_auto (GStrv) cells = lk_noaa_region_cells (self, self->regions[i].id);
 
       for (guint c = 0; cells != NULL && cells[c] != NULL; c++)
         {
@@ -471,8 +417,8 @@ lk_noaa_recost (LkNoaa *self)
     return;
 
   ids = lk_noaa_picked_ids (self);
-  lk_chart_controller_noaa_cost (self->controller, ids, &self->cells, &self->bytes,
-                                 &self->held, &self->held_bytes);
+  lookout_noaa_svc_cost (self->service, ids, &self->cells, &self->bytes, &self->held,
+                        &self->held_bytes);
 }
 
 guint32 lk_noaa_cells (LkNoaa *self)      { return LK_IS_NOAA (self) ? self->cells : 0; }
@@ -508,9 +454,23 @@ lk_noaa_cost_words (guint32 cells, guint64 bytes, guint32 held, guint64 held_byt
 char **
 lk_noaa_region_cells (LkNoaa *self, const char *region_ids)
 {
+  size_t n;
+  char **out;
+
   g_return_val_if_fail (LK_IS_NOAA (self), g_new0 (char *, 1));
 
-  return lk_chart_controller_noaa_region_cells (self->controller, region_ids);
+  if (region_ids == NULL || region_ids[0] == '\0')
+    return g_new0 (char *, 1);
+  n = lookout_noaa_svc_region_cells (self->service, region_ids, NULL, 0);
+  if (n == 0)
+    return g_new0 (char *, 1);
+
+  g_autofree const char **raw = g_new0 (const char *, n);
+  n = lookout_noaa_svc_region_cells (self->service, region_ids, raw, n);
+  out = g_new0 (char *, n + 1);
+  for (size_t i = 0; i < n; i++)
+    out[i] = g_strdup (raw[i]);
+  return out;
 }
 
 char *
@@ -526,7 +486,8 @@ lk_noaa_note_installed (LkNoaa *self, const char *const *names)
 {
   g_return_if_fail (LK_IS_NOAA (self));
 
-  lk_chart_controller_noaa_have (self->controller, names);
+  lookout_noaa_svc_have (self->service, names,
+                         names != NULL ? g_strv_length ((char **) names) : 0);
   lk_noaa_recost_regions (self);
   lk_noaa_recost (self);
   g_signal_emit (self, signals[SIGNAL_CHANGED], 0);
@@ -660,8 +621,8 @@ lk_noaa_download (LkNoaa *self, const char *dest_dir, gboolean again)
 
   lk_noaa_note_downloaded (self);
   ids = lk_noaa_picked_ids (self);
-  lk_chart_controller_noaa_download (self->controller, ids, dest_dir, again);
-  lk_noaa_poll (self);
+  lookout_noaa_svc_download (self->service, ids, dest_dir, again ? 1 : 0);
+  lk_noaa_sync (self);
 }
 
 void
@@ -669,8 +630,8 @@ lk_noaa_cancel (LkNoaa *self)
 {
   g_return_if_fail (LK_IS_NOAA (self));
 
-  lk_chart_controller_noaa_cancel (self->controller);
-  lk_noaa_poll (self);
+  lookout_noaa_svc_cancel (self->service);
+  lk_noaa_sync (self);
 }
 
 guint32
@@ -688,7 +649,7 @@ lk_noaa_outdated (LkNoaa *self, const LkNoaaInstalled *have, guint n)
       raw[i].edition = have[i].edition;
       raw[i].update = have[i].update;
     }
-  return lk_chart_controller_noaa_outdated (self->controller, raw, n);
+  return lookout_noaa_svc_outdated (self->service, raw, n);
 }
 
 void
@@ -707,8 +668,8 @@ lk_noaa_update (LkNoaa *self, const LkNoaaInstalled *have, guint n, const char *
       raw[i].edition = have[i].edition;
       raw[i].update = have[i].update;
     }
-  lk_chart_controller_noaa_update (self->controller, raw, n, dest_dir);
-  lk_noaa_poll (self);
+  lookout_noaa_svc_update (self->service, raw, n, dest_dir);
+  lk_noaa_sync (self);
 }
 
 char *
@@ -723,33 +684,14 @@ lk_noaa_download_dir (void)
 
 /* ---- lifecycle ----------------------------------------------------------- */
 
-void
-lk_noaa_set_need_chart (LkNoaa *self, LkNoaaNeedChart fn, gpointer user_data)
-{
-  g_return_if_fail (LK_IS_NOAA (self));
-
-  self->need_chart = fn;
-  self->need_chart_data = user_data;
-}
-
-void
-lk_noaa_shutdown (LkNoaa *self)
-{
-  g_return_if_fail (LK_IS_NOAA (self));
-
-  g_clear_handle_id (&self->poll_id, g_source_remove);
-  g_clear_object (&self->controller);
-  self->need_chart = NULL;
-  self->need_chart_data = NULL;
-}
-
 static void
 lk_noaa_dispose (GObject *object)
 {
   LkNoaa *self = LK_NOAA (object);
 
-  g_clear_handle_id (&self->poll_id, g_source_remove);
-  g_clear_object (&self->controller);
+  /* The fetcher goes first, so no response reaches a closed service. */
+  g_clear_pointer (&self->fetcher, lk_fetcher_free);
+  g_clear_pointer (&self->service, lookout_noaa_close);
   g_clear_pointer (&self->picked, g_hash_table_unref);
   g_clear_pointer (&self->coverage, g_hash_table_unref);
   g_clear_pointer (&self->regions, g_free);
@@ -784,10 +726,21 @@ lk_noaa_init (LkNoaa *self)
 }
 
 LkNoaa *
-lk_noaa_new (LkChartController *controller)
+lk_noaa_new (lookout_store *store, lookout_chart_sets *sets)
 {
   LkNoaa *self = g_object_new (LK_TYPE_NOAA, NULL);
 
-  self->controller = controller != NULL ? g_object_ref (controller) : NULL;
+  self->service = lookout_noaa_open (store, sets);
+  self->fetcher = lk_fetcher_new (lk_noaa_respond, self);
+  lk_fetcher_set_chunk_respond (self->fetcher, lk_noaa_respond_chunk);
+  lookout_noaa_svc_set_http_provider (self->service, lk_noaa_http_get,
+                                      lk_noaa_http_cancel, lk_noaa_wake, self);
   return self;
+}
+
+lookout_noaa *
+lk_noaa_service (LkNoaa *self)
+{
+  g_return_val_if_fail (LK_IS_NOAA (self), NULL);
+  return self->service;
 }

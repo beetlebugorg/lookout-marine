@@ -116,6 +116,12 @@ lk_chart_sets_new (LkChartSetsChanged on_changed, GObject *owner)
   return self;
 }
 
+lookout_chart_sets *
+lk_chart_sets_handle (LkChartSets *self)
+{
+  return self != NULL ? self->sets : NULL;
+}
+
 void
 lk_chart_sets_free (LkChartSets *self)
 {

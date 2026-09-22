@@ -20,7 +20,8 @@
  */
 #pragma once
 
-#include "engine/controller.h"
+#include <glib-object.h>
+#include <lookout.h>
 
 G_BEGIN_DECLS
 
@@ -45,27 +46,6 @@ typedef struct {
   double west, south, east, north;
 } LkNoaaBox;
 
-/* What the core is doing with NOAA's charts. */
-typedef enum {
-  LK_NOAA_IDLE = 0,
-  LK_NOAA_READING_CATALOG = 1,
-  LK_NOAA_READY = 2,
-  LK_NOAA_DOWNLOADING = 3,
-} LkNoaaPhase;
-
-/* The whole snapshot, as the last poll read it. */
-typedef struct {
-  LkNoaaPhase phase;
-  gboolean    have_catalog;
-  char        date[16]; /* NOAA's validity date, "20250903" */
-  gint64      checked_at; /* unix seconds of the last read that worked, or 0 */
-  guint32     catalog_cells;
-  /* The download running now. */
-  guint32     total, done, failed;
-  guint64     bytes_total, bytes_done;
-  char        error[256];
-} LkNoaaState;
-
 /* A cell already installed, for the update check. */
 typedef struct {
   const char *name; /* the cell name, "US5MD1MC" */
@@ -73,17 +53,12 @@ typedef struct {
   guint32     update;
 } LkNoaaInstalled;
 
-/* Called when a catalog read has no chart handle to run through. The owner
- * answers by opening a chart of no charts; the request is replayed from
- * lk_noaa_chart_did_open. */
-typedef void (*LkNoaaNeedChart) (gpointer user_data);
+/* Open the core's NOAA service on `store` and `sets`, with a fetcher of its
+ * own. Both are borrowed and must outlive the object. */
+LkNoaa *lk_noaa_new (lookout_store *store, lookout_chart_sets *sets);
 
-/* Takes a strong reference on the controller, as the chart links do: a poll
- * that lands late must find an object to refuse it. */
-LkNoaa *lk_noaa_new (LkChartController *controller);
-
-/* The owner's way to supply a chart handle on demand. */
-void lk_noaa_set_need_chart (LkNoaa *self, LkNoaaNeedChart fn, gpointer user_data);
+/* The core's service. A test uses it to install a fetcher of its own. */
+lookout_noaa *lk_noaa_service (LkNoaa *self);
 
 /* The regions, borrowed and static. `out_n` is how many. */
 const LkNoaaRegion *lk_noaa_regions (LkNoaa *self, guint *out_n);
@@ -99,21 +74,13 @@ void     lk_noaa_clear_picks (LkNoaa *self);
 guint    lk_noaa_picked_count (LkNoaa *self);
 char    *lk_noaa_picked_ids (LkNoaa *self);
 
-/* The snapshot, borrowed. Never NULL. */
-const LkNoaaState *lk_noaa_state (LkNoaa *self);
+/* The core's state, borrowed. Never NULL. It is read again, and ::changed
+ * emitted, when lookout_noaa_svc_changed returns 1: after each order, on the
+ * service's wake, and as the pieces of a transfer arrive. */
+const lookout_noaa_state *lk_noaa_state (LkNoaa *self);
 
-/* Take the core's snapshot, reprice the pick, and emit ::changed when anything
- * moved. Runs a timer of its own while a read or a download is in flight and
- * stops it when the work ends, so an idle app runs no timer. */
-void lk_noaa_poll (LkNoaa *self);
-
-/* Read NOAA's product catalog. The result arrives through the poll above. With
- * no chart open this asks the owner for one and holds the request. */
+/* Read NOAA's product catalog. The result arrives through ::changed. */
 void lk_noaa_refresh (LkNoaa *self);
-
-/* A chart handle has just been created. Anything held while there was none
- * runs now, and so does a read the old handle took with it when it closed. */
-void lk_noaa_chart_did_open (LkNoaa *self);
 
 /* One region's coverage, borrowed, read once when the catalog lands. Empty
  * until then, and a picker draws the rough extent instead. */
@@ -200,10 +167,6 @@ void lk_noaa_cancel (LkNoaa *self);
 guint32 lk_noaa_outdated (LkNoaa *self, const LkNoaaInstalled *have, guint n);
 void    lk_noaa_update (LkNoaa *self, const LkNoaaInstalled *have, guint n,
                         const char *dest_dir);
-
-/* Drop the poll timer and the controller reference. The owner calls this at
- * dispose, ahead of releasing the controller. */
-void lk_noaa_shutdown (LkNoaa *self);
 
 /* Where downloaded cells are staged before they bake. ONE directory, so the
  * whole download bakes as a single chart set. Free with g_free. */

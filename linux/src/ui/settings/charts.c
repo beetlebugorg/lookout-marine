@@ -835,11 +835,11 @@ lk_settings_fill_sets_list (LkSettings *settings)
           /* A transfer already running is replaced by lookout_noaa_update
            * with no word to the mariner, so Update stands down while one
            * runs and while what it brought is prepared. */
-          const LkNoaaState *state =
+          const lookout_noaa_state *state =
               lk_noaa_state (lk_app_model_get_noaa (settings->model));
 
           gtk_widget_set_sensitive (update,
-                                    state->phase != LK_NOAA_DOWNLOADING &&
+                                    state->phase != LOOKOUT_NOAA_DOWNLOADING &&
                                         !lk_app_model_get_baking (settings->model));
           g_signal_connect (update, "clicked", G_CALLBACK (lk_charts_update_clicked),
                             settings);
@@ -929,7 +929,7 @@ static void
 lk_settings_fill_work_list (LkSettings *settings)
 {
   GtkWidget *list = settings->work.box;
-  const LkNoaaState *noaa = lk_noaa_state (lk_app_model_get_noaa (settings->model));
+  const lookout_noaa_state *noaa = lk_noaa_state (lk_app_model_get_noaa (settings->model));
   const LkBakeProgress *bake = lk_app_model_get_bake_progress (settings->model);
   const LkBakeProgress *gone = lk_app_model_get_remove_progress (settings->model);
   GtkWidget *child;
@@ -937,7 +937,7 @@ lk_settings_fill_work_list (LkSettings *settings)
   while ((child = gtk_widget_get_first_child (list)) != NULL)
     gtk_box_remove (GTK_BOX (list), child);
 
-  if (noaa->phase == LK_NOAA_DOWNLOADING)
+  if (noaa->phase == LOOKOUT_NOAA_DOWNLOADING)
     {
       GtkWidget *panel = lk_work_panel_new ("Cancel", G_CALLBACK (lk_noaa_cancel_clicked),
                                             settings);
@@ -981,7 +981,7 @@ lk_settings_fill_work_list (LkSettings *settings)
   /* A section with nothing in it is a heading over empty space. */
   if (settings->work_section != NULL)
     gtk_widget_set_visible (settings->work_section,
-                            noaa->phase == LK_NOAA_DOWNLOADING || bake != NULL ||
+                            noaa->phase == LOOKOUT_NOAA_DOWNLOADING || bake != NULL ||
                                 gone != NULL);
 }
 
@@ -1039,7 +1039,7 @@ lk_settings_baking_changed (GObject *object, GParamSpec *pspec, gpointer user_da
 static char *
 lk_noaa_checked_text (LkNoaa *noaa)
 {
-  const LkNoaaState *state = lk_noaa_state (noaa);
+  const lookout_noaa_state *state = lk_noaa_state (noaa);
   g_autoptr (GDateTime) when = NULL;
   g_autoptr (GDateTime) now = NULL;
 

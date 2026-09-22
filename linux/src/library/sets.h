@@ -74,6 +74,9 @@ typedef void (*LkChartSetsChanged) (GObject *owner);
 LkChartSets *lk_chart_sets_new (LkChartSetsChanged on_changed, GObject *owner);
 void lk_chart_sets_free (LkChartSets *self);
 
+/* The core's chart sets handle, borrowed for the life of `self`. */
+lookout_chart_sets *lk_chart_sets_handle (LkChartSets *self);
+
 /* Every installed set, in the order added. Transfer full: a GPtrArray of
  * LkChartSetRow. Titles and details fill in as the scans land. */
 GPtrArray *lk_chart_sets_rows (LkChartSets *self);

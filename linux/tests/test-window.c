@@ -301,6 +301,30 @@ test_an_import_with_no_chart_can_go_back (void)
   g_assert_false (lk_first_run_import_stalled (&flow));
 }
 
+/* A download that failed ends the import, and Back leaves the step. */
+static void
+test_a_failed_download_can_go_back (void)
+{
+  g_autoptr (LkFirstRun) run = lk_first_run_new ();
+  LkFirstRunFlow flow = { .model = model, .flow = run };
+  LkNoaa *noaa = lk_app_model_get_noaa (model);
+
+  g_setenv ("LOOKOUT_FIRST_RUN", "importing", TRUE);
+  lk_first_run_begin (run);
+  g_unsetenv ("LOOKOUT_FIRST_RUN");
+
+  /* With no fetcher the core refuses the order, and the outcome is FAILED. */
+  lookout_noaa_svc_set_http_provider (lk_noaa_service (noaa), NULL, NULL, NULL, NULL);
+  lk_noaa_toggle (noaa, "d5");
+  lk_app_model_start_noaa_download (model, FALSE);
+  lk_noaa_clear_picks (noaa);
+  g_assert_cmpint (lk_noaa_state (noaa)->outcome, ==, LOOKOUT_NOAA_FAILED);
+
+  g_assert_true (lk_first_run_import_stalled (&flow));
+  lk_first_run_back (run);
+  g_assert_cmpint (lk_first_run_step (run), ==, LK_FIRST_RUN_COVERAGE);
+}
+
 /* The page fill stands while there is no chart handle. A chart of no charts
  * draws the basemap, and setup floats over that, so the fill goes.
  *
@@ -443,6 +467,8 @@ main (int argc, char *argv[])
                    test_the_noaa_terms_gate_the_coverage_step);
   g_test_add_func ("/window/an-import-with-no-chart-can-go-back",
                    test_an_import_with_no_chart_can_go_back);
+  g_test_add_func ("/window/a-failed-download-can-go-back",
+                   test_a_failed_download_can_go_back);
   g_test_add_func ("/window/setup-returns-when-the-library-empties",
                    test_setup_returns_when_the_library_empties);
   g_test_add_func ("/window/page-follows-nothing-to-draw", test_page_follows_nothing_to_draw);

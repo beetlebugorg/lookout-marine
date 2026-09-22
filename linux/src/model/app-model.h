@@ -34,19 +34,6 @@ char *lk_app_model_initial_source (LkAppModel *self);
 void lk_app_model_open_chart (LkAppModel *self, const char *path);
 void lk_app_model_open_chart_directory (LkAppModel *self, const char *dir);
 
-/* Open a chart of NO charts, which draws the basemap.
- *
- * Every NOAA call and every chart-link call runs through a lookout handle, and
- * a mariner with an empty library has none. This is how the shell gets one:
- * setup reads NOAA's catalog before the first chart is installed, and a
- * published style is picked the same way.
- *
- * ON DEMAND, by whatever needs the handle. The app does not open one at launch:
- * a launch with nothing installed opens nothing and shows the first-run page,
- * and the first thing to need a handle raises this. Does nothing while a chart
- * is open or an open is in flight. */
-void lk_app_model_open_empty (LkAppModel *self);
-
 /* ---- the chart library: installed sets -------------------------------------- */
 
 /* A SET is a folder the mariner added, or one .zip: how a chart agency
@@ -236,11 +223,6 @@ void lk_app_model_poll_chart_links (LkAppModel *self);
  * them. Owned here so the picker, the Charts page and setup read one object.
  * See library/noaa.h for what a region selects. */
 LkNoaa *lk_app_model_get_noaa (LkAppModel *self);
-
-/* A chart handle has just been created. NOAA's catalog belongs to the handle,
- * so a read held while there was none runs now. Called beside the raster
- * replay and the chart-link reapply, for the same reason. */
-void lk_app_model_noaa_chart_did_open (LkAppModel *self);
 
 /* Download the regions the mariner picked, then prepare what arrives.
  *

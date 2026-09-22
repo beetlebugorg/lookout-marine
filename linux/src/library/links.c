@@ -319,19 +319,6 @@ lk_chart_links_class_init (LkChartLinksClass *klass)
                     0, NULL, NULL, NULL, G_TYPE_NONE, 0);
 }
 
-/* The same answer in pieces, for a body too large to hold whole: a NOAA
- * district bundle. */
-static void
-lk_links_respond_chunk (gpointer user_data, uint64_t req_id, const void *bytes,
-                        gsize len, int status, gboolean done)
-{
-  LkChartLinks *self = user_data;
-
-  if (self->controller != NULL)
-    lk_chart_controller_http_respond_chunk (self->controller, req_id, bytes, len,
-                                            status, done);
-}
-
 static void
 lk_chart_links_init (LkChartLinks *self)
 {
@@ -339,7 +326,6 @@ lk_chart_links_init (LkChartLinks *self)
   self->attribution = g_strdup ("");
   self->error = g_strdup ("");
   self->fetcher = lk_fetcher_new (lk_links_respond, self);
-  lk_fetcher_set_chunk_respond (self->fetcher, lk_links_respond_chunk);
 }
 
 LkChartLinks *

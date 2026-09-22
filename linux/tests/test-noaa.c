@@ -8,15 +8,18 @@
  * is everything that does not.
  */
 
+#include <glib/gstdio.h>
+
 #include "library/noaa.h"
+#include "library/sets.h"
 #include "model/app-model.h"
 #include "model/store.h"
 
 static char *home;
 
-/* The model owns the NOAA object and hands it the controller, so a test reads
- * it the way the Charts page does. No chart is open, so every core call
- * answers its documented empty value. */
+/* The model owns the NOAA object, so a test reads it the way the Charts page
+ * does. No catalog is cached, so every core call returns its documented empty
+ * value. */
 static LkNoaa *
 noaa_of (LkAppModel *model)
 {
@@ -152,9 +155,9 @@ test_no_catalog (void)
   LkNoaa *noaa = noaa_of (model);
   guint n = 0;
   const LkNoaaRegion *regions = lk_noaa_regions (noaa, &n);
-  const LkNoaaState *state = lk_noaa_state (noaa);
+  const lookout_noaa_state *state = lk_noaa_state (noaa);
 
-  g_assert_cmpint (state->phase, ==, LK_NOAA_IDLE);
+  g_assert_cmpint (state->phase, ==, LOOKOUT_NOAA_IDLE);
   g_assert_false (state->have_catalog);
   g_assert_cmpstr (state->error, ==, "");
   g_assert_cmpint (state->checked_at, ==, 0);
@@ -183,24 +186,103 @@ test_download_dir (void)
   g_assert_false (g_str_has_prefix (dir, lk_chart_bake_root ()));
 }
 
-/* With no chart handle the service reads as idle and the poll stops.
- *
- * The snapshot kept whatever phase the last handle left, so a phase of
- * downloading or reading held the 400 ms timer for the life of the process
- * and the panels went on saying a transfer was running. */
+/* A catalog of one cell in district 5, as NOAA publishes it. */
+static const char catalog[] =
+    "<ENC_Product_Catalog><date_valid>20250903</date_valid>"
+    "<cell><name>US5MD1MC</name><lname>Chesapeake Bay Entrance</lname>"
+    "<cscale>20000</cscale><edtn>27</edtn><updn>3</updn><isdt>20250801</isdt>"
+    "<zipfile_location>https://charts.noaa.gov/ENCs/US5MD1MC.zip</zipfile_location>"
+    "<zipfile_size>1048576</zipfile_size><coast_guard_district>5</coast_guard_district>"
+    "<panel><vertex><lat>36.0</lat><long>-76.5</long></vertex>"
+    "<vertex><lat>37.0</lat><long>-75.5</long></vertex></panel></cell>"
+    "</ENC_Product_Catalog>";
+
+/* A fetcher that counts requests and cancels, and sends no response. */
+typedef struct {
+  guint gets;
+  guint cancels;
+} FakeFetch;
+
 static void
-test_no_handle_reads_as_idle (void)
+fake_get (void *user, uint64_t req_id, const char *url, int allow_file)
 {
+  ((FakeFetch *) user)->gets++;
+}
+
+static void
+fake_cancel (void *user, uint64_t req_id)
+{
+  ((FakeFetch *) user)->cancels++;
+}
+
+static void
+noop_changed (GObject *owner)
+{
+}
+
+/* A set switched off during a download reopens the chart, and the download
+ * keeps running. The service has no chart handle under it. */
+static void
+test_switch_during_download (void)
+{
+  g_autofree char *cache = g_build_filename (g_getenv ("XDG_CACHE_HOME"), "lookout",
+                                             "fetched", NULL);
+  g_autofree char *cached = g_build_filename (cache, "ENCProdCat.xml", NULL);
+  g_autofree char *dir = g_build_filename (home, "switch", NULL);
+  g_autofree char *from = g_build_filename (LK_TEST_CELLS, "US3CU1EF.000", NULL);
+  g_autofree char *to = g_build_filename (dir, "US3CU1EF.000", NULL);
+  g_autofree char *cell = NULL;
+  gsize len = 0;
+  g_autoptr (GObject) owner = g_object_new (G_TYPE_OBJECT, NULL);
+  LkChartSets *sets;
+
+  /* The catalog is read from the cache, and the set is in the store. */
+  g_assert_cmpint (g_mkdir_with_parents (cache, 0700), ==, 0);
+  g_assert_true (g_file_set_contents (cached, catalog, -1, NULL));
+  g_assert_cmpint (g_mkdir_with_parents (dir, 0700), ==, 0);
+  g_assert_true (g_file_get_contents (from, &cell, &len, NULL));
+  g_assert_true (g_file_set_contents (to, cell, (gssize) len, NULL));
+  sets = lk_chart_sets_new (noop_changed, owner);
+  g_assert_true (lk_chart_sets_note (sets, dir));
+  lk_chart_sets_free (sets);
+
   g_autoptr (LkAppModel) model = lk_app_model_new ();
   LkNoaa *noaa = noaa_of (model);
-  const LkNoaaState *state = lk_noaa_state (noaa);
+  lookout_noaa *service = lk_noaa_service (noaa);
+  FakeFetch fake = { 0 };
+  lookout_noaa_state now;
 
-  /* This model has no chart open, so every poll finds no handle. */
-  lk_noaa_poll (noaa);
-  g_assert_cmpint (state->phase, ==, LK_NOAA_IDLE);
-  g_assert_false (state->have_catalog);
-  g_assert_cmpuint (state->total, ==, 0);
-  g_assert_cmpuint (state->done, ==, 0);
+  lookout_noaa_svc_set_http_provider (service, fake_get, fake_cancel, NULL, &fake);
+  lk_noaa_refresh (noaa);
+  g_assert_true (lk_noaa_state (noaa)->have_catalog);
+
+  lk_noaa_toggle (noaa, "d5");
+  lk_app_model_start_noaa_download (model, FALSE);
+  g_assert_cmpint (lk_noaa_state (noaa)->outcome, ==, LOOKOUT_NOAA_RUNNING);
+  g_assert_cmpuint (fake.gets, >=, 2);
+  /* The order cancels the catalog read that is still out. */
+  guint cancels = fake.cancels;
+
+  lk_app_model_set_chart_set_on (model, dir, FALSE);
+  g_autoptr (GPtrArray) rows = lk_app_model_get_chart_sets (model);
+  gboolean switched = FALSE;
+  for (guint i = 0; i < rows->len; i++)
+    {
+      const LkChartSetRow *row = g_ptr_array_index (rows, i);
+
+      if (g_strcmp0 (row->path, dir) == 0)
+        switched = !row->on;
+    }
+  g_assert_true (switched);
+
+  lookout_noaa_svc_changed (service);
+  lookout_noaa_svc_poll (service, &now);
+  g_assert_cmpint (now.phase, ==, LOOKOUT_NOAA_DOWNLOADING);
+  g_assert_cmpint (now.outcome, ==, LOOKOUT_NOAA_RUNNING);
+  g_assert_cmpuint (fake.cancels, ==, cancels);
+
+  lk_noaa_clear_picks (noaa);
+  g_assert_cmpint (g_remove (cached), ==, 0);
 }
 
 
@@ -221,7 +303,7 @@ main (int argc, char *argv[])
   g_test_add_func ("/noaa/pick-order", test_pick_order);
   g_test_add_func ("/noaa/changed-signal", test_changed_signal);
   g_test_add_func ("/noaa/no-catalog", test_no_catalog);
-  g_test_add_func ("/noaa/no-handle-reads-as-idle", test_no_handle_reads_as_idle);
+  g_test_add_func ("/noaa/switch-during-download", test_switch_during_download);
   g_test_add_func ("/noaa/download-dir", test_download_dir);
 
   return g_test_run ();

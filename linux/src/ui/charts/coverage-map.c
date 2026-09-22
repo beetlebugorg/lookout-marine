@@ -353,7 +353,7 @@ lk_panel_clicked (GtkGestureClick *gesture, int n_press, double x, double y,
 {
   LkPanelState *state = user_data;
   GtkWidget *area = gtk_event_controller_get_widget (GTK_EVENT_CONTROLLER (gesture));
-  const LkNoaaState *noaa_state = lk_noaa_state (state->noaa);
+  const lookout_noaa_state *noaa_state = lk_noaa_state (state->noaa);
   const LkNoaaRegion *region;
 
   /* Nothing to pick until the catalog says what a pick would cost. */
@@ -600,12 +600,12 @@ static void
 lk_catalog_line_sync (LkNoaa *noaa, gpointer user_data)
 {
   GtkWidget *box = user_data;
-  const LkNoaaState *state = lk_noaa_state (noaa);
+  const lookout_noaa_state *state = lk_noaa_state (noaa);
   GtkWidget *spinner = g_object_get_data (G_OBJECT (box), "lk-spinner");
   GtkWidget *label = g_object_get_data (G_OBJECT (box), "lk-label");
   GtkWidget *again = g_object_get_data (G_OBJECT (box), "lk-again");
   GtkWidget *note = g_object_get_data (G_OBJECT (box), "lk-note");
-  gboolean reading = state->phase == LK_NOAA_READING_CATALOG;
+  gboolean reading = state->phase == LOOKOUT_NOAA_READING;
   gboolean failed = !reading && state->error[0] != '\0';
   /* A catalog already read outranks a failed read. The core loads the cached
    * catalog before it requests a new one, so a mariner with no network has a

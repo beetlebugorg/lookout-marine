@@ -250,7 +250,7 @@ void
 lk_first_run_importing_sync (GtkWidget *step)
 {
   LkImporting *self;
-  const LkNoaaState *noaa;
+  const lookout_noaa_state *noaa;
   const LkBakeProgress *bake, *work;
   gboolean downloading, running, finding, importing, pending;
   const char *regions = NULL;
@@ -269,7 +269,7 @@ lk_first_run_importing_sync (GtkWidget *step)
   lk_importing_remember (self, bake);
   work = bake != NULL ? bake : (self->have_last ? &self->last : NULL);
   running = bake != NULL;
-  downloading = noaa->phase == LK_NOAA_DOWNLOADING;
+  downloading = noaa->outcome == LOOKOUT_NOAA_RUNNING;
   self->from_noaa = lk_first_run_order (self->flow->flow, &regions, &ordered, &bytes);
 
   /* What is being prepared, and what it cost. NOAA states both; a folder the

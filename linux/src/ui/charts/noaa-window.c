@@ -171,7 +171,7 @@ lk_noaa_window_sync (LkNoaa *noaa, gpointer user_data)
   /* The handler is tied to the WINDOW's life, so the window is what arrives
    * here and the state hangs off it. The same shape the settings pages use. */
   LkNoaaWindow *self = g_object_get_data (G_OBJECT (user_data), "lk-noaa-window");
-  const LkNoaaState *state = lk_noaa_state (noaa);
+  const lookout_noaa_state *state = lk_noaa_state (noaa);
   gboolean ready, picked, priced;
 
   if (self == NULL || gtk_widget_in_destruction (GTK_WIDGET (user_data)))
@@ -491,16 +491,15 @@ lk_noaa_window_present (GtkWindow *parent, LkAppModel *model)
 
   gtk_window_set_child (GTK_WINDOW (self->window), root);
 
-  /* What the picker needs before it can price anything: where the service
-   * stands and what this device already holds.
+  /* What the picker needs before it can price anything: what this device
+   * already holds.
    *
-   * BOTH BEFORE THE HANDLER IS CONNECTED. The sync seeds the pick, and the
-   * seed reads the per-region counts these calls recompute. Each call also
+   * BEFORE THE HANDLER IS CONNECTED. The sync seeds the pick, and the seed
+   * reads the per-region counts these calls recompute. Each call also
    * emits ::changed, so connecting first ran the seed on the counts the
    * FIRST of the two left: a picker opened after the charts had gone seeded
    * from a device that still held them, and opened ticked on water it had
    * deleted. */
-  lk_noaa_poll (noaa);
   if (!lk_app_model_library_scanning (model))
     {
       g_auto (GStrv) have = lk_app_model_installed_cell_names (model);

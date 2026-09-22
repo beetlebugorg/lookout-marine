@@ -14,13 +14,10 @@ struct _LkAppModel {
   LkChartController *controller;
   LkChartLinks      *chart_links;
   LkNoaa            *noaa;
-  /* The directory a NOAA download is filling, and whether this model is still
-   * following that download to its end. */
+  /* The directory a NOAA download is filling, and the `run` of the download
+   * this model follows to its end, or 0 when it follows none. */
   char              *noaa_dest;
-  gboolean           noaa_watching;
-  /* A reopen asked for while a download ran. The reopen closes the handle the
-   * transfer runs on, so it waits for the transfer to end. */
-  gboolean           recompose_held;
+  guint32            noaa_run;
   /* A download that ended while a scan or a bake was running. The open is
    * refused then, and this is what brings it back. */
   gboolean           noaa_open_held;
@@ -203,9 +200,10 @@ lk_app_model_dispose (GObject *object)
   if (self->chart_links != NULL)
     lk_chart_links_shutdown (self->chart_links);
   g_clear_object (&self->chart_links);
-  /* Same reason: the poll timer holds this model's controller. */
+  /* Close the NOAA service before the chart sets it borrows. A queued wake
+   * can hold a reference past this unref. */
   if (self->noaa != NULL)
-    lk_noaa_shutdown (self->noaa);
+    g_object_run_dispose (G_OBJECT (self->noaa));
   g_clear_object (&self->noaa);
   g_clear_object (&self->controller);
   g_clear_pointer (&self->chart_path, g_free);
@@ -427,18 +425,6 @@ lk_app_model_sets_changed (GObject *owner)
 static void
 lk_app_model_recompose_library (LkAppModel *self)
 {
-  /* NOT WHILE A DOWNLOAD RUNS. The NOAA service lives on the chart handle,
-   * and a reopen closes the old handle, which cancels every transfer it was
-   * running. A removal's rescan and a set switched off both reach here, and
-   * either one seconds into a download stopped it and left the cells that had
-   * arrived unprepared. lk_app_model_noaa_changed runs the held reopen when
-   * the transfer ends. */
-  if (self->noaa_watching)
-    {
-      self->recompose_held = TRUE;
-      return;
-    }
-
   g_auto (GStrv) all = lk_chart_sets_compose (self->chart_sets);
 
   if (all != NULL && all[0] != NULL)
@@ -461,44 +447,47 @@ lk_app_model_recompose_library (LkAppModel *self)
     }
 }
 
-/* A NOAA download has ended. Prepare what landed.
- *
- * ::changed carries every move the service makes, so this watches for the
- * phase leaving the transfer rather than running a timer of its own. The
- * service's own poll is what raises it, and that poll stops with the
- * download.
- *
- * The counters are the transfer's: they hold their final values once it ends,
- * so `done` is how many cells arrived. */
+/* End the followed download when its outcome is no longer running, and
+ * prepare what arrived. A stop keeps the charts that arrived before it. */
+static void
+lk_app_model_noaa_follow (LkAppModel *self)
+{
+  const lookout_noaa_state *state = lk_noaa_state (self->noaa);
+
+  if (self->noaa_run == 0 || state->run != self->noaa_run ||
+      state->outcome == LOOKOUT_NOAA_RUNNING)
+    return;
+  self->noaa_run = 0;
+
+  if (state->outcome == LOOKOUT_NOAA_FINISHED ||
+      (state->outcome == LOOKOUT_NOAA_CANCELLED && state->done > 0))
+    lk_app_model_prepare_noaa_download (self);
+}
+
+/* Follow the download or update just ordered. `before` is the `run` read
+ * before the order. */
+static void
+lk_app_model_noaa_ordered (LkAppModel *self, const char *dest, guint32 before)
+{
+  guint32 run = lk_noaa_state (self->noaa)->run;
+
+  if (run == before)
+    return;
+  g_free (self->noaa_dest);
+  self->noaa_dest = g_strdup (dest);
+  self->noaa_run = run;
+  lk_app_model_noaa_follow (self);
+}
+
 static void
 lk_app_model_noaa_changed (LkNoaa *noaa, gpointer user_data)
 {
   LkAppModel *self = user_data;
-  const LkNoaaState *state = lk_noaa_state (noaa);
 
   /* A check waiting on the catalog it counts against. */
-  if (self->noaa_checking && state->have_catalog)
+  if (self->noaa_checking && lk_noaa_state (noaa)->have_catalog)
     lk_app_model_count_noaa_outdated (self);
-
-  if (!self->noaa_watching || state->phase == LK_NOAA_DOWNLOADING)
-    return;
-  self->noaa_watching = FALSE;
-
-  /* The reopen a removal or a switch asked for while the transfer ran. */
-  if (self->recompose_held)
-    {
-      self->recompose_held = FALSE;
-      lk_app_model_recompose_library (self);
-      lk_app_model_emit_chart_sets_changed (self);
-    }
-
-  /* Nothing arrived. A download that failed every cell leaves an empty
-   * directory, and adding that to the library makes a set that never fills.
-   * The service carries its own error. */
-  if (state->done == 0 || self->noaa_dest == NULL)
-    return;
-
-  lk_app_model_prepare_noaa_download (self);
+  lk_app_model_noaa_follow (self);
 }
 
 /* Prepare what the download left. Refused while a scan or a bake runs, so the
@@ -522,15 +511,6 @@ lk_app_model_prepare_noaa_download (LkAppModel *self)
   lk_app_model_open_chart_directory (self, self->noaa_dest);
   /* The downloader's own set. The picker states what THIS holds. */
   lk_chart_sets_set_managed (self->chart_sets, self->noaa_dest, TRUE);
-}
-
-/* NOAA asked for its catalog with no chart open. Open one of no charts: the
- * read runs through a handle, and a mariner with an empty library is exactly
- * who has to read that catalog. */
-static void
-lk_app_model_noaa_needs_chart (gpointer user_data)
-{
-  lk_app_model_open_empty (LK_APP_MODEL (user_data));
 }
 
 static void
@@ -560,11 +540,9 @@ lk_app_model_init (LkAppModel *self)
   self->raster_state = lk_raster_state_new ();
 
   /* NOAA's catalog, the regions a mariner picks, and the downloads run from
-   * them. Every call it makes runs through a chart handle, and setup reads the
-   * catalog before the first chart is installed, so it is given the way to ask
-   * for one. */
-  self->noaa = lk_noaa_new (self->controller);
-  lk_noaa_set_need_chart (self->noaa, lk_app_model_noaa_needs_chart, self);
+   * them. The service is open for the life of the model, so a chart reopen
+   * leaves a download running. */
+  self->noaa = lk_noaa_new (lk_store_handle (), lk_chart_sets_handle (self->chart_sets));
   g_signal_connect (self->noaa, "changed", G_CALLBACK (lk_app_model_noaa_changed), self);
 }
 
@@ -611,24 +589,6 @@ lk_app_model_get_noaa (LkAppModel *self)
   return self->noaa;
 }
 
-void
-lk_app_model_noaa_chart_did_open (LkAppModel *self)
-{
-  g_return_if_fail (LK_IS_APP_MODEL (self));
-
-  /* The cells this device holds live on the handle, and this is a new one.
-   * lk_noaa_chart_did_open below replays the catalog read for the same reason.
-   * Without this the picker prices water the mariner already has as water to
-   * fetch, and the regions it should open ticked open bare. */
-  lk_app_model_noaa_note_all (self);
-
-  lk_noaa_chart_did_open (self->noaa);
-
-  /* The catalog read runs through a handle, so the first chart of the run is
-   * where a due check can start. */
-  lk_app_model_check_noaa_updates (self);
-}
-
 char **
 lk_app_model_installed_cell_names (LkAppModel *self)
 {
@@ -660,6 +620,7 @@ void
 lk_app_model_start_noaa_download (LkAppModel *self, gboolean again)
 {
   g_autofree char *dest = NULL;
+  guint32 before;
 
   g_return_if_fail (LK_IS_APP_MODEL (self));
 
@@ -674,10 +635,9 @@ lk_app_model_start_noaa_download (LkAppModel *self, gboolean again)
    * partly hold fetches the rest of it. */
   lk_app_model_noaa_note_all (self);
 
-  g_free (self->noaa_dest);
-  self->noaa_dest = g_strdup (dest);
-  self->noaa_watching = TRUE;
+  before = lk_noaa_state (self->noaa)->run;
   lk_noaa_download (self->noaa, dest, again);
+  lk_app_model_noaa_ordered (self, dest, before);
 }
 
 /* ---- opening charts ----------------------------------------------------- */
@@ -827,21 +787,6 @@ lk_app_model_library_scanning (LkAppModel *self)
   g_return_val_if_fail (LK_IS_APP_MODEL (self), FALSE);
 
   return lk_chart_sets_scanning (self->chart_sets);
-}
-
-void
-lk_app_model_open_empty (LkAppModel *self)
-{
-  static const char *const none[] = { NULL };
-
-  g_return_if_fail (LK_IS_APP_MODEL (self));
-
-  /* A chart already open is already a handle. Reopening would throw away the
-   * one the caller is about to use, along with whatever it is holding. */
-  if (self->has_chart || self->is_opening)
-    return;
-
-  lk_chart_controller_reopen (self->controller, none);
 }
 
 void
@@ -1099,6 +1044,7 @@ lk_app_model_download_noaa_updates (LkAppModel *self)
   g_autoptr (GArray) have = NULL;
   g_autofree LkNoaaInstalled *installed = NULL;
   g_autofree char *dest = NULL;
+  guint32 before;
 
   g_return_if_fail (LK_IS_APP_MODEL (self));
 
@@ -1123,10 +1069,9 @@ lk_app_model_download_noaa_updates (LkAppModel *self)
       installed[i].update = one->update;
     }
 
-  g_free (self->noaa_dest);
-  self->noaa_dest = g_strdup (dest);
-  self->noaa_watching = TRUE;
+  before = lk_noaa_state (self->noaa)->run;
   lk_noaa_update (self->noaa, installed, have->len, dest);
+  lk_app_model_noaa_ordered (self, dest, before);
 }
 
 char **

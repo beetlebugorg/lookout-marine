@@ -56,7 +56,6 @@ catalog_ready (void)
       if (lk_noaa_state (noaa)->have_catalog)
         return TRUE;
       g_usleep (100000);
-      lk_noaa_poll (noaa);
     }
   g_print ("# catalog phase=%d error=%s\n", lk_noaa_state (noaa)->phase,
            lk_noaa_state (noaa)->error);

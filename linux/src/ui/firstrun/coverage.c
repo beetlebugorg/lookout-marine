@@ -54,9 +54,8 @@ lk_first_run_coverage_new (LkFirstRunFlow *flow)
   gtk_widget_set_margin_end (step, 20);
   gtk_widget_set_margin_bottom (step, 22);
 
-  /* What the picker needs before it can price anything: where the service
-   * stands, what this device already holds, and the catalog itself. */
-  lk_noaa_poll (noaa);
+  /* What the picker needs before it can price anything: what this device
+   * already holds, and the catalog itself. */
   g_auto (GStrv) have = lk_app_model_installed_cell_names (flow->model);
   lk_noaa_note_installed (noaa, (const char *const *) have);
   if (!lk_noaa_state (noaa)->have_catalog)

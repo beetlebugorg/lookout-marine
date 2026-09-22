@@ -31,10 +31,7 @@ void lk_chart_controller_set_model (LkChartController *self, LkAppModel *model);
 /* Open baked charts into `view`, composing multiple into one library.
  * Recreates the handle if one exists. `paths` is a NULL-terminated strv.
  *
- * An EMPTY `paths` opens a chart of no charts, which draws the basemap. Every
- * NOAA call and every chart-link call runs through a lookout handle, so a
- * mariner with nothing installed still needs one: without it the catalog
- * cannot be read and a published style cannot be picked. */
+ * An EMPTY `paths` opens a chart of no charts, which draws the basemap. */
 gboolean lk_chart_controller_open (LkChartController *self,
                                    const char *const *paths,
                                    GtkWidget         *view);
@@ -166,14 +163,6 @@ void lk_chart_controller_set_http_provider (LkChartController *self,
 void lk_chart_controller_http_respond (LkChartController *self, guint64 req_id,
                                        const void *bytes, gsize len, int status);
 
-/* The same answer in pieces, for a body too large to hold whole. Each piece
- * goes in as it arrives, and `done` marks the last. A district bundle runs to
- * a couple of hundred megabytes, and the core writes the pieces to disk as
- * they land. */
-void lk_chart_controller_http_respond_chunk (LkChartController *self, guint64 req_id,
-                                             const void *bytes, gsize len, int status,
-                                             gboolean done);
-
 /* The chart-link management surface, straight through to lookout. */
 void  lk_chart_controller_chart_link_add (LkChartController *self, const char *link);
 void  lk_chart_controller_chart_link_select (LkChartController *self, const char *url);
@@ -224,59 +213,6 @@ char *lk_chart_controller_chart_link_preview_url (LkChartController *self,
  * FALSE with no chart open. */
 gboolean lk_chart_controller_view_centre (LkChartController *self,
                                           double *out_lon, double *out_lat);
-
-/* ---- NOAA charts --------------------------------------------------------- */
-/*
- * The core reads NOAA's product catalog, works out which cells a region needs
- * and fetches them through the same HTTP provider the chart links installed.
- * These are the calls that start that work and read where it got to. Each
- * answers its empty value with no chart open, because every one of them runs
- * through a lookout handle. See include/lookout-library.h.
- */
-
-/* FALSE when no chart is open, so the caller knows to ask for one. */
-gboolean lk_chart_controller_noaa_refresh (LkChartController *self);
-
-/* The whole snapshot in one call. FALSE with no chart open, leaving `out`
- * zeroed. */
-gboolean lk_chart_controller_noaa_poll (LkChartController *self, lookout_noaa_state *out);
-
-/* What picking `region_ids` (a comma separated list) costs. Any output may be
- * NULL. FALSE when no catalog is loaded. */
-gboolean lk_chart_controller_noaa_cost (LkChartController *self, const char *region_ids,
-                                        guint32 *out_cells, guint64 *out_bytes,
-                                        guint32 *out_held, guint64 *out_held_bytes);
-
-/* Name the NOAA cells this device already holds, as dataset names with no
- * extension. The cost above leaves them out and a download skips them. */
-void lk_chart_controller_noaa_have (LkChartController *self, const char *const *names);
-
-/* The dataset names of every cell covering `region_ids`, in catalog order.
- * Transfer full, NULL-terminated. Empty before the catalog is read. */
-char **lk_chart_controller_noaa_region_cells (LkChartController *self,
-                                              const char *region_ids);
-
-/* One region's coverage, as the boxes the catalog states. Writes at most `cap`
- * and answers how many there are, so a caller sizes its buffer by asking once
- * with `out` NULL. */
-gsize lk_chart_controller_noaa_coverage (LkChartController *self, const char *region_id,
-                                         lookout_noaa_box *out, gsize cap);
-
-/* Download the cells covering `region_ids` into `dest_dir`. `again` fetches the
- * cells already held as well, which is how a mariner repairs a set. */
-void lk_chart_controller_noaa_download (LkChartController *self, const char *region_ids,
-                                        const char *dest_dir, gboolean again);
-
-void lk_chart_controller_noaa_cancel (LkChartController *self);
-
-/* How many of these cells NOAA has reissued, and the download that replaces
- * them. The editions come from the caller: a file on disk does not say which
- * edition it is. */
-guint32 lk_chart_controller_noaa_outdated (LkChartController *self,
-                                           const lookout_noaa_installed *have, gsize n);
-void    lk_chart_controller_noaa_update (LkChartController *self,
-                                         const lookout_noaa_installed *have, gsize n,
-                                         const char *dest_dir);
 
 /* ---- wasm plugins -------------------------------------------------------- */
 
