@@ -140,16 +140,17 @@ namespace winrt::LookoutMarine::implementation
 
             // A scan landing is often the first moment the library composes at
             // all. The open at startup asks the model what the switched-on sets
-            // hold, and before the scan the answer is nothing, so the chart
-            // drew a recent and the library stayed shut for the rest of the
-            // run. The release build loses that race every time: it reaches the
-            // open sooner than the debug build does.
-            if (opened_set_paths.empty())
-            {
-                auto composed = ChartSetOpenPaths();
-                if (!composed.empty())
-                    ReopenChartSets({});
-            }
+            // hold, and before the scan the answer is empty, so the chart drew
+            // a recent and the library stayed shut for the rest of the run. The
+            // release build loses that race every time: it reaches the open
+            // sooner than the debug build does.
+            //
+            // Only when the composition differs from what is open. An open
+            // that already composed the library records it, and reopening on
+            // top of that ends a NOAA transfer in flight.
+            auto composed = ChartSetOpenPaths();
+            if (!composed.empty() && composed != opened_set_paths)
+                ReopenChartSets({});
         });
     }
 

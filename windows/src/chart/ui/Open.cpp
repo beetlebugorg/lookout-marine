@@ -203,6 +203,13 @@ namespace winrt::LookoutMarine::implementation
             // first run ask for one through open_after_write.
             AdoptChartSet(recent, open_after_write);
             open_after_write = false;
+            // What this open composed, when it composed a set. The scan that
+            // lands after an import reads this: with it empty, the poll opens
+            // the library a second time, and that close ends a NOAA transfer
+            // in flight.
+            auto composed = ChartSetOpenPaths();
+            if (!composed.empty() && paths == composed)
+                opened_set_paths = composed;
             if (!pending_plugin_install.empty())
             {
                 // The .lkplug that arrived at the empty state, now that a
