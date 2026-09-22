@@ -39,8 +39,14 @@ namespace winrt::LookoutMarine::implementation
             // The download directory is the downloader's set. The core skips
             // the mark when the directory is not on the saved list yet, and
             // PrepareChartSet marks it when a download adds it.
+            // The library directory was the managed set before it became
+            // prepared_root. Its row stays listed as a set the mariner can
+            // remove.
             if (chart_sets_model != nullptr)
+            {
                 lookout_chart_sets_set_managed(chart_sets_model, lkw::NoaaDownloadDir().c_str(), 1);
+                lookout_chart_sets_set_managed(chart_sets_model, lkw::ChartLibraryDir().c_str(), 0);
+            }
             SweepRemovedCharts();
         }
         return chart_sets_model;
