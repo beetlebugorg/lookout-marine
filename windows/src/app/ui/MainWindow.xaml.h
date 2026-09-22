@@ -343,9 +343,6 @@ namespace winrt::LookoutMarine::implementation
         bool open_after_write{ false };
         void SetChartSetOn(std::string const &path, bool on);
         void RemoveChartSet(std::string const &path);
-        /* Whether Lookout made the charts in this set, which decides whether
-         * removing it deletes them and asks first. */
-        bool ChartSetIsDerived(std::string const &path);
         /* Ask, then remove and delete. The mariner is throwing away work, so
          * the question says how much of it. */
         fire_and_forget ConfirmRemoveChartSet(std::string path, std::string name, size_t charts);

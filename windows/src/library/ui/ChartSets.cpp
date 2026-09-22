@@ -251,7 +251,7 @@ namespace winrt::LookoutMarine::implementation
             std::error_code one;
             if (!entry.is_directory(one))
                 continue;
-            if (entry.path().filename().string().rfind(".removing-", 0) == 0)
+            if (lookout_bake_is_trash(entry.path().filename().string().c_str()))
                 old.push_back(entry.path());
         }
         if (old.empty())
@@ -411,25 +411,6 @@ namespace winrt::LookoutMarine::implementation
         ReopenChartSets(path);
     }
 
-    // Whether Lookout made the charts in this set.
-    //
-    // The bake writes into the chart library and the shell adopts that
-    // directory as a set, so a set at or under the library holds work this app
-    // did and can do again. Every other set is the mariner's own files, and
-    // removing one of those only takes it off the list.
-    bool MainWindow::ChartSetIsDerived(std::string const &path)
-    {
-        std::error_code ec;
-        auto lib = std::filesystem::weakly_canonical(lkw::ChartLibraryDir(), ec);
-        if (ec)
-            return false;
-        auto p = std::filesystem::weakly_canonical(std::filesystem::path(path), ec);
-        if (ec)
-            return false;
-        auto shared = std::mismatch(lib.begin(), lib.end(), p.begin(), p.end());
-        return shared.first == lib.end();
-    }
-
     // Delete a holding directory, a chart at a time, saying where it has got
     // to.
     //
@@ -493,13 +474,13 @@ namespace winrt::LookoutMarine::implementation
     // rather than racing the delete.
     void MainWindow::DeletePreparedCharts(std::string const &path, std::string const &name)
     {
-        if (!ChartSetIsDerived(path))
+        if (!lookout_bake_is_derived(lkw::ChartLibraryDir().c_str(), path.c_str()))
             return;
         std::error_code ec;
         std::filesystem::path lib = lkw::ChartLibraryDir();
         // The name a delete in flight goes under. Skipped by the sweep below,
         // so two removals in a row do not fight over each other's work.
-        std::string const prefix = ".removing-";
+        std::string const prefix = lookout_bake_trash_prefix();
         std::filesystem::path trash =
             lib / (prefix + std::to_string(GetCurrentProcessId()) + "-" +
                    std::to_string(++remove_seq));
@@ -576,7 +557,7 @@ namespace winrt::LookoutMarine::implementation
         // while this runs; the reopen at the end puts the rest back up.
         CloseChartHandle();
 
-        std::string const prefix = ".removing-";
+        std::string const prefix = lookout_bake_trash_prefix();
         // BESIDE the library, not in it. A rename is instant and the delete
         // behind it takes a while; with the trash inside the library the scan
         // asked for below counted every chart still sitting in it, so the pane

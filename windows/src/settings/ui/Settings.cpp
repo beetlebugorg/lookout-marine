@@ -1759,7 +1759,8 @@ namespace winrt::LookoutMarine::implementation
                         // removing it asks first and says how much. A folder of
                         // the mariner's own files is a list entry, so it goes
                         // without a question.
-                        bool derived = ChartSetIsDerived(set.path);
+                        bool derived = lookout_bake_is_derived(lkw::ChartLibraryDir().c_str(),
+                                                               set.path.c_str()) != 0;
                         Automation::AutomationProperties::SetName(
                             srm, derived
                                      ? L"Remove. The charts this app prepared are deleted; your "
