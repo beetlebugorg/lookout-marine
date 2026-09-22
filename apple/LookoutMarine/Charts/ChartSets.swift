@@ -55,14 +55,9 @@ struct ScannedCell: Identifiable, Hashable {
     /// True when `path` is a name INSIDE an archive rather than a file. Such a
     /// chart cannot be opened, whatever it is: it has to come out first.
     var archived: Bool = false
-    /// True when this cell was written after the chart prepared from it, as a
-    /// NOAA update writes one. The prepared chart draws the edition before it
-    /// until this cell is prepared again.
-    var stale: Bool = false
 
     init(path: String, name: String, kind: Kind, band: Int, bytes: Int64,
-         edition: UInt32 = 0, update: UInt32 = 0, archived: Bool = false,
-         stale: Bool = false) {
+         edition: UInt32 = 0, update: UInt32 = 0, archived: Bool = false) {
         self.path = path
         self.name = name
         self.kind = kind
@@ -71,7 +66,6 @@ struct ScannedCell: Identifiable, Hashable {
         self.edition = edition
         self.update = update
         self.archived = archived
-        self.stale = stale
     }
 
     init(_ f: lookout_chart_file, archived: Bool) {
@@ -82,8 +76,7 @@ struct ScannedCell: Identifiable, Hashable {
                   bytes: Int64(f.bytes),
                   edition: f.edition,
                   update: f.update,
-                  archived: archived,
-                  stale: f.stale != 0)
+                  archived: archived)
     }
 
     var id: String { path }
@@ -128,6 +121,12 @@ struct ChartSet: Identifiable, Hashable {
     /// True when the NOAA downloader owns this set. The row says so, and the
     /// charts are added and removed in the downloader.
     var managed: Bool = false
+    /// The files the core lists to prepare. 0 until the core has scanned the
+    /// set.
+    var toPrepareCount: Int = 0
+    /// Files a finished prepare of this set did not prepare, as the core
+    /// counts them.
+    var refused: Int = 0
 
     var id: String { path }
     /// What the folder or archive is called. The identity, and the fallback
@@ -173,29 +172,6 @@ struct ChartSet: Identifiable, Hashable {
     /// never deleted.
     var isDerived: Bool { preparedPath != nil }
     var bytes: Int64 { (cells + rasters).reduce(0) { $0 + $1.bytes } }
-    /// Everything in this set that must be prepared before it draws.
-    ///
-    /// A cell that has already been prepared is done, and what was made from
-    /// it sits in the same set under the same stem. Reading only the kind of
-    /// each file counted every source cell in the folder on every import, so
-    /// downloading one region reported the whole library.
-    /// A cell written after the chart prepared from it is prepared again, so
-    /// an update reaches the chart the mariner draws.
-    var toPrepare: [ScannedCell] {
-        let all = cells + rasters
-        let ready = Set(all.filter { !$0.needsPrepare }.map(\.stem))
-        return all.filter { $0.needsPrepare && ($0.stale || !ready.contains($0.stem)) }
-    }
-    var needsBake: Int { toPrepare.count }
-    /// What is left over after a prepare has already run for this set: files
-    /// the engine would not read. Offering to prepare them again says the work
-    /// is unfinished when it is as finished as it will get.
-    ///
-    /// A cell written after the chart prepared from it is work still to do, so
-    /// it counts as one to prepare rather than one the engine refused.
-    var refusedCount: Int {
-        preparedPath == nil ? 0 : toPrepare.filter { !$0.stale }.count
-    }
     /// The pictures that are ready to draw now.
     var rasterPaths: [String] { rasters.filter { !$0.needsPrepare }.map(\.path) }
     /// True when this set holds anything that draws now. `openablePaths` and
@@ -411,6 +387,22 @@ enum ChartSetStore {
     /// rather than walking the folder again.
     static func files(of path: String) -> [ScannedCell] {
         guard let h = handle else { return [] }
+        return cells(of: path) { p, n in lookout_chart_set_files(h, p, &n) }
+    }
+
+    /// The files the core lists to prepare for one set: each file that bakes
+    /// before it draws and has no current prepared chart, less the files a
+    /// finished bake of the set refused. A bake prepares this list.
+    static func toPrepare(of path: String) -> [ScannedCell] {
+        guard let h = handle else { return [] }
+        return cells(of: path) { p, n in lookout_chart_set_to_prepare(h, p, &n) }
+    }
+
+    /// One of the core's file lists for a set, copied out.
+    private static func cells(
+        of path: String,
+        _ read: (UnsafePointer<CChar>, inout Int) -> UnsafePointer<UnsafePointer<lookout_chart_file>?>?
+    ) -> [ScannedCell] {
         // An entry path is a name inside the archive with no file at it. The
         // core also lists the charts a bake wrote into the prepared directory,
         // and those are files on disk. Test the path prefix rather than the
@@ -422,7 +414,7 @@ enum ChartSetStore {
         let prepared = archive ? ChartBake.preparedDirectory(for: path).map { $0 + "/" } : nil
         return path.withCString { p in
             var n = 0
-            guard let rows = lookout_chart_set_files(h, p, &n) else { return [] }
+            guard let rows = read(p, &n) else { return [] }
             return (0..<n).compactMap { i -> ScannedCell? in
                 guard let row = rows[i] else { return nil }
                 let onDisk = prepared.map { String(cString: row.pointee.path).hasPrefix($0) } ?? false
@@ -438,6 +430,29 @@ enum ChartSetStore {
     static func rescan(_ path: String) -> Bool {
         guard let h = handle else { return false }
         return path.withCString { lookout_chart_sets_rescan(h, $0) != 0 }
+    }
+
+    /// Record how the bake of the set at `path` ended. Call it once the bake
+    /// has stopped and before it is freed, then rescan the set. The next scan
+    /// records what a finished bake left unprepared as refused, and a
+    /// cancelled or failed bake records a stop.
+    static func noteBake(_ path: String, _ bake: OpaquePointer) {
+        guard let h = handle else { return }
+        _ = path.withCString { lookout_chart_sets_note_bake(h, $0, bake) }
+    }
+
+    /// Record that the mariner stopped the prepare of the set at `path`.
+    /// `resume` skips the set until a scan finds a new file to prepare in it.
+    static func noteCancel(_ path: String) {
+        guard let h = handle else { return }
+        path.withCString { lookout_chart_sets_note_cancel(h, $0) }
+    }
+
+    /// The managed set whose prepare is unfinished and was not stopped since
+    /// it last changed, or nil.
+    static func resume() -> String? {
+        guard let h = handle, let p = lookout_chart_sets_resume(h) else { return nil }
+        return String(cString: p)
     }
 
     static func savedPaths() -> [String] { all().map(\.path) }
@@ -525,6 +540,13 @@ struct CoreChartSet: Identifiable, Hashable {
     /// holds no cell with a band in its name.
     let bandLo: Int
     let bandHi: Int
+    /// The files `ChartSetStore.toPrepare` lists: `unprepared` less `refused`.
+    let toPrepare: Int
+    /// Files a finished bake of this set did not prepare. They stay out of
+    /// `toPrepare` until a new edition or update of the cell arrives.
+    let refused: Int
+    /// `toPrepare` by usage band: bandTodo[0] is band 1.
+    let bandTodo: [Int]
 
     var id: String { path }
 
@@ -541,5 +563,8 @@ struct CoreChartSet: Identifiable, Hashable {
         bytes = Int64(s.bytes)
         bandLo = Int(s.band_lo)
         bandHi = Int(s.band_hi)
+        toPrepare = s.to_prepare
+        refused = s.refused
+        bandTodo = withUnsafeBytes(of: s.band_todo) { Array($0.bindMemory(to: Int.self)) }
     }
 }

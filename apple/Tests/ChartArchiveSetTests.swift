@@ -100,8 +100,10 @@ final class ChartArchiveSetTests: ShellTestCase {
                            preparedPath: ChartBake.preparedDirectory(for: zip),
                            cells: files.filter { !$0.isRaster },
                            rasters: files.filter(\.isRaster), on: true)
-        XCTAssertEqual(set.refusedCount, 0)
-        XCTAssertEqual(set.needsBake, 0)
+        let row = try XCTUnwrap(ChartSetStore.all().first { $0.path == zip })
+        XCTAssertEqual(row.refused, 0)
+        XCTAssertEqual(row.toPrepare, 0)
+        XCTAssertTrue(ChartSetStore.toPrepare(of: zip).isEmpty)
         XCTAssertEqual(set.openablePaths.count, 1)
     }
 

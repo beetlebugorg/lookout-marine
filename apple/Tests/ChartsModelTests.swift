@@ -120,48 +120,78 @@ final class ChartsModelTests: ShellTestCase {
     }
 }
 
-/// Resuming a bake that a previous run left unfinished.
+/// Resuming the downloader's prepare from the core's list.
 @MainActor
-final class ResumeUnpreparedTests: ShellTestCase {
+final class ResumePrepareTests: ShellTestCase {
 
-    private func set(managed: Bool, raw: Bool) -> ChartSet {
-        let kind: ScannedCell.Kind = raw ? .source : .baked
-        let ext = raw ? "000" : "pmtiles"
-        return ChartSet(path: "/charts/NOAA",
-                        producer: "US",
-                        preparedPath: nil,
-                        cells: [ScannedCell(path: "/charts/NOAA/US5MA1BO.\(ext)",
-                                            name: "US5MA1BO",
-                                            kind: kind,
-                                            band: 5,
-                                            bytes: 1)],
-                        rasters: [],
-                        on: true,
-                        managed: managed)
+    /// Spin the main run loop until `done` holds, for the bake's poll and the
+    /// core's scans.
+    private func wait(_ what: String, file: StaticString = #filePath, line: UInt = #line,
+                      until done: () -> Bool) {
+        let deadline = Date().addingTimeInterval(20)
+        while Date() < deadline {
+            if done() { return }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        }
+        XCTFail("timed out waiting for \(what)", file: file, line: line)
     }
 
-    func testTheManagedSetWithRawCellsResumes() {
-        let charts = ChartsModel(raster: RasterModel())
-        charts.sets = [set(managed: true, raw: true)]
-        XCTAssertEqual(charts.unpreparedSetToResume?.path, "/charts/NOAA")
+    /// The downloader's set, holding raw cells copied from test/cells, as the
+    /// core has read it. Twelve copies keep the bake running past a cancel.
+    private func managedSetOfRawCells() throws -> String {
+        let source = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("test/cells/US5OR2XF.000")
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: source.path),
+                          "no repository beside the test bundle")
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("lookout-resume-" + UUID().uuidString)
+        for i in 10..<22 {
+            let cell = dir.appendingPathComponent("US5OR2\(i)/US5OR2\(i).000")
+            try FileManager.default.createDirectory(at: cell.deletingLastPathComponent(),
+                                                    withIntermediateDirectories: true)
+            try FileManager.default.copyItem(at: source, to: cell)
+        }
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: dir)
+            if let prepared = ChartBake.preparedDirectory(for: dir.path) {
+                try? FileManager.default.removeItem(atPath: prepared)
+            }
+        }
+        XCTAssertTrue(ChartSetStore.add(dir.path))
+        XCTAssertTrue(ChartSetStore.setManaged(dir.path, true))
+        wait("the scan of the set") {
+            ChartSetStore.all().first { $0.path == dir.path }?.scanned == true
+        }
+        return dir.path
     }
 
-    func testAFolderTheMarinerAddedDoesNotResume() {
+    /// A prepare the mariner stopped stays stopped. The bake's own rescan and
+    /// every later pull of the sets leave it alone.
+    func testAStoppedPrepareIsNotRestartedByTheNextPull() throws {
+        let path = try managedSetOfRawCells()
         let charts = ChartsModel(raster: RasterModel())
-        charts.sets = [set(managed: false, raw: true)]
-        XCTAssertNil(charts.unpreparedSetToResume)
-    }
+        let engine = FakeEngine()
+        charts.engine = engine
 
-    func testAPreparedSetDoesNotResume() {
-        let charts = ChartsModel(raster: RasterModel())
-        charts.sets = [set(managed: true, raw: false)]
-        XCTAssertNil(charts.unpreparedSetToResume)
-    }
+        charts.pullChartSets()
+        XCTAssertNotNil(charts.bake, "the downloader's unprepared set resumes")
 
-    func testTheResumeWaitsForTheScan() {
-        let charts = ChartsModel(raster: RasterModel())
-        charts.sets = [set(managed: true, raw: true)]
-        charts.scanning = true
-        XCTAssertNil(charts.unpreparedSetToResume)
+        charts.cancelBake()
+        // The bake's end adopts the set, which rescans it. The test host's own
+        // frame loop may take the core's changed flag, so the pull after the
+        // rescan is made here.
+        wait("the stopped bake to end and the set to be read again") {
+            charts.bake == nil && !charts.scanRequested
+                && ChartSetStore.all().first { $0.path == path }?.scanned == true
+        }
+        charts.pullChartSets()
+        XCTAssertNil(charts.bake)
+        XCTAssertNil(ChartSetStore.resume())
+        // The cells are still to prepare and none is refused, so the stop is
+        // what holds the set.
+        let row = try XCTUnwrap(ChartSetStore.all().first { $0.path == path })
+        XCTAssertGreaterThan(row.toPrepare, 0)
+        XCTAssertEqual(row.refused, 0)
     }
 }

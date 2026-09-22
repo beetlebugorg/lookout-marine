@@ -473,14 +473,14 @@ private struct ChartSetRow: View {
                 .padding(.leading, 30)
             }
 
-            if set.refusedCount > 0 {
-                // Already prepared once; whatever is still unread is unreadable.
-                Label("\(set.refusedCount) file\(set.refusedCount == 1 ? "" : "s") Lookout could not read",
+            if set.refused > 0 {
+                Label("\(set.refused) file\(set.refused == 1 ? "" : "s") Lookout could not read",
                       systemImage: "exclamationmark.triangle")
                     .font(.caption).foregroundStyle(.secondary)
                     .padding(.leading, 30)
-            } else if set.needsBake > 0 {
-                Label("\(set.needsBake) to prepare", systemImage: "clock.arrow.circlepath")
+            }
+            if set.toPrepareCount > 0 {
+                Label("\(set.toPrepareCount) to prepare", systemImage: "clock.arrow.circlepath")
                     .font(.caption).foregroundStyle(.secondary)
                     .padding(.leading, 30)
             }

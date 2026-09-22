@@ -114,6 +114,8 @@ final class ChartBakeJob {
     private var handle: OpaquePointer?
     private let started = Date()
     private var name = ""
+    /// The set being prepared, for the core's record of how the bake ended.
+    private var source = ""
     private var poll: Timer?
 
     /// Called on the main queue whenever the count moves.
@@ -127,7 +129,10 @@ final class ChartBakeJob {
         if let handle { lookout_bake_cancel(handle) }
     }
 
-    fileprivate func setName(_ n: String) { name = n }
+    fileprivate func setSource(_ path: String) {
+        source = path
+        name = (path as NSString).lastPathComponent
+    }
 
     /// Take the core's job and start reporting. The job is freed when it ends.
     fileprivate func adopt(_ h: OpaquePointer, completion: @escaping (Bool) -> Void) {
@@ -151,6 +156,8 @@ final class ChartBakeJob {
                 self.poll = nil
                 self.handle = nil
                 let ok = p.ok != 0
+                // The core reads the ended job to record refusals or a stop.
+                ChartSetStore.noteBake(self.source, h)
                 // Freeing joins the worker, which has already finished.
                 lookout_bake_free(h)
                 completion(ok)
@@ -534,7 +541,7 @@ enum ChartBake {
         let sheetCount = items[cellCount...].prefix { $0.work == LOOKOUT_PREPARE_SHEET }.count
         let liftCount = items.count - cellCount - sheetCount
 
-        job.setName((sourceDir as NSString).lastPathComponent)
+        job.setSource(sourceDir)
         let started = ins.withUnsafeBufferPointer { i in
             outs.withUnsafeBufferPointer { o in
                 lookout_bake_start(sourceDir, i.baseAddress, o.baseAddress,

@@ -47,7 +47,6 @@ final class ChartScanTests: XCTestCase {
         let dir = try bakedChartDirectory()
         let set = try XCTUnwrap(ChartScan.scan(dir))
         XCTAssertEqual(set.openablePaths.count, 1)
-        XCTAssertEqual(set.needsBake, 0)
         XCTAssertFalse(set.isDerived)
     }
 
@@ -109,31 +108,9 @@ final class ChartSetTests: XCTestCase {
     }
 
     private func cell(_ name: String, band: Int = 5, kind: ScannedCell.Kind = .baked,
-                      bytes: Int64 = 1_000_000, archived: Bool = false,
-                      stale: Bool = false) -> ScannedCell {
+                      bytes: Int64 = 1_000_000, archived: Bool = false) -> ScannedCell {
         ScannedCell(path: "/charts/\(name)/\(name).pmtiles", name: name, kind: kind,
-                    band: band, bytes: bytes, archived: archived, stale: stale)
-    }
-
-    /// An update writes a new cell beside the chart prepared from the edition
-    /// before it. The chart draws until the cell is prepared again, and the
-    /// set asks for that work.
-    func testACellWrittenAfterItsChartIsPreparedAgain() {
-        let prepared = cell("a")
-        let updated = cell("a", kind: .source, stale: true)
-        let s = set(cells: [prepared, updated], prepared: "/prepared")
-        XCTAssertEqual(s.needsBake, 1)
-        XCTAssertEqual(s.toPrepare.map(\.stem), ["a"])
-        // Work to do, rather than a file the engine refused.
-        XCTAssertEqual(s.refusedCount, 0)
-        // The prepared chart still opens while the cell waits.
-        XCTAssertEqual(s.openablePaths.count, 1)
-    }
-
-    /// A cell whose chart is current is left alone.
-    func testACellWithACurrentChartIsNotPreparedAgain() {
-        let s = set(cells: [cell("a"), cell("a", kind: .source)], prepared: "/prepared")
-        XCTAssertEqual(s.needsBake, 0)
+                    band: band, bytes: bytes, archived: archived)
     }
 
     /// An office not listed keeps the folder name. A wrong agency on a chart
@@ -182,7 +159,6 @@ final class ChartSetTests: XCTestCase {
     func testAnArchivedCellIsNotOpenable() {
         let s = set(cells: [cell("a"), cell("b", archived: true)])
         XCTAssertEqual(s.openablePaths.count, 1)
-        XCTAssertEqual(s.needsBake, 1)
     }
 
     /// A raw S-57 cell and a BSB sheet both prepare first.
@@ -196,12 +172,10 @@ final class ChartSetTests: XCTestCase {
         XCTAssertFalse(cell("a", kind: .baked).isRaster)
     }
 
-    /// Offering to prepare them again would say the work is unfinished when it
-    /// is as finished as it will get.
-    func testWhatIsLeftAfterAPrepareIsCountedAsRefused() {
+    /// A set Lookout prepared charts for is derived, and removing it deletes
+    /// them.
+    func testASetWithAPreparedDirectoryIsDerived() {
         let cells = [cell("a"), cell("b", kind: .source)]
-        XCTAssertEqual(set(cells: cells, prepared: nil).refusedCount, 0)
-        XCTAssertEqual(set(cells: cells, prepared: "/prepared").refusedCount, 1)
         XCTAssertTrue(set(cells: cells, prepared: "/prepared").isDerived)
         XCTAssertFalse(set(cells: cells).isDerived)
     }
@@ -230,28 +204,21 @@ final class ChartSetTests: XCTestCase {
         XCTAssertTrue(s.rasterGroups(label: RasterModel.providerLabel).isEmpty)
     }
 
-    /// The count the import page shows. A cell that has already been prepared
-    /// is done, and what was made from it sits in the set under the same stem.
-    /// Reading only the kind of each file counted every source cell in the
-    /// folder, so downloading one region reported the whole library.
-    func testPreparedCellsAreNotPreparedAgain() {
+    /// A set holding one prepared chart draws.
+    func testAPreparedCellIsSomethingToDraw() {
         let s = set(cells: [
             cell("US5MD1MC", kind: .baked),
-            cell("US5MD1MC", kind: .source),
             cell("US5VA22M", kind: .source),
         ], prepared: "/prepared/ENC_ROOT")
-        XCTAssertEqual(s.toPrepare.map(\.name), ["US5VA22M"])
-        XCTAssertEqual(s.needsBake, 1)
         XCTAssertTrue(s.hasSomethingToDraw)
     }
 
-    /// A set with nothing prepared yet still counts every cell in it.
-    func testUnpreparedSetCountsEveryCell() {
+    /// A set of raw cells has no chart to draw until they are prepared.
+    func testAnUnpreparedSetHasNothingToDraw() {
         let s = set(cells: [
             cell("US5MD1MC", kind: .source),
             cell("US5VA22M", kind: .source),
         ])
-        XCTAssertEqual(s.needsBake, 2)
         XCTAssertFalse(s.hasSomethingToDraw)
     }
 }
