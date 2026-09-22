@@ -389,11 +389,6 @@ lk_chart_sets_set_managed (LkChartSets *self, const char *path, gboolean on)
          lookout_chart_sets_set_managed (self->sets, path, on ? 1 : 0) != 0;
 }
 
-gboolean
-lk_chart_sets_is_managed (LkChartSets *self, const char *path)
-{
-  return path != NULL && lookout_chart_sets_is_managed (self->sets, path) != 0;
-}
 
 char **
 lk_chart_sets_managed_cell_names (LkChartSets *self)

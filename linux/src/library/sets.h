@@ -98,11 +98,10 @@ gboolean lk_chart_sets_scanning (LkChartSets *self);
  * it. TRUE when the list or the switch changed. */
 gboolean lk_chart_sets_note (LkChartSets *self, const char *path);
 
-/* Mark a set as the downloader's rather than the mariner's, and read the mark.
+/* Mark a set as the downloader's rather than the mariner's.
  * The NOAA picker states what THIS set holds: counting every installed cell
  * reads an archive the mariner merely lists as water they can delete. */
 gboolean lk_chart_sets_set_managed (LkChartSets *self, const char *path, gboolean on);
-gboolean lk_chart_sets_is_managed (LkChartSets *self, const char *path);
 
 /* The dataset names the MANAGED sets hold, uppercased and deduplicated.
  * Transfer full. */

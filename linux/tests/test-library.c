@@ -316,7 +316,6 @@ test_a_managed_set_says_so_on_its_row (void)
   g_assert_false (managed_row (sets, dir));
 
   g_assert_true (lk_chart_sets_set_managed (sets, dir, TRUE));
-  g_assert_true (lk_chart_sets_is_managed (sets, dir));
   g_assert_true (managed_row (sets, dir));
 
   lk_chart_sets_free (sets);

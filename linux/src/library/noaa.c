@@ -487,15 +487,6 @@ lk_noaa_all_installed (LkNoaa *self)
   return self->cells == 0 && self->held > 0;
 }
 
-char *
-lk_noaa_size_text (guint64 bytes)
-{
-  /* Decimal, and one unit either side of a gigabyte. A mariner about to spend
-   * a marina's wifi on this reads GB or MB, not a three-place number. */
-  if (bytes >= 1000000000ULL)
-    return g_strdup_printf ("%.1f GB", (double) bytes / 1e9);
-  return g_strdup_printf ("%.0f MB", (double) bytes / 1e6);
-}
 
 char *
 lk_noaa_cost_words (guint32 cells, guint64 bytes, guint32 held, guint64 held_bytes)
@@ -504,11 +495,11 @@ lk_noaa_cost_words (guint32 cells, guint64 bytes, guint32 held, guint64 held_byt
    * region's size reads as a saving rather than a mistake. */
   if (cells == 0 && held > 0)
     {
-      g_autofree char *size = lk_noaa_size_text (held_bytes);
+      g_autofree char *size = g_format_size (held_bytes);
       return g_strdup_printf ("%u charts, all installed · %s to fetch again", held, size);
     }
 
-  g_autofree char *size = lk_noaa_size_text (bytes);
+  g_autofree char *size = g_format_size (bytes);
   if (held > 0)
     return g_strdup_printf ("%u charts, %s · %u already installed", cells, size, held);
   return g_strdup_printf ("%u charts, %s", cells, size);

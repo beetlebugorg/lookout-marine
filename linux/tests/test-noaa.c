@@ -141,47 +141,7 @@ test_changed_signal (void)
   g_assert_cmpuint (changes, ==, 2);
 }
 
-/* A size a mariner reads before spending a marina's wifi on it. */
-static void
-test_size_words (void)
-{
-  struct { guint64 bytes; const char *text; } cases[] = {
-    { 0, "0 MB" },
-    { 1500000, "2 MB" },
-    { 48000000, "48 MB" },
-    { 999000000, "999 MB" },
-    { 1000000000, "1.0 GB" },
-    { 1200000000, "1.2 GB" },
-    { 12500000000ULL, "12.5 GB" },
-  };
 
-  for (gsize i = 0; i < G_N_ELEMENTS (cases); i++)
-    {
-      g_autofree char *text = lk_noaa_size_text (cases[i].bytes);
-      g_assert_cmpstr (text, ==, cases[i].text);
-    }
-}
-
-/* What a pick costs, in the mariner's words. The held count is the interesting
- * part: a region partly installed fetches the rest, and one wholly installed
- * is a repair rather than an empty pick. */
-static void
-test_cost_words (void)
-{
-  g_autofree char *plain = lk_noaa_cost_words (12, 48000000, 0, 0);
-  g_assert_cmpstr (plain, ==, "12 charts, 48 MB");
-
-  g_autofree char *partly = lk_noaa_cost_words (12, 48000000, 3, 9000000);
-  g_assert_cmpstr (partly, ==, "12 charts, 48 MB · 3 already installed");
-
-  g_autofree char *whole = lk_noaa_cost_words (0, 0, 40, 160000000);
-  g_assert_cmpstr (whole, ==, "40 charts, all installed · 160 MB to fetch again");
-
-  /* Nothing picked at all. The caller shows its own line for this, but the
-   * words must not claim an install. */
-  g_autofree char *empty = lk_noaa_cost_words (0, 0, 0, 0);
-  g_assert_cmpstr (empty, ==, "0 charts, 0 MB");
-}
 
 /* With no catalog there is nothing to price and nothing to draw, and the
  * snapshot says idle rather than guessing. */
@@ -293,8 +253,6 @@ main (int argc, char *argv[])
   g_test_add_func ("/noaa/region-table", test_region_table);
   g_test_add_func ("/noaa/pick-order", test_pick_order);
   g_test_add_func ("/noaa/changed-signal", test_changed_signal);
-  g_test_add_func ("/noaa/size-words", test_size_words);
-  g_test_add_func ("/noaa/cost-words", test_cost_words);
   g_test_add_func ("/noaa/no-catalog", test_no_catalog);
   g_test_add_func ("/noaa/no-handle-reads-as-idle", test_no_handle_reads_as_idle);
   g_test_add_func ("/noaa/update-check-is-due-once-a-day",

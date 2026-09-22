@@ -209,7 +209,5 @@ void lk_noaa_shutdown (LkNoaa *self);
  * whole download bakes as a single chart set. Free with g_free. */
 char *lk_noaa_download_dir (void);
 
-/* A size a mariner reads before agreeing to download it. Free with g_free. */
-char *lk_noaa_size_text (guint64 bytes);
 
 G_END_DECLS

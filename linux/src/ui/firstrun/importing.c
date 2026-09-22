@@ -284,7 +284,7 @@ lk_first_run_importing_sync (GtkWidget *step)
   g_autofree char *subtitle = NULL;
   if (self->from_noaa)
     {
-      g_autofree char *size = lk_noaa_size_text (bytes);
+      g_autofree char *size = g_format_size (bytes);
 
       subtitle = g_strdup_printf ("NOAA · %u charts · %s", ordered, size);
     }

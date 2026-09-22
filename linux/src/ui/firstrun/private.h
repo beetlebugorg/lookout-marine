@@ -104,8 +104,6 @@ void lk_first_run_finish (LkFirstRun *self);
  * so the button states what the choice does; `chosen` may be NULL. */
 const char *lk_first_run_primary_title (LkFirstRun *self, const char *chosen);
 
-/* The step's name, for the page that says where the mariner is. */
-const char *lk_first_run_step_title (LkFirstRunStep step);
 
 /* The design's sheet widths. A step is as wide as its content, and a row of
  * cards needs more room than a paragraph. */

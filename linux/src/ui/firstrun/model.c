@@ -290,20 +290,6 @@ lk_first_run_primary_title (LkFirstRun *self, const char *chosen)
     }
 }
 
-const char *
-lk_first_run_step_title (LkFirstRunStep step)
-{
-  switch (step)
-    {
-    case LK_FIRST_RUN_WELCOME:   return "Welcome";
-    case LK_FIRST_RUN_SOURCE:    return "Add charts";
-    case LK_FIRST_RUN_COVERAGE:  return "Coverage";
-    case LK_FIRST_RUN_ONLINE:    return "Online chart";
-    case LK_FIRST_RUN_IMPORTING: return "Preparing";
-    case LK_FIRST_RUN_DEPTHS:    return "Depths";
-    default:                     return "Setup";
-    }
-}
 
 int
 lk_first_run_sheet_width (LkFirstRunStep step)
