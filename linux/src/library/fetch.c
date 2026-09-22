@@ -143,6 +143,11 @@ lk_fetch_piece (LkFetch *fetch, GBytes *bytes, gboolean done)
 
   if (self->dead || self->chunk == NULL)
     return;
+  /* A piece queued before the cancel goes. A reopen cancels every fetch and
+   * issues ids from 1 again, so this piece reaches the new handle's request
+   * of the same number. */
+  if (g_cancellable_is_cancelled (fetch->cancel))
+    return;
   if (done)
     lk_fetcher_forget (fetch);
   self->chunk (self->respond_data, fetch->id, data, len, (int) fetch->status, done);
