@@ -54,6 +54,10 @@ pub const Phase = enum(u8) {
     downloading = 3,
 };
 
+/// Called when a response is queued for adopt. From any thread, possibly
+/// inside the shell's own call to respond.
+pub const WakeFn = *const fn (user: ?*anyopaque) callconv(.c) void;
+
 /// One cell to fetch. The slices point into the catalog arena.
 const Job = struct {
     /// What the answer is written as while it is unpacked. Owned, because a
@@ -171,6 +175,10 @@ pub const Service = struct {
 
     get: ?clinks.HttpGetFn = null,
     cancel: ?clinks.HttpCancelFn = null,
+    /// Called after each response is queued, so a shell with no frame loop
+    /// running knows to adopt it. Null for a service on a chart handle,
+    /// whose frame loop adopts.
+    wake: ?WakeFn = null,
     user: ?*anyopaque = null,
 
     cat: ?noaa.Catalog = null,
@@ -292,9 +300,10 @@ pub const Service = struct {
 
     // ---- the shell's fetcher ----------------------------------------------
 
-    pub fn setProvider(self: *Service, get: ?clinks.HttpGetFn, cancel: ?clinks.HttpCancelFn, user: ?*anyopaque) void {
+    pub fn setProvider(self: *Service, get: ?clinks.HttpGetFn, cancel: ?clinks.HttpCancelFn, wake: ?WakeFn, user: ?*anyopaque) void {
         self.get = get;
         self.cancel = cancel;
+        self.wake = wake;
         self.user = user;
         if (get == null) self.cancelAll();
     }
@@ -847,13 +856,16 @@ pub const Service = struct {
 
     /// Queue one answer for the next adopt.
     fn post(self: *Service, a: Answer) void {
-        self.inbox_mu.lock();
-        defer self.inbox_mu.unlock();
-        self.inbox.append(self.alloc, a) catch {
-            if (a.bytes.len != 0) self.alloc.free(a.bytes);
-            return;
-        };
-        self.inbox_len.store(self.inbox.items.len, .release);
+        {
+            self.inbox_mu.lock();
+            defer self.inbox_mu.unlock();
+            self.inbox.append(self.alloc, a) catch {
+                if (a.bytes.len != 0) self.alloc.free(a.bytes);
+                return;
+            };
+            self.inbox_len.store(self.inbox.items.len, .release);
+        }
+        if (self.wake) |w| w(self.user);
     }
 
     /// Hand a written transfer to the unpack thread. Owns `name` and `dest`
@@ -1319,6 +1331,185 @@ pub const Service = struct {
     }
 };
 
+/// One box of a region's coverage, in degrees.
+pub const Box = extern struct {
+    west: f64,
+    south: f64,
+    east: f64,
+    north: f64,
+};
+
+/// A service and the lock that serializes calls into it.
+///
+/// lookout_noaa is one of these on its own. A chart handle holds one as well,
+/// for the calls that take a chart handle, and adopts it from its frame loop.
+/// Every method except respondChunk and poll locks `mu`, and the shell's
+/// fetcher is called with it held.
+pub const Handle = struct {
+    mu: Lock = .{},
+    svc: Service,
+    /// The names regionCells last handed out, valid until its next call.
+    cells: ?std.heap.ArenaAllocator = null,
+    /// Borrowed from the shell, which keeps both open for the life of the
+    /// handle. Either may be null.
+    store: ?*anyopaque = null,
+    sets: ?*anyopaque = null,
+
+    pub fn init(alloc: std.mem.Allocator) Handle {
+        return .{ .svc = Service.init(alloc) };
+    }
+
+    pub fn deinit(self: *Handle) void {
+        self.svc.deinit();
+        if (self.cells) |*a| a.deinit();
+        self.cells = null;
+    }
+
+    pub fn setProvider(self: *Handle, get: ?clinks.HttpGetFn, stop: ?clinks.HttpCancelFn, wake: ?WakeFn, user: ?*anyopaque) void {
+        self.mu.lock();
+        defer self.mu.unlock();
+        self.svc.setProvider(get, stop, wake, user);
+        self.svc.publish();
+    }
+
+    /// One piece of a response. No lock: see Service.respondChunk.
+    pub fn respondChunk(self: *Handle, req_id: u64, bytes: []const u8, status: c_int, done: bool) void {
+        self.svc.respondChunk(req_id, bytes, status, done);
+    }
+
+    /// Adopt the responses that arrived and publish what changed.
+    pub fn adopt(self: *Handle) void {
+        self.mu.lock();
+        defer self.mu.unlock();
+        self.svc.adopt();
+    }
+
+    /// The last published state. No lock beyond the snapshot's own.
+    pub fn poll(self: *Handle) State {
+        return self.svc.published();
+    }
+
+    pub fn refresh(self: *Handle) void {
+        self.mu.lock();
+        defer self.mu.unlock();
+        self.svc.refresh();
+        self.svc.publish();
+    }
+
+    pub fn have(self: *Handle, names: []const []const u8) void {
+        self.mu.lock();
+        defer self.mu.unlock();
+        self.svc.setHeld(names);
+    }
+
+    /// Null when no catalog is loaded.
+    pub fn cost(self: *Handle, districts: []const u8) ?noaa.Cost {
+        self.mu.lock();
+        defer self.mu.unlock();
+        if (!self.svc.haveCatalog()) return null;
+        return self.svc.costOf(districts);
+    }
+
+    /// Write at most `cap` names into `out` and return how many there are.
+    /// The names stay valid until the next call.
+    pub fn regionCells(self: *Handle, districts: []const u8, out: ?[*][*:0]const u8, cap: usize) usize {
+        self.mu.lock();
+        defer self.mu.unlock();
+        if (!self.svc.haveCatalog()) return 0;
+        const alloc = self.svc.alloc;
+        var names = std.ArrayList([]const u8).empty;
+        defer names.deinit(alloc);
+        self.svc.cellsOf(districts, &names);
+        const dst = out orelse return names.items.len;
+
+        // The catalog holds the names unterminated. A caller reads C strings,
+        // so they are copied into an arena that lives until the next call.
+        if (self.cells) |*old| old.deinit();
+        var arena = std.heap.ArenaAllocator.init(alloc);
+        const a = arena.allocator();
+        var n: usize = 0;
+        for (names.items) |name| {
+            if (n >= cap) break;
+            const z = a.dupeZ(u8, name) catch break;
+            dst[n] = z.ptr;
+            n += 1;
+        }
+        self.cells = arena;
+        return names.items.len;
+    }
+
+    /// The boxes of the finest coarse band a region has. Writes at most `cap`
+    /// and returns how many there are.
+    pub fn regionCoverage(self: *Handle, region_id: []const u8, out: ?[*]Box, cap: usize) usize {
+        self.mu.lock();
+        defer self.mu.unlock();
+        const cat = &(self.svc.cat orelse return 0);
+        const region = noaa.regionById(region_id) orelse return 0;
+        // The finest of the coarse bands this district has. Band 3 is coastal
+        // and hugs the shore; band 1 is an ocean basin and blots out the
+        // coastline it is meant to describe. The Great Lakes have no band 3,
+        // so the choice is made per district rather than fixed.
+        var band: u8 = 0;
+        for ([_]u8{ 3, 2, 1 }) |b| {
+            for (cat.cells) |c| {
+                if (c.district == region.district and c.band == b and c.box.known) {
+                    band = b;
+                    break;
+                }
+            }
+            if (band != 0) break;
+        }
+        if (band == 0) return 0;
+
+        var n: usize = 0;
+        for (cat.cells) |c| {
+            if (c.district != region.district or !c.box.known) continue;
+            if (c.band != band) continue;
+            if (out) |o| {
+                if (n < cap) o[n] = .{
+                    .west = c.box.start,
+                    .south = c.box.south,
+                    .east = c.box.start + c.box.width,
+                    .north = c.box.north,
+                };
+            }
+            n += 1;
+        }
+        return n;
+    }
+
+    pub fn download(self: *Handle, districts: []const u8, dest: []const u8, again: bool) void {
+        self.mu.lock();
+        defer self.mu.unlock();
+        self.svc.start(districts, dest, again);
+        self.svc.publish();
+    }
+
+    /// How many of `installed` the catalog has reissued. 0 with no catalog.
+    pub fn outdated(self: *Handle, installed: []const noaa.Installed) u32 {
+        self.mu.lock();
+        defer self.mu.unlock();
+        const cat = &(self.svc.cat orelse return 0);
+        const stale = noaa.outdated(self.svc.alloc, cat, installed) catch return 0;
+        defer self.svc.alloc.free(stale);
+        return @intCast(stale.len);
+    }
+
+    pub fn update(self: *Handle, installed: []const noaa.Installed, dest: []const u8) void {
+        self.mu.lock();
+        defer self.mu.unlock();
+        self.svc.startUpdate(installed, dest);
+        self.svc.publish();
+    }
+
+    pub fn cancel(self: *Handle) void {
+        self.mu.lock();
+        defer self.mu.unlock();
+        self.svc.cancelAll();
+        self.svc.publish();
+    }
+};
+
 /// The cell directory that holds an exchange set entry, or null when the
 /// entry is not a cell file.
 ///
@@ -1499,7 +1690,7 @@ test "copyZ terminates a value that fits and one that does not" {
 }
 
 /// A catalog holding `cells` charts in one district, each with a zip url.
-fn oneDistrict(alloc: std.mem.Allocator, district: u8, cells: u32) !noaa.Catalog {
+pub fn oneDistrict(alloc: std.mem.Allocator, district: u8, cells: u32) !noaa.Catalog {
     var xml: std.ArrayList(u8) = .empty;
     defer xml.deinit(alloc);
     try xml.appendSlice(alloc, "<ENC_Product_Catalog><date_valid>20250903</date_valid>");
@@ -1554,7 +1745,7 @@ test "a bundle NOAA does not serve is asked for cell by cell" {
     defer s.deinit();
     s.cat = try oneDistrict(alloc, 5, 30);
     s.phase = .ready;
-    s.setProvider(Recorder.get, null, &rec);
+    s.setProvider(Recorder.get, null, null, &rec);
 
     // Thirty cells is past bundle_at, so the district goes as one zip.
     s.start(&.{5}, dest, false);
@@ -1593,7 +1784,7 @@ test "a bundle part way down counts the charts its bytes have brought" {
     defer s.deinit();
     s.cat = try oneDistrict(alloc, 5, 30);
     s.phase = .ready;
-    s.setProvider(Recorder.get, null, &rec);
+    s.setProvider(Recorder.get, null, null, &rec);
     s.start(&.{5}, dest, false);
 
     // One bundle standing for thirty cells of a thousand bytes each.
@@ -1618,11 +1809,11 @@ test "a bundle part way down counts the charts its bytes have brought" {
 }
 
 /// One file in a zip a test builds.
-const TestEntry = struct { name: []const u8, data: []const u8 };
+pub const TestEntry = struct { name: []const u8, data: []const u8 };
 
 /// A zip of stored entries, in the layout of an exchange set. Owned by
 /// `alloc`.
-fn testZip(alloc: std.mem.Allocator, entries: []const TestEntry) ![]u8 {
+pub fn testZip(alloc: std.mem.Allocator, entries: []const TestEntry) ![]u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(alloc);
     const offsets = try alloc.alloc(u32, entries.len);
@@ -1772,7 +1963,7 @@ test "a catalog read during a download leaves the download running" {
     // Ten cells, under bundle_at, so each is its own request.
     s.cat = try oneDistrict(alloc, 5, 10);
     s.phase = .ready;
-    s.setProvider(Recorder.get, null, &rec);
+    s.setProvider(Recorder.get, null, null, &rec);
     s.start(&.{5}, dest, false);
     try testing.expectEqual(Phase.downloading, s.phase);
     try testing.expectEqual(@as(usize, MAX_INFLIGHT), rec.ids.items.len);
@@ -1831,7 +2022,7 @@ test "a bundle that will not unpack fails every chart it stood for" {
     defer s.deinit();
     s.cat = try oneDistrict(alloc, 5, 30);
     s.phase = .ready;
-    s.setProvider(Recorder.get, null, &rec);
+    s.setProvider(Recorder.get, null, null, &rec);
     s.start(&.{5}, dest, false);
     try testing.expectEqual(@as(u32, 30), s.planCells());
 
@@ -1862,7 +2053,7 @@ test "the unpack thread ends with the download" {
     defer s.deinit();
     s.cat = try oneDistrict(alloc, 5, 1);
     s.phase = .ready;
-    s.setProvider(Recorder.get, null, &rec);
+    s.setProvider(Recorder.get, null, null, &rec);
     s.start(&.{5}, dest, false);
     try testing.expect(s.unpackerRunning());
 
@@ -1918,7 +2109,7 @@ test "a new download starts while the cancelled one's cells are still queued" {
     defer s.deinit();
     s.cat = try oneDistrict(alloc, 5, 10);
     s.phase = .ready;
-    s.setProvider(Recorder.get, null, &rec);
+    s.setProvider(Recorder.get, null, null, &rec);
     s.start(&.{5}, old, false);
     try testing.expectEqual(@as(usize, MAX_INFLIGHT), rec.ids.items.len);
 
@@ -1969,7 +2160,7 @@ test "a bundle leaves the cells already held as they are" {
     defer s.deinit();
     s.cat = try oneDistrict(alloc, 5, 412);
     s.phase = .ready;
-    s.setProvider(Recorder.get, null, &rec);
+    s.setProvider(Recorder.get, null, null, &rec);
 
     // The first 300 cells are held. Two of them are on disk here.
     var names: [412][8]u8 = undefined;

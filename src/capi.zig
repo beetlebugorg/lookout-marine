@@ -4,7 +4,7 @@
 //! hosts need no allocator.
 //!
 //! The rest of the ABI is in capi/: bake.zig, chartsets.zig, format.zig,
-//! frame.zig, library.zig, pick.zig, plugins.zig and settings.zig.
+//! frame.zig, library.zig, noaa.zig, pick.zig, plugins.zig and settings.zig.
 const std = @import("std");
 const builtin = @import("builtin");
 
@@ -653,6 +653,7 @@ comptime {
     _ = @import("capi/format.zig");
     _ = @import("capi/frame.zig");
     _ = @import("capi/library.zig");
+    _ = @import("capi/noaa.zig");
     _ = @import("capi/pick.zig");
     _ = @import("capi/bake.zig");
     _ = @import("capi/chartsets.zig");

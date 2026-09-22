@@ -763,12 +763,11 @@ pub const Lookout = struct {
     /// tiles the style names. The shell keeps one job, fetching bytes for a
     /// url. See src/chartlinks.zig.
     links: clinks.Links = undefined,
-    /// NOAA's chart catalog and the downloads run from it. Shares the shell's
-    /// fetcher with links. See src/noaajob.zig.
-    noaa: noaajob.Service = undefined,
-    /// The names lookout_noaa_region_cells last handed out, valid until its
-    /// next call on this handle.
-    noaa_cells: ?std.heap.ArenaAllocator = null,
+    /// NOAA's chart catalog and the downloads run from it, for the NOAA calls
+    /// that take a chart handle. Shares the shell's fetcher with links, and
+    /// closes with the handle. lookout_noaa_open makes one that does not.
+    /// See src/noaajob.zig.
+    noaa: noaajob.Handle = undefined,
 
     // API-entry lock (see capi.locked): serializes the C ABI between the
     // host's input thread and its render thread. Distinct from engine_mu,
@@ -962,7 +961,7 @@ pub const Lookout = struct {
         // and neither belongs to a chart. Nothing resolves until the shell
         // supplies a fetcher (setHttpProvider).
         self.links = clinks.Links.init(alloc, self.linksSink());
-        self.noaa = noaajob.Service.init(alloc);
+        self.noaa = noaajob.Handle.init(alloc);
         if (marks.supportDirAlloc(alloc)) |d| {
             defer alloc.free(d);
             self.links.openStore(d);
@@ -2082,8 +2081,6 @@ pub const Lookout = struct {
         // tiles it has outstanding, and those answers go through the renderer.
         self.links.deinit();
         self.noaa.deinit();
-        if (self.noaa_cells) |*a| a.deinit();
-        self.noaa_cells = null;
         self.pollCompose(true); // finish any in-flight partition build first
         // BEFORE the composition and the charts: the renderer's tile workers
         // read the compositor, and its deinit is what stops them.
@@ -2987,7 +2984,7 @@ pub const Lookout = struct {
     pub fn setHttpProvider(self: *Lookout, get: ?clinks.HttpGetFn, cancel: ?clinks.HttpCancelFn, user: ?*anyopaque) void {
         self.ct.setCoreTileSink(if (get != null) linkAskTile else null, self);
         self.links.setProvider(get, cancel, user);
-        self.noaa.setProvider(get, cancel, user);
+        self.noaa.setProvider(get, cancel, null, user);
     }
 
     pub const TileStatus = ctprovided.Status;
@@ -3327,7 +3324,7 @@ pub const Lookout = struct {
         // draws on demand would never tick, and a resolve would stall on its
         // first answer.
         if (self.links.pending()) return true;
-        if (self.noaa.pending()) return true;
+        if (self.noaa.svc.pending()) return true;
         // A sheet still decoding, or decoded and waiting for the build worker
         // to let go of the atlas. A shell that draws on demand has to come
         // back for it, or the icons never land.
@@ -4403,3 +4400,70 @@ test "what the engine does not persist stays out of the store" {
     try t.expect(!f.store.has(g, "viewing_groups_off"));
 }
 
+
+test "a NOAA download on its own handle runs through two chart handles closing" {
+    const alloc = std.testing.allocator;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const dest = "/tmp/lookout-noaa-chart-reopen";
+    std.Io.Dir.cwd().deleteTree(io, dest) catch {};
+    defer std.Io.Dir.cwd().deleteTree(io, dest) catch {};
+
+    // A chart handle reads the mariner's chart links from under $HOME. Point
+    // it at an empty directory.
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const home = try std.fmt.allocPrintSentinel(alloc, ".zig-cache/tmp/{s}", .{tmp.sub_path}, 0);
+    defer alloc.free(home);
+    const old_home = std.c.getenv("HOME");
+    const kept = if (old_home) |h| try alloc.dupeZ(u8, std.mem.span(h)) else null;
+    defer if (kept) |k| alloc.free(k);
+    _ = setenv("HOME", home.ptr, 1);
+    defer _ = if (kept) |k| setenv("HOME", k.ptr, 1) else unsetenv("HOME");
+
+    const Fetch = struct {
+        ids: std.ArrayList(u64) = .empty,
+        fn get(user: ?*anyopaque, req_id: u64, url: [*:0]const u8, allow_file: c_int) callconv(.c) void {
+            _ = url;
+            _ = allow_file;
+            const self: *@This() = @ptrCast(@alignCast(user orelse return));
+            self.ids.append(std.testing.allocator, req_id) catch {};
+        }
+    };
+    var f = Fetch{};
+    defer f.ids.deinit(alloc);
+
+    const n = try alloc.create(noaajob.Handle);
+    n.* = noaajob.Handle.init(alloc);
+    defer {
+        n.deinit();
+        alloc.destroy(n);
+    }
+    n.svc.cat = try noaajob.oneDistrict(alloc, 5, 1);
+    n.svc.phase = .ready;
+    n.setProvider(Fetch.get, null, null, &f);
+    n.download(&.{5}, dest, false);
+    try std.testing.expectEqual(@as(usize, 1), f.ids.items.len);
+
+    // The C allocator, as lookout_open uses. close frees the handle.
+    for (0..2) |_| {
+        const l = try Lookout.openCharts(std.heap.c_allocator, &.{}, .{ .width = 64, .height = 64 });
+        l.close();
+    }
+    try std.testing.expectEqual(noaajob.Phase.downloading, n.svc.phase);
+
+    const zip = try noaajob.testZip(alloc, &.{.{ .name = "ENC_ROOT/US505000/US505000.000", .data = "cell" }});
+    defer alloc.free(zip);
+    n.respondChunk(f.ids.items[0], zip, 200, true);
+    var tries: usize = 0;
+    while (n.svc.phase == .downloading and tries < 2000) : (tries += 1) {
+        n.adopt();
+        sleepMs(1);
+    }
+    const st = n.poll();
+    try std.testing.expectEqual(@as(u8, @intFromEnum(noaajob.Phase.ready)), st.phase);
+    try std.testing.expectEqual(@as(u32, 1), st.done);
+    try std.testing.expectEqual(@as(u32, 0), st.failed);
+}
+
+extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+extern "c" fn unsetenv(name: [*:0]const u8) c_int;
