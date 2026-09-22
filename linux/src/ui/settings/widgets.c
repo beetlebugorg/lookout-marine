@@ -172,6 +172,8 @@ typedef struct {
   LkSettings *settings;
   int        *field;      /* for plain int-backed enums */
   void      (*apply) (LkSettings *settings, int value);
+  /* TRUE when the choice edits the mariner. */
+  gboolean    mariner;
 } LkChoiceBinding;
 
 static void
@@ -190,7 +192,28 @@ lk_choice_changed (GtkDropDown *dropdown, GParamSpec *pspec, gpointer user_data)
   else
     return;
 
-  lk_mariner_touch (binding->settings->mariner);
+  /* A row that saves elsewhere, such as the NOAA update cadence, has no
+   * mariner edit to apply. */
+  if (binding->mariner)
+    lk_mariner_touch (binding->settings->mariner);
+}
+
+GtkWidget *
+lk_choice_row_plain (GtkWidget         *section,
+                     LkSettings        *settings,
+                     const char        *title,
+                     const char *const *options,
+                     int                selected,
+                     void             (*apply) (LkSettings *, int))
+{
+  GtkWidget *dropdown = lk_choice_row (section, settings, title, options, selected, NULL,
+                                       apply);
+  LkChoiceBinding *binding =
+      g_object_get_data (G_OBJECT (dropdown), "lk-choice-binding");
+
+  if (binding != NULL)
+    binding->mariner = FALSE;
+  return dropdown;
 }
 
 GtkWidget *
@@ -208,11 +231,13 @@ lk_choice_row (GtkWidget          *section,
   binding->settings = settings;
   binding->field = field;
   binding->apply = apply;
+  binding->mariner = TRUE;
 
   gtk_drop_down_set_selected (GTK_DROP_DOWN (dropdown), selected);
   gtk_widget_set_valign (dropdown, GTK_ALIGN_CENTER);
   g_signal_connect_data (dropdown, "notify::selected", G_CALLBACK (lk_choice_changed),
                          binding, lk_binding_free, 0);
+  g_object_set_data (G_OBJECT (dropdown), "lk-choice-binding", binding);
   lk_row (section, title, dropdown);
   return dropdown;
 }

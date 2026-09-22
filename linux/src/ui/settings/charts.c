@@ -1335,8 +1335,8 @@ lk_build_charts_page (LkSettings *settings)
                : g_str_equal (cadence, "startup") ? 1
                                                   : 2;
 
-  lk_choice_row (add_group, settings, "Check for NOAA chart updates", cadences, chosen,
-                 NULL, lk_charts_update_cadence_chosen);
+  lk_choice_row_plain (add_group, settings, "Check for NOAA chart updates", cadences,
+                       chosen, lk_charts_update_cadence_chosen);
 
   lk_footer (add,
              "S-57 and S-101 cells (.000 with their updates) · charts Lookout has "

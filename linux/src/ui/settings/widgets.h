@@ -74,6 +74,15 @@ GtkWidget *lk_choice_row (GtkWidget          *section,
                           int                *field,
                           void              (*apply) (LkSettings *, int));
 
+/* The same row for a choice that saves somewhere other than the mariner: its
+ * apply writes the store itself, and the mariner is left alone. */
+GtkWidget *lk_choice_row_plain (GtkWidget         *section,
+                                LkSettings        *settings,
+                                const char        *title,
+                                const char *const *options,
+                                int                selected,
+                                void             (*apply) (LkSettings *, int));
+
 /* Bind a list on the Charts page to the function that fills it. */
 void lk_deferred_list_bind (LkDeferredList *list, LkSettings *settings, GtkWidget *box,
                             void (*fill) (LkSettings *settings));

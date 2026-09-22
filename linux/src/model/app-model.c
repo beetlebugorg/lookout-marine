@@ -980,9 +980,8 @@ lk_app_model_check_noaa_updates (LkAppModel *self)
   if (self->noaa_checked_this_run || self->noaa_checking)
     return;
 
-  /* AT MOST ONCE A DAY, whatever the cadence. NOAA publishes weekly, and a
-   * check reads a catalog of about 10 MB. "startup" asks on every launch,
-   * "daily" once in each 24 hours. */
+  /* ONCE PER RUN, and for "daily" once in each 24 hours as well. NOAA
+   * publishes weekly, and a check reads a catalog of about 10 MB. */
   now = g_get_real_time () / G_USEC_PER_SEC;
   last = lk_store_load_noaa_update_checked ();
   if (g_str_equal (cadence, "daily") && last > 0 && now - last < 24 * 60 * 60)
