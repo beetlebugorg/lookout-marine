@@ -64,6 +64,9 @@ protocol ChartLinkEngine: AnyObject {
 @MainActor
 protocol NoaaEngine: AnyObject {
     @discardableResult func noaaRefresh() -> Bool
+    /// True when the state has changed since the last call. It also adopts
+    /// what the fetcher brought, so the frame loop calls it.
+    func noaaChanged() -> Bool
     func noaaState() -> NoaaState
     func noaaCost(regionIDs: String) -> NoaaCost?
     /// Name the NOAA cells already installed, so a pick prices the rest.
@@ -124,5 +127,5 @@ protocol OverlayEngine: AnyObject {
     @discardableResult func removeMarker(_ id: UInt64) -> Bool
 }
 
-extension ChartController: RasterEngine, ChartLinkEngine, NoaaEngine, PluginEngine,
+extension ChartController: RasterEngine, ChartLinkEngine, PluginEngine,
                           ChartOpenEngine, ReadoutEngine, OverlayEngine {}

@@ -828,6 +828,7 @@ final class ChartController: NSObject {
         // A set's background scan landing is the core's only unprompted
         // change, and the flag has one consumer.
         if ChartSetStore.changed() { model.charts.pullChartSets() }
+        model.noaa.pull()
 
     }
 

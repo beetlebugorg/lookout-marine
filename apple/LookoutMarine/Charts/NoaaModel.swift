@@ -46,6 +46,10 @@ struct NoaaInstalledCell: Hashable {
 /// What the core is doing with NOAA's charts.
 struct NoaaState: Equatable {
     enum Phase: UInt8 { case idle = 0, readingCatalog = 1, ready = 2, downloading = 3 }
+    /// How the download numbered `run` ended. See LOOKOUT_NOAA_NONE.
+    enum Outcome: UInt8 {
+        case none = 0, running = 1, finished = 2, empty = 3, cancelled = 4, failed = 5
+    }
 
     var phase: Phase = .idle
     var haveCatalog = false
@@ -60,6 +64,12 @@ struct NoaaState: Equatable {
     var bytesTotal: UInt64 = 0
     var bytesDone: UInt64 = 0
     var error = ""
+    var outcome: Outcome = .none
+    /// Counts the downloads ordered, refused ones included.
+    var run: UInt32 = 0
+
+    /// True once the download numbered `run` has stopped for any reason.
+    var ended: Bool { outcome != .none && outcome != .running }
 
     /// What the catalog line draws.
     ///
@@ -98,8 +108,8 @@ final class NoaaModel {
     /// Which regions the mariner picked, by id.
     var picked: Set<String> = []
     private(set) var state = NoaaState()
-    /// True when the mariner stopped the last download. A new one clears it.
-    private(set) var stoppedByMariner = false
+    /// Called after every read that changed `state`.
+    var onChange: (() -> Void)?
     /// Each region's real coverage, read once the catalog is in. A region
     /// drawn as one rectangle claims water it does not cover.
     private(set) var coverage: [String: [GeoBox]] = [:]
@@ -113,20 +123,13 @@ final class NoaaModel {
     /// What fetching the installed ones again costs, for a repair.
     private(set) var heldBytes: UInt64 = 0
 
-    /// True when a catalog read was asked for before a chart was open. Every
-    /// call here goes through a chart handle, so a read asked for at launch
-    /// had nothing to run through.
-    private var wantsCatalog = false
-    /// True once anything has asked for the catalog in this session. The
-    /// catalog belongs to the chart handle, so a chart that closes takes it
-    /// along with any read still running through it.
-    private var asked = false
+    /// Callers waiting in checkForUpdates for the catalog read to end.
+    private var catalogWaiters: [CheckedContinuation<Void, Never>] = []
 
     weak var engine: (any NoaaEngine)? {
         didSet {
             guard engine != nil else { return }
             poll()
-            if wantsCatalog { refresh() }
         }
     }
 
@@ -163,41 +166,24 @@ final class NoaaModel {
         recost()
     }
 
-    /// Called when a read has no chart to run through. AppModel opens one of
-    /// no cells, the way a chart link does.
-    var openChartForCatalog: (() -> Void)?
-
-    /// Read NOAA's catalog. The result arrives through poll().
+    /// Read NOAA's catalog. The result arrives through pull().
     func refresh() {
-        guard let engine, engine.noaaRefresh() else {
-            wantsCatalog = true
-            // Every call here goes through a lookout handle, which exists
-            // only while a chart is open. On a first run there are no charts,
-            // so the catalog read had no handle to use and the coverage step
-            // sat with its regions dim and no line to say why.
-            openChartForCatalog?()
-            return
-        }
-        wantsCatalog = false
-        asked = true
-        // The core set the phase to reading when it took the call. Read it
-        // back, so the view watching the phase starts its own poll.
-        poll()
+        engine?.noaaRefresh()
+        pull()
     }
 
-    /// A chart is open. Anything asked for before the handle existed runs now,
-    /// and so does a read the old handle took with it when it closed.
-    func chartDidOpen() {
+    /// Read the core's state when it has changed. The frame loop calls this,
+    /// and so does the service each time a response arrives.
+    func pull() {
+        guard let engine, engine.noaaChanged() else { return }
         poll()
-        if wantsCatalog || (asked && !state.haveCatalog) { refresh() }
     }
 
     /// Take the core's snapshot and reprice the pick.
     func poll() {
         guard let engine else { return }
         let next = engine.noaaState()
-        // Assigning an equal value still invalidates every view reading it,
-        // and this polls several times a second.
+        // Assigning an equal value still invalidates every view reading it.
         guard next != state else { return }
         let gained = next.haveCatalog && !state.haveCatalog
         state = next
@@ -206,6 +192,12 @@ final class NoaaModel {
             repriceRegions()
             loadCoverage()
         }
+        if state.phase != .readingCatalog, !catalogWaiters.isEmpty {
+            let waiting = catalogWaiters
+            catalogWaiters = []
+            for w in waiting { w.resume() }
+        }
+        onChange?()
     }
 
     /// Read every region's coverage. The catalog holds it and does not change
@@ -419,15 +411,13 @@ final class NoaaModel {
     func download(to destination: String, again: Bool = false) {
         guard !picked.isEmpty else { return }
         recordPicked(regions.filter { picked.contains($0.id) }.map(\.id))
-        stoppedByMariner = false
         engine?.noaaDownload(regionIDs: pickedIDs, destination: destination, again: again)
-        poll()
+        pull()
     }
 
     func cancel() {
-        stoppedByMariner = true
         engine?.noaaCancel()
-        poll()
+        pull()
     }
 
     /// How many of these cells NOAA has reissued.
@@ -436,9 +426,8 @@ final class NoaaModel {
     }
 
     func update(_ have: [NoaaInstalledCell], to destination: String) {
-        stoppedByMariner = false
         engine?.noaaUpdate(have, destination: destination)
-        poll()
+        pull()
     }
 
     // MARK: - Checking for reissued charts
@@ -496,20 +485,16 @@ final class NoaaModel {
 
     /// Read NOAA's catalog, then count how many of `have` it has reissued.
     ///
-    /// One pass. It ends with the count, so an app that is not being asked
-    /// anything runs no timer: the poll below stops with the catalog read.
+    /// One pass. It ends with the count, and waits on the catalog read with
+    /// no timer.
     func checkForUpdates(_ have: [NoaaInstalledCell]) async {
         guard !checking, !have.isEmpty else { return }
         checking = true
         defer { checking = false }
         if !state.haveCatalog {
             refresh()
-            // The core reads the catalog on a thread of its own and reports no
-            // callback across the C ABI.
-            for _ in 0..<200 {
-                poll()
-                if state.phase != .readingCatalog { break }
-                try? await Task.sleep(for: .milliseconds(300))
+            if state.phase == .readingCatalog {
+                await withCheckedContinuation { catalogWaiters.append($0) }
             }
         }
         guard state.haveCatalog else { return }

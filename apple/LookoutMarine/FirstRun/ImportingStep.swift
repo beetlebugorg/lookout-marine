@@ -48,19 +48,6 @@ struct ImportingStep: View {
         }
         .padding(.horizontal, horizontalInset)
         .padding(.bottom, 22)
-        .task {
-            // The core reports progress and accepts no callback across the C
-            // ABI. The poll ends when the download does; the bake has a poll
-            // of its own inside ChartBakeJob.
-            // Only while the transfer runs. Polling for the life of the step
-            // re-rendered it several times a second after everything had
-            // finished. The row's finished count comes from the order.
-            while model.noaa.state.phase == .downloading {
-                try? await Task.sleep(for: .milliseconds(400))
-                model.noaa.poll()
-            }
-            model.noaa.poll()
-        }
         .onChange(of: model.noaa.state, initial: true) { noteImport() }
         .onChange(of: model.charts.chartWork) { _, now in
             defer { noteImport() }

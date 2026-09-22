@@ -13,21 +13,10 @@ import CoreGraphics
 import SwiftUI
 
 /// Where NOAA's catalog stands, and a way to read it again after a failure.
-///
-/// This polls while the read runs. The core reports progress and accepts no
-/// callback across the C ABI, so a view showing that state has to ask for it.
-/// The poll ends with the read, leaving an idle app with no timer.
 struct NoaaCatalogLine: View {
     @Bindable var noaa: NoaaModel
 
-    var body: some View {
-        line.task(id: noaa.state.phase) {
-            while noaa.state.phase == .readingCatalog {
-                try? await Task.sleep(for: .milliseconds(300))
-                noaa.poll()
-            }
-        }
-    }
+    var body: some View { line }
 
     @ViewBuilder private var line: some View {
         switch noaa.state.catalogLine {

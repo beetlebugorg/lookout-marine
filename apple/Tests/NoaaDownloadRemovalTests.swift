@@ -99,10 +99,10 @@ final class NoaaDownloadRemovalTests: XCTestCase {
     }
 }
 
-/// A download ordered while the chart handle is replaced. The NOAA service
-/// lives on the handle, and closing the handle cancels every transfer.
+/// The NOAA service has no chart handle under it, so a download starts at
+/// once whether or not a chart is open or reopening.
 @MainActor
-final class NoaaDownloadThroughReopenTests: ShellTestCase {
+final class NoaaDownloadWithoutChartTests: ShellTestCase {
 
     private func app() -> (AppModel, FakeEngine) {
         let app = AppModel()
@@ -110,7 +110,6 @@ final class NoaaDownloadThroughReopenTests: ShellTestCase {
         app.charts.engine = fake
         app.noaa.engine = fake
         app.noaa.picked = [app.noaa.regions[0].id]
-        app.charts.hasChart = true
         return (app, fake)
     }
 
@@ -118,54 +117,60 @@ final class NoaaDownloadThroughReopenTests: ShellTestCase {
         fake.calls.filter { $0.hasPrefix("noaaDownload") }.count
     }
 
-    /// The defect: Apply removed one region, which requested a reopen, and
-    /// then started the download for the other on the handle about to close.
-    func testAnApplyThatRemovesAndAddsDownloadsOnTheNewHandle() {
+    func testADownloadDuringAReopenStartsAtOnce() {
         let (app, fake) = app()
-        // The removal's reopen is pending.
+        app.charts.hasChart = true
         app.charts.isOpening = true
         app.startNoaaDownload()
-        XCTAssertEqual(downloads(fake), 0)
-
-        app.charts.isOpening = false
-        app.chartDidOpen()
         XCTAssertEqual(downloads(fake), 1)
         XCTAssertFalse(fake.calls.contains("noaaCancel"))
-
-        // A second open does not start the download again.
-        app.chartDidOpen()
-        XCTAssertEqual(downloads(fake), 1)
     }
 
-    func testADownloadWithAChartUpStartsAtOnce() {
+    func testADownloadWithNoChartStartsAtOnce() {
         let (app, fake) = app()
+        app.charts.hasChart = false
         app.startNoaaDownload(again: true)
         XCTAssertEqual(downloads(fake), 1)
         XCTAssertTrue(fake.calls.contains { $0.hasSuffix("again: true)") })
     }
 }
 
-/// A download the mariner stops is no error.
+/// How a download ended decides what follows it.
 @MainActor
 final class NoaaDownloadStopTests: ShellTestCase {
 
-    func testAStoppedDownloadRaisesNoOpenError() {
+    /// A download ordered and running on the fake, as run 1.
+    private func started() -> (AppModel, FakeEngine) {
         let app = AppModel()
         let fake = FakeEngine()
         app.charts.engine = fake
         app.noaa.engine = fake
         app.noaa.picked = [app.noaa.regions[0].id]
         app.charts.hasChart = true
-
         fake.noaa.phase = .downloading
         fake.noaa.total = 3
+        fake.noaa.run = 1
+        fake.noaa.outcome = .running
         app.startNoaaDownload()
-        app.noaa.cancel()
-        fake.noaa.phase = .ready
-        XCTAssertEqual(fake.noaa.done, 0)
+        return (app, fake)
+    }
 
-        // The watch polls every half second.
-        RunLoop.current.run(until: Date().addingTimeInterval(1.5))
+    func testAStoppedDownloadRaisesNoOpenError() {
+        let (app, fake) = started()
+        fake.noaa.phase = .ready
+        fake.noaa.outcome = .cancelled
+        app.noaa.cancel()
+        XCTAssertTrue(fake.calls.contains("noaaCancel"))
         XCTAssertNil(app.charts.openError)
+    }
+
+    func testAFailedDownloadReportsItsError() {
+        let (app, fake) = started()
+        fake.noaa.phase = .ready
+        fake.noaa.failed = 3
+        fake.noaa.outcome = .failed
+        fake.noaa.error = "could not write a downloaded chart"
+        app.noaa.pull()
+        XCTAssertEqual(app.charts.openError, "could not write a downloaded chart")
     }
 }

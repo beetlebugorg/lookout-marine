@@ -197,7 +197,7 @@ final class FirstRunModel {
             && noaaOrder != nil
             && !sawBake
             && !bakeRunning
-            && noaa.phase != .downloading
+            && noaa.ended
             && noaa.done == 0
     }
 

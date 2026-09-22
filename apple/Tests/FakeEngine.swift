@@ -178,6 +178,8 @@ final class FakeEngine: RasterEngine, ChartLinkEngine, PluginEngine,
         return noaaRefreshes
     }
 
+    /// The fake tracks no changes, so every read goes through.
+    func noaaChanged() -> Bool { true }
     func noaaState() -> NoaaState { noaa }
 
     func noaaCost(regionIDs: String) -> NoaaCost? { noaaCosts[regionIDs] }

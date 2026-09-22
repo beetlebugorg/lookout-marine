@@ -36,14 +36,6 @@ struct NoaaDownloadPanel: View {
         }
         .padding(compact ? 12 : 18)
         .panelSurface(cornerRadius: 10, opaque: !compact)
-        .task(id: state.phase) {
-            // The core reports progress and accepts no callback across the C
-            // ABI. The poll ends with the download.
-            while model.noaa.state.phase == .downloading {
-                try? await Task.sleep(for: .milliseconds(400))
-                model.noaa.poll()
-            }
-        }
     }
 
     private var title: String {

@@ -347,7 +347,7 @@ enum ChartScan {
 enum ChartSetStore {
     /// The model, opened once on the shell's store. Nil when the core cannot
     /// open one, leaving every read empty and every write a no-op.
-    nonisolated(unsafe) private static var handle: OpaquePointer? = open()
+    nonisolated(unsafe) private(set) static var handle: OpaquePointer? = open()
 
     private static func open() -> OpaquePointer? {
         guard let store = Store.shared.handle else { return nil }

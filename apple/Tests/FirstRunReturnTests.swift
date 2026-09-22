@@ -99,6 +99,8 @@ final class FirstRunStepTests: ShellTestCase {
         s.done = done
         s.total = total
         s.error = error
+        s.run = 1
+        s.outcome = phase == .downloading ? .running : done > 0 ? .finished : .failed
         return s
     }
 

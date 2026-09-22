@@ -20,7 +20,6 @@ final class AppModel {
             // ChartEngine.swift.
             charts.engine = controller
             chartLinks.engine = controller
-            noaa.engine = controller
             raster.engine = controller
             readouts.engine = controller
             plugins.engine = controller
@@ -36,14 +35,12 @@ final class AppModel {
     /// NOAA's catalog, the regions a mariner picks, and the downloads run from
     /// them. See src/noaa.zig for what a region selects.
     let noaa = NoaaModel()
-    /// Follows a NOAA download to its end. Cancelled when a new one starts.
-    private var noaaWatch: Task<Void, Never>?
-    /// A download ordered while the chart handle is being replaced, and
-    /// whether it fetches held charts again. The NOAA service lives on the
-    /// handle, and closing the handle cancels every transfer. An Apply that
-    /// removes water and adds more reopens the handle, so the download starts
-    /// from chartDidOpen on the new handle.
-    private var heldNoaaDownload: Bool?
+    /// The core's NOAA service. It has no chart handle under it, so a chart
+    /// reopening leaves its download running.
+    private var noaaService: NoaaService?
+    /// The download being followed to its end: its run number, where it
+    /// writes, and whether an update check follows. A new order replaces it.
+    private var noaaWatch: (run: UInt32, dest: String, thenRecheck: Bool)?
     /// True once the update check has run in this session. A chart reopens
     /// whenever the set list changes, and the check is a launch question.
     private var noaaChecked = false
@@ -79,22 +76,13 @@ final class AppModel {
     /// The core writes one zip per cell into a single directory, so the whole
     /// download bakes as one chart set once the transfers finish.
     func startNoaaDownload(again: Bool = false) {
-        guard charts.hasChart, !charts.isOpening else {
-            heldNoaaDownload = again
-            // Every NOAA call goes through a chart handle.
-            if !charts.hasChart { charts.openEmpty() }
-            return
-        }
-        beginNoaaDownload(again: again)
-    }
-
-    private func beginNoaaDownload(again: Bool) {
         guard let dest = NoaaModel.downloadDirectory else {
             charts.openError = "Couldn't find a place to download charts to."
             return
         }
+        let before = noaa.state.run
         noaa.download(to: dest, again: again)
-        watchNoaaDownload(dest)
+        watchNoaaDownload(dest, after: before)
     }
 
     /// Fetch the reissued editions of every installed cell, and prepare what
@@ -110,39 +98,45 @@ final class AppModel {
         }
         let have = charts.installedCells
         guard !have.isEmpty else { return }
+        let before = noaa.state.run
         noaa.update(have, to: dest)
-        watchNoaaDownload(dest, thenRecheck: true)
+        watchNoaaDownload(dest, after: before, thenRecheck: true)
     }
 
-    /// Follow a download to its end and bake the directory it filled.
-    ///
-    /// A poll rather than a callback, because the core reports progress and
-    /// accepts no callback across the C ABI. It ends when the download ends, so
-    /// an idle app runs no timer.
-    private func watchNoaaDownload(_ dest: String, thenRecheck: Bool = false) {
-        noaaWatch?.cancel()
-        noaaWatch = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(500))
-                guard let self else { return }
-                self.noaa.poll()
-                guard self.noaa.state.phase != .downloading else { continue }
-                // Bake only when something arrived. A download that failed
-                // every cell leaves an empty directory and its own error.
-                let st = self.noaa.state
-                if st.done > 0 {
-                    self.charts.openChartDirectory(dest)
-                } else if st.total > 0, !self.noaa.stoppedByMariner, !self.firstRun.showing {
-                    // No bake runs, so the Charts pane reports the failed
-                    // download here. A stop is the mariner's own, and setup
-                    // reports the end in its own step.
-                    self.charts.openError = st.error.isEmpty
-                        ? "The download stopped before any chart arrived." : st.error
-                }
-                if thenRecheck { await self.recheckNoaaUpdates() }
-                return
+    /// Follow the download just ordered to its end, and bake the directory
+    /// it filled. noaaChanged checks it each time the state changes. `before`
+    /// is the run number read before ordering: an order the model did not
+    /// pass on leaves it as it was, and there is no download to follow.
+    private func watchNoaaDownload(_ dest: String, after before: UInt32,
+                                   thenRecheck: Bool = false) {
+        guard noaa.state.run != before else { return }
+        noaaWatch = (noaa.state.run, dest, thenRecheck)
+        noaaChanged()
+    }
+
+    /// The NOAA state changed. End the watched download if it has ended.
+    private func noaaChanged() {
+        guard let w = noaaWatch else { return }
+        let st = noaa.state
+        guard st.run == w.run, st.ended else { return }
+        noaaWatch = nil
+        switch st.outcome {
+        case .finished:
+            charts.openChartDirectory(w.dest)
+        case .cancelled:
+            // A stop is the mariner's own. What arrived before it is kept.
+            if st.done > 0 { charts.openChartDirectory(w.dest) }
+        case .failed:
+            // No bake runs, so the Charts pane reports the failed download
+            // here. Setup reports the end in its own step.
+            if !firstRun.showing {
+                charts.openError = st.error.isEmpty
+                    ? "The download stopped before any chart arrived." : st.error
             }
+        case .empty, .none, .running:
+            break
         }
+        if w.thenRecheck { Task { await recheckNoaaUpdates() } }
     }
 
     /// Count the reissued charts again, once the new editions are in the
@@ -175,8 +169,7 @@ final class AppModel {
     /// Look for reissued charts, when the cadence says to and there is
     /// something to look for.
     ///
-    /// Once per launch, from the first chart that opens: every NOAA call goes
-    /// through a chart handle. Daily means the last check was over a day ago,
+    /// Once per launch, from the first chart that opens. Daily means the last check was over a day ago,
     /// which an app left running for a week satisfies once a day, so nothing
     /// here wakes on a clock.
     private func considerNoaaUpdateCheck() {
@@ -268,9 +261,12 @@ final class AppModel {
         // only while a chart is open. Open a chart of no cells so a link
         // picked with no charts installed has a core to run through.
         chartLinks.openChartForLink = { [weak self] in self?.charts.openEmpty() }
-        // The same for NOAA's catalog, which setup reads before the mariner
-        // has a single chart.
-        noaa.openChartForCatalog = { [weak self] in self?.charts.openEmpty() }
+        // NOAA's service needs no chart, so setup reads the catalog before
+        // the mariner has one.
+        let service = NoaaService { [weak self] in self?.noaa.pull() }
+        noaaService = service
+        noaa.engine = service
+        noaa.onChange = { [weak self] in self?.noaaChanged() }
     }
 
     /// A chart handle has just been created. The core reads its chart-link
@@ -278,14 +274,8 @@ final class AppModel {
     /// its fetcher, so nothing has to be replayed here — only the mariner's old
     /// UserDefaults list handed over, once.
     func chartDidOpen() {
-        // Setup frames the country and reads NOAA's catalog. Both go through
-        // the chart handle, which exists only now.
+        // Setup frames the country, which goes through the chart handle.
         if firstRun.showing { showWholeCountry() }
-        noaa.chartDidOpen()
-        if let again = heldNoaaDownload {
-            heldNoaaDownload = nil
-            beginNoaaDownload(again: again)
-        }
         considerNoaaUpdateCheck()
         chartLinks.migrate()
         // The chart-link calls held while no chart was open.

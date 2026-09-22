@@ -310,14 +310,6 @@ private struct NoaaProgressRow: View {
             ProgressView(value: Double(s.done), total: Double(max(s.total, 1)))
         }
         .padding(.vertical, 4)
-        .task(id: s.phase) {
-            // The core reports progress and accepts no callback across the C
-            // ABI. The poll ends with the download.
-            while model.noaa.state.phase == .downloading {
-                try? await Task.sleep(for: .milliseconds(500))
-                model.noaa.poll()
-            }
-        }
     }
 }
 

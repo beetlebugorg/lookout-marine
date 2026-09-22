@@ -25,14 +25,34 @@ final class ChartLinkFetch: @unchecked Sendable {
         "LookoutMarine/1.0 (macOS; org.beetlebug.lookout; contact jeremy.collins@beetlebug.org)"
     static let referer = "https://beetlebug.org/"
 
+    /// The core handle a response goes to: a chart handle, or the NOAA
+    /// service's own.
+    private enum Target {
+        case chart(OpaquePointer)
+        case noaa(OpaquePointer)
+
+        /// One piece of a response. `done` ends the body.
+        func respond(_ id: UInt64, _ bytes: UnsafeRawPointer?, _ count: Int,
+                     _ status: Int32, done: Bool) {
+            let d: Int32 = done ? 1 : 0
+            switch self {
+            case .chart(let h): lookout_http_respond_chunk(h, id, bytes, count, status, d)
+            case .noaa(let n): lookout_noaa_svc_http_respond_chunk(n, id, bytes, count, status, d)
+            }
+        }
+    }
+
     private let lock = NSLock()
-    /// nil once the chart is closing: a fetch still in flight must not answer
-    /// into a handle that is going away.
-    private var handle: OpaquePointer?
+    /// nil once the handle is closing: a fetch still in flight must not
+    /// respond into a handle that is going away.
+    private var target: Target?
     /// Wakes the frame loop. An answer is adopted at the top of a frame, and
     /// the display link pauses when nothing is moving, so a resolve landing
     /// with no gesture behind it needs someone to ask for the next frame.
+    /// Under a lock of its own: the NOAA service calls it from inside a
+    /// respond made with `lock` held.
     private var wake: (() -> Void)?
+    private let wakeLock = NSLock()
     /// Tasks by request id, so a cancel can reach the transfer.
     private var inFlight: [UInt64: URLSessionTask] = [:]
     /// Request id and final status by task, for the delegate that hands the
@@ -80,12 +100,36 @@ final class ChartLinkFetch: @unchecked Sendable {
     /// Attach to a chart handle and start answering. Call once per handle.
     /// `wake` is called on the main thread after every answer.
     func attach(to h: OpaquePointer, wake: @escaping () -> Void) {
+        attach(.chart(h), wake)
+    }
+
+    /// Attach to the NOAA service instead. `wake` is also called each time
+    /// the core queues a response for it.
+    func attach(noaa n: OpaquePointer, wake: @escaping () -> Void) {
+        attach(.noaa(n), wake)
+    }
+
+    private func attach(_ t: Target, _ wake: @escaping () -> Void) {
         lock.lock()
-        handle = h
-        self.wake = wake
+        target = t
         lock.unlock()
-        lookout_set_http_provider(h, chartLinkGet, chartLinkCancel,
-                                  Unmanaged.passUnretained(self).toOpaque())
+        wakeLock.lock()
+        self.wake = wake
+        wakeLock.unlock()
+        let me = Unmanaged.passUnretained(self).toOpaque()
+        switch t {
+        case .chart(let h): lookout_set_http_provider(h, chartLinkGet, chartLinkCancel, me)
+        case .noaa(let n):
+            lookout_noaa_svc_set_http_provider(n, chartLinkGet, chartLinkCancel, noaaWake, me)
+        }
+    }
+
+    /// Call `wake` on the main thread. Any thread.
+    fileprivate func ping() {
+        wakeLock.lock()
+        let w = wake
+        wakeLock.unlock()
+        if let w { DispatchQueue.main.async(execute: w) }
     }
 
     /// Stop answering, before the handle closes. Idempotent.
@@ -95,19 +139,25 @@ final class ChartLinkFetch: @unchecked Sendable {
     /// cancelled on, and clearing the provider is what releases the rest.
     func detach() {
         lock.lock()
-        let h = handle
+        let t = target
         let tasks = inFlight
         inFlight = [:]
         byTask = [:]
         statusByTask = [:]
-        if let h {
-            for (id, _) in tasks { lookout_http_respond(h, id, nil, 0, 0) }
+        if let t {
+            for (id, _) in tasks { t.respond(id, nil, 0, 0, done: true) }
         }
-        handle = nil
-        wake = nil
+        target = nil
         lock.unlock()
-        if let h { lookout_set_http_provider(h, nil, nil, nil) }
-        for (_, t) in tasks { t.cancel() }
+        wakeLock.lock()
+        wake = nil
+        wakeLock.unlock()
+        switch t {
+        case .chart(let h): lookout_set_http_provider(h, nil, nil, nil)
+        case .noaa(let n): lookout_noaa_svc_set_http_provider(n, nil, nil, nil, nil)
+        case nil: break
+        }
+        for (_, task) in tasks { task.cancel() }
     }
 
     /// One url lookout wants. Called on its render thread with its lock held —
@@ -132,11 +182,11 @@ final class ChartLinkFetch: @unchecked Sendable {
         }
         let task = session.dataTask(with: URLRequest(url: url))
         lock.lock()
-        if handle != nil {
+        if target != nil {
             inFlight[id] = task
             byTask[task.taskIdentifier] = id
         }
-        let live = handle != nil
+        let live = target != nil
         lock.unlock()
         if live { task.resume() } else { answer(id, nil, 0) }
     }
@@ -186,16 +236,16 @@ final class ChartLinkFetch: @unchecked Sendable {
     /// One piece of a body. Passed straight through, with no buffer here.
     fileprivate func piece(_ task: Int, _ data: Data) {
         lock.lock()
-        let h = handle
+        let t = target
         let id = byTask[task]
         let status = statusByTask[task] ?? 0
-        if let h, let id {
+        if let t, let id {
             // Data may hold several buffers. Each region is contiguous, and
             // lookout reads pieces in order, so they go one after another
             // rather than through a flattening copy.
             for region in data.regions where !region.isEmpty {
                 region.withUnsafeBytes { raw in
-                    lookout_http_respond_chunk(h, id, raw.baseAddress, raw.count, status, 0)
+                    t.respond(id, raw.baseAddress, raw.count, status, done: false)
                 }
             }
         }
@@ -205,16 +255,15 @@ final class ChartLinkFetch: @unchecked Sendable {
     /// A task that ended. `err` nil finishes the body; anything else fails it.
     fileprivate func finish(_ task: Int, err: Error?) {
         lock.lock()
-        let h = handle
-        let wake = self.wake
+        let t = target
         let id = byTask.removeValue(forKey: task)
         let status = statusByTask.removeValue(forKey: task) ?? 0
         if let id { inFlight.removeValue(forKey: id) }
-        if let h, let id {
-            lookout_http_respond_chunk(h, id, nil, 0, err == nil ? status : 0, 1)
+        if let t, let id {
+            t.respond(id, nil, 0, err == nil ? status : 0, done: true)
         }
         lock.unlock()
-        if h != nil, id != nil, let wake { DispatchQueue.main.async(execute: wake) }
+        if t != nil, id != nil { ping() }
     }
 
     private func answer(_ id: UInt64, _ bytes: Data?, _ status: Int32) {
@@ -222,19 +271,18 @@ final class ChartLinkFetch: @unchecked Sendable {
         // into. lookout_http_respond takes no lock of its own, so nothing can
         // deadlock behind this.
         lock.lock()
-        let h = handle
-        let wake = self.wake
-        if let h {
+        let t = target
+        if let t {
             if let bytes, !bytes.isEmpty {
                 bytes.withUnsafeBytes { raw in
-                    lookout_http_respond(h, id, raw.baseAddress, raw.count, status)
+                    t.respond(id, raw.baseAddress, raw.count, status, done: true)
                 }
             } else {
-                lookout_http_respond(h, id, nil, 0, status)
+                t.respond(id, nil, 0, status, done: true)
             }
         }
         lock.unlock()
-        if h != nil, let wake { DispatchQueue.main.async(execute: wake) }
+        if t != nil { ping() }
     }
 }
 
@@ -272,4 +320,10 @@ private let chartLinkGet: lookout_http_get = { user, id, url, allowFile in
 private let chartLinkCancel: lookout_http_cancel = { user, id in
     guard let user else { return }
     Unmanaged<ChartLinkFetch>.fromOpaque(user).takeUnretainedValue().abort(id: id)
+}
+
+/// The NOAA service queued a response, from any thread.
+private let noaaWake: lookout_noaa_wake = { user in
+    guard let user else { return }
+    Unmanaged<ChartLinkFetch>.fromOpaque(user).takeUnretainedValue().ping()
 }
