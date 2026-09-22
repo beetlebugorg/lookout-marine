@@ -267,13 +267,21 @@ test "a directory being deleted is named so the sweep finds it" {
     try t.expect(isTrash(trash_prefix ++ "0BFE-11EE"));
     try t.expect(!isTrash("ENC_ROOT"));
 }
+/// The path these tests expect, joined the way the platform joins one.
+/// outputPath writes a filesystem path, so on Windows it holds
+/// backslashes.
+fn wantPath(parts: []const []const u8) ![]u8 {
+    return std.fs.path.join(t.allocator, parts);
+}
 
 test "a prepared chart goes in a directory of its own name" {
     const a = t.allocator;
     const out = "/support/Lookout/Charts/ENC_ROOT";
     const p = try outputPath(a, out, "/Users/m/Charts/ENC_ROOT", one("US5MD1MC.000", 5, .cell));
     defer a.free(p);
-    try t.expectEqualStrings(out ++ "/US5MD1MC/US5MD1MC.pmtiles", p);
+    const want = try wantPath(&.{ out, "US5MD1MC", "US5MD1MC.pmtiles" });
+    defer a.free(want);
+    try t.expectEqualStrings(want, p);
 }
 
 test "an archive's output mirrors the entry's own path" {
@@ -287,7 +295,11 @@ test "an archive's output mirrors the entry's own path" {
     defer a.free(p);
     // The mirrored directory IS already the cell's own name, so it is not
     // appended twice.
-    try t.expectEqualStrings(out ++ "/ENC_ROOT/US5MD1MC/US5MD1MC.pmtiles", p);
+    // The mirrored part is the entry's own path, which a zip writes with
+    // forward slashes whatever the platform is.
+    const want = try wantPath(&.{ out, "ENC_ROOT/US5MD1MC", "US5MD1MC.pmtiles" });
+    defer a.free(want);
+    try t.expectEqualStrings(want, p);
 }
 
 test "a lift keeps the name the file already has" {
@@ -298,7 +310,9 @@ test "a lift keeps the name the file already has" {
     const p = try outputPath(a, out, "/Users/m/Downloads/Imagery.zip", it);
     defer a.free(p);
     // An .mbtiles is a chart already, and no directory of its own.
-    try t.expectEqualStrings(out ++ "/pictures/ncds_08.mbtiles", p);
+    const want = try wantPath(&.{ out, "pictures", "ncds_08.mbtiles" });
+    defer a.free(want);
+    try t.expectEqualStrings(want, p);
 }
 
 test "a lifted chart keeps the extension its name lost" {
@@ -313,5 +327,7 @@ test "a lifted chart keeps the extension its name lost" {
     };
     const out = try outputPath(a, "/prepared", "/charts/set.zip", item);
     defer a.free(out);
-    try t.expectEqualStrings("/prepared/ENC_ROOT/US4TE3W0/US4TE3W0.pmtiles", out);
+    const want = try wantPath(&.{ "/prepared", "ENC_ROOT/US4TE3W0", "US4TE3W0.pmtiles" });
+    defer t.allocator.free(want);
+    try t.expectEqualStrings(want, out);
 }
