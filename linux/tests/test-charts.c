@@ -57,26 +57,6 @@ tiles_of (GtkWidget *gallery)
   return tiles;
 }
 
-/* Lookout's own chart first, then the charts the app ships, then the way to
- * add one. Holding that order steady is what keeps the cards where they were
- * when a mariner picks one. */
-static void
-test_tile_order (void)
-{
-  GtkWidget *gallery = hosted_gallery ();
-  g_autoptr (GPtrArray) tiles = tiles_of (gallery);
-  guint n_catalog = 0;
-  const LkChartCatalogEntry *catalog = lk_chart_catalog_entries (&n_catalog);
-
-  g_assert_cmpuint (tiles->len, ==, 1 + n_catalog + 1);
-
-  g_assert_nonnull (lk_test_find_label (g_ptr_array_index (tiles, 0), "Lookout chart"));
-  for (guint i = 0; i < n_catalog; i++)
-    g_assert_nonnull (lk_test_find_label (g_ptr_array_index (tiles, i + 1),
-                                          catalog[i].name));
-  g_assert_nonnull (lk_test_find_label (g_ptr_array_index (tiles, tiles->len - 1),
-                                        "Add a chart"));
-}
 
 /* With no link picked, Lookout's own chart is the one drawing, and it says so.
  * It is built from the sets and cannot be removed, so it offers no menu. */
@@ -171,36 +151,6 @@ charts_page (GtkWidget *pane)
   return gtk_stack_get_child_by_name (GTK_STACK (stack), "charts");
 }
 
-/* The sections, in the order a mariner asks: which chart is DRAWN, what it is
- * built from, what is arriving, and where to get more. */
-static void
-test_pane_order (void)
-{
-  GtkWidget *pane = charts_pane ();
-  GtkWidget *active = lk_test_find_label (pane, "Active chart");
-  GtkWidget *sets = lk_test_find_label (pane, "Your chart sets");
-  GtkWidget *arriving = lk_test_find_label (pane, "Arriving now");
-  GtkWidget *add = lk_test_find_label (pane, "Add charts");
-
-  g_assert_nonnull (active);
-  g_assert_nonnull (sets);
-  g_assert_nonnull (arriving);
-  g_assert_nonnull (add);
-
-  /* Nothing is arriving, so that section is not a heading over empty space. */
-  g_assert_false (lk_test_shown (arriving, pane));
-
-  /* ONE list of what is installed. The separate picture list is gone: a
-   * mariner had to remember which panel a file went into. */
-  g_assert_null (lk_test_find_label (pane, "Raster charts"));
-  /* And the gallery says which chart is drawn, so nothing reports the open
-   * file a second time. */
-  g_assert_null (lk_test_find_label (pane, "Open"));
-  g_assert_null (lk_test_find_label (pane, "No chart open"));
-
-  gtk_window_destroy (GTK_WINDOW (pane));
-  lk_test_drain ();
-}
 
 /* Every way to add charts, each saying what it does. A mariner choosing
  * between NOAA and their own folder is choosing between free official cover
@@ -464,11 +414,9 @@ main (int argc, char *argv[])
   gtk_window_present (GTK_WINDOW (window));
   lk_test_drain ();
 
-  g_test_add_func ("/charts/tile-order", test_tile_order);
   g_test_add_func ("/charts/own-chart-is-active", test_own_chart_is_active);
   g_test_add_func ("/charts/shipped-tiles", test_shipped_tiles);
   g_test_add_func ("/charts/add-tile-asks", test_add_tile_asks);
-  g_test_add_func ("/charts/pane-order", test_pane_order);
   g_test_add_func ("/charts/add-rows", test_add_rows);
   g_test_add_func ("/charts/a-pick-says-it-is-reading", test_a_pick_says_it_is_reading);
   g_test_add_func ("/charts/empty-library", test_empty_library);

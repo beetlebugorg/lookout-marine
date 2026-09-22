@@ -41,6 +41,25 @@ test_noaa_regions_record (void)
   g_assert_false (lk_store_noaa_regions_recorded ());
 }
 
+/* The NOAA update cadence, as the Charts page saves it. Daily on a device
+ * that has never said. */
+static void
+test_noaa_update_cadence (void)
+{
+  g_autofree char *first = lk_store_load_noaa_update_check ();
+
+  g_assert_cmpstr (first, ==, "daily");
+  g_assert_cmpint (lk_store_load_noaa_update_checked (), ==, 0);
+
+  lk_store_save_noaa_update_check ("startup");
+  lk_store_save_noaa_update_checked (1700000000);
+
+  g_autofree char *second = lk_store_load_noaa_update_check ();
+
+  g_assert_cmpstr (second, ==, "startup");
+  g_assert_cmpint (lk_store_load_noaa_update_checked (), ==, 1700000000);
+}
+
 static void
 test_recents_order_and_cap (void)
 {
@@ -162,6 +181,7 @@ main (int argc, char *argv[])
   g_test_init (&argc, &argv, NULL);
 
   g_test_add_func ("/store/noaa-regions", test_noaa_regions_record);
+  g_test_add_func ("/store/noaa-update-cadence", test_noaa_update_cadence);
   g_test_add_func ("/store/recents", test_recents_order_and_cap);
   g_test_add_func ("/store/raster", test_raster_roundtrip);
   g_test_add_func ("/store/raster-all", test_raster_all_roundtrip);

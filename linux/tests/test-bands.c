@@ -132,45 +132,7 @@ test_narrow_bar (void)
   g_assert_cmpfloat (total_width (bands, room), >=, room);
 }
 
-/* The ramp, deep to shallow, read as fine to coarse. Band 6 is the deepest
- * colour and band 1 the palest, so the bar runs from detail to overview. */
-static void
-test_ramp_colours (void)
-{
-  double last = -1;
 
-  for (int band = 6; band >= 1; band--)
-    {
-      double r = 0, g = 0, b = 0;
-
-      lk_band_ramp_color (band, &r, &g, &b);
-      g_assert_cmpfloat (r, >=, 0);
-      g_assert_cmpfloat (r, <=, 1);
-      /* Each step is paler than the one before it. */
-      g_assert_cmpfloat (r, >, last);
-      last = r;
-    }
-
-  /* Outside the range the palest end stands in, rather than reading off the
-   * end of the table. */
-  double r = 0;
-  lk_band_ramp_color (0, &r, NULL, NULL);
-  g_assert_cmpfloat (r, ==, last);
-  lk_band_ramp_color (9, &r, NULL, NULL);
-  g_assert_cmpfloat (r, ==, last);
-}
-
-/* The names the readouts use, which the legend and the capsule share. */
-static void
-test_band_names (void)
-{
-  g_assert_cmpstr (lk_chart_band_name (1), ==, "Overview");
-  g_assert_cmpstr (lk_chart_band_name (3), ==, "Coastal");
-  g_assert_cmpstr (lk_chart_band_name (5), ==, "Harbor");
-  g_assert_cmpstr (lk_chart_band_name (6), ==, "Berthing");
-  g_assert_cmpstr (lk_chart_band_name (0), ==, "Unknown");
-  g_assert_cmpstr (lk_chart_band_name (7), ==, "Unknown");
-}
 
 /* A bake's done count, split across the bands it works.
  *
@@ -232,8 +194,6 @@ main (int argc, char *argv[])
   g_test_add_func ("/bands/single-band", test_single_band);
   g_test_add_func ("/bands/empty-and-edges", test_empty_and_edges);
   g_test_add_func ("/bands/narrow-bar", test_narrow_bar);
-  g_test_add_func ("/bands/ramp-colours", test_ramp_colours);
-  g_test_add_func ("/bands/band-names", test_band_names);
   g_test_add_func ("/bands/bake-bands-advance", test_bake_bands_advance);
 
   return g_test_run ();

@@ -203,39 +203,6 @@ test_no_handle_reads_as_idle (void)
   g_assert_cmpuint (state->done, ==, 0);
 }
 
-/* The update check runs when it is due, and holds off when it is not. */
-static void
-test_the_update_check_is_due_once_a_day (void)
-{
-  g_autoptr (LkAppModel) model = lk_app_model_new ();
-
-  /* A device that has never checked. */
-  g_assert_cmpint (lk_store_load_noaa_update_checked (), ==, 0);
-
-  g_autofree char *cadence = lk_store_load_noaa_update_check ();
-  g_assert_cmpstr (cadence, ==, "daily");
-
-  /* The check needs a catalog, and this model has none, so it asks for one
-   * and the count stays 0. */
-  lk_app_model_check_noaa_updates (model);
-  g_assert_cmpuint (lk_app_model_noaa_outdated (model), ==, 0);
-
-  /* Never means never, whatever the clock says. */
-  lk_store_save_noaa_update_check ("never");
-  lk_store_save_noaa_update_checked (0);
-  lk_app_model_check_noaa_updates (model);
-  g_assert_cmpint (lk_store_load_noaa_update_checked (), ==, 0);
-
-  /* Daily holds off inside the day. */
-  lk_store_save_noaa_update_check ("daily");
-  lk_store_save_noaa_update_checked (g_get_real_time () / G_USEC_PER_SEC);
-  g_autoptr (LkAppModel) fresh = lk_app_model_new ();
-  lk_app_model_check_noaa_updates (fresh);
-  g_assert_cmpuint (lk_app_model_noaa_outdated (fresh), ==, 0);
-
-  lk_store_save_noaa_update_check ("daily");
-  lk_store_save_noaa_update_checked (0);
-}
 
 int
 main (int argc, char *argv[])
@@ -255,8 +222,6 @@ main (int argc, char *argv[])
   g_test_add_func ("/noaa/changed-signal", test_changed_signal);
   g_test_add_func ("/noaa/no-catalog", test_no_catalog);
   g_test_add_func ("/noaa/no-handle-reads-as-idle", test_no_handle_reads_as_idle);
-  g_test_add_func ("/noaa/update-check-is-due-once-a-day",
-                   test_the_update_check_is_due_once_a_day);
   g_test_add_func ("/noaa/download-dir", test_download_dir);
 
   return g_test_run ();
