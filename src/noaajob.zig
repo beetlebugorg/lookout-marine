@@ -111,15 +111,32 @@ const Stage = struct {
     /// Set when a piece would not write or the body ran past the limit. The
     /// rest is dropped and the answer reports a failure.
     broken: bool = false,
+    /// The directory the part file is in, set when the file is created. A
+    /// later download sets a new `stage_dest`, and this file stays here.
+    dest: []u8 = &.{},
 };
 
 /// One transfer on disk, waiting to be unpacked. The unpack thread owns the
-/// name once it is queued.
+/// name and the directory once it is queued.
 const Pending = struct {
     id: u64,
     name: []u8,
+    /// The directory the transfer was staged in.
+    dest: []u8,
     size: u64,
     status: c_int,
+};
+
+/// One unpack thread and the transfers queued for it. Each download starts
+/// its own, so a stopped thread drops only its own queue, and a new download
+/// does not wait for it to end.
+const Unpacker = struct {
+    thread: std.Thread = undefined,
+    /// Guarded by `Service.unpack_mu`.
+    q: std.ArrayList(Pending) = .empty,
+    stop: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// Set by the thread as it returns, so adopt can join it without waiting.
+    exited: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 };
 
 /// The snapshot a shell renders. Plain data, copied out under the api lock.
@@ -197,12 +214,14 @@ pub const Service = struct {
     /// lock, which the frame loop needs to start the next transfer. Under
     /// both, the count sat at 1 of 829 while the disk filled.
     unpack_mu: Lock = .{},
-    unpack_q: std.ArrayList(Pending) = .empty,
-    unpack_stop: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-    unpack_thread: ?std.Thread = null,
-    /// Set by the unpack thread as it returns, so adopt can join it without
-    /// waiting.
-    unpack_exited: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// The current download's unpack thread.
+    unpacker: ?*Unpacker = null,
+    /// Stopped threads that adopt has not joined yet.
+    reap: std.ArrayList(*Unpacker) = .empty,
+    /// Held while one transfer is unpacked. A stopped thread may still be on
+    /// its last transfer when the next download's thread starts, and both
+    /// can write the same directory.
+    unpack_work: Lock = .{},
 
     /// The snapshot a shell reads, and the lock that guards it.
     ///
@@ -239,7 +258,7 @@ pub const Service = struct {
         self.held.deinit(self.alloc);
         self.cancelAll();
         self.stopUnpacker();
-        self.unpack_q.deinit(self.alloc);
+        self.reap.deinit(self.alloc);
         self.freeStr(&self.stage_dest);
         self.stage.deinit(self.alloc);
         if (self.cat) |*c| c.deinit();
@@ -328,6 +347,10 @@ pub const Service = struct {
                 st.broken = true;
                 return true;
             };
+            st.dest = self.alloc.dupe(u8, self.stage_dest) catch {
+                st.broken = true;
+                return true;
+            };
             st.file = std.Io.Dir.cwd().createFile(io, path, .{}) catch {
                 st.broken = true;
                 return true;
@@ -375,6 +398,7 @@ pub const Service = struct {
         for (self.stage.items) |st| {
             if (st.file) |f| f.close(io);
             self.alloc.free(st.name);
+            if (st.dest.len != 0) self.alloc.free(st.dest);
         }
         self.stage.clearRetainingCapacity();
     }
@@ -795,18 +819,15 @@ pub const Service = struct {
     fn finishStaged(self: *Service, req_id: u64, status: c_int) void {
         const st = self.takeStaged(req_id) orelse return;
         const ok = !st.broken and st.size != 0 and status >= 200 and status < 300;
-        if (ok and self.queueUnpack(req_id, st.name, st.size, status)) return;
-        if (st.size != 0) self.dropPart(st.name);
+        if (ok and st.dest.len != 0 and self.queueUnpack(req_id, st.name, st.dest, st.size, status)) return;
+        dropPart(st.dest, st.name);
         self.alloc.free(st.name);
+        if (st.dest.len != 0) self.alloc.free(st.dest);
         self.post(.{ .id = req_id, .bytes = &.{}, .status = if (st.broken) 0 else status });
     }
 
     /// Remove the part file of a transfer that will not be unpacked.
-    fn dropPart(self: *Service, name: []const u8) void {
-        self.stage_mu.lock();
-        const dest = self.alloc.dupe(u8, self.stage_dest) catch &.{};
-        self.stage_mu.unlock();
-        defer if (dest.len != 0) self.alloc.free(dest);
+    fn dropPart(dest: []const u8, name: []const u8) void {
         if (dest.len == 0) return;
         var buf: [512]u8 = undefined;
         const path = std.fmt.bufPrint(&buf, "{s}/{s}.zip.part", .{ dest, name }) catch return;
@@ -824,102 +845,176 @@ pub const Service = struct {
         self.inbox_len.store(self.inbox.items.len, .release);
     }
 
-    /// Hand a written transfer to the unpack thread. Owns `name` on success.
-    /// Returns false when the queue could not be grown, and the caller then
-    /// posts the answer itself.
-    fn queueUnpack(self: *Service, id: u64, name: []u8, size: u64, status: c_int) bool {
+    /// Hand a written transfer to the unpack thread. Owns `name` and `dest`
+    /// on success. Returns false when no thread runs, when it is stopping, or
+    /// when the queue could not be grown, and the caller then posts the
+    /// answer itself.
+    fn queueUnpack(self: *Service, id: u64, name: []u8, dest: []u8, size: u64, status: c_int) bool {
         self.unpack_mu.lock();
         defer self.unpack_mu.unlock();
-        self.unpack_q.append(self.alloc, .{
+        const u = self.unpacker orelse return false;
+        if (u.stop.load(.acquire)) return false;
+        u.q.append(self.alloc, .{
             .id = id,
             .name = name,
+            .dest = dest,
             .size = size,
             .status = status,
         }) catch return false;
         return true;
     }
 
+    /// The longest an idle unpack thread sleeps between looks at its queue.
+    const unpack_idle_max_ms = 50;
+
     /// The unpack thread. Writes one cell at a time and posts an answer for
     /// each.
-    fn unpackMain(self: *Service) void {
-        // A poll, for the reason src/ct/tiles.zig gives: Zig 0.16 has no
-        // std.Thread.Condition outside an Io. The download bounds it.
-        while (!self.unpack_stop.load(.acquire)) {
-            var wrote = false;
-            while (true) {
-                var job: Pending = undefined;
-                {
-                    self.unpack_mu.lock();
-                    defer self.unpack_mu.unlock();
-                    if (self.unpack_q.items.len == 0) break;
-                    job = self.unpack_q.orderedRemove(0);
-                }
-                defer self.alloc.free(job.name);
-
-                self.stage_mu.lock();
-                const dest = self.alloc.dupe(u8, self.stage_dest) catch &.{};
-                self.stage_mu.unlock();
-                defer if (dest.len != 0) self.alloc.free(dest);
-
-                var a: Answer = .{ .id = job.id, .bytes = &.{}, .status = job.status };
-                if (dest.len == 0) {
-                    a.write_failed = true;
-                } else if (self.unpack(dest, job.name)) {
-                    a.stored = true;
-                    a.size = @intCast(job.size);
-                } else |_| {
-                    a.write_failed = true;
-                }
-                self.post(a);
-                wrote = true;
-            }
-            if (!wrote) lock.sleepMs(1);
+    ///
+    /// The stop flag is read before each transfer, so a stopped thread ends
+    /// after the transfer it is on. What is still queued is dropped and its
+    /// part files deleted.
+    ///
+    /// Zig 0.16 has no semaphore outside an Io, so an empty queue is polled
+    /// with a backoff: 1 ms, doubling to 50 ms while the queue stays empty,
+    /// and back to 1 ms after each transfer.
+    fn unpackMain(self: *Service, u: *Unpacker) void {
+        var idle_ms: u32 = 1;
+        while (true) {
+            const next: ?Pending = blk: {
+                self.unpack_mu.lock();
+                defer self.unpack_mu.unlock();
+                if (u.stop.load(.acquire)) break;
+                if (u.q.items.len == 0) break :blk null;
+                break :blk u.q.orderedRemove(0);
+            };
+            const job = next orelse {
+                lock.sleepMs(idle_ms);
+                idle_ms = @min(idle_ms * 2, unpack_idle_max_ms);
+                continue;
+            };
+            idle_ms = 1;
+            self.unpackOne(u, job);
         }
-        self.unpack_exited.store(true, .release);
+        self.dropQueue(u);
+        u.exited.store(true, .release);
     }
 
-    /// Start the unpack thread for a download. A thread stopped at the end of
-    /// the last download may still be draining its queue, so it is joined and
-    /// a new one is spawned.
+    /// Unpack one transfer and post its answer. A transfer whose thread was
+    /// stopped while it waited for `unpack_work` is dropped.
+    fn unpackOne(self: *Service, u: *Unpacker, job: Pending) void {
+        defer self.alloc.free(job.name);
+        defer self.alloc.free(job.dest);
+        self.unpack_work.lock();
+        defer self.unpack_work.unlock();
+        if (u.stop.load(.acquire)) {
+            dropPart(job.dest, job.name);
+            return;
+        }
+        var a: Answer = .{ .id = job.id, .bytes = &.{}, .status = job.status };
+        if (self.unpack(job.dest, job.name)) {
+            a.stored = true;
+            a.size = @intCast(job.size);
+        } else |_| {
+            a.write_failed = true;
+        }
+        self.post(a);
+    }
+
+    /// Drop every transfer still queued for `u` and delete its part file.
+    fn dropQueue(self: *Service, u: *Unpacker) void {
+        var q: std.ArrayList(Pending) = .empty;
+        {
+            self.unpack_mu.lock();
+            defer self.unpack_mu.unlock();
+            q = u.q;
+            u.q = .empty;
+        }
+        defer q.deinit(self.alloc);
+        for (q.items) |job| {
+            dropPart(job.dest, job.name);
+            self.alloc.free(job.name);
+            self.alloc.free(job.dest);
+        }
+    }
+
+    /// Start an unpack thread for a download.
+    ///
+    /// Called under the api lock, so the thread from the last download is
+    /// stopped and left for adopt to join. It ends after the transfer it is
+    /// on, and `unpack_work` keeps that transfer from running beside the new
+    /// thread's first.
     fn startUnpacker(self: *Service) void {
-        if (self.unpack_thread != null and !self.unpack_stop.load(.acquire)) return;
-        self.stopUnpacker();
-        self.unpack_stop.store(false, .release);
-        self.unpack_exited.store(false, .release);
-        self.unpack_thread = std.Thread.spawn(.{}, unpackMain, .{self}) catch null;
-    }
-
-    /// Stop it and wait for the cell it is on.
-    /// A transfer queued after an idle thread returned is dropped here too.
-    fn stopUnpacker(self: *Service) void {
-        if (self.unpack_thread) |th| {
-            self.unpack_stop.store(true, .release);
-            th.join();
-            self.unpack_thread = null;
-        }
+        self.retireUnpacker();
+        const u = self.alloc.create(Unpacker) catch return;
+        u.* = .{};
+        u.thread = std.Thread.spawn(.{}, unpackMain, .{ self, u }) catch {
+            self.alloc.destroy(u);
+            return;
+        };
         self.unpack_mu.lock();
         defer self.unpack_mu.unlock();
-        for (self.unpack_q.items) |j| self.alloc.free(j.name);
-        self.unpack_q.clearRetainingCapacity();
+        self.unpacker = u;
     }
 
-    /// Let the unpack thread go once no download runs.
-    ///
-    /// The thread polls its queue every millisecond, so it runs only while a
-    /// download runs. After the stop flag is set it drains the queue and
-    /// exits, and the next adopt joins it without blocking.
+    /// Stop the current thread and move it to `reap`. Joins it here only
+    /// when `reap` cannot grow.
+    fn retireUnpacker(self: *Service) void {
+        const u = blk: {
+            self.unpack_mu.lock();
+            defer self.unpack_mu.unlock();
+            const u = self.unpacker orelse return;
+            u.stop.store(true, .release);
+            self.unpacker = null;
+            break :blk u;
+        };
+        self.reap.append(self.alloc, u) catch self.joinUnpacker(u);
+    }
+
+    /// Join a stopped thread and free it.
+    fn joinUnpacker(self: *Service, u: *Unpacker) void {
+        u.thread.join();
+        self.dropQueue(u);
+        self.alloc.destroy(u);
+    }
+
+    /// Stop every thread and wait for each. For deinit.
+    fn stopUnpacker(self: *Service) void {
+        self.retireUnpacker();
+        for (self.reap.items) |u| {
+            u.stop.store(true, .release);
+            self.joinUnpacker(u);
+        }
+        self.reap.clearRetainingCapacity();
+    }
+
+    /// Join the stopped threads that have returned, and stop the current one
+    /// once no download runs.
     fn idleUnpacker(self: *Service) void {
+        var i: usize = 0;
+        while (i < self.reap.items.len) {
+            const u = self.reap.items[i];
+            if (!u.exited.load(.acquire)) {
+                i += 1;
+                continue;
+            }
+            _ = self.reap.swapRemove(i);
+            self.joinUnpacker(u);
+        }
         if (self.phase == .downloading) return;
-        const th = self.unpack_thread orelse return;
-        self.unpack_stop.store(true, .release);
-        if (!self.unpack_exited.load(.acquire)) return;
-        th.join();
-        self.unpack_thread = null;
+        const u = self.unpacker orelse return;
+        u.stop.store(true, .release);
+        if (!u.exited.load(.acquire)) return;
+        {
+            self.unpack_mu.lock();
+            defer self.unpack_mu.unlock();
+            self.unpacker = null;
+        }
+        self.joinUnpacker(u);
     }
 
-    /// True while the unpack thread is alive.
+    /// True while an unpack thread is alive or not yet joined.
     pub fn unpackerRunning(self: *const Service) bool {
-        return self.unpack_thread != null;
+        return self.unpacker != null or self.reap.items.len != 0;
     }
 
     /// True while an answer waits to be adopted.
@@ -1727,5 +1822,72 @@ test "the unpack thread ends with the download" {
     // A second download starts a thread of its own.
     s.start(&.{5}, dest, true);
     try testing.expect(s.unpackerRunning());
+    s.cancelAll();
+}
+
+/// How many part files are left in `dir`.
+fn testParts(dir: []const u8) !usize {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var d = try std.Io.Dir.cwd().openDir(io, dir, .{ .iterate = true });
+    defer d.close(io);
+    var it = d.iterate();
+    var n: usize = 0;
+    while (try it.next(io)) |e| {
+        if (std.mem.endsWith(u8, e.name, ".zip.part")) n += 1;
+    }
+    return n;
+}
+
+test "a new download starts while the cancelled one's cells are still queued" {
+    const alloc = testing.allocator;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const old = "/tmp/lookout-noaa-restart-old";
+    const new = "/tmp/lookout-noaa-restart-new";
+    std.Io.Dir.cwd().deleteTree(io, old) catch {};
+    std.Io.Dir.cwd().deleteTree(io, new) catch {};
+    defer std.Io.Dir.cwd().deleteTree(io, old) catch {};
+    defer std.Io.Dir.cwd().deleteTree(io, new) catch {};
+
+    var rec = Recorder{ .alloc = alloc };
+    defer rec.deinit();
+
+    var s = Service.init(alloc);
+    defer s.deinit();
+    s.cat = try oneDistrict(alloc, 5, 10);
+    s.phase = .ready;
+    s.setProvider(Recorder.get, null, &rec);
+    s.start(&.{5}, old, false);
+    try testing.expectEqual(@as(usize, MAX_INFLIGHT), rec.ids.items.len);
+
+    // The test holds the unpack lock, so the first thread cannot finish a
+    // cell before the second download starts.
+    s.unpack_work.lock();
+    var held = true;
+    defer if (held) s.unpack_work.unlock();
+
+    const zip = try testZip(alloc, &.{
+        .{ .name = "ENC_ROOT/US505000/US505000.000", .data = "cell" },
+    });
+    defer alloc.free(zip);
+    for (rec.ids.items) |id| s.respond(id, zip, 200);
+    try testing.expectEqual(@as(usize, MAX_INFLIGHT), try testParts(old));
+
+    s.cancelAll();
+    s.start(&.{5}, new, false);
+    try testing.expectEqual(Phase.downloading, s.phase);
+    try testing.expect(!testExists(old ++ "/ENC_ROOT"));
+
+    s.unpack_work.unlock();
+    held = false;
+    var tries: usize = 0;
+    while (s.reap.items.len != 0 and tries < 2000) : (tries += 1) {
+        s.adopt();
+        lock.sleepMs(1);
+    }
+    try testing.expectEqual(@as(usize, 0), s.reap.items.len);
+    // Every queued cell of the cancelled download was dropped unwritten, and
+    // its part file with it.
+    try testing.expect(!testExists(old ++ "/ENC_ROOT"));
+    try testing.expectEqual(@as(usize, 0), try testParts(old));
     s.cancelAll();
 }
