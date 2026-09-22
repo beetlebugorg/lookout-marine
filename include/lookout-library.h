@@ -1092,6 +1092,11 @@ void lookout_noaa_cancel(lookout *h);
  *   lookout_noaa_svc_http_respond_chunk.
  * - Responses are adopted only when the shell calls
  *   lookout_noaa_svc_changed, from its frame loop or on the wake callback.
+ * - The cells held and their editions are read off the chart sets it was
+ *   opened with. The shell names none. Every set counts toward the cells
+ *   held, switched on or off, so a pick prices what is missing. The update
+ *   check reads the editions of the managed sets alone, the charts the
+ *   service downloaded.
  *
  * Calls from different threads are serialized on the handle's own lock. The
  * fetcher's get and cancel are called with that lock held, from the thread
@@ -1101,8 +1106,11 @@ void lookout_noaa_cancel(lookout *h);
 typedef struct lookout_noaa lookout_noaa;
 
 /* Open the service. `store` and `sets` are borrowed and must outlive the
- * handle. Either may be NULL. The service reads its cached catalog on the
- * first lookout_noaa_svc_refresh. NULL when it cannot be allocated. */
+ * handle. Either may be NULL. With no sets, no cell is held and the update
+ * check finds none to check. With no store, the update check is daily and its
+ * time is kept for the life of the handle. The service reads its cached
+ * catalog on the first lookout_noaa_svc_refresh. NULL when it cannot be
+ * allocated. */
 lookout_noaa *lookout_noaa_open(lookout_store *store, lookout_chart_sets *sets);
 
 /* Cancel the download and free the handle. The shell stops calling
@@ -1140,7 +1148,6 @@ int lookout_noaa_svc_changed(lookout_noaa *n);
 void lookout_noaa_svc_poll(lookout_noaa *n, lookout_noaa_state *out);
 
 void lookout_noaa_svc_refresh(lookout_noaa *n);
-void lookout_noaa_svc_have(lookout_noaa *n, const char *const *names, size_t count);
 int lookout_noaa_svc_cost(lookout_noaa *n, const char *region_ids,
                           uint32_t *out_cells, uint64_t *out_bytes,
                           uint32_t *out_held, uint64_t *out_held_bytes);
@@ -1151,11 +1158,34 @@ size_t lookout_noaa_svc_region_coverage(lookout_noaa *n, const char *region_id,
                                         lookout_noaa_box *out, size_t cap);
 void lookout_noaa_svc_download(lookout_noaa *n, const char *region_ids,
                                const char *dest_dir, int again);
-uint32_t lookout_noaa_svc_outdated(lookout_noaa *n,
-                                   const lookout_noaa_installed *have,
-                                   size_t count);
-void lookout_noaa_svc_update(lookout_noaa *n, const lookout_noaa_installed *have,
-                             size_t count, const char *dest_dir);
+
+/* How many of the managed sets' cells NOAA has reissued, on the terms of
+ * lookout_noaa_outdated. Returns 0 until a catalog has been read from the
+ * network since the handle opened. The cached catalog can predate a reissue.
+ * The count follows the sets, so a shell reads it again when
+ * lookout_chart_sets_changed returns 1. */
+uint32_t lookout_noaa_svc_outdated(lookout_noaa *n);
+
+/* Download the reissued editions of the managed sets' cells into `dest_dir`,
+ * on the terms of lookout_noaa_download. */
+void lookout_noaa_svc_update(lookout_noaa *n, const char *dest_dir);
+
+/* The update check. Returns 1 when a check is due and has started, or is
+ * still running, else 0. The count is lookout_noaa_svc_outdated once the
+ * catalog read ends: `phase` is no longer LOOKOUT_NOAA_READING.
+ *
+ * The cadence is the store's "noaa-update-check" in the chart sets group:
+ * "never", "startup" (once per handle) or "daily" (the default). The last
+ * check is "noaa-update-checked", in unix seconds. A check reads the catalog
+ * from the network, and uses one read under a day old as it is. The time is
+ * recorded only when that read succeeds, so a failed read leaves the check
+ * due. With no managed cell that states an edition it returns 0 and sends no
+ * request.
+ *
+ * No timer starts a check. Call this when a chart opens and when
+ * lookout_chart_sets_changed returns 1. */
+int lookout_noaa_svc_update_due(lookout_noaa *n);
+
 void lookout_noaa_svc_cancel(lookout_noaa *n);
 
 #ifdef __cplusplus

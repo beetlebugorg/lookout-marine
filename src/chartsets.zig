@@ -651,6 +651,80 @@ pub const Sets = struct {
         return false;
     }
 
+    /// One survey cell the sets hold, by dataset name.
+    pub const Held = struct { name: []u8, edition: u32, update: u32 };
+
+    /// Which cells heldCells reads.
+    pub const HeldOf = enum {
+        /// Every set, switched on or off. Edition and update are the highest
+        /// found and may be 0.
+        names,
+        /// The managed sets, and only the cells that state an edition. A cell
+        /// with no edition cannot be compared with the catalog: 0 is lower than
+        /// every edition the catalog lists.
+        editions,
+    };
+
+    /// The survey cells the sets hold, one per dataset name, upper case and
+    /// sorted by name. Pictures are left out. Where two files hold one name,
+    /// the higher edition and update are kept, because that is the chart
+    /// compose draws.
+    ///
+    /// Owned by `alloc`. Free it with freeHeld.
+    pub fn heldCells(self: *Sets, alloc: std.mem.Allocator, of: HeldOf) ![]Held {
+        var by_name = std.StringHashMapUnmanaged(Held).empty;
+        defer by_name.deinit(alloc);
+        errdefer {
+            var it = by_name.valueIterator();
+            while (it.next()) |h| alloc.free(h.name);
+        }
+        {
+            self.mu.lock();
+            defer self.mu.unlock();
+            for (self.rows.items) |r| {
+                if (of == .editions and !r.managed) continue;
+                for (r.files) |f| {
+                    if (f.kind != .baked and f.kind != .source) continue;
+                    if (of == .editions and f.edition == 0) continue;
+                    const stem = library.stemOf(std.mem.span(f.name));
+                    var buf: [64]u8 = undefined;
+                    if (stem.len == 0 or stem.len > buf.len) continue;
+                    const upper = std.ascii.upperString(&buf, stem);
+                    const gop = try by_name.getOrPut(alloc, upper);
+                    if (gop.found_existing) {
+                        const had = gop.value_ptr;
+                        if (f.edition > had.edition or (f.edition == had.edition and f.update > had.update)) {
+                            had.edition = f.edition;
+                            had.update = f.update;
+                        }
+                        continue;
+                    }
+                    const name = alloc.dupe(u8, upper) catch |e| {
+                        by_name.removeByPtr(gop.key_ptr);
+                        return e;
+                    };
+                    gop.key_ptr.* = name;
+                    gop.value_ptr.* = .{ .name = name, .edition = f.edition, .update = f.update };
+                }
+            }
+        }
+        const out = try alloc.alloc(Held, by_name.count());
+        var it = by_name.valueIterator();
+        var n: usize = 0;
+        while (it.next()) |h| : (n += 1) out[n] = h.*;
+        std.mem.sort(Held, out, {}, struct {
+            fn lt(_: void, a: Held, b: Held) bool {
+                return std.mem.order(u8, a.name, b.name) == .lt;
+            }
+        }.lt);
+        return out;
+    }
+
+    pub fn freeHeld(alloc: std.mem.Allocator, cells: []Held) void {
+        for (cells) |h| alloc.free(h.name);
+        alloc.free(cells);
+    }
+
     /// Every chart the switched-on sets hold, sorted and deduplicated.
     ///
     /// By path, and then BY DATASET NAME. Two sets overlap whenever a mariner

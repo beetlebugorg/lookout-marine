@@ -22,6 +22,8 @@ const Lock = lock.Lock;
 const clock = @import("clock.zig");
 const httpgather = @import("httpgather.zig");
 const cachedir = @import("cachedir.zig");
+const chartsets = @import("chartsets.zig");
+const settings = @import("settings.zig");
 
 /// Set on every request id this service issues.
 pub const id_mark: u64 = @as(u64, 1) << 63;
@@ -210,6 +212,9 @@ pub const Service = struct {
 
     cat: ?noaa.Catalog = null,
     checked_at: i64 = 0,
+    /// Counts the catalog reads from the network that succeeded. 0 while the
+    /// catalog in hand is the cached one, which can predate a reissue.
+    fresh_reads: u32 = 0,
     err: []u8 = &.{},
     phase: Phase = .idle,
     /// A catalog read is out. Held apart from `phase`, because a read can run
@@ -248,9 +253,10 @@ pub const Service = struct {
     stage_dest: []u8 = &.{},
     stage: std.ArrayList(Stage) = .empty,
 
-    /// The cells this device already holds, sorted by name. The shell reads
-    /// them off the chart sets and hands them over, so picking water that is
-    /// already downloaded fetches what is missing from it.
+    /// The cells this device already holds, sorted by name, so picking water
+    /// that is already downloaded fetches what is missing from it. A Handle
+    /// with chart sets reads them off the sets. The chart handle's service is
+    /// handed them by the shell.
     held: std.ArrayList([]u8) = .empty,
 
     /// Cells fetched and not yet written, and the thread that writes them.
@@ -1165,6 +1171,7 @@ pub const Service = struct {
         if (self.cat) |*old| old.deinit();
         self.cat = parsed;
         self.checked_at = @divFloor(clock.wallMs(), 1000);
+        self.fresh_reads +%= 1;
         self.catalogEnded();
         self.cacheCatalog(a.bytes);
     }
@@ -1401,9 +1408,21 @@ pub const Handle = struct {
     /// The names regionCells last handed out, valid until its next call.
     cells: ?std.heap.ArenaAllocator = null,
     /// Borrowed from the shell, which keeps both open for the life of the
-    /// handle. Either may be null.
-    store: ?*anyopaque = null,
-    sets: ?*anyopaque = null,
+    /// handle. Either may be null. With sets, the held cells and their
+    /// editions are read off them. Without, the shell names them through
+    /// `have`.
+    store: ?*settings.Store = null,
+    sets: ?*chartsets.Sets = null,
+
+    /// An update check is waiting on the catalog read that started with
+    /// `check_reads` fresh reads behind it.
+    check_pending: bool = false,
+    check_reads: u32 = 0,
+    /// A check has been recorded since the handle opened. The startup
+    /// cadence checks once per launch.
+    checked_run: bool = false,
+    /// The last check, for a handle with no store.
+    last_check: i64 = 0,
 
     pub fn init(alloc: std.mem.Allocator) Handle {
         return .{ .svc = Service.init(alloc) };
@@ -1432,6 +1451,7 @@ pub const Handle = struct {
         self.mu.lock();
         defer self.mu.unlock();
         self.svc.adopt();
+        self.settleCheck();
     }
 
     /// Adopt, then report whether the published state changed since the
@@ -1464,7 +1484,28 @@ pub const Handle = struct {
         self.mu.lock();
         defer self.mu.unlock();
         if (!self.svc.haveCatalog()) return null;
+        self.syncHeld();
         return self.svc.costOf(districts);
+    }
+
+    /// Read the held cells off the sets. Leaves `held` as the shell named it
+    /// when the handle has no sets. Called with `mu` held.
+    fn syncHeld(self: *Handle) void {
+        const sets = self.sets orelse return;
+        const alloc = self.svc.alloc;
+        const cells = sets.heldCells(alloc, .names) catch return;
+        defer chartsets.Sets.freeHeld(alloc, cells);
+        const names = alloc.alloc([]const u8, cells.len) catch return;
+        defer alloc.free(names);
+        for (cells, names) |c, *n| n.* = c.name;
+        self.svc.setHeld(names);
+    }
+
+    /// The managed sets' cells that state an edition, for the update check.
+    /// Empty without sets. Free with chartsets.Sets.freeHeld.
+    fn managedEditions(self: *Handle) ![]chartsets.Sets.Held {
+        const sets = self.sets orelse return self.svc.alloc.alloc(chartsets.Sets.Held, 0);
+        return sets.heldCells(self.svc.alloc, .editions);
     }
 
     /// Write at most `cap` names into `out` and return how many there are.
@@ -1538,6 +1579,7 @@ pub const Handle = struct {
     pub fn download(self: *Handle, districts: []const u8, dest: []const u8, again: bool) void {
         self.mu.lock();
         defer self.mu.unlock();
+        self.syncHeld();
         self.svc.start(districts, dest, again);
         self.svc.publish();
     }
@@ -1559,6 +1601,109 @@ pub const Handle = struct {
         self.svc.publish();
     }
 
+    /// How many of the managed sets' cells the catalog has reissued. 0 until
+    /// a catalog has been read from the network: the cached one can predate a
+    /// reissue, and the cells it names may be the ones installed from it.
+    pub fn outdatedOfSets(self: *Handle) u32 {
+        self.mu.lock();
+        defer self.mu.unlock();
+        if (self.svc.fresh_reads == 0) return 0;
+        const cat = &(self.svc.cat orelse return 0);
+        const alloc = self.svc.alloc;
+        const held = self.managedEditions() catch return 0;
+        defer chartsets.Sets.freeHeld(alloc, held);
+        // Both lists are keyed by name. The catalog is walked once, and each
+        // name is looked up in the sorted list the sets returned.
+        var n: u32 = 0;
+        for (cat.cells) |c| {
+            const i = heldIndex(held, c.name) orelse continue;
+            const h = held[i];
+            if (c.edition > h.edition or (c.edition == h.edition and c.update > h.update)) n += 1;
+        }
+        return n;
+    }
+
+    /// Download the reissues of the managed sets' cells into `dest`.
+    pub fn updateOfSets(self: *Handle, dest: []const u8) void {
+        self.mu.lock();
+        defer self.mu.unlock();
+        const alloc = self.svc.alloc;
+        const held = self.managedEditions() catch return;
+        defer chartsets.Sets.freeHeld(alloc, held);
+        const list = alloc.alloc(noaa.Installed, held.len) catch return;
+        defer alloc.free(list);
+        for (held, list) |h, *o| o.* = .{ .name = h.name, .edition = h.edition, .update = h.update };
+        self.svc.startUpdate(list, dest);
+        self.svc.publish();
+    }
+
+    pub const cadence_key = "noaa-update-check";
+    pub const checked_key = "noaa-update-checked";
+    const day_s: i64 = 24 * 60 * 60;
+
+    /// Start an update check when the cadence calls for one, and return true
+    /// while one is running or has just been recorded. The count is
+    /// outdatedOfSets once the catalog read ends.
+    ///
+    /// The cadence is "never", "startup" or "daily", daily when unset. A
+    /// check needs a catalog read from the network. One read within the day
+    /// is used as it is, and otherwise a read starts here. The check is
+    /// recorded only when that read succeeds, so a failed read leaves it due.
+    /// With no managed cell that states an edition there is no check to make,
+    /// and no request goes out.
+    pub fn updateDue(self: *Handle, now_s: i64) bool {
+        self.mu.lock();
+        defer self.mu.unlock();
+        const cadence: []const u8 = if (self.store) |st|
+            st.text(settings.group_chartsets, cadence_key) orelse "daily"
+        else
+            "daily";
+        if (std.mem.eql(u8, cadence, "never")) return false;
+        const startup = std.mem.eql(u8, cadence, "startup");
+
+        const held = self.managedEditions() catch return false;
+        chartsets.Sets.freeHeld(self.svc.alloc, held);
+        if (held.len == 0) return false;
+
+        if (self.check_pending) return true;
+        const due = if (startup) !self.checked_run else now_s - self.lastCheck() >= day_s;
+        if (!due) return false;
+
+        if (self.svc.fresh_reads != 0 and !self.svc.catalog_inflight and
+            (startup or now_s - self.svc.checked_at < day_s))
+        {
+            self.recordCheck(self.svc.checked_at);
+            return true;
+        }
+        self.check_pending = true;
+        self.check_reads = self.svc.fresh_reads;
+        self.svc.refresh();
+        self.svc.publish();
+        self.settleCheck();
+        return true;
+    }
+
+    /// End a pending check once its catalog read has ended, and record it
+    /// when the read succeeded. Called with `mu` held.
+    fn settleCheck(self: *Handle) void {
+        if (!self.check_pending or self.svc.catalog_inflight) return;
+        self.check_pending = false;
+        if (self.svc.fresh_reads != self.check_reads) self.recordCheck(self.svc.checked_at);
+    }
+
+    fn lastCheck(self: *Handle) i64 {
+        const st = self.store orelse return self.last_check;
+        const v = st.number(settings.group_chartsets, checked_key, 0);
+        if (!std.math.isFinite(v)) return 0;
+        return std.math.lossyCast(i64, v);
+    }
+
+    fn recordCheck(self: *Handle, at: i64) void {
+        self.checked_run = true;
+        self.last_check = at;
+        if (self.store) |st| st.setNumber(settings.group_chartsets, checked_key, @floatFromInt(at));
+    }
+
     pub fn cancel(self: *Handle) void {
         self.mu.lock();
         defer self.mu.unlock();
@@ -1566,6 +1711,21 @@ pub const Handle = struct {
         self.svc.publish();
     }
 };
+
+/// The index of `name` in `have`, sorted by name, or null.
+fn heldIndex(have: []const chartsets.Sets.Held, name: []const u8) ?usize {
+    var lo: usize = 0;
+    var hi: usize = have.len;
+    while (lo < hi) {
+        const mid = lo + (hi - lo) / 2;
+        switch (std.mem.order(u8, have[mid].name, name)) {
+            .eq => return mid,
+            .lt => lo = mid + 1,
+            .gt => hi = mid,
+        }
+    }
+    return null;
+}
 
 /// The cell directory that holds an exchange set entry, or null when the
 /// entry is not a cell file.
@@ -1748,25 +1908,33 @@ test "copyZ terminates a value that fits and one that does not" {
 
 /// A catalog holding `cells` charts in one district, each with a zip url.
 pub fn oneDistrict(alloc: std.mem.Allocator, district: u8, cells: u32) !noaa.Catalog {
+    const xml = try districtXml(alloc, district, cells, 1);
+    defer alloc.free(xml);
+    return noaa.parse(alloc, xml);
+}
+
+/// The catalog text oneDistrict parses, with every cell at `edition`. The
+/// caller frees it.
+fn districtXml(alloc: std.mem.Allocator, district: u8, cells: u32, edition: u32) ![]u8 {
     var xml: std.ArrayList(u8) = .empty;
-    defer xml.deinit(alloc);
+    errdefer xml.deinit(alloc);
     try xml.appendSlice(alloc, "<ENC_Product_Catalog><date_valid>20250903</date_valid>");
     for (0..cells) |k| {
         const row = try std.fmt.allocPrint(alloc,
             "<cell><name>US5{d:0>2}{d:0>3}</name><lname>Cell</lname>" ++
-                "<cscale>20000</cscale><edtn>1</edtn><updn>0</updn>" ++
+                "<cscale>20000</cscale><edtn>{d}</edtn><updn>0</updn>" ++
                 "<zipfile_location>https://charts.noaa.gov/ENCs/US5{d:0>2}{d:0>3}.zip</zipfile_location>" ++
                 "<zipfile_size>1000</zipfile_size>" ++
                 "<coast_guard_district>{d}</coast_guard_district>" ++
                 "<panel><vertex><lat>1.00</lat><long>-70.00</long></vertex>" ++
                 "<vertex><lat>1.40</lat><long>-69.60</long></vertex></panel></cell>",
-            .{ district, k, district, k, district },
+            .{ district, k, edition, district, k, district },
         );
         defer alloc.free(row);
         try xml.appendSlice(alloc, row);
     }
     try xml.appendSlice(alloc, "</ENC_Product_Catalog>");
-    return noaa.parse(alloc, xml.items);
+    return xml.toOwnedSlice(alloc);
 }
 
 /// A fetcher that records what it was asked for and answers nothing.
@@ -2470,4 +2638,256 @@ test "changed rises once for each change and stays down while idle" {
     try testing.expect(!h.svc.unpackerRunning());
     for (0..5) |_| try testing.expect(!h.changed());
     try testing.expectEqual(@as(u32, 1), f.wakes.load(.monotonic));
+}
+
+// ---- the held cells and the update check, off the chart sets -----------------
+
+const library = @import("library.zig");
+
+/// A store and a chart set list in a directory of the test's own.
+const SetsFixture = struct {
+    tmp: std.testing.TmpDir,
+    dir: []u8,
+    store: *settings.Store,
+    sets: *chartsets.Sets,
+
+    const io = std.Io.Threaded.global_single_threaded.io();
+
+    fn init(inventory: ?library.TakeInventory) !SetsFixture {
+        var tmp = testing.tmpDir(.{ .iterate = true });
+        errdefer tmp.cleanup();
+        const dir = try std.fmt.allocPrint(testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+        errdefer testing.allocator.free(dir);
+        const store = try settings.Store.open(testing.allocator, io, dir);
+        errdefer store.close();
+        const sets = try chartsets.Sets.open(testing.allocator, io, store, "", inventory);
+        return .{ .tmp = tmp, .dir = dir, .store = store, .sets = sets };
+    }
+
+    fn deinit(self: *SetsFixture) void {
+        self.sets.close();
+        self.store.close();
+        testing.allocator.free(self.dir);
+        self.tmp.cleanup();
+    }
+
+    /// A folder holding exactly the files named. The caller frees the path.
+    fn folder(self: *SetsFixture, name: []const u8, files: []const []const u8) ![]u8 {
+        try self.tmp.dir.createDirPath(io, name);
+        var buf: [256]u8 = undefined;
+        for (files) |f| {
+            const sub = try std.fmt.bufPrint(&buf, "{s}/{s}", .{ name, f });
+            try self.tmp.dir.writeFile(io, .{ .sub_path = sub, .data = "x" });
+        }
+        return std.fmt.allocPrint(testing.allocator, "{s}/{s}", .{ self.dir, name });
+    }
+
+    /// Wait for the scan worker to finish.
+    fn settle(self: *SetsFixture) void {
+        for (0..2000) |_| {
+            self.sets.mu.lock();
+            const idle = !self.sets.running and self.sets.queue.items.len == 0;
+            self.sets.mu.unlock();
+            if (idle) return;
+            lock.sleepMs(1);
+        }
+    }
+};
+
+/// An inventory reporting US505000 at edition 1 in every folder.
+fn editionOne(
+    _: ?*anyopaque,
+    alloc: std.mem.Allocator,
+    path: []const u8,
+    out: *std.ArrayList(library.InventoryRow),
+) bool {
+    const cell = std.fmt.allocPrint(alloc, "{s}/US505000.000", .{path}) catch return false;
+    out.append(alloc, .{
+        .path = cell,
+        .name = alloc.dupe(u8, "US505000") catch return false,
+        .kind = .source,
+        .bytes = 4096,
+        .edition = 1,
+    }) catch return false;
+    return true;
+}
+
+test "the held cells follow the chart sets as a set is added and removed" {
+    const alloc = testing.allocator;
+    var f = try SetsFixture.init(null);
+    defer f.deinit();
+
+    var h = Handle.init(alloc);
+    defer h.deinit();
+    h.sets = f.sets;
+    h.svc.cat = try oneDistrict(alloc, 5, 3);
+    h.svc.phase = .ready;
+
+    const a = try f.folder("A", &.{"US505000.000"});
+    defer alloc.free(a);
+    const b = try f.folder("B", &.{"US505001.000"});
+    defer alloc.free(b);
+
+    try testing.expectEqual(@as(u32, 0), h.cost(&.{5}).?.held);
+    try testing.expect(f.sets.add(a));
+    f.settle();
+    try testing.expectEqual(@as(u32, 1), h.cost(&.{5}).?.held);
+    try testing.expect(f.sets.add(b));
+    f.settle();
+    try testing.expectEqual(@as(u32, 2), h.cost(&.{5}).?.held);
+    // A set switched off still holds its cells.
+    try testing.expect(f.sets.setOn(b, false));
+    try testing.expectEqual(@as(u32, 2), h.cost(&.{5}).?.held);
+    try testing.expect(f.sets.remove(a));
+    const left = h.cost(&.{5}).?;
+    try testing.expectEqual(@as(u32, 1), left.held);
+    try testing.expectEqual(@as(u32, 2), left.cells);
+}
+
+test "the update count reads a catalog from the network, and the cached one counts 0" {
+    const alloc = testing.allocator;
+    var cache = testing.tmpDir(.{});
+    defer cache.cleanup();
+    const root = try testCacheRoot(&cache);
+    defer alloc.free(root);
+
+    var f = try SetsFixture.init(editionOne);
+    defer f.deinit();
+    const dir = try f.folder("NOAA", &.{});
+    defer alloc.free(dir);
+    try testing.expect(f.sets.add(dir));
+    try testing.expect(f.sets.setManaged(dir, true));
+    f.settle();
+
+    // The cached catalog and the network both list edition 2.
+    const xml = try districtXml(alloc, 5, 3, 2);
+    defer alloc.free(xml);
+    {
+        var s = Service.init(alloc);
+        defer s.deinit();
+        s.cacheCatalog(xml);
+    }
+
+    var rec = Recorder{ .alloc = alloc };
+    defer rec.deinit();
+    var h = Handle.init(alloc);
+    defer h.deinit();
+    h.sets = f.sets;
+    h.store = f.store;
+    h.setProvider(Recorder.get, null, null, &rec);
+
+    h.refresh();
+    try testing.expect(h.svc.haveCatalog());
+    try testing.expectEqual(@as(u32, 0), h.outdatedOfSets());
+    try testing.expectEqual(@as(usize, 1), rec.ids.items.len);
+
+    h.respondChunk(rec.ids.items[0], xml, 200, true);
+    try testing.expect(h.changed());
+    try testing.expectEqual(@as(u32, 1), h.outdatedOfSets());
+}
+
+test "with no managed cell the update check sends no request" {
+    const alloc = testing.allocator;
+    var cache = testing.tmpDir(.{});
+    defer cache.cleanup();
+    const root = try testCacheRoot(&cache);
+    defer alloc.free(root);
+
+    var f = try SetsFixture.init(editionOne);
+    defer f.deinit();
+    const dir = try f.folder("Mine", &.{});
+    defer alloc.free(dir);
+    try testing.expect(f.sets.add(dir));
+    f.settle();
+
+    var rec = Recorder{ .alloc = alloc };
+    defer rec.deinit();
+    var h = Handle.init(alloc);
+    defer h.deinit();
+    h.sets = f.sets;
+    h.store = f.store;
+    h.setProvider(Recorder.get, null, null, &rec);
+
+    const now = @divFloor(clock.wallMs(), 1000);
+    try testing.expect(!h.updateDue(now));
+    try testing.expectEqual(@as(usize, 0), rec.ids.items.len);
+
+    // The same cells in a managed set are checked.
+    try testing.expect(f.sets.setManaged(dir, true));
+    try testing.expect(h.updateDue(now));
+    try testing.expectEqual(@as(usize, 1), rec.ids.items.len);
+}
+
+test "the update check follows the cadence and records a read that succeeded" {
+    const alloc = testing.allocator;
+    var cache = testing.tmpDir(.{});
+    defer cache.cleanup();
+    const root = try testCacheRoot(&cache);
+    defer alloc.free(root);
+
+    var f = try SetsFixture.init(editionOne);
+    defer f.deinit();
+    const dir = try f.folder("NOAA", &.{});
+    defer alloc.free(dir);
+    try testing.expect(f.sets.add(dir));
+    try testing.expect(f.sets.setManaged(dir, true));
+    f.settle();
+
+    const xml = try districtXml(alloc, 5, 3, 2);
+    defer alloc.free(xml);
+
+    var rec = Recorder{ .alloc = alloc };
+    defer rec.deinit();
+    var h = Handle.init(alloc);
+    defer h.deinit();
+    h.sets = f.sets;
+    h.store = f.store;
+    h.setProvider(Recorder.get, null, null, &rec);
+
+    const group = settings.group_chartsets;
+    const now = @divFloor(clock.wallMs(), 1000);
+
+    f.store.setText(group, Handle.cadence_key, "never");
+    try testing.expect(!h.updateDue(now));
+    try testing.expectEqual(@as(usize, 0), rec.ids.items.len);
+
+    // Daily, never checked: due, and one read goes out.
+    f.store.setText(group, Handle.cadence_key, "daily");
+    try testing.expect(h.updateDue(now));
+    try testing.expectEqual(@as(usize, 1), rec.ids.items.len);
+    // A second call while it runs sends no second read.
+    try testing.expect(h.updateDue(now));
+    try testing.expectEqual(@as(usize, 1), rec.ids.items.len);
+
+    // A failed read leaves the check unrecorded and due.
+    h.respondChunk(rec.ids.items[0], "", 500, true);
+    _ = h.changed();
+    try testing.expect(!f.store.has(group, Handle.checked_key));
+    try testing.expect(h.updateDue(now));
+    try testing.expectEqual(@as(usize, 2), rec.ids.items.len);
+
+    // A read that succeeds is recorded, and the next day is the next check.
+    h.respondChunk(rec.ids.items[1], xml, 200, true);
+    _ = h.changed();
+    try testing.expect(f.store.has(group, Handle.checked_key));
+    try testing.expectEqual(@as(u32, 1), h.outdatedOfSets());
+    try testing.expect(!h.updateDue(now + 60 * 60));
+    try testing.expectEqual(@as(usize, 2), rec.ids.items.len);
+    try testing.expect(h.updateDue(now + 25 * 60 * 60));
+    try testing.expectEqual(@as(usize, 3), rec.ids.items.len);
+    h.respondChunk(rec.ids.items[2], xml, 200, true);
+    _ = h.changed();
+
+    // At startup: once per handle, whenever the last check was.
+    f.store.setText(group, Handle.cadence_key, "startup");
+    try testing.expect(!h.updateDue(now + 25 * 60 * 60));
+    try testing.expectEqual(@as(usize, 3), rec.ids.items.len);
+
+    var next = Handle.init(alloc);
+    defer next.deinit();
+    next.sets = f.sets;
+    next.store = f.store;
+    next.setProvider(Recorder.get, null, null, &rec);
+    try testing.expect(next.updateDue(now));
+    try testing.expectEqual(@as(usize, 4), rec.ids.items.len);
 }

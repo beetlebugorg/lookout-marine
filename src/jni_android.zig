@@ -3869,7 +3869,6 @@ extern fn lookout_noaa_svc_http_respond_chunk(n: ?*c_noaa, req_id: u64, bytes: ?
 extern fn lookout_noaa_svc_changed(n: ?*c_noaa) c_int;
 extern fn lookout_noaa_svc_poll(n: ?*c_noaa, out: *lookout_noaa_state) void;
 extern fn lookout_noaa_svc_refresh(n: ?*c_noaa) void;
-extern fn lookout_noaa_svc_have(n: ?*c_noaa, names: ?[*]const ?[*:0]const u8, count: usize) void;
 extern fn lookout_noaa_svc_cost(n: ?*c_noaa, region_ids: [*:0]const u8, out_cells: ?*u32, out_bytes: ?*u64, out_held: ?*u32, out_held_bytes: ?*u64) c_int;
 extern fn lookout_noaa_svc_region_coverage(n: ?*c_noaa, region_id: [*:0]const u8, out: ?[*]lookout_noaa_box, cap: usize) usize;
 extern fn lookout_noaa_svc_download(n: ?*c_noaa, region_ids: [*:0]const u8, dest_dir: [*:0]const u8, again: c_int) void;
@@ -4121,17 +4120,10 @@ export fn Java_org_beetlebug_lookout_Lookout_nNoaaSvcCost(env: [*c]j.JNIEnv, cls
     return if (ok != 0) 1 else 0;
 }
 
+/// The service reads the held cells off the chart sets, so the names are
+/// ignored.
 export fn Java_org_beetlebug_lookout_Lookout_nNoaaSvcHave(env: [*c]j.JNIEnv, cls: j.jclass, n: j.jlong, names: j.jobjectArray) void {
-    _ = cls;
-    const x = noaaOf(n) orelse return;
-    const count: usize = if (names == null) 0 else @intCast(env_(env).GetArrayLength.?(env, names));
-    if (count == 0) {
-        lookout_noaa_svc_have(x, null, 0);
-        return;
-    }
-    const cs = copyPathArray(env, names, count) orelse return;
-    defer freePathArray(cs);
-    lookout_noaa_svc_have(x, @ptrCast(cs.ptr), count);
+    _ = .{ env, cls, n, names };
 }
 
 export fn Java_org_beetlebug_lookout_Lookout_nNoaaSvcDownload(env: [*c]j.JNIEnv, cls: j.jclass, n: j.jlong, ids: j.jstring, dest: j.jstring, again: j.jboolean) void {

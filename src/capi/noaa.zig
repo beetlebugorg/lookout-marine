@@ -11,6 +11,7 @@ const noaa = @import("../noaa.zig");
 const noaajob = @import("../noaajob.zig");
 const clinks = @import("../chartlinks.zig");
 const capi = @import("../capi.zig");
+const clock = @import("../clock.zig");
 
 const gpa = capi.gpa;
 
@@ -102,8 +103,8 @@ pub fn update(n: *noaajob.Handle, have_: ?[*]const lookout_noaa_installed, count
 export fn lookout_noaa_open(store: ?*anyopaque, sets: ?*anyopaque) ?*lookout_noaa {
     const n = gpa.create(lookout_noaa) catch return null;
     n.* = noaajob.Handle.init(gpa);
-    n.store = store;
-    n.sets = sets;
+    n.store = @ptrCast(@alignCast(store));
+    n.sets = @ptrCast(@alignCast(sets));
     return n;
 }
 
@@ -147,10 +148,6 @@ export fn lookout_noaa_svc_refresh(n: ?*lookout_noaa) void {
     if (n) |x| x.refresh();
 }
 
-export fn lookout_noaa_svc_have(n: ?*lookout_noaa, names: ?[*]const ?[*:0]const u8, count: usize) void {
-    if (n) |x| have(x, names, count);
-}
-
 export fn lookout_noaa_svc_cost(n: ?*lookout_noaa, region_ids: ?[*:0]const u8, out_cells: ?*u32, out_bytes: ?*u64, out_held: ?*u32, out_held_bytes: ?*u64) c_int {
     const x = n orelse {
         // cost() zeroes the outputs; with no handle there is none to call.
@@ -177,13 +174,20 @@ export fn lookout_noaa_svc_download(n: ?*lookout_noaa, region_ids: ?[*:0]const u
     if (n) |x| download(x, region_ids, dest_dir, again);
 }
 
-export fn lookout_noaa_svc_outdated(n: ?*lookout_noaa, have_: ?[*]const lookout_noaa_installed, count: usize) u32 {
+export fn lookout_noaa_svc_outdated(n: ?*lookout_noaa) u32 {
     const x = n orelse return 0;
-    return outdated(x, have_, count);
+    return x.outdatedOfSets();
 }
 
-export fn lookout_noaa_svc_update(n: ?*lookout_noaa, have_: ?[*]const lookout_noaa_installed, count: usize, dest_dir: ?[*:0]const u8) void {
-    if (n) |x| update(x, have_, count, dest_dir);
+export fn lookout_noaa_svc_update(n: ?*lookout_noaa, dest_dir: ?[*:0]const u8) void {
+    const x = n orelse return;
+    const dest = dest_dir orelse return;
+    x.updateOfSets(std.mem.span(dest));
+}
+
+export fn lookout_noaa_svc_update_due(n: ?*lookout_noaa) c_int {
+    const x = n orelse return 0;
+    return @intFromBool(x.updateDue(@divFloor(clock.wallMs(), 1000)));
 }
 
 export fn lookout_noaa_svc_cancel(n: ?*lookout_noaa) void {
