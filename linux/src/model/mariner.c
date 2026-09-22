@@ -85,12 +85,12 @@ lk_mariner_apply (gpointer user_data)
 
   self->apply_id = 0;
 
-  /* An open chart saves what it is handed, on the engine's own cadence. With
-   * none there is nothing to apply to, so the edit goes straight to the
-   * store. */
+  /* A chart holding the store saves what it is handed, on the engine's own
+   * cadence. A chart of no charts holds none, and a closed one has no handle
+   * to apply to, so both leave the write here. */
   if (lk_chart_controller_is_open (self->controller))
     lk_chart_controller_set_mariner (self->controller, self->raw);
-  else
+  if (!lk_chart_controller_has_store (self->controller))
     lookout_store_write_mariner (lk_store_handle (), &self->raw);
 
   return G_SOURCE_REMOVE;

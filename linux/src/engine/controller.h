@@ -47,6 +47,11 @@ void lk_chart_controller_attach_view (LkChartController *self, GtkWidget *view);
 
 void     lk_chart_controller_close    (LkChartController *self);
 gboolean lk_chart_controller_is_open  (LkChartController *self);
+
+/* TRUE when the open handle holds the store. The engine saves the mariner
+ * settings and the pose through it. A chart of no charts holds none, so its
+ * owner writes those settings itself. */
+gboolean lk_chart_controller_has_store (LkChartController *self);
 const char *lk_chart_controller_chart_path (LkChartController *self);
 
 /* How many vector charts the open library holds. 0 for a chart opened with

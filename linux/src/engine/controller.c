@@ -11,6 +11,9 @@ struct _LkChartController {
   GObject parent_instance;
 
   lookout *handle;    /* NULL until a chart is opened */
+  /* TRUE when the handle holds the store. A chart of no charts keeps it at
+   * arm's length, so the engine saves no pose for that one. */
+  gboolean handle_has_store;
   char    *chart_path; /* the path (or directory) currently open, for the title */
 
   GtkWidget  *view;  /* the chart widget we render for; not owned */
@@ -71,6 +74,12 @@ lk_chart_controller_set_model (LkChartController *self, LkAppModel *model)
 {
   g_return_if_fail (LK_IS_CHART_CONTROLLER (self));
   self->model = model;
+}
+
+gboolean
+lk_chart_controller_has_store (LkChartController *self)
+{
+  return LK_IS_CHART_CONTROLLER (self) && self->handle != NULL && self->handle_has_store;
 }
 
 gboolean
@@ -885,6 +894,7 @@ lk_chart_controller_open (LkChartController *self,
       lookout_mariner_defaults (&mariner);
       lookout_store_read_mariner (lk_store_handle (), &mariner);
       lookout_set_mariner (handle, &mariner);
+      self->handle_has_store = FALSE;
     }
   else
     {
@@ -892,6 +902,7 @@ lk_chart_controller_open (LkChartController *self,
        * here: it restores both now, writes the pose down as the mariner
        * moves, and writes both again at close. */
       lookout_set_store (handle, lk_store_handle ());
+      self->handle_has_store = TRUE;
       if (!lk_store_has_saved_view ())
         {
           lookout_view opening;

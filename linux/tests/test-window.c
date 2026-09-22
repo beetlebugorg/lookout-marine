@@ -9,6 +9,7 @@
 #include "lk-test.h"
 
 #include "model/app-model.h"
+#include "model/mariner.h"
 #include "model/store.h"
 #include "pick-fixture.h"
 #include "ui/firstrun/private.h"
@@ -160,6 +161,36 @@ test_an_empty_open_keeps_the_stored_pose (void)
 {
   /* This suite opens no charts, so every open here is the empty one. */
   g_assert_false (lk_store_has_saved_view ());
+}
+
+/* A mariner setting reaches the store with a chart of no charts open.
+ *
+ * That chart holds no store, so the engine saves no settings through it. The
+ * edit is written here, as it is with no chart at all. */
+static void
+test_a_setting_is_saved_over_the_basemap (void)
+{
+  LkChartController *controller = lk_app_model_get_controller (model);
+  g_autoptr (LkMariner) mariner = lk_mariner_new (controller);
+  tile57_mariner *raw = lk_mariner_raw (mariner);
+
+  /* This suite opens a chart of no charts. */
+  g_assert_true (lk_chart_controller_is_open (controller));
+  g_assert_false (lk_chart_controller_has_store (controller));
+
+  raw->safety_depth = 7.5;
+  lk_mariner_touch (mariner);
+
+  for (int i = 0; i < 60; i++)
+    {
+      g_main_context_iteration (NULL, FALSE);
+      g_usleep (10000);
+    }
+
+  tile57_mariner saved;
+  lookout_mariner_defaults (&saved);
+  lookout_store_read_mariner (lk_store_handle (), &saved);
+  g_assert_cmpfloat (saved.safety_depth, ==, 7.5);
 }
 
 /* The scrim goes when setup does.
@@ -419,6 +450,8 @@ main (int argc, char *argv[])
   g_test_add_func ("/window/scheme-action-follows", test_scheme_action_follows);
   /* Last: it puts setup away for the rest of the run. */
   g_test_add_func ("/window/setup-later-puts-it-away", test_setup_later_puts_it_away);
+  g_test_add_func ("/window/a-setting-is-saved-over-the-basemap",
+                   test_a_setting_is_saved_over_the_basemap);
   g_test_add_func ("/window/the-scrim-goes-with-setup", test_the_scrim_goes_with_setup);
   g_test_add_func ("/window/an-empty-open-keeps-the-stored-pose",
                    test_an_empty_open_keeps_the_stored_pose);
