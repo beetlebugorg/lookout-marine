@@ -132,9 +132,10 @@ final class AppModel {
                 let st = self.noaa.state
                 if st.done > 0 {
                     self.charts.openChartDirectory(dest)
-                } else if st.total > 0 {
+                } else if st.total > 0, !self.noaa.stoppedByMariner, !self.firstRun.showing {
                     // No bake runs, so the Charts pane reports the failed
-                    // download here.
+                    // download here. A stop is the mariner's own, and setup
+                    // reports the end in its own step.
                     self.charts.openError = st.error.isEmpty
                         ? "The download stopped before any chart arrived." : st.error
                 }

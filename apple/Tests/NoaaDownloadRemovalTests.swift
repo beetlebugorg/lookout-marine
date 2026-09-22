@@ -144,3 +144,28 @@ final class NoaaDownloadThroughReopenTests: ShellTestCase {
         XCTAssertTrue(fake.calls.contains { $0.hasSuffix("again: true)") })
     }
 }
+
+/// A download the mariner stops is no error.
+@MainActor
+final class NoaaDownloadStopTests: ShellTestCase {
+
+    func testAStoppedDownloadRaisesNoOpenError() {
+        let app = AppModel()
+        let fake = FakeEngine()
+        app.charts.engine = fake
+        app.noaa.engine = fake
+        app.noaa.picked = [app.noaa.regions[0].id]
+        app.charts.hasChart = true
+
+        fake.noaa.phase = .downloading
+        fake.noaa.total = 3
+        app.startNoaaDownload()
+        app.noaa.cancel()
+        fake.noaa.phase = .ready
+        XCTAssertEqual(fake.noaa.done, 0)
+
+        // The watch polls every half second.
+        RunLoop.current.run(until: Date().addingTimeInterval(1.5))
+        XCTAssertNil(app.charts.openError)
+    }
+}

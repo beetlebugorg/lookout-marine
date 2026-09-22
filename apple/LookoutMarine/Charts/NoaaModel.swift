@@ -98,6 +98,8 @@ final class NoaaModel {
     /// Which regions the mariner picked, by id.
     var picked: Set<String> = []
     private(set) var state = NoaaState()
+    /// True when the mariner stopped the last download. A new one clears it.
+    private(set) var stoppedByMariner = false
     /// Each region's real coverage, read once the catalog is in. A region
     /// drawn as one rectangle claims water it does not cover.
     private(set) var coverage: [String: [GeoBox]] = [:]
@@ -417,11 +419,13 @@ final class NoaaModel {
     func download(to destination: String, again: Bool = false) {
         guard !picked.isEmpty else { return }
         recordPicked(regions.filter { picked.contains($0.id) }.map(\.id))
+        stoppedByMariner = false
         engine?.noaaDownload(regionIDs: pickedIDs, destination: destination, again: again)
         poll()
     }
 
     func cancel() {
+        stoppedByMariner = true
         engine?.noaaCancel()
         poll()
     }
@@ -432,6 +436,7 @@ final class NoaaModel {
     }
 
     func update(_ have: [NoaaInstalledCell], to destination: String) {
+        stoppedByMariner = false
         engine?.noaaUpdate(have, destination: destination)
         poll()
     }
