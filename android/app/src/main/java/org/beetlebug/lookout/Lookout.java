@@ -133,6 +133,8 @@ public final class Lookout implements AutoCloseable {
     public void pan(float dxPts, float dyPts)    { if (h != 0) nPan(h, dxPts, dyPts); }
     /** Zoom by dz levels about a point (logical pts); eases via tickAnim. */
     public void zoomAt(double dz, float xPts, float yPts) { if (h != 0) nZoomAt(h, dz, xPts, yPts); }
+    /** The same zoom with no ease, for a pinch that reports continuously. */
+    public void zoomAbout(double dz, float xPts, float yPts) { if (h != 0) nZoomAbout(h, dz, xPts, yPts); }
     /** Render one frame; true when the frame presented. */
     public boolean render()                      { return h != 0 && nRender(h); }
     /** True while the view needs another frame (state changed, building). */
@@ -402,6 +404,7 @@ public final class Lookout implements AutoCloseable {
     private static native void nDefaultView(long h);
     private static native void nPan(long h, float dxPts, float dyPts);
     private static native void nZoomAt(long h, double dz, float xPts, float yPts);
+    private static native void nZoomAbout(long h, double dz, float xPts, float yPts);
     private static native boolean nRender(long h);
     private static native boolean nNeedsRedraw(long h);
     private static native boolean nAnimating(long h);

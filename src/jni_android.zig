@@ -53,6 +53,7 @@ extern fn lookout_set_view(h: ?*anyopaque, v: *const lookout_view) void;
 extern fn lookout_get_view(h: ?*anyopaque, v: *lookout_view) void;
 extern fn lookout_pan_logical(h: ?*anyopaque, dx_pt: f32, dy_pt: f32) void;
 extern fn lookout_zoom_at_logical(h: ?*anyopaque, dzoom: f64, x_pt: f32, y_pt: f32) void;
+extern fn lookout_zoom_about_logical(h: ?*anyopaque, dzoom: f64, x_pt: f32, y_pt: f32) void;
 extern fn lookout_render(h: ?*anyopaque) c_int;
 extern fn lookout_needs_redraw(h: ?*anyopaque) c_int;
 extern fn lookout_animating(h: ?*anyopaque) c_int;
@@ -324,6 +325,14 @@ export fn Java_org_beetlebug_lookout_Lookout_nZoomAt(env: [*c]j.JNIEnv, cls: j.j
     _ = cls;
     const h = fromLong(hl) orelse return;
     lookout_zoom_at_logical(h.l, dz, x_pt, y_pt);
+}
+
+/// The same zoom with no ease, for a pinch.
+export fn Java_org_beetlebug_lookout_Lookout_nZoomAbout(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, dz: j.jdouble, x_pt: j.jfloat, y_pt: j.jfloat) void {
+    _ = env;
+    _ = cls;
+    const h = fromLong(hl) orelse return;
+    lookout_zoom_about_logical(h.l, dz, x_pt, y_pt);
 }
 
 export fn Java_org_beetlebug_lookout_Lookout_nRender(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) j.jboolean {
