@@ -938,9 +938,31 @@ size_t lookout_noaa_region_coverage(lookout *h, const char *region_id,
  * Progress and the result surface through lookout_noaa_poll. Old path. */
 void lookout_noaa_refresh(lookout *h);
 
+/* lookout_noaa_state.phase: what the service is doing now. */
+#define LOOKOUT_NOAA_IDLE        0
+#define LOOKOUT_NOAA_READING     1 /* reading the catalog */
+#define LOOKOUT_NOAA_READY       2 /* a catalog is loaded */
+#define LOOKOUT_NOAA_DOWNLOADING 3
+
+/* lookout_noaa_state.outcome: how the download numbered `run` ended. */
+#define LOOKOUT_NOAA_NONE      0 /* no download has been ordered */
+#define LOOKOUT_NOAA_RUNNING   1
+/* The plan ran to its end and at least one chart arrived. `failed` counts
+ * the charts that did not. */
+#define LOOKOUT_NOAA_FINISHED  2
+/* Every chart the order named is already installed, or an update found no
+ * reissue. No request went out. */
+#define LOOKOUT_NOAA_EMPTY     3
+/* Stopped by lookout_noaa_svc_cancel, by a new download, or by clearing the
+ * fetcher. */
+#define LOOKOUT_NOAA_CANCELLED 4
+/* No chart arrived, or the order was refused: no catalog, no fetcher, or no
+ * download directory. `error` says which. */
+#define LOOKOUT_NOAA_FAILED    5
+
 /* What lookout is doing with NOAA's charts. Every field is read in one call. */
 typedef struct {
-    /* 0 idle, 1 reading the catalog, 2 catalog loaded, 3 downloading. */
+    /* A LOOKOUT_NOAA_IDLE .. _DOWNLOADING value. */
     uint8_t phase;
     uint8_t have_catalog;
     /* NOAA's validity date for the loaded catalog, "20250903". */
@@ -956,11 +978,22 @@ typedef struct {
     uint64_t bytes_done;
     /* What went wrong, or an empty string. */
     char error[256];
+    /* A LOOKOUT_NOAA_NONE .. _FAILED value, for the download numbered `run`. */
+    uint8_t outcome;
+    /* Counts the downloads and updates ordered on this service, refused ones
+     * included. 0 before the first. A shell that ordered one reads its end
+     * when `run` has moved past the value it read before ordering and
+     * `outcome` is no longer LOOKOUT_NOAA_RUNNING. */
+    uint32_t run;
 } lookout_noaa_state;
 
 /* Old path. Does not block on the api lock. */
 void lookout_noaa_poll(lookout *h, lookout_noaa_state *out);
 
+/* Old path. 1 when the state lookout_noaa_poll reads has changed since the
+ * last call, then clears. No api lock. The chart handle's frame loop adopts
+ * the responses, so this rises only while frames run. */
+int lookout_noaa_changed(lookout *h);
 
 /* What downloading these regions costs: how many cells, and how many bytes of
  * exchange-set zip. `region_ids` is a comma separated list of region ids
@@ -1050,11 +1083,12 @@ void lookout_noaa_cancel(lookout *h);
  * - It has its own fetcher, and responses go to
  *   lookout_noaa_svc_http_respond_chunk.
  * - Responses are adopted only when the shell calls
- *   lookout_noaa_svc_poll, from its frame loop or on the wake callback.
+ *   lookout_noaa_svc_changed, from its frame loop or on the wake callback.
  *
  * Calls from different threads are serialized on the handle's own lock. The
  * fetcher's get and cancel are called with that lock held, from the thread
- * that made the call. lookout_noaa_svc_http_respond_chunk does not take it. */
+ * that made the call. lookout_noaa_svc_poll and
+ * lookout_noaa_svc_http_respond_chunk do not take it. */
 
 typedef struct lookout_noaa lookout_noaa;
 
@@ -1068,14 +1102,14 @@ lookout_noaa *lookout_noaa_open(lookout_store *store, lookout_chart_sets *sets);
 void lookout_noaa_close(lookout_noaa *n);
 
 /* Called once for each response queued for adopt, so a shell whose frame loop
- * has stopped knows to call lookout_noaa_svc_poll. Called from any thread,
+ * has stopped knows to call lookout_noaa_svc_changed. Called from any thread,
  * including from inside lookout_noaa_svc_http_respond_chunk and from a thread
  * of lookout's own. Post to the shell's own loop and return. Do not call into
  * lookout from it. */
 typedef void (*lookout_noaa_wake)(void *user);
 
 /* Install the service's fetcher, on the terms of lookout_set_http_provider.
- * `wake` may be NULL for a shell that calls lookout_noaa_svc_poll every
+ * `wake` may be NULL for a shell that calls lookout_noaa_svc_changed every
  * frame. `user` is passed to all three. Clearing it (get NULL) cancels the
  * download. */
 void lookout_noaa_svc_set_http_provider(lookout_noaa *n, lookout_http_get get,
@@ -1088,8 +1122,13 @@ void lookout_noaa_svc_http_respond_chunk(lookout_noaa *n, uint64_t req_id,
                                          const void *bytes, size_t len,
                                          int status, int done);
 
-/* Adopt the responses that arrived, start the next transfers, and return the
- * state. */
+/* Adopt the responses that arrived, start the next transfers, and return 1
+ * when the state lookout_noaa_svc_poll reads has changed since the last
+ * call, else 0. An idle service returns 0 on every call. Call it from the
+ * frame loop and on every wake. */
+int lookout_noaa_svc_changed(lookout_noaa *n);
+
+/* The state, as of the last call that changed it. Does not lock. */
 void lookout_noaa_svc_poll(lookout_noaa *n, lookout_noaa_state *out);
 
 void lookout_noaa_svc_refresh(lookout_noaa *n);

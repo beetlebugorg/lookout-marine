@@ -127,13 +127,19 @@ export fn lookout_noaa_svc_http_respond_chunk(n: ?*lookout_noaa, req_id: u64, by
     x.respondChunk(req_id, slice, status, done != 0);
 }
 
+/// Adopt what arrived, and say whether the state changed. See
+/// lookout-library.h.
+export fn lookout_noaa_svc_changed(n: ?*lookout_noaa) c_int {
+    const x = n orelse return 0;
+    return @intFromBool(x.changed());
+}
+
 export fn lookout_noaa_svc_poll(n: ?*lookout_noaa, out: ?*lookout_noaa_state) void {
     const o = out orelse return;
     const x = n orelse {
         o.* = .{};
         return;
     };
-    x.adopt();
     o.* = x.poll();
 }
 

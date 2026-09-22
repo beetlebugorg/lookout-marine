@@ -54,6 +54,24 @@ pub const Phase = enum(u8) {
     downloading = 3,
 };
 
+/// How the last download ended, or that it is still running.
+pub const Outcome = enum(u8) {
+    /// No download has started on this service.
+    none = 0,
+    running = 1,
+    /// The plan ran to its end and at least one chart arrived. Some may have
+    /// failed; `failed` counts them.
+    finished = 2,
+    /// Every chart the order named is already installed, or an update found
+    /// no reissue. No request went out.
+    empty = 3,
+    /// Stopped by a cancel, by a new download, or by clearing the fetcher.
+    cancelled = 4,
+    /// The plan ran to its end with no chart arriving, or the order was
+    /// refused: no catalog, no fetcher, or no download directory.
+    failed = 5,
+};
+
 /// Called when a response is queued for adopt. From any thread, possibly
 /// inside the shell's own call to respond.
 pub const WakeFn = *const fn (user: ?*anyopaque) callconv(.c) void;
@@ -167,6 +185,10 @@ pub const State = extern struct {
     bytes_done: u64 = 0,
     /// What went wrong, or an empty string.
     err: [256]u8 = @splat(0),
+    /// An Outcome.
+    outcome: u8 = 0,
+    /// Counts the downloads ordered on this service. The first is 1.
+    run: u32 = 0,
 };
 
 /// The catalog, the plan, and the transfer.
@@ -188,8 +210,12 @@ pub const Service = struct {
     /// A catalog read is out. Held apart from `phase`, because a read can run
     /// beside a download and the download's end is read off the phase.
     catalog_inflight: bool = false,
-    /// Raised when the snapshot changes. The shell's frame loop reads it.
+    /// Raised when the snapshot needs publishing.
     changed: bool = false,
+
+    /// The download's number, and how it ended.
+    run: u32 = 0,
+    outcome: Outcome = .none,
 
     next_req: u64 = 1,
     reqs: std.ArrayList(Req) = .empty,
@@ -244,6 +270,9 @@ pub const Service = struct {
     /// count read 0 of 829 until it ended.
     pub_mu: Lock = .{},
     pub_state: State = .{},
+    /// Set when a publish stores a state that differs from the one before,
+    /// and cleared by takeChanged. Guarded by pub_mu.
+    pub_changed: bool = false,
 
     /// Whether this download was asked to fetch water already held. Kept for
     /// the bundle fallback, which plans the same cells a second time.
@@ -306,10 +335,6 @@ pub const Service = struct {
         self.wake = wake;
         self.user = user;
         if (get == null) self.cancelAll();
-    }
-
-    pub fn hasProvider(self: *const Service) bool {
-        return self.get != null;
     }
 
     /// Hand one url to the shell. Returns the request id, or 0 when no
@@ -457,6 +482,7 @@ pub const Service = struct {
         self.clearStage();
         self.inflight = 0;
         self.catalog_inflight = false;
+        if (self.phase == .downloading) self.outcome = .cancelled;
         if (self.phase == .downloading or self.phase == .reading_catalog) {
             self.phase = if (self.cat != null) .ready else .idle;
             self.changed = true;
@@ -667,17 +693,37 @@ pub const Service = struct {
         self.bytes_total += bytes;
     }
 
-    pub fn start(self: *Service, districts: []const u8, dest: []const u8, again: bool) void {
-        const cat = &(self.cat orelse {
-            self.setErr("no catalog yet");
-            return;
-        });
-        if (self.get == null) {
-            self.setErr("no network provider");
+    /// Number a new download and mark it running.
+    fn beginRun(self: *Service) void {
+        self.run +%= 1;
+        self.outcome = .running;
+        self.changed = true;
+    }
+
+    /// End the current download with `outcome`, and state why.
+    fn endRun(self: *Service, outcome: Outcome, why: []const u8) void {
+        if (why.len != 0) self.setErr(why);
+        self.outcome = outcome;
+        self.changed = true;
+    }
+
+    /// Refuse an order before it starts. A download already running goes on
+    /// and keeps its number.
+    fn refuse(self: *Service, why: []const u8) void {
+        if (self.phase == .downloading) {
+            self.setErr(why);
             return;
         }
+        self.beginRun();
+        self.endRun(.failed, why);
+    }
+
+    pub fn start(self: *Service, districts: []const u8, dest: []const u8, again: bool) void {
+        const cat = &(self.cat orelse return self.refuse("no catalog yet"));
+        if (self.get == null) return self.refuse("no network provider");
 
         self.cancelAll();
+        self.beginRun();
         self.freePlan();
         self.again = again;
         self.next_job = 0;
@@ -690,10 +736,8 @@ pub const Service = struct {
         // A district arrives as one zip where it can. NOAA serves a public
         // archive, and a region holds hundreds of cells: asking for each one
         // is hundreds of requests for water a single bundle already answers.
-        const fetches = noaa.planFetches(self.alloc, cat, districts, self.held.items, again) catch {
-            self.setErr("out of memory planning the download");
-            return;
-        };
+        const fetches = noaa.planFetches(self.alloc, cat, districts, self.held.items, again) catch
+            return self.endRun(.failed, "out of memory planning the download");
         defer self.alloc.free(fetches);
 
         var url_buf: [256]u8 = undefined;
@@ -708,21 +752,9 @@ pub const Service = struct {
             const name = std.fmt.bufPrint(&name_buf, "{d:0>2}CGD_ENCs", .{t.district}) catch continue;
             self.planAppend(name, url, t.bytes, t.cells, t.district);
         }
-        if (self.plan.items.len == 0) {
-            self.setErr("every chart for those regions is already installed");
-            return;
-        }
-
-        self.freeStr(&self.dest);
-        self.dest = self.alloc.dupe(u8, dest) catch {
-            self.setErr("out of memory");
-            return;
-        };
-        makeDir(dest) catch {
-            self.setErr("could not create the download directory");
-            return;
-        };
-        self.setStageDest(dest);
+        if (self.plan.items.len == 0)
+            return self.endRun(.empty, "every chart for those regions is already installed");
+        if (!self.stageAt(dest)) return;
         self.startUnpacker(!again);
 
         self.phase = .downloading;
@@ -732,21 +764,14 @@ pub const Service = struct {
 
     /// Download the cells NOAA has reissued since these were installed.
     pub fn startUpdate(self: *Service, installed: []const noaa.Installed, dest: []const u8) void {
-        const cat = &(self.cat orelse {
-            self.setErr("no catalog yet");
-            return;
-        });
-        if (self.get == null) {
-            self.setErr("no network provider");
-            return;
-        }
-        const stale = noaa.outdated(self.alloc, cat, installed) catch {
-            self.setErr("out of memory checking editions");
-            return;
-        };
+        const cat = &(self.cat orelse return self.refuse("no catalog yet"));
+        if (self.get == null) return self.refuse("no network provider");
+        const stale = noaa.outdated(self.alloc, cat, installed) catch
+            return self.refuse("out of memory checking editions");
         defer self.alloc.free(stale);
 
         self.cancelAll();
+        self.beginRun();
         self.freePlan();
         self.next_job = 0;
         self.done = 0;
@@ -764,20 +789,9 @@ pub const Service = struct {
         }
         if (self.plan.items.len == 0) {
             self.phase = .ready;
-            self.changed = true;
-            return;
+            return self.endRun(.empty, "");
         }
-
-        self.freeStr(&self.dest);
-        self.dest = self.alloc.dupe(u8, dest) catch {
-            self.setErr("out of memory");
-            return;
-        };
-        makeDir(dest) catch {
-            self.setErr("could not create the download directory");
-            return;
-        };
-        self.setStageDest(dest);
+        if (!self.stageAt(dest)) return;
         self.startUnpacker(false);
 
         self.phase = .downloading;
@@ -798,13 +812,24 @@ pub const Service = struct {
         }
         if (self.inflight == 0 and self.next_job >= self.plan.items.len and self.phase == .downloading) {
             self.phase = .ready;
-            self.changed = true;
+            self.endRun(if (self.done > 0) .finished else .failed, "");
         }
     }
 
-    /// True once every cell in the plan has been written or has failed.
-    pub fn finished(self: *const Service) bool {
-        return self.phase != .downloading and self.plan.items.len != 0;
+    /// Create `dest` and point the fetch threads at it. Ends the run as
+    /// failed and returns false when it cannot.
+    fn stageAt(self: *Service, dest: []const u8) bool {
+        self.freeStr(&self.dest);
+        self.dest = self.alloc.dupe(u8, dest) catch {
+            self.endRun(.failed, "out of memory");
+            return false;
+        };
+        makeDir(dest) catch {
+            self.endRun(.failed, "could not create the download directory");
+            return false;
+        };
+        self.setStageDest(dest);
+        return true;
     }
 
     // ---- answers ----------------------------------------------------------
@@ -1264,7 +1289,19 @@ pub const Service = struct {
         const s = self.snapshot();
         self.pub_mu.lock();
         defer self.pub_mu.unlock();
+        if (std.meta.eql(s, self.pub_state)) return;
         self.pub_state = s;
+        self.pub_changed = true;
+    }
+
+    /// True when a publish has changed the state since the last call. Safe
+    /// from any thread.
+    pub fn takeChanged(self: *Service) bool {
+        self.pub_mu.lock();
+        defer self.pub_mu.unlock();
+        const was = self.pub_changed;
+        self.pub_changed = false;
+        return was;
     }
 
     /// The last published state. Safe from any thread.
@@ -1320,6 +1357,8 @@ pub const Service = struct {
             .failed = self.failed,
             .bytes_total = self.bytes_total,
             .bytes_done = self.bytes_done + live.bytes,
+            .outcome = @intFromEnum(self.outcome),
+            .run = self.run,
         };
         if (self.cat) |*c| {
             s.catalog_cells = @intCast(c.cells.len);
@@ -1382,6 +1421,13 @@ pub const Handle = struct {
         self.mu.lock();
         defer self.mu.unlock();
         self.svc.adopt();
+    }
+
+    /// Adopt, then report whether the published state changed since the
+    /// last call.
+    pub fn changed(self: *Handle) bool {
+        self.adopt();
+        return self.svc.takeChanged();
     }
 
     /// The last published state. No lock beyond the snapshot's own.
@@ -2210,4 +2256,154 @@ test "a bundle leaves the cells already held as they are" {
         if (testExists(p)) written += 1;
     }
     try testing.expectEqual(@as(usize, 112), written);
+}
+
+/// Run adopt until the download ends or two seconds pass. The unpack thread
+/// posts on its own time.
+fn testDrain(s: *Service) void {
+    var tries: usize = 0;
+    while ((s.phase == .downloading or s.unpackerRunning()) and tries < 2000) : (tries += 1) {
+        s.adopt();
+        lock.sleepMs(1);
+    }
+}
+
+test "each way a download ends sets its outcome and numbers the run" {
+    const alloc = testing.allocator;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const dest = "/tmp/lookout-noaa-outcomes";
+    std.Io.Dir.cwd().deleteTree(io, dest) catch {};
+    defer std.Io.Dir.cwd().deleteTree(io, dest) catch {};
+
+    var rec = Recorder{ .alloc = alloc };
+    defer rec.deinit();
+    var s = Service.init(alloc);
+    defer s.deinit();
+    try testing.expectEqual(@as(u8, @intFromEnum(Outcome.none)), s.snapshot().outcome);
+    try testing.expectEqual(@as(u32, 0), s.snapshot().run);
+
+    // Refused: no catalog.
+    s.start(&.{5}, dest, false);
+    try testing.expectEqual(Outcome.failed, s.outcome);
+    try testing.expectEqual(@as(u32, 1), s.run);
+
+    s.cat = try oneDistrict(alloc, 5, 2);
+    s.phase = .ready;
+    s.setProvider(Recorder.get, null, null, &rec);
+
+    // Finished: one chart arrives, one fails.
+    s.start(&.{5}, dest, false);
+    try testing.expectEqual(Outcome.running, s.outcome);
+    try testing.expectEqual(@as(u32, 2), s.run);
+    try testing.expectEqual(@as(usize, 2), rec.ids.items.len);
+    const zip = try testZip(alloc, &.{.{ .name = "ENC_ROOT/US505000/US505000.000", .data = "cell" }});
+    defer alloc.free(zip);
+    s.respond(rec.ids.items[0], zip, 200);
+    s.respond(rec.ids.items[1], "", 500);
+    testDrain(&s);
+    try testing.expectEqual(Outcome.finished, s.outcome);
+    try testing.expectEqual(@as(u32, 1), s.done);
+    try testing.expectEqual(@as(u32, 1), s.failed);
+
+    // Failed: every chart fails.
+    s.start(&.{5}, dest, true);
+    try testing.expectEqual(@as(u32, 3), s.run);
+    for (rec.ids.items[2..]) |id| s.respond(id, "", 404);
+    testDrain(&s);
+    try testing.expectEqual(Outcome.failed, s.outcome);
+
+    // Cancelled.
+    s.start(&.{5}, dest, true);
+    try testing.expectEqual(@as(u32, 4), s.run);
+    s.cancelAll();
+    try testing.expectEqual(Outcome.cancelled, s.outcome);
+
+    // Empty: every chart is held, so no request goes out.
+    const before = rec.ids.items.len;
+    s.setHeld(&.{ "US505000", "US505001" });
+    s.start(&.{5}, dest, false);
+    try testing.expectEqual(Outcome.empty, s.outcome);
+    try testing.expectEqual(@as(u32, 5), s.run);
+    try testing.expectEqual(before, rec.ids.items.len);
+
+    // Empty: an update with no reissue.
+    const current = [_]noaa.Installed{.{ .name = "US505000", .edition = 1, .update = 0 }};
+    s.startUpdate(&current, dest);
+    try testing.expectEqual(Outcome.empty, s.outcome);
+    try testing.expectEqual(@as(u32, 6), s.run);
+
+    // The snapshot has both.
+    const snap = s.snapshot();
+    try testing.expectEqual(@as(u8, @intFromEnum(Outcome.empty)), snap.outcome);
+    try testing.expectEqual(@as(u32, 6), snap.run);
+}
+
+test "changed rises once for each change and stays down while idle" {
+    const alloc = testing.allocator;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const dest = "/tmp/lookout-noaa-changed";
+    std.Io.Dir.cwd().deleteTree(io, dest) catch {};
+    defer std.Io.Dir.cwd().deleteTree(io, dest) catch {};
+
+    // A fetcher that records the ids and counts the wakes.
+    const Fetch = struct {
+        ids: std.ArrayList(u64) = .empty,
+        wakes: std.atomic.Value(u32) = .init(0),
+
+        fn get(user: ?*anyopaque, req_id: u64, url: [*:0]const u8, allow_file: c_int) callconv(.c) void {
+            _ = url;
+            _ = allow_file;
+            const self: *@This() = @ptrCast(@alignCast(user orelse return));
+            self.ids.append(testing.allocator, req_id) catch {};
+        }
+        fn wake(user: ?*anyopaque) callconv(.c) void {
+            const self: *@This() = @ptrCast(@alignCast(user orelse return));
+            _ = self.wakes.fetchAdd(1, .monotonic);
+        }
+    };
+    var f = Fetch{};
+    defer f.ids.deinit(alloc);
+
+    var h = Handle.init(alloc);
+    defer h.deinit();
+    h.svc.cat = try oneDistrict(alloc, 5, 1);
+    h.svc.phase = .ready;
+    h.setProvider(Fetch.get, null, Fetch.wake, &f);
+
+    // Publishing the catalog loaded above is one change.
+    try testing.expect(h.changed());
+    for (0..5) |_| try testing.expect(!h.changed());
+
+    // Naming held cells leaves the published state as it was.
+    h.have(&.{"US509999"});
+    try testing.expect(!h.changed());
+
+    h.download(&.{5}, dest, false);
+    try testing.expect(h.changed());
+    try testing.expectEqual(@as(u8, @intFromEnum(Outcome.running)), h.poll().outcome);
+    for (0..5) |_| try testing.expect(!h.changed());
+    try testing.expectEqual(@as(u32, 0), f.wakes.load(.monotonic));
+
+    // The response wakes the shell. The state stays as it was until changed
+    // adopts it.
+    const zip = try testZip(alloc, &.{.{ .name = "ENC_ROOT/US505000/US505000.000", .data = "cell" }});
+    defer alloc.free(zip);
+    h.respondChunk(f.ids.items[0], zip, 200, true);
+    var tries: usize = 0;
+    while (f.wakes.load(.monotonic) == 0 and tries < 2000) : (tries += 1) lock.sleepMs(1);
+    try testing.expectEqual(@as(u32, 1), f.wakes.load(.monotonic));
+    try testing.expectEqual(@as(u8, @intFromEnum(Outcome.running)), h.poll().outcome);
+    try testing.expect(h.changed());
+    try testing.expectEqual(@as(u8, @intFromEnum(Outcome.finished)), h.poll().outcome);
+    try testing.expectEqual(@as(u32, 1), h.poll().done);
+
+    // Idle again. The unpack thread is joined without a change to report.
+    tries = 0;
+    while (h.svc.unpackerRunning() and tries < 2000) : (tries += 1) {
+        try testing.expect(!h.changed());
+        lock.sleepMs(1);
+    }
+    try testing.expect(!h.svc.unpackerRunning());
+    for (0..5) |_| try testing.expect(!h.changed());
+    try testing.expectEqual(@as(u32, 1), f.wakes.load(.monotonic));
 }

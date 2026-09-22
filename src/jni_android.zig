@@ -2068,6 +2068,8 @@ const lookout_noaa_state = extern struct {
     bytes_total: u64,
     bytes_done: u64,
     err: [256]u8,
+    outcome: u8,
+    run: u32,
 };
 
 extern fn lookout_noaa_regions(out: *?[*]const lookout_noaa_region) usize;
@@ -3863,6 +3865,7 @@ extern fn lookout_noaa_open(store: ?*c_store, sets: ?*c_sets) ?*c_noaa;
 extern fn lookout_noaa_close(n: ?*c_noaa) void;
 extern fn lookout_noaa_svc_set_http_provider(n: ?*c_noaa, get: ?HttpGetFn, cancel: ?HttpCancelFn, wake: ?NoaaWakeFn, user: ?*anyopaque) void;
 extern fn lookout_noaa_svc_http_respond_chunk(n: ?*c_noaa, req_id: u64, bytes: ?*const anyopaque, len: usize, status: c_int, done: c_int) void;
+extern fn lookout_noaa_svc_changed(n: ?*c_noaa) c_int;
 extern fn lookout_noaa_svc_poll(n: ?*c_noaa, out: *lookout_noaa_state) void;
 extern fn lookout_noaa_svc_refresh(n: ?*c_noaa) void;
 extern fn lookout_noaa_svc_have(n: ?*c_noaa, names: ?[*]const ?[*:0]const u8, count: usize) void;
@@ -4049,20 +4052,29 @@ export fn Java_org_beetlebug_lookout_Lookout_nNoaaRespondChunk(env: [*c]j.JNIEnv
     lookout_noaa_svc_http_respond_chunk(x, req, p, have, status, fin);
 }
 
-/// boolean nNoaaSvcPoll(long n, long[] out) -- nNoaaPoll for the service handle,
-/// with the same slots.
+/// boolean nNoaaSvcChanged(long n) -- adopt what arrived, and return whether
+/// the state changed since the last call.
+export fn Java_org_beetlebug_lookout_Lookout_nNoaaSvcChanged(env: [*c]j.JNIEnv, cls: j.jclass, n: j.jlong) j.jboolean {
+    _ = env;
+    _ = cls;
+    return if (lookout_noaa_svc_changed(noaaOf(n)) != 0) 1 else 0;
+}
+
+/// boolean nNoaaSvcPoll(long n, long[] out) -- the slots of nNoaaPoll, then
+/// [8] outcome and [9] run.
 export fn Java_org_beetlebug_lookout_Lookout_nNoaaSvcPoll(env: [*c]j.JNIEnv, cls: j.jclass, n: j.jlong, out: j.jlongArray) j.jboolean {
     _ = cls;
     var st: lookout_noaa_state = std.mem.zeroes(lookout_noaa_state);
     lookout_noaa_svc_poll(noaaOf(n), &st);
-    if (out != null and env_(env).GetArrayLength.?(env, out) >= 8) {
-        var buf: [8]j.jlong = .{
+    if (out != null and env_(env).GetArrayLength.?(env, out) >= 10) {
+        var buf: [10]j.jlong = .{
             @intCast(st.phase),         st.checked_at,
             @intCast(st.catalog_cells), @intCast(st.total),
             @intCast(st.done),          @intCast(st.failed),
             @bitCast(st.bytes_total),   @bitCast(st.bytes_done),
+            @intCast(st.outcome),       @intCast(st.run),
         };
-        env_(env).SetLongArrayRegion.?(env, out, 0, 8, &buf);
+        env_(env).SetLongArrayRegion.?(env, out, 0, 10, &buf);
     }
     return if (st.have_catalog != 0) 1 else 0;
 }

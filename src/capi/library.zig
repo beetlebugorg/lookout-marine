@@ -532,6 +532,13 @@ export fn lookout_noaa_poll(h: ?*lookout, out: ?*lookout_noaa_state) void {
     o.* = cast(h).noaa.poll();
 }
 
+/// 1 when the state lookout_noaa_poll reads has changed since the last call.
+/// No api lock: the frame loop adopts. See lookout-library.h.
+export fn lookout_noaa_changed(h: ?*lookout) c_int {
+    if (h == null) return 0;
+    return @intFromBool(cast(h).noaa.svc.takeChanged());
+}
+
 /// Name the NOAA cells this device already holds. See lookout-library.h.
 export fn lookout_noaa_have(h: ?*lookout, names: ?[*]const ?[*:0]const u8, n: usize) void {
     const l = locked(h);

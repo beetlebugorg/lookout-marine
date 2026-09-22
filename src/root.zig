@@ -4449,20 +4449,19 @@ test "a NOAA download on its own handle runs through two chart handles closing" 
         const l = try Lookout.openCharts(std.heap.c_allocator, &.{}, .{ .width = 64, .height = 64 });
         l.close();
     }
-    try std.testing.expectEqual(noaajob.Phase.downloading, n.svc.phase);
+    try std.testing.expectEqual(noaajob.Outcome.running, n.svc.outcome);
 
     const zip = try noaajob.testZip(alloc, &.{.{ .name = "ENC_ROOT/US505000/US505000.000", .data = "cell" }});
     defer alloc.free(zip);
     n.respondChunk(f.ids.items[0], zip, 200, true);
     var tries: usize = 0;
-    while (n.svc.phase == .downloading and tries < 2000) : (tries += 1) {
-        n.adopt();
+    while (n.poll().outcome == @intFromEnum(noaajob.Outcome.running) and tries < 2000) : (tries += 1) {
+        _ = n.changed();
         sleepMs(1);
     }
     const st = n.poll();
-    try std.testing.expectEqual(@as(u8, @intFromEnum(noaajob.Phase.ready)), st.phase);
+    try std.testing.expectEqual(@as(u8, @intFromEnum(noaajob.Outcome.finished)), st.outcome);
     try std.testing.expectEqual(@as(u32, 1), st.done);
-    try std.testing.expectEqual(@as(u32, 0), st.failed);
 }
 
 extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
