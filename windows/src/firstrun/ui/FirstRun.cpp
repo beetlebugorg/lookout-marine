@@ -444,12 +444,11 @@ namespace winrt::LookoutMarine::implementation
         // The last run's import state. A second download in one launch read
         // the first run's bands, and its bake never started.
         noaa_scan_bands.clear();
-        noaa_dest_dir.clear();
         first_run_import_idle = false;
         noaa_region_id.clear();
         noaa_picked_seeded = false;
         noaa_held_at_open.clear();
-        lk_controller_noaa_refresh(controller);
+        lookout_noaa_svc_refresh(noaa);
         first_run.BeginAt(lkw::FirstRunStep::Coverage);
         FirstRunRender();
     }
@@ -647,7 +646,7 @@ namespace winrt::LookoutMarine::implementation
             // the mariner is watching.
             uint32_t cells = 0;
             uint64_t bytes = 0;
-            lk_controller_noaa_cost(controller, noaa_region_id.c_str(), &cells, &bytes,
+            lookout_noaa_svc_cost(noaa, noaa_region_id.c_str(), &cells, &bytes,
                                     nullptr, nullptr);
 
             lkw::FirstRunOrder order;
@@ -657,7 +656,7 @@ namespace winrt::LookoutMarine::implementation
             // Name the regions rather than their ids, so "Alaska" for "d17",
             // and every one the mariner picked.
             lookout_noaa_region const *regions = nullptr;
-            size_t const n = lk_controller_noaa_regions(&regions);
+            size_t const n = lookout_noaa_regions(&regions);
             for (size_t i = 0; i < n && regions != nullptr; ++i)
             {
                 if (!lkw::RegionPicked(noaa_region_id, regions[i].id))
@@ -668,18 +667,10 @@ namespace winrt::LookoutMarine::implementation
             }
             first_run.set_order(std::move(order));
 
-            // The download directory is the managed chart set, and its charts
-            // are prepared into the library.
-            noaa_dest_dir = lkw::NoaaDownloadDir();
-            std::error_code ec;
-            std::filesystem::create_directories(noaa_dest_dir, ec);
-
             // `again` fetches the cells this device already holds as well,
-            // which is what a pick of water that is wholly installed asks for.
-            lk_controller_noaa_download(controller, noaa_region_id.c_str(),
-                                        noaa_dest_dir.c_str(), NoaaAllHeld() ? 1 : 0);
+            // for a pick of water that is wholly installed.
             first_run_import_idle = false; // a fresh import has work to watch
-            FirstRunPollStart();
+            NoaaDownload(noaa_region_id, NoaaAllHeld());
             break;
         }
 
@@ -697,38 +688,108 @@ namespace winrt::LookoutMarine::implementation
     }
 
 
-    // ---- the two services, on a timer -------------------------------------
+    // ---- the NOAA service and the setup clock ------------------------------
 
-    // Whether there is anything to watch, and the timer started or stopped to
-    // match.
-    //
-    // A read, a transfer, a bake and a bake waiting to be handed over are the
-    // four things a tick is for. With none of them the timer stops, so an idle
-    // card keeps no clock.
-    //
-    // The coverage step is the reason a catalog read is one of them. A clock
-    // that runs only for a transfer leaves the line reading "Reading NOAA's
-    // chart catalog…" for as long as the step is up, over a map holding the
-    // rough extents it was built with.
+    // The service queued a response, or the readout tick came round. Read its
+    // state only when lookout_noaa_svc_changed returns 1.
+    void MainWindow::NoaaChanged()
+    {
+        if (noaa == nullptr || !lookout_noaa_svc_changed(noaa))
+            return;
+        lookout_noaa_svc_poll(noaa, &noaa_state);
+        lookout_noaa_state const &st = noaa_state;
+
+        // Retry of an order refused with no catalog: the catalog read it
+        // started has finished with one.
+        if (noaa_retry_waiting && st.have_catalog)
+        {
+            noaa_retry_waiting = false;
+            NoaaDownload(noaa_watch_regions, noaa_watch_again);
+            return;
+        }
+
+        // The end of the download being followed. An order that fetched no
+        // chart goes to the Preparing step when setup is up. Otherwise a
+        // failure, and a refusal that a retry can clear, show an error.
+        bool const ended = st.outcome != LOOKOUT_NOAA_NONE && st.outcome != LOOKOUT_NOAA_RUNNING;
+        if (noaa_watch_run != 0 && st.run == noaa_watch_run && ended)
+        {
+            noaa_watch_run = 0;
+            bool const importing =
+                first_run.showing() && first_run.step() == lkw::FirstRunStep::Importing;
+            if (st.outcome == LOOKOUT_NOAA_FINISHED ||
+                (st.outcome == LOOKOUT_NOAA_CANCELLED && st.done > 0))
+                PrepareChartSet(lkw::NoaaDownloadDir());
+            else if (importing)
+            {
+                first_run.NoteImportStalled(st.error[0] != '\0' ? std::string(st.error)
+                                                                : std::string("No charts arrived."));
+                first_run_import_idle = true;
+                FirstRunRender();
+            }
+            else if (!first_run.showing() &&
+                     (st.outcome == LOOKOUT_NOAA_FAILED || (st.outcome == LOOKOUT_NOAA_REFUSED && st.retry)))
+                ShowNoaaError(winrt::to_hstring(st.error[0] != '\0'
+                                                    ? st.error
+                                                    : "The download stopped before any chart arrived."),
+                              st.retry != 0);
+        }
+
+        if (first_run.showing())
+            FirstRunPoll();
+        PollNoaaPane();
+    }
+
+    // Order a download of `regions` into the download set, and follow the
+    // run it starts. The run number moves by one for each order.
+    void MainWindow::NoaaDownload(std::string const &regions, bool again)
+    {
+        if (noaa == nullptr || regions.empty())
+            return;
+        std::string const dest = lkw::NoaaDownloadDir();
+        std::error_code ec;
+        std::filesystem::create_directories(dest, ec);
+        noaa_watch_regions = regions;
+        noaa_watch_again = again;
+        noaa_retry_waiting = false;
+        noaa_watch_run = noaa_state.run + 1;
+        lookout_noaa_svc_download(noaa, regions.c_str(), dest.c_str(), again ? 1 : 0);
+        NoaaChanged();
+    }
+
+    // Retry repeats the order. With no catalog loaded it reads the catalog
+    // first, and NoaaChanged repeats the order when the catalog arrives.
+    fire_and_forget MainWindow::ShowNoaaError(winrt::hstring msg, bool retry)
+    {
+        auto lifetime = get_strong();
+        Controls::ContentDialog dialog;
+        dialog.XamlRoot(DialogRoot());
+        dialog.Title(winrt::box_value(L"NOAA Charts"));
+        dialog.Content(winrt::box_value(msg));
+        if (retry)
+            dialog.PrimaryButtonText(L"Retry");
+        dialog.CloseButtonText(L"OK");
+        if (co_await dialog.ShowAsync() != Controls::ContentDialogResult::Primary)
+            co_return;
+        if (noaa_state.have_catalog)
+            NoaaDownload(noaa_watch_regions, noaa_watch_again);
+        else
+        {
+            noaa_retry_waiting = true;
+            lookout_noaa_svc_refresh(noaa);
+        }
+    }
+
+    // Whether the setup clock has anything to watch, and the timer started or
+    // stopped to match: a bake, a set scan, or an ended bake still to be
+    // handed over. NoaaChanged follows the service itself.
     void MainWindow::FirstRunPollAsNeeded()
     {
-        bool want = false;
-        if (first_run.showing() && controller != nullptr)
-        {
-            lookout_noaa_state st{};
-            lk_controller_noaa_poll(controller, &st);
-            want = st.phase == 1 ||                                 // a catalog read
-                   st.phase == 3 ||                                 // a transfer
-                   (bake_job != nullptr && bake_job->Running()) ||  // a bake
-                   !pending_set.empty() ||                          // a set scan
-                   // An import between its parts. The bake is STARTED by the
-                   // poll itself, from the tick that finds the transfer over,
-                   // so the clock has to outlive the transfer: stopping it on
-                   // the tick the download ended left the step saying
-                   // "Downloading charts" with nothing to start the bake.
-                   (first_run.step() == lkw::FirstRunStep::Importing &&
-                    !noaa_handed_over && !first_run_import_idle);
-        }
+        bool const want =
+            first_run.showing() &&
+            ((bake_job != nullptr && bake_job->Running()) || !pending_set.empty() ||
+             (first_run.step() == lkw::FirstRunStep::Importing && first_run.saw_bake() &&
+              !noaa_handed_over));
         if (want)
             FirstRunPollStart();
         else if (first_run_timer != nullptr)
@@ -753,12 +814,9 @@ namespace winrt::LookoutMarine::implementation
         PollChartSets();
 
         lkw::FirstRunLive live;
-
-        lookout_noaa_state st{};
-        lk_controller_noaa_poll(controller, &st);
-        live.downloading = st.phase == 3;
-        live.fetched     = st.done;
-        live.expected    = st.total;
+        live.downloading = noaa_state.phase == LOOKOUT_NOAA_DOWNLOADING;
+        live.fetched     = noaa_state.done;
+        live.expected    = noaa_state.total;
 
         if (bake_job)
         {
@@ -783,25 +841,6 @@ namespace winrt::LookoutMarine::implementation
             noaa_handed_over = true;
             FirstRunRender();
             return;
-        }
-
-        // The transfer is over. The download directory goes on the set list,
-        // and FinishPendingSet bakes its to_prepare list or opens it. When the
-        // transfer fetched no chart, the step shows the service's error.
-        if (!live.downloading && !first_run.saw_bake() && !noaa_dest_dir.empty() &&
-            first_run.order().has_value() && !noaa_handed_over && !first_run_import_idle &&
-            pending_set.empty() && bake_job == nullptr)
-        {
-            if (st.done == 0)
-            {
-                first_run.NoteImportStalled(st.error[0] != '\0'
-                                                ? std::string(st.error)
-                                                : std::string("The download produced no charts."));
-                first_run_import_idle = true;
-                FirstRunRender();
-            }
-            else
-                PrepareChartSet(noaa_dest_dir);
         }
 
         // The Preparing step moves four times a second. Its values are
@@ -841,7 +880,7 @@ namespace winrt::LookoutMarine::implementation
             return false;
         uint32_t cells = 0, held = 0;
         uint64_t bytes = 0, held_bytes = 0;
-        if (!lk_controller_noaa_cost(controller, noaa_region_id.c_str(), &cells, &bytes, &held,
+        if (!lookout_noaa_svc_cost(noaa, noaa_region_id.c_str(), &cells, &bytes, &held,
                                      &held_bytes))
             return false;
         return cells == 0 && held > 0;
@@ -861,7 +900,7 @@ namespace winrt::LookoutMarine::implementation
     {
         std::vector<std::wstring> out;
         lookout_noaa_region const *regions = nullptr;
-        size_t const n = lk_controller_noaa_regions(&regions);
+        size_t const n = lookout_noaa_regions(&regions);
         for (auto const &id : ids)
             for (size_t i = 0; i < n && regions != nullptr; ++i)
                 if (id == regions[i].id)
@@ -887,12 +926,12 @@ namespace winrt::LookoutMarine::implementation
             std::vector<std::string> names;
             if (ids.empty())
                 return names;
-            size_t const n = lk_controller_noaa_region_cells(controller, ids.c_str(), nullptr, 0);
+            size_t const n = lookout_noaa_svc_region_cells(noaa, ids.c_str(), nullptr, 0);
             if (n == 0)
                 return names;
             std::vector<char const *> buf(n, nullptr);
             size_t const got =
-                lk_controller_noaa_region_cells(controller, ids.c_str(), buf.data(), buf.size());
+                lookout_noaa_svc_region_cells(noaa, ids.c_str(), buf.data(), buf.size());
             for (size_t i = 0; i < got && i < buf.size(); ++i)
                 if (buf[i] != nullptr)
                 {
@@ -959,7 +998,7 @@ namespace winrt::LookoutMarine::implementation
 
         uint32_t cells = 0;
         if (!noaa_region_id.empty())
-            lk_controller_noaa_cost(controller, noaa_region_id.c_str(), &cells, nullptr, nullptr,
+            lookout_noaa_svc_cost(noaa, noaa_region_id.c_str(), &cells, nullptr, nullptr,
                                     nullptr);
         if (cells > 0)
         {
@@ -994,8 +1033,7 @@ namespace winrt::LookoutMarine::implementation
     // out: they move every tick and the step states them from its own poll.
     std::string MainWindow::NoaaCatalogSignature()
     {
-        lookout_noaa_state st{};
-        lk_controller_noaa_poll(controller, &st);
+        lookout_noaa_state const &st = noaa_state;
         return std::to_string(st.phase) + "|" + std::to_string(st.have_catalog) + "|" +
                std::to_string(st.catalog_cells) + "|" + st.date + "|" + st.error;
     }
@@ -1193,14 +1231,14 @@ namespace winrt::LookoutMarine::implementation
 
         if (names.empty())
         {
-            lk_controller_noaa_have(controller, nullptr, 0);
+            lookout_noaa_svc_have(noaa, nullptr, 0);
             return;
         }
         std::vector<char const *> cps;
         cps.reserve(names.size());
         for (auto const &n : names)
             cps.push_back(n.c_str());
-        lk_controller_noaa_have(controller, cps.data(), cps.size());
+        lookout_noaa_svc_have(noaa, cps.data(), cps.size());
     }
 
     // Price every region on its own.
@@ -1216,7 +1254,7 @@ namespace winrt::LookoutMarine::implementation
         if (controller == nullptr)
             return;
         lookout_noaa_region const *regions = nullptr;
-        size_t const n = lk_controller_noaa_regions(&regions);
+        size_t const n = lookout_noaa_regions(&regions);
         if (n == 0 || regions == nullptr)
             return;
 
@@ -1228,12 +1266,12 @@ namespace winrt::LookoutMarine::implementation
         std::set<std::string> const mine = ChartSetCells(true);
         for (size_t i = 0; i < n; ++i)
         {
-            size_t const want = lk_controller_noaa_region_cells(controller, regions[i].id,
+            size_t const want = lookout_noaa_svc_region_cells(noaa, regions[i].id,
                                                                 nullptr, 0);
             if (want == 0)
                 continue;
             std::vector<char const *> buf(want, nullptr);
-            size_t const got = lk_controller_noaa_region_cells(controller, regions[i].id,
+            size_t const got = lookout_noaa_svc_region_cells(noaa, regions[i].id,
                                                                buf.data(), buf.size());
             uint32_t held = 0, missing = 0;
             for (size_t c = 0; c < got && c < buf.size(); ++c)
@@ -1330,7 +1368,7 @@ namespace winrt::LookoutMarine::implementation
         add_rings(2, water); // a lake is water drawn back over the land
 
         lookout_noaa_region const *regions = nullptr;
-        size_t const n = lk_controller_noaa_regions(&regions);
+        size_t const n = lookout_noaa_regions(&regions);
         for (size_t i = 0; i < n && regions != nullptr; ++i)
         {
             auto const &r = regions[i];
@@ -1342,11 +1380,11 @@ namespace winrt::LookoutMarine::implementation
             // The catalog's boxes, or the region's rough extent until the
             // catalog is in. What downloads is the catalog's either way.
             std::vector<lookout_noaa_box> boxes;
-            size_t const have = lk_controller_noaa_region_coverage(controller, r.id, nullptr, 0);
+            size_t const have = lookout_noaa_svc_region_coverage(noaa, r.id, nullptr, 0);
             if (have > 0)
             {
                 boxes.resize(have);
-                lk_controller_noaa_region_coverage(controller, r.id, boxes.data(), have);
+                lookout_noaa_svc_region_coverage(noaa, r.id, boxes.data(), have);
             }
             else
             {
@@ -1420,8 +1458,7 @@ namespace winrt::LookoutMarine::implementation
         if (coastline_.empty())
             return;
 
-        lookout_noaa_state st{};
-        lk_controller_noaa_poll(controller, &st);
+        lookout_noaa_state const &st = noaa_state;
         bool const enabled = st.have_catalog != 0;
 
         // The lower 48, with Alaska and Hawaii inset. One view cannot hold all
@@ -1482,7 +1519,7 @@ namespace winrt::LookoutMarine::implementation
                   L"them. You can add the rest later."));
 
         lookout_noaa_region const *regions = nullptr;
-        size_t const n = lk_controller_noaa_regions(&regions);
+        size_t const n = lookout_noaa_regions(&regions);
         if (n == 0 || regions == nullptr)
         {
             body.Children().Append(Muted(L"The region list is not available."));
@@ -1492,8 +1529,7 @@ namespace winrt::LookoutMarine::implementation
         // Before any price: the cost call leaves out what this device holds.
         FirstRunNoaaHave();
 
-        lookout_noaa_state st{};
-        lk_controller_noaa_poll(controller, &st);
+        lookout_noaa_state const &st = noaa_state;
 
         // Ask for the catalog here rather than trusting whoever opened the
         // chart to have asked. This step is reached from a launch with no
@@ -1504,8 +1540,7 @@ namespace winrt::LookoutMarine::implementation
         if (!st.have_catalog && st.phase != 1 && !noaa_catalog_asked)
         {
             noaa_catalog_asked = true;
-            lk_controller_noaa_refresh(controller);
-            lk_controller_noaa_poll(controller, &st);
+            lookout_noaa_svc_refresh(noaa);
         }
         if (st.have_catalog)
             noaa_catalog_asked = false; // a later failure may ask again
@@ -1576,7 +1611,7 @@ namespace winrt::LookoutMarine::implementation
                 again.Content(box_value(L"Try Again"));
                 again.Click([this](auto &&, auto &&) {
                     noaa_catalog_asked = true;
-                    lk_controller_noaa_refresh(controller);
+                    lookout_noaa_svc_refresh(noaa);
                     FirstRunRender();
                 });
                 failed.Children().Append(again);
@@ -1736,14 +1771,16 @@ namespace winrt::LookoutMarine::implementation
             stop.Content(box_value(L"Stop"));
             stop.HorizontalAlignment(HorizontalAlignment::Left);
             stop.Click([this](auto &&, auto &&) {
-                lk_controller_noaa_cancel(controller);
+                lookout_noaa_svc_cancel(noaa);
                 if (bake_job)
+                {
                     // The mariner stopped it. The core skips this set on resume until a
                     // scan of it finds a file to prepare that was not there before.
                     if (lookout_chart_sets *model = ChartSetsModel(); model != nullptr &&
                         !bake_source.empty())
                         lookout_chart_sets_note_cancel(model, bake_source.c_str());
                     bake_job->Cancel();
+                }
                 FirstRunRender();
             });
             phases.Children().Append(stop);
@@ -1830,8 +1867,7 @@ namespace winrt::LookoutMarine::implementation
         // Whether the primary action has anything to do. The model decides;
         // the shell answers the three questions it cannot see.
         bool const have_catalog = [&] {
-            lookout_noaa_state st{};
-            lk_controller_noaa_poll(controller, &st);
+            lookout_noaa_state const &st = noaa_state;
             return st.have_catalog != 0;
         }();
         bool const chart_ready = lk_controller_is_open(controller) && chart_has_cells;
@@ -1850,7 +1886,7 @@ namespace winrt::LookoutMarine::implementation
                 // holds: charts to fetch, water to give back, or neither.
                 uint32_t cells = 0;
                 if (!noaa_region_id.empty())
-                    lk_controller_noaa_cost(controller, noaa_region_id.c_str(), &cells, nullptr,
+                    lookout_noaa_svc_cost(noaa, noaa_region_id.c_str(), &cells, nullptr,
                                             nullptr, nullptr);
                 FirstRunPrimaryBtn().IsEnabled(
                     lkw::ApplyEnabled(have_catalog, cells, removing.size()));
@@ -1885,7 +1921,7 @@ namespace winrt::LookoutMarine::implementation
             f.credit = std::wstring{ ScaleBarCredit().Text() };
             f.removing = NoaaRegionNames(removing);
             if (first_run.step() == lkw::FirstRunStep::Coverage && !noaa_region_id.empty())
-                lk_controller_noaa_cost(controller, noaa_region_id.c_str(), &f.cells,
+                lookout_noaa_svc_cost(noaa, noaa_region_id.c_str(), &f.cells,
                                         &f.bytes, &f.held, &f.held_bytes);
             std::wstring const note = first_run.Footnote(f);
             FirstRunFootnote().Text(winrt::hstring{ note });

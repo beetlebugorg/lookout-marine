@@ -142,6 +142,8 @@ namespace winrt::LookoutMarine::implementation
         readout_timer.Interval(std::chrono::milliseconds(100));
         readout_timer.Tick([this](auto &&, auto &&) { OnRendering(nullptr, nullptr); });
 
+        NoaaOpen();
+
         // The ROOT ELEMENT's SizeChanged, not the window's: the element fires
         // after layout, when ActualWidth/Height already hold the new size:
         // which is also the moment the first open becomes possible, because
@@ -164,8 +166,9 @@ namespace winrt::LookoutMarine::implementation
             StopRenderThread();
             lk_controller_free(controller);
             controller = nullptr;
-            // The set model holds a scan thread and the store, so it goes
-            // before the store does.
+            // The NOAA service borrows the set model, and the set model holds
+            // a scan thread and the store, so they close in that order.
+            NoaaClose();
             CloseChartSets();
             // The store coalesces its writes, so the last of them reaches the
             // disk here rather than at whatever the window was doing.
@@ -379,9 +382,8 @@ namespace winrt::LookoutMarine::implementation
             // landing answer raises needs-redraw, so a resolve keeps the render
             // loop ticking until it is done.
             PollChartLinks();
-            // A download the Charts page is reporting. Returns at once unless
-            // that line is on the page.
-            PollNoaaPane();
+            // The NOAA service's responses, beside the wake that posts them.
+            NoaaChanged();
             // A removal the page is reporting, for the same reason.
             PollRemovalPane();
         }

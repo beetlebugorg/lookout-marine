@@ -923,130 +923,17 @@ lk_controller_set_http_provider(lk_controller *self, lk_http_get get,
 }
 
 void
-lk_controller_http_respond(lk_controller *self, unsigned long long req_id,
-                           const void *bytes, size_t len, int status)
-{
-    /* lookout_http_respond takes no lock of the core's and ignores an unknown
-     * id, so a fetch landing late is harmless, but never after close: the
-     * shell detaches the provider and joins its fetches first. */
-    if (!lk_controller_is_open(self))
-        return;
-    lookout_http_respond(self->handle, req_id, bytes, len, status);
-    /* An answer is adopted at the top of a frame, and the render loop stands
-     * down when nothing is moving, so a resolve landing with no gesture behind
-     * it needs someone to ask for the next frame. */
-    kick(self);
-}
-
-void
 lk_controller_http_respond_chunk(lk_controller *self, unsigned long long req_id,
                                  const void *bytes, size_t len, int status, int done)
 {
+    /* lookout_http_respond_chunk does not lock and ignores an unknown
+     * id, so a late fetch is harmless, but never after close: the
+     * shell detaches the provider and joins its fetches first. */
     if (!lk_controller_is_open(self))
         return;
     lookout_http_respond_chunk(self->handle, req_id, bytes, len, status, done);
-    /* Kick on every piece. A piece is adopted at the top of a frame like any
-     * other answer, and that adoption writes it to disk. Pieces landing while
-     * the loop is parked queue up in memory. Kicking only on the last piece
-     * holds the whole archive in that queue, and this call exists to avoid
-     * that cost. Batching the kicks saves little: both halves of kick
-     * are idempotent, a SetEvent on a signalled event and a flag store, so
-     * the roughly 900 pieces of a district zip are cheap. */
-    kick(self);
-}
-
-/* ---- NOAA charts --------------------------------------------------------- */
-
-size_t
-lk_controller_noaa_regions(const lookout_noaa_region **out)
-{
-    /* Static table, no handle: the first-run picker lists the regions before
-     * any chart exists. */
-    return lookout_noaa_regions(out);
-}
-
-size_t
-lk_controller_noaa_region_coverage(lk_controller *self, const char *region_id,
-                                   lookout_noaa_box *out, size_t cap)
-{
-    if (!lk_controller_is_open(self) || region_id == NULL)
-        return 0;
-    return lookout_noaa_region_coverage(self->handle, region_id, out, cap);
-}
-
-void
-lk_controller_noaa_refresh(lk_controller *self)
-{
-    if (!lk_controller_is_open(self))
-        return;
-    lookout_noaa_refresh(self->handle);
-    /* The catalog read runs through the fetcher, and the fetcher lands its
-     * answers at the top of a frame. Same reason as the http respond above. */
-    kick(self);
-}
-
-void
-lk_controller_noaa_poll(lk_controller *self, lookout_noaa_state *out)
-{
-    if (out == NULL)
-        return;
-    /* A poll on a closed handle answers a zeroed state rather than leaving the
-     * caller reading its own stack: the first-run page polls on a timer and
-     * must not have to know whether the handle is up yet. */
-    memset(out, 0, sizeof *out);
-    if (!lk_controller_is_open(self))
-        return;
-    lookout_noaa_poll(self->handle, out);
-}
-
-void
-lk_controller_noaa_have(lk_controller *self, const char *const *names, size_t n)
-{
-    if (!lk_controller_is_open(self))
-        return;
-    lookout_noaa_have(self->handle, names, n);
-}
-
-int
-lk_controller_noaa_cost(lk_controller *self, const char *region_ids,
-                        uint32_t *out_cells, uint64_t *out_bytes,
-                        uint32_t *out_held, uint64_t *out_held_bytes)
-{
-    if (out_cells != NULL)      *out_cells = 0;
-    if (out_bytes != NULL)      *out_bytes = 0;
-    if (out_held != NULL)       *out_held = 0;
-    if (out_held_bytes != NULL) *out_held_bytes = 0;
-    if (!lk_controller_is_open(self) || region_ids == NULL)
-        return 0;
-    return lookout_noaa_cost(self->handle, region_ids, out_cells, out_bytes,
-                             out_held, out_held_bytes);
-}
-
-size_t
-lk_controller_noaa_region_cells(lk_controller *self, const char *region_ids,
-                                const char **out, size_t cap)
-{
-    if (!lk_controller_is_open(self) || region_ids == NULL)
-        return 0;
-    return lookout_noaa_region_cells(self->handle, region_ids, out, cap);
-}
-
-void
-lk_controller_noaa_download(lk_controller *self, const char *region_ids,
-                            const char *dest_dir, int again)
-{
-    if (!lk_controller_is_open(self) || region_ids == NULL || dest_dir == NULL)
-        return;
-    lookout_noaa_download(self->handle, region_ids, dest_dir, again);
-    kick(self);
-}
-
-void
-lk_controller_noaa_cancel(lk_controller *self)
-{
-    if (!lk_controller_is_open(self))
-        return;
-    lookout_noaa_cancel(self->handle);
+    /* A piece is adopted at the top of a frame, and the render loop stands
+     * down when the view is still, so this starts the next frame. */
     kick(self);
 }
 

@@ -953,8 +953,7 @@ namespace winrt::LookoutMarine::implementation
     {
         if (noaa_pane_count == nullptr || controller == nullptr)
             return;
-        lookout_noaa_state nst{};
-        lk_controller_noaa_poll(controller, &nst);
+        lookout_noaa_state const &nst = noaa_state;
         if (nst.phase != 3)
         {
             // The transfer ended. The section goes, and the sets it landed in
@@ -1001,8 +1000,7 @@ namespace winrt::LookoutMarine::implementation
         s += removal_job != nullptr ? "|removing" : "|kept";
         if (lk_controller_is_open(controller))
         {
-            lookout_noaa_state nst{};
-            lk_controller_noaa_poll(controller, &nst);
+            lookout_noaa_state const &nst = noaa_state;
             s += nst.phase == 3 ? "|downloading" : "|quiet";
         }
         return s;
@@ -2015,8 +2013,7 @@ namespace winrt::LookoutMarine::implementation
             // transfer begun here otherwise runs behind it.
             if (lk_controller_is_open(controller))
             {
-                lookout_noaa_state nst{};
-                lk_controller_noaa_poll(controller, &nst);
+                lookout_noaa_state const &nst = noaa_state;
                 if (nst.phase == 3)
                 {
                     header(L"Downloading from NOAA");
@@ -2034,7 +2031,7 @@ namespace winrt::LookoutMarine::implementation
                     Controls::Button stop;
                     stop.Content(winrt::box_value(L"Cancel"));
                     stop.Click([this](auto &&, auto &&) {
-                        lk_controller_noaa_cancel(controller);
+                        lookout_noaa_svc_cancel(noaa);
                         BuildSettingsPage();
                     });
                     Controls::Grid::SetColumn(stop, 1);
@@ -2182,8 +2179,7 @@ namespace winrt::LookoutMarine::implementation
                 std::wstring checked;
                 if (lk_controller_is_open(controller))
                 {
-                    lookout_noaa_state nst{};
-                    lk_controller_noaa_poll(controller, &nst);
+                    lookout_noaa_state const &nst = noaa_state;
                     if (nst.checked_at != 0)
                     {
                         std::time_t at = (std::time_t)nst.checked_at;

@@ -301,11 +301,10 @@ namespace winrt::LookoutMarine::implementation
         }
         if (opened)
         {
-            // The fetcher, before setup can need it: the coverage step prices
-            // regions from NOAA s catalog and the online step resolves a style,
-            // and both go through this door.
+            // The chart link fetcher, before the online step resolves a style,
+            // and the NOAA catalog the coverage step prices regions from.
             ChartLinksAttach();
-            lk_controller_noaa_refresh(controller);
+            lookout_noaa_svc_refresh(noaa);
             StartRenderThread();
         }
         // Either way the loader comes down: there is no chart coming, and a

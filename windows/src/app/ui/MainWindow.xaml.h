@@ -442,7 +442,6 @@ namespace winrt::LookoutMarine::implementation
         void ChartLinksDetach();  // before the handle closes
         void MigrateChartLinks(); // the old store, handed over once
         void PollChartLinks();    // the snapshot; UI thread, one consumer
-        void ChartLinkRespond(uint64_t id, void const *bytes, size_t len, int status);
         // ---- setup (firstrun/) ------------------------------------------
         //
         // The MODEL decides; this half only draws it. See firstrun/lk_firstrun.h.
@@ -480,8 +479,8 @@ namespace winrt::LookoutMarine::implementation
          * the catalog the core holds. */
         void FirstRunRepriceRegions();
         void FirstRunPollStart();
-        /* Start or stop that poll by what there is to watch: a catalog read, a
-         * transfer, a bake, or an import between its parts. */
+        /* Start or stop that poll by what there is to watch: a bake, a set
+         * scan, or an ended bake still to be handed over. */
         void FirstRunPollAsNeeded();
 
         /* The depth step: the boat the mariner describes, and the parts of the
@@ -605,8 +604,6 @@ namespace winrt::LookoutMarine::implementation
         // What the online step has been given, so the button can read Skip
         // until there is something to continue with.
         std::string chart_link_url;
-        // The download directory of this run's order, lkw::NoaaDownloadDir.
-        std::string noaa_dest_dir;
         // The usage band of every file the running set bake prepares, which
         // with the bake's own count gives the by-band breakdown. See
         // lkw::FirstRunBands.
@@ -627,6 +624,33 @@ namespace winrt::LookoutMarine::implementation
         static void HttpGetThunk(void *user, unsigned long long req_id,
                                  const char *url, int allow_file);
         static void HttpCancelThunk(void *user, unsigned long long req_id);
+
+        // The NOAA service, open for the life of the window with its own
+        // fetcher (library/ui/ChartLinks.cpp). noaa_state is the state as of
+        // the last lookout_noaa_svc_changed that returned 1.
+        lookout_noaa *noaa{ nullptr };
+        lookout_noaa_state noaa_state{};
+        std::atomic<bool> noaa_wake_posted{ false };
+        winrt::Microsoft::UI::Dispatching::DispatcherQueue noaa_queue{ nullptr };
+        void NoaaOpen();
+        void NoaaClose();
+        static void NoaaGetThunk(void *user, unsigned long long req_id, const char *url,
+                                 int allow_file);
+        static void NoaaCancelThunk(void *user, unsigned long long req_id);
+        static void NoaaWakeThunk(void *user);
+        /* Adopt the service's responses and, when its state changed, read it
+         * and pass it to setup and the Charts page. */
+        void NoaaChanged();
+        /* Order a download into the download set and follow it to its end. */
+        void NoaaDownload(std::string const &regions, bool again);
+        /* The run number of the download being followed, 0 for none, and
+         * the order to repeat on Retry. */
+        uint32_t noaa_watch_run{ 0 };
+        std::string noaa_watch_regions;
+        bool noaa_watch_again{ false };
+        /* Retry is waiting for the catalog read it started. */
+        bool noaa_retry_waiting{ false };
+        fire_and_forget ShowNoaaError(winrt::hstring msg, bool retry);
 
         std::vector<ChartLink> chart_links;
         std::string active_chart_link; // "" draws the built-in chart
