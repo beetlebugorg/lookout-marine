@@ -401,7 +401,11 @@ pub const Links = struct {
         defer self.alloc.free(z);
         const id = self.next_req;
         self.next_req += 1;
-        self.reqs.append(self.alloc, .{ .id = id, .epoch = self.epoch, .kind = kind }) catch return 0;
+        if (!self.gather.begin(id)) return 0;
+        self.reqs.append(self.alloc, .{ .id = id, .epoch = self.epoch, .kind = kind }) catch {
+            self.gather.drop(id);
+            return 0;
+        };
         if (kind == .tile) self.tiles_inflight += 1 else self.resolve_inflight += 1;
         // The api lock is already held, and the shell's rule is to start the
         // fetch and return. It may answer before this call ends — respond only
@@ -422,6 +426,7 @@ pub const Links = struct {
                 self.resolve_inflight -= 1;
             }
             if (tell_shell) {
+                self.gather.drop(id);
                 if (self.cancel) |c| c(self.user, id);
             }
             return req;
@@ -440,6 +445,7 @@ pub const Links = struct {
             }
             const r = self.reqs.swapRemove(i);
             self.resolve_inflight -= 1;
+            self.gather.drop(r.id);
             if (self.cancel) |c| c(self.user, r.id);
         }
     }
@@ -460,6 +466,7 @@ pub const Links = struct {
             const r = self.reqs.swapRemove(i);
             self.tiles_inflight -= 1;
             self.sink.tileRespond(self.sink.ctx, r.kind.tile, &.{}, .failed);
+            self.gather.drop(r.id);
             if (self.cancel) |c| c(self.user, r.id);
         }
         for (self.tile_queue.items) |q| {

@@ -415,6 +415,10 @@ pub const Service = struct {
         const id = self.next_req | id_mark;
         self.next_req += 1;
         self.reqs.append(self.alloc, .{ .id = id, .kind = kind, .job = job }) catch return 0;
+        if (kind == .catalog and !self.gather.begin(id)) {
+            _ = self.reqs.pop();
+            return 0;
+        }
         if (kind == .cell) {
             const t = self.plan.items[job];
             self.stageCell(id, t.name, if (t.district == 0) MAX_ZIP_BYTES else MAX_BUNDLE_BYTES);
@@ -439,6 +443,7 @@ pub const Service = struct {
             for (self.reqs.items) |r| c(self.user, r.id);
         }
         self.reqs.clearRetainingCapacity();
+        self.gather.clear();
         self.clearStage();
         self.inflight = 0;
         self.catalog_inflight = false;
