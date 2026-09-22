@@ -1,4 +1,4 @@
-/* library/links.c — charts by link. See library/links.h. */
+/* library/links.c: charts by link. See library/links.h. */
 #include "library/links.h"
 
 #include "library/fetch.h"

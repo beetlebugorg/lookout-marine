@@ -1,4 +1,4 @@
-/* ui/charts/gallery.h — the charts to draw, as tiles.
+/* ui/charts/gallery.h: the charts to draw, as tiles.
  *
  * ONE CHART DRAWS AT A TIME. Lookout's own chart is built from the installed
  * sets; a link is a publisher's style drawn instead of it. Two whole charts

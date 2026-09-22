@@ -1,8 +1,8 @@
-/* ui/settings/plugins.c — the controls a plugin declared.
+/* ui/settings/plugins.c: the controls a plugin declared.
  *
  * A plugin's manifest names its settings: a number with a unit and a range, a
  * toggle, a text box, and a list the mariner adds rows to. This builds those
- * controls, and puts each one in whatever section the plugin filed it under —
+ * controls, and puts each one in whatever section the plugin filed it under,
  * so a plugin can add a control to a page the app already has, not only to one
  * the plugins brought into existence.
  */
@@ -86,8 +86,8 @@ lk_plugin_number_changed (GtkSpinButton *spin, gpointer user_data)
 
 /* A spin button over the range a manifest declared.
  *
- * The step suits the range it covers — metres of CPA move in tens, minutes and
- * knots one at a time — and the digits follow the step, so a whole-number range
+ * The step suits the range it covers, metres of CPA move in tens, minutes and
+ * knots one at a time, and the digits follow the step, so a whole-number range
  * shows no ".0". A plugin's own control and a cell in one of its lists are both
  * built from this. */
 static GtkWidget *
@@ -394,7 +394,7 @@ lk_plugin_status_poll (gpointer user_data)
 }
 
 /* One row: what it is called and what it is doing, a switch that pauses it, and
- * — folded away until it is wanted — the address behind it. The mariner reads
+ *, folded away until it is wanted, the address behind it. The mariner reads
  * the first line and touches nothing else most days. */
 static void
 lk_plugin_fill_row (LkSettings *settings, GtkWidget *box,
@@ -568,8 +568,8 @@ lk_plugin_nearby_add_clicked (GtkButton *button, gpointer user_data)
  *
  * A HOST the list points at is not offered again, whatever port the row uses.
  * One machine announces the port it wants to be reached on and is often
- * reachable on another — a Signal K server announces its websocket on 3000 and
- * carries the same boat on 8375 — so a second row to it would send everything
+ * reachable on another, a Signal K server announces its websocket on 3000 and
+ * carries the same boat on 8375, so a second row to it would send everything
  * twice. */
 static gboolean
 lk_plugin_holds_host (LkSettings *settings, const LkPluginList *list, const char *host)
@@ -787,7 +787,7 @@ lk_plugin_fill_tab (GtkWidget *page, LkSettings *settings, const char *tab)
       lk_plugin_fill_rows (settings, list, box);
 
       /* The plugin's own sentence, never the window's. Connections holds two
-       * lists — NMEA gateways and Signal K servers — and a line about WiFi
+       * lists. NMEA gateways and Signal K servers, and a line about WiFi
        * gateways under a list of Signal K servers sends the mariner to the
        * wrong port. */
       if (list->footer[0] != '\0')

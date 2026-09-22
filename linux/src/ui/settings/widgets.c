@@ -1,4 +1,4 @@
-/* ui/settings/widgets.c — the pieces every settings page is built from.
+/* ui/settings/widgets.c: the pieces every settings page is built from.
  *
  * A page is a column of sections; a section is a title over a column of rows;
  * a row is a label and one control. The bindings below carry a pointer to the

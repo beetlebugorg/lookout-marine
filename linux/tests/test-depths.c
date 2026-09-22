@@ -1,4 +1,4 @@
-/* test-depths.c — the depth step's arithmetic.
+/* test-depths.c: the depth step's arithmetic.
  *
  * The step asks a mariner two things about their boat and derives the three
  * numbers the engine shades water with. Getting that wrong shades water the

@@ -1,4 +1,4 @@
-/* ui/firstrun/importing.c — the wait, while charts arrive and convert.
+/* ui/firstrun/importing.c: the wait, while charts arrive and convert.
  *
  * A cell holds survey data rather than a drawn chart, so each one converts on
  * the way in. SETUP STAYS OPEN THROUGH IT, because the chart opens when the

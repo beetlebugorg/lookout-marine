@@ -1,4 +1,4 @@
-/* test-depth-step.c — the depth step's controls.
+/* test-depth-step.c: the depth step's controls.
  *
  * The step asks for a draft in the unit on screen. A change of unit has to
  * convert the boat the step already holds, and every number has to stay round

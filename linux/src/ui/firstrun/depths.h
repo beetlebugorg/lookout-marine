@@ -1,4 +1,4 @@
-/* ui/firstrun/depths.h — the depth step, and the ladder behind it.
+/* ui/firstrun/depths.h: the depth step, and the ladder behind it.
  *
  * The step asks for a draft and a clearance under the keel. Everything the
  * engine draws with follows from those two, and the arithmetic is here so it

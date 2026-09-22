@@ -1,4 +1,4 @@
-/* ui/firstrun/online.c — a published chart style, drawn as the chart.
+/* ui/firstrun/online.c: a published chart style, drawn as the chart.
  *
  * One online chart draws at a time, and while it draws it IS the chart. The
  * Mariner settings do not reach inside one, because a linked chart renders the

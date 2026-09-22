@@ -1,4 +1,4 @@
-/* library/fetch.c — see library/fetch.h. */
+/* library/fetch.c: see library/fetch.h. */
 #include "library/fetch.h"
 
 #include "library/agent.h"
@@ -7,8 +7,8 @@
 #include <string.h>
 
 struct _LkFetcher {
-  /* One session for everything lookout asks for — style, TileJSON, sprite
-   * packs, tiles — so soup's per-host pooling applies to the lot and no source
+  /* One session for everything lookout asks for, style, TileJSON, sprite
+   * packs, tiles, so soup's per-host pooling applies to the lot and no source
    * can hold a lane another source's tiles are waiting on. */
   SoupSession *session;
   /* request id -> LkFetch, borrowed. Each fetch is freed by its own
@@ -262,7 +262,7 @@ lk_fetcher_read_done (GObject *source_object, GAsyncResult *result, gpointer use
 }
 
 /* The path a local url names, or NULL when it names a host. A mariner's own
- * style.json is a real way to install a chart — offline, or one they wrote
+ * style.json is a real way to install a chart, offline, or one they wrote
  * themselves. */
 static const char *
 lk_fetcher_local_path (const char *url)

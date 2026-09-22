@@ -1,4 +1,4 @@
-/* ui/settings/charts.c — the Charts page.
+/* ui/settings/charts.c: the Charts page.
  *
  * In the order a mariner asks: which chart is DRAWN, what it is built from,
  * what is arriving now, and where to get more.
@@ -94,8 +94,8 @@ lk_add_link_submit (LkSettings *settings, GtkWidget *entry)
   if (text == NULL || text[0] == '\0')
     return;
   lk_chart_links_add (lk_app_model_get_chart_links (settings->model), text);
-  /* The window goes at once. What happens next — reading the style, or
-   * refusing it — is reported on the page, under the gallery. */
+  /* The window goes at once. What happens next, reading the style, or
+   * refusing it, is reported on the page, under the gallery. */
   if (window != NULL)
     gtk_window_destroy (GTK_WINDOW (window));
 }
@@ -1013,7 +1013,7 @@ lk_settings_fill_work_list (LkSettings *settings)
   /* A removal, the same way. Deleting a library is thousands of files and it
    * runs behind the app: without this the panel says nothing at all while the
    * charts go, which reads as the removal having done nothing. It offers no
-   * Cancel — the set is already off the list, and half a deleted library is
+   * Cancel, the set is already off the list, and half a deleted library is
    * not a state to stop in. */
   if (gone != NULL)
     {
@@ -1055,9 +1055,8 @@ static char *lk_noaa_checked_text (LkNoaa *noaa);
 
 /* When the catalog was last read, on the row that offers it.
  *
- * The caption was lettered once, when the page was built, so a read that
- * landed while the page stood left it saying what it said at launch, or
- * saying nothing at all on a device that had never read one. */
+ * The row reads the time again whenever the service moves, so a catalog read
+ * that finishes while the page stands is on it. */
 static void
 lk_settings_refresh_noaa_checked (LkSettings *settings)
 {

@@ -1,4 +1,4 @@
-/* ui/charts/band-ramp.h — what scales a chart set holds.
+/* ui/charts/band-ramp.h: what scales a chart set holds.
  *
  * One bar in the S-52 depth ramp, split by usage band, finest first, with a
  * legend under it. A set that stops at Coastal does not draw the harbour a

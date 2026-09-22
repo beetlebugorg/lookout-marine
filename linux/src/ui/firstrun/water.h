@@ -1,4 +1,4 @@
-/* ui/firstrun/water.h — what the depth answers do to a chart.
+/* ui/firstrun/water.h: what the depth answers do to a chart.
  *
  * A seabed shoaling to a shore, shaded at the derived contours, with spot
  * depths on it. The depth range follows the deep contour, so all four shades

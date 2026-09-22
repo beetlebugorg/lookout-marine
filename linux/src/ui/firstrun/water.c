@@ -1,4 +1,4 @@
-/* ui/firstrun/water.c — see ui/firstrun/water.h. */
+/* ui/firstrun/water.c: see ui/firstrun/water.h. */
 #include "ui/firstrun/water.h"
 
 #include <lookout.h>

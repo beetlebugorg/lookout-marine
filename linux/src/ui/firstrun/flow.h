@@ -1,4 +1,4 @@
-/* ui/firstrun/flow.h — setup, over the running app.
+/* ui/firstrun/flow.h: setup, over the running app.
  *
  * The first thing a mariner sees when there is nothing to draw: what this is,
  * where the charts come from, and the one screen that source needs.

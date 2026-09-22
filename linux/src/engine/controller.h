@@ -1,4 +1,4 @@
-/* engine/controller.h — the single owner of the `lookout*` handle.
+/* engine/controller.h: the single owner of the `lookout*` handle.
  *
  * Every lookout_* call funnels through here, on the main thread only (the
  * engine wants one thread, GTK wants the main one). Drives the on-demand render
@@ -162,7 +162,7 @@ void lk_chart_controller_set_http_provider (LkChartController *self,
                                             gpointer user);
 
 /* Answer one ask: `status` is the final HTTP status, or 0 for a transport
- * failure. Safe after the handle closed — the answer is dropped. */
+ * failure. Safe after the handle closed, the answer is dropped. */
 void lk_chart_controller_http_respond (LkChartController *self, guint64 req_id,
                                        const void *bytes, gsize len, int status);
 
@@ -287,7 +287,7 @@ gboolean lk_chart_controller_plugins_active (LkChartController *self);
 
 /* Every loaded plugin with its settings schema and the values in force, as
  * lookout_plugins_read documents. NULL when no plugin layer is up, which is NOT
- * the same as a layer holding no plugins (that answers a read with no rows) — a
+ * the same as a layer holding no plugins (that answers a read with no rows), a
  * caller with a registry already on screen must keep it rather than empty the
  * window. Transfer full; free it with lookout_plugins_free. */
 lookout_plugins *lk_chart_controller_plugins_read (LkChartController *self);

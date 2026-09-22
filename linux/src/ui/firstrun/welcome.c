@@ -1,4 +1,4 @@
-/* ui/firstrun/welcome.c — what this is, and the ways to get a chart.
+/* ui/firstrun/welcome.c: what this is, and the ways to get a chart.
  *
  * The hero is a real ENC, this app's own render of Annapolis, so the promise
  * is visible before anything downloads. The rows below answer what to do next.

@@ -1,4 +1,4 @@
-/* ui/startup-view.c — what the window shows before a chart is open.
+/* ui/startup-view.c: what the window shows before a chart is open.
  *
  * The loader and its three steps, an overlay the window hides once the chart
  * draws.

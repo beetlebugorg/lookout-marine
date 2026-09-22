@@ -1,4 +1,4 @@
-/* ui/firstrun/flow.c — the step on screen, and the action under it.
+/* ui/firstrun/flow.c: the step on screen, and the action under it.
  *
  * See ui/firstrun/flow.h. The card scrolls its step and keeps its footer: a
  * step taller than the window must still be reachable.

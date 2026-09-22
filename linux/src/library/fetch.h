@@ -1,4 +1,4 @@
-/* library/fetch.h — the url fetcher lookout drives.
+/* library/fetch.h: the url fetcher lookout drives.
  *
  * lookout does no networking. It asks the shell for a url and the shell
  * answers, which is how a publisher's style, its TileJSON, its sprite packs

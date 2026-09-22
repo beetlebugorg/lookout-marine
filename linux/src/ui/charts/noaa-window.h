@@ -1,4 +1,4 @@
-/* ui/charts/noaa-window.h — picking NOAA's waters, in a window of its own.
+/* ui/charts/noaa-window.h: picking NOAA's waters, in a window of its own.
  *
  * The picker is a map of the United States with the districts drawn on it. In
  * the settings window it would come up in a pane about 550 points wide, which

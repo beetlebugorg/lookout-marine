@@ -1,4 +1,4 @@
-/* ui/settings/widgets.h — the pieces every settings page is built from.
+/* ui/settings/widgets.h: the pieces every settings page is built from.
  *
  * Each page includes this and ui/settings/private.h, and builds itself out of
  * sections and rows. A control that edits one mariner field takes a pointer to
@@ -46,7 +46,7 @@ GtkWidget *lk_group (GtkWidget *section, int spacing);
 
 /* A caption that CLOSES a section, for what its controls cannot say on their
  * own. It sits outside the shelf, as the reference puts it, and LK_GAP_FOOTER
- * clear of whatever is above it — the shelf has an edge, and a note that hugs
+ * clear of whatever is above it, the shelf has an edge, and a note that hugs
  * that edge reads as the last row rather than as a note on the section. */
 GtkWidget *lk_footer (GtkWidget *section, const char *text);
 

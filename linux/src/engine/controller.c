@@ -135,7 +135,7 @@ lk_chart_controller_push_readouts (LkChartController *self)
   lk_app_model_refresh_raster_state (self->model);
 
   /* Under follow the CORE moves the camera without the shell; the pick's
-   * mark must ride its water, not its pixels. Only the mark moves — the
+   * mark must ride its water, not its pixels. Only the mark moves. The
    * report's frame is fixed for the report's life. */
   double plon, plat;
   if (lk_app_model_get_pick_geo (self->model, &plon, &plat))
@@ -155,7 +155,7 @@ lk_chart_controller_push_readouts (LkChartController *self)
  * the platform timer, on or off.
  *
  * Three verdicts. RENDER draws. WAIT keeps the frame clock, or takes the loop
- * off it and sets a one-shot when a rate comes with it — that is the slow beat
+ * off it and sets a one-shot when a rate comes with it. That is the slow beat
  * a plugin layer needs, because traffic arrives with no gesture behind it.
  * IDLE stops the loop until something kicks it. */
 
@@ -196,7 +196,7 @@ lk_chart_controller_tick (GtkWidget     *widget,
           lk_chart_view_surface_ready (LK_CHART_VIEW (self->view));
           /* The chart is on the screen, so the loader has done its job. A
            * library of a thousand cells keeps tessellating for a while after
-           * that, and the build pill carries it — a loader still up over a
+           * that, and the build pill carries it. A loader still up over a
            * drawn chart says the app is stuck when it is not. */
           if (self->model != NULL)
             lk_app_model_set_first_build_done (self->model, TRUE);
@@ -324,7 +324,7 @@ lk_bundled_plugin_dir (void)
 
 /* Bundled first, then installed. The order is the precedence the core
  * documents: $LOOKOUT_PLUGINS (which loads at open, before this runs), then
- * bundled, then installed — on an id collision the first copy loaded wins, so
+ * bundled, then installed, on an id collision the first copy loaded wins, so
  * a developer override beats the shipped copy and the shipped copy beats one
  * the mariner installed under the same id.
  *
@@ -824,7 +824,7 @@ lk_chart_controller_open (LkChartController *self,
    * in the window, so the compositor draws it crisply and the chrome floats over. */
   if (!lk_chart_view_ensure_native_surface (LK_CHART_VIEW (view)))
     {
-      g_warning ("open FAILED — no native surface");
+      g_warning ("open FAILED, no native surface");
       if (self->model != NULL)
         lk_app_model_set_open_error (self->model, "The chart view has no drawing surface.");
       return FALSE;
@@ -841,7 +841,7 @@ lk_chart_controller_open (LkChartController *self,
 
   if (handle == NULL)
     {
-      g_warning ("open FAILED (lookout_open_in_window returned NULL — Vulkan device or chart file?)");
+      g_warning ("open FAILED (lookout_open_in_window returned NULL. Vulkan device or chart file?)");
       if (self->model != NULL)
         lk_app_model_set_open_error (self->model,
                                      "Couldn't open the chart.\n"
@@ -860,7 +860,7 @@ lk_chart_controller_open (LkChartController *self,
 
   /* Re-install the mariner's raster charts. A raster chart belongs to a lookout
    * handle, and the close above destroyed the old one, so every open replays
-   * them — that is what makes a raster chart survive both a change of ENC and a
+   * them. That is what makes a raster chart survive both a change of ENC and a
    * restart. */
   if (self->model != NULL)
     lk_app_model_reinstall_raster_charts (self->model);
@@ -917,7 +917,7 @@ lk_chart_controller_open (LkChartController *self,
   if (spec != NULL)
     {
       /* Every field must parse whole. A non-numeric field read as 0 would
-       * open on null island — and the 3 s pose save would then keep it. */
+       * open on null island, and the 3 s pose save would then keep it. */
       g_auto (GStrv) parts = g_strsplit (spec, ",", -1);
       guint count = g_strv_length (parts);
       double fields[4] = { 0, 0, 0, 0 };
@@ -991,7 +991,7 @@ lk_chart_controller_close (LkChartController *self)
   /* Before the handle: a fetch landing later must find the provider gone,
    * never a dying engine. The respond wrapper below refuses a NULL handle,
    * and the links layer cancels its in-flight fetches before the NEXT handle
-   * can ask for anything — a new handle reuses the old one's request ids. */
+   * can ask for anything, a new handle reuses the old one's request ids. */
   lookout_set_http_provider (self->handle, NULL, NULL, NULL);
 
   /* lookout_close writes the pose and the mariner settings down on its way
@@ -1736,7 +1736,7 @@ lk_chart_controller_pick (LkChartController *self, double lon, double lat)
   /* The ranked pick, not the raw one: the engine's own list is in draw order,
    * which puts the land area before the light that was tapped. The core drops
    * the meta objects that say nothing, demotes a feature the cell gave no
-   * attributes, and states depths in the mariner's unit — once, for every
+   * attributes, and states depths in the mariner's unit, once, for every
    * shell. */
   return lookout_picks_read (self->handle, lon, lat);
 }

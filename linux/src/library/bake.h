@@ -164,7 +164,7 @@ gboolean lk_chart_bake_delete_download (const char        *prepared,
  *
  * `name` is the set the mariner removed, for the report to name. `on_progress`
  * runs ON THE MAIN THREAD as chart directories go, and once more with an empty
- * name when the removal is over — that last report is what takes the panel
+ * name when the removal is over. That last report is what takes the panel
  * down. Both may be NULL for a delete nobody is watching.
  *
  * The count is the mariner's own unit: the bake writes a directory per chart,

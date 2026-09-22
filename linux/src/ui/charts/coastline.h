@@ -1,4 +1,4 @@
-/* ui/charts/coastline.h — the coastline the coverage picker draws, and the
+/* ui/charts/coastline.h: the coastline the coverage picker draws, and the
  * projection it draws through.
  *
  * Baked from vendor/gshhg/coastline.geojson.gz, the same GSHHG data the

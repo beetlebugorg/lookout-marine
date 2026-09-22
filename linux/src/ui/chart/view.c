@@ -5,7 +5,7 @@
 #include "ui/hud/hud.h"
 #include "util/json.h"
 
-/* S-52 NODATA, day scheme — what lookout's first frame clears to. */
+/* S-52 NODATA, day scheme: what lookout's first frame clears to. */
 static const GdkRGBA LK_NODATA_COLOR = { 0.576f, 0.682f, 0.733f, 1.0f };
 
 /* A press travelling no further than this is a tap (identify), not a throw. */
@@ -271,7 +271,7 @@ lk_chart_view_realize (GtkWidget *widget)
   GdkSurface *parent = native != NULL ? gtk_native_get_surface (native) : NULL;
   if (parent == NULL)
     {
-      g_warning ("chart view realized with no GdkSurface — no chart will render");
+      g_warning ("chart view realized with no GdkSurface, no chart will render");
       return;
     }
 
@@ -426,8 +426,8 @@ lk_chart_view_sample_velocity (LkChartView *self, double dx, double dy)
 /* A plain click or tap on the chart. It pins an overlay symbol's bubble and
  * does nothing else.
  *
- * IT DOES NOT PICK. A stray click while panning used to throw a pick report
- * the mariner never asked for, and the plain click belongs to the chart. What
+ * IT DOES NOT PICK. The plain click belongs to the chart, and a stray click
+ * while panning throws no pick report the mariner did not ask for. What
  * is at a point is asked for by name, from the menu a secondary click or a
  * held finger raises there. The reference shell follows the same rule
  * (ChartView.swift, tapChart).
@@ -648,7 +648,7 @@ lk_chart_view_open_menu (LkChartView *self, double x, double y)
 
 /* A click gesture's current event came from a touchscreen. Touch is handled by
    the legacy controller and the zoom and rotate gestures, so the click handlers
-   stand off it — the same test the scroll handler makes. */
+   stand off it, the same test the scroll handler makes. */
 static gboolean
 lk_chart_view_gesture_is_touch (GtkGesture *gesture)
 {
@@ -1157,7 +1157,7 @@ lk_chart_view_class_init (LkChartViewClass *klass)
 }
 
 /* The hover tip over a plugin's symbol: a vessel's name, course and speed,
- * formatted from the JSON lookout_overlay_at documents — title bold, then a
+ * formatted from the JSON lookout_overlay_at documents, title bold, then a
  * dim key beside each value. FALSE (no tip) over open water. GTK owns the
  * dwell and the re-query on movement, so the engine is asked only when a tip
  * could actually show. */
@@ -1275,7 +1275,7 @@ lk_chart_view_new (LkAppModel *model)
   self->model = model;
   self->controller = lk_app_model_get_controller (model);
   /* A camera move retires the chrome. The pick report clears through the model,
-     and the chart menu closes here — a keyboard zoom or a follow move must not
+     and the chart menu closes here, a keyboard zoom or a follow move must not
      leave it standing over water it no longer points at. */
   g_signal_connect_object (model, "chrome-retired",
                            G_CALLBACK (lk_chart_view_chrome_retired), self, 0);

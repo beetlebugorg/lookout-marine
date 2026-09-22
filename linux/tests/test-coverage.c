@@ -1,4 +1,4 @@
-/* test-coverage.c — the NOAA coverage picker.
+/* test-coverage.c: the NOAA coverage picker.
  *
  * The map, the pills and the catalog line all drive one selection and all read
  * it back off the service. With no catalog the picker has nothing to price a

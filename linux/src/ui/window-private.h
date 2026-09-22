@@ -1,4 +1,4 @@
-/* ui/window-private.h — the main window's shared state.
+/* ui/window-private.h: the main window's shared state.
  *
  * The window is built from several units: the file dialogs, the dev hooks and
  * the startup view each own one part of it. They all read and write the one

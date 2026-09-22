@@ -1,4 +1,4 @@
-/* ui/open-dialogs.h — the file pickers, and the one route in.
+/* ui/open-dialogs.h: the file pickers, and the one route in.
  *
  * The window raises these from its actions and the settings charts page raises
  * them from its buttons, so they are their own unit rather than the window's.

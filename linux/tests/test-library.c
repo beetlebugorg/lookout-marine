@@ -1,4 +1,4 @@
-/* test-library.c — what the app opens on its own, and what counts as drawable.
+/* test-library.c: what the app opens on its own, and what counts as drawable.
  *
  * The decision behind the first-run page. An app with an empty library must
  * open a chart of no charts and say so, and it must not reach for a cell some
@@ -237,7 +237,7 @@ place_prepared (const char *prepared, const char *relative)
 /* A set is "derived" when REMOVING IT DELETES WORK.
  *
  * That is the question the remove button asks before it puts up its warning,
- * and the removal deletes the set's PREPARED directory — which a folder in the
+ * and the removal deletes the set's PREPARED directory, which a folder in the
  * mariner's own home has just as much as a lifted archive does. Reading the
  * set's own path instead answered no for every folder a mariner added, so a
  * gigabyte of prepared charts went with no warning at all, under a tooltip

@@ -1,4 +1,4 @@
-/* model/app-model.h — shared app state: chart open/recents, live readouts, and
+/* model/app-model.h: shared app state: chart open/recents, live readouts, and
  * headerbar actions. Holds the one LkChartController and funnels commands
  * through it. Readouts are GObject properties the HUD tracks via notify::. */
 #pragma once
@@ -49,7 +49,7 @@ void lk_app_model_open_empty (LkAppModel *self);
 
 /* ---- the chart library: installed sets -------------------------------------- */
 
-/* A SET is a folder the mariner added, or one .zip — how a chart agency
+/* A SET is a folder the mariner added, or one .zip: how a chart agency
  * publishes them. The list answers what is installed and what is being sailed
  * on: switching a set off keeps it installed and takes it out of the chart, and
  * the chart is composed as the UNION of the sets switched on. */
@@ -60,11 +60,11 @@ void lk_app_model_open_empty (LkAppModel *self);
 GPtrArray *lk_app_model_get_chart_sets (LkAppModel *self);
 
 /* Switch one set into or out of the chart. Persists, and recomposes the open
- * chart from the sets that remain on — all of them off closes it. */
+ * chart from the sets that remain on, all of them off closes it. */
 void lk_app_model_set_chart_set_on (LkAppModel *self, const char *path, gboolean on);
 
-/* Take a set off the list. What Lookout prepared from it is deleted — it can
- * be made again — and the mariner's own folder is never touched. */
+/* Take a set off the list. What Lookout prepared from it is deleted. It can
+ * be made again, and the mariner's own folder is never touched. */
 void lk_app_model_remove_chart_set (LkAppModel *self, const char *path);
 
 /* The cells the downloader's own set holds. The NOAA picker ticks from this
@@ -170,7 +170,7 @@ gboolean lk_app_model_get_fix (LkAppModel *self, double *out_lon, double *out_la
 
 /* Install the files the mariner chose, persist the list, and draw what was just
  * added when it covers this view. Files that will not open are reported
- * together through ::open-error, not one alert at a time — a folder of twenty
+ * together through ::open-error, not one alert at a time, a folder of twenty
  * asking twenty times would be unusable. */
 void lk_app_model_add_raster_charts (LkAppModel *self, const char *const *paths);
 
@@ -312,7 +312,7 @@ void lk_app_model_set_chart_open (LkAppModel *self, gboolean open, const char *p
 void lk_app_model_set_open_error (LkAppModel *self, const char *message);
 
 /* The pick from the last tap, and where on the chart it landed (logical points
- * in the chart view — the report stands beside the mark there). Transfer full;
+ * in the chart view, the report stands beside the mark there). Transfer full;
  * emits ::pick-results, which is what rebuilds the report. */
 void       lk_app_model_set_pick (LkAppModel *self, GPtrArray *results, double x, double y,
                                   double lon, double lat);

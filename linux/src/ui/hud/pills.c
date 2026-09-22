@@ -1,4 +1,4 @@
-/* ui/hud/pills.c — the two progress pills at the top of the chart. */
+/* ui/hud/pills.c: the two progress pills at the top of the chart. */
 #include "ui/hud/pills.h"
 #include "ui/hud/hud.h"
 #include "util/tether.h"

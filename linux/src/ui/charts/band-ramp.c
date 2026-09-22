@@ -1,4 +1,4 @@
-/* ui/charts/band-ramp.c — see ui/charts/band-ramp.h. */
+/* ui/charts/band-ramp.c: see ui/charts/band-ramp.h. */
 #include "ui/charts/band-ramp.h"
 
 #include "library/sets.h"

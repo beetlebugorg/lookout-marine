@@ -1,4 +1,4 @@
-/* ui/firstrun/source.c — where the first charts come from.
+/* ui/firstrun/source.c: where the first charts come from.
  *
  * One decision, as big as the card allows. The cards stand side by side, in
  * equal columns, so blurbs of different lengths still make one row rather than

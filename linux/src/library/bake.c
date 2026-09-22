@@ -261,7 +261,7 @@ lk_trash_worker (gpointer data)
       GDir *dir = g_dir_open (self->path, 0, NULL);
 
       /* ONE LISTING, not a walk. The bake writes a directory per chart, so a
-       * chart gone is one of these gone — the same unit the import counted,
+       * chart gone is one of these gone: the same unit the import counted,
        * and found without reading all thirty thousand files first. */
       if (dir != NULL)
         {

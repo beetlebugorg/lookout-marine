@@ -1,4 +1,4 @@
-/* ui/charts/coastline.c — see ui/charts/coastline.h. */
+/* ui/charts/coastline.c: see ui/charts/coastline.h. */
 #include "ui/charts/coastline.h"
 
 #include "lk-resources.h"

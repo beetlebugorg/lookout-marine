@@ -1,4 +1,4 @@
-/* test-coastline.c — the first-run data the binary carries, and the
+/* test-coastline.c: the first-run data the binary carries, and the
  * projection the coverage picker draws through.
  *
  * The picker has to draw on its first frame, with no camera and no tiles, so

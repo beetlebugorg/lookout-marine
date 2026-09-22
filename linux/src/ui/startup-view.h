@@ -1,4 +1,4 @@
-/* ui/startup-view.h — the opening page.
+/* ui/startup-view.h: the opening page.
  *
  * The window builds it once and shows it while a chart opens.
  */

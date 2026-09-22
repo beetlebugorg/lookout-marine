@@ -1,4 +1,4 @@
-/* ui/settings/charts.h — the Charts page.
+/* ui/settings/charts.h: the Charts page.
  *
  * Which chart is drawn, the library it is built from, the work arriving now,
  * and where to get more.

@@ -1,9 +1,9 @@
-/* library/links.h — an online map AS the chart.
+/* library/links.h: an online map AS the chart.
  *
  * lookout owns the whole feature: it probes the link, inlines TileJSON
  * sources, generates a wrapper style for bare tiles, fetches the sprite packs,
  * builds the credit line, templates the tile urls and persists the list. This
- * object is the shell's two halves of it — a libsoup fetcher for the urls
+ * object is the shell's two halves of it, a libsoup fetcher for the urls
  * lookout asks for, and the snapshot the settings list and the HUD render.
  * See include/lookout.h, lookout_set_http_provider.
  *
@@ -55,7 +55,7 @@ void lk_chart_links_add (LkChartLinks *self, const char *link);
 /* Forget one link. Removing the active one comes back to lookout's chart. */
 void lk_chart_links_remove (LkChartLinks *self, const char *url);
 
-/* Read a linked chart again — its tile urls, zooms, sprites and credit. A link
+/* Read a linked chart again, its tile urls, zooms, sprites and credit. A link
  * that does not answer leaves the chart as it was. */
 void lk_chart_links_refresh (LkChartLinks *self, const char *url);
 

@@ -103,8 +103,8 @@ struct _LkAppModel {
   GPtrArray *pick_results;
   gboolean   pick_valid;
   double     pick_x, pick_y; /* logical points in the chart view */
-  /* The water the pick describes. The mark rides this under follow — the
-     core moves the camera without the shell — while the report's frame stays
+  /* The water the pick describes. The mark rides this under follow, the
+     core moves the camera without the shell, while the report's frame stays
      where it opened. */
   double     pick_lon, pick_lat;
   gboolean   pick_has_geo;
@@ -455,7 +455,7 @@ lk_app_model_recompose_library (LkAppModel *self)
        * alive, and the app already draws that state. */
       lk_chart_controller_reopen (self->controller, none);
       /* The readouts stop with the render loop, so the raster snapshot has
-       * to be read back here — without this the pill keeps naming a set of
+       * to be read back here, without this the pill keeps naming a set of
        * the chart that just closed. */
       lk_app_model_refresh_raster_state (self);
     }
@@ -883,7 +883,7 @@ lk_app_model_open_chart (LkAppModel *self, const char *path)
 }
 
 /* Open the LIBRARY with `source` added: the source goes on the set list,
- * switched on, and the chart opens as the union of every set switched on —
+ * switched on, and the chart opens as the union of every set switched on:
  * what is ready in each folder, plus anything a bake put in its prepared
  * directory. A second folder composes with the first instead of replacing
  * it. */
@@ -1292,7 +1292,7 @@ lk_app_model_open_chart_directory (LkAppModel *self, const char *dir)
 {
   g_return_if_fail (LK_IS_APP_MODEL (self));
 
-  /* Ask the engine what is actually there before offering it — off the main
+  /* Ask the engine what is actually there before offering it, off the main
      loop, because a folder scan opens every archive it finds and the whole
      UI stood still for it. One scan at a time: the engine's two scan entry
      points share one non-reentrant buffer. */
@@ -1302,7 +1302,7 @@ lk_app_model_open_chart_directory (LkAppModel *self, const char *dir)
           "Still looking through the last pick. Try again in a moment.");
       return;
     }
-  /* One import at a time, and the refusal says so — as the reference does.
+  /* One import at a time, and the refusal says so, as the reference does.
    * A quiet fall-through here left the folder in the library as an empty
    * set that nothing would ever prepare. */
   if (self->baking)
@@ -1480,7 +1480,7 @@ lk_app_model_reinstall_raster_charts (LkAppModel *self)
 
 /* Draw the set the last added file belongs to, when it covers this view. The
  * mariner picked these files while looking at this water, so showing them is
- * the obvious answer — and the pill takes it back in one click. */
+ * the obvious answer, and the pill takes it back in one click. */
 static void
 lk_app_model_draw_added_raster (LkAppModel *self, const char *path)
 {
@@ -1636,7 +1636,7 @@ lk_app_model_toggle_chart (LkAppModel *self)
 {
   g_return_if_fail (LK_IS_APP_MODEL (self));
 
-  /* Nothing to hide without a chart — and a chartless toggle must not clear
+  /* Nothing to hide without a chart, and a chartless toggle must not clear
    * the saved choice, which the next open replays. */
   if (!lk_chart_controller_is_open (self->controller))
     return;

@@ -1,4 +1,4 @@
-/* library/sets.c — the installed chart sets.
+/* library/sets.c: the installed chart sets.
  *
  * A SET is a folder the mariner added, or one .zip, which is how a chart
  * agency publishes one. The CORE owns the list, the switches, their
@@ -73,7 +73,7 @@ lk_chart_cell_paths_for (const char *target)
 #define LK_KEY_SETS_SEEDED "seeded"
 
 /* No list ever saved means this build has never run here, and the charts the
- * mariner had open carry across as sets — without this they are simply gone at
+ * mariner had open carry across as sets, without this they are simply gone at
  * the next launch, the folders still on disk and the app showing the first-run
  * page. What is not a chart drops out on its own the first time a scan looks.
  * Once, whatever the mariner does with the list afterwards. */
@@ -219,7 +219,7 @@ lk_chart_sets_rows (LkChartSets *self)
       row->pictures = (guint) set->pictures;
       row->bytes = (gint64) set->bytes;
       row->scanned = set->scanned != 0;
-      /* TRUE when REMOVING THIS DELETES WORK — the charts Lookout prepared
+      /* TRUE when REMOVING THIS DELETES WORK, the charts Lookout prepared
        * from it. That is the question the removal actually asks, and it is NOT
        * the same as the set's own path sitting under the prepared root: a
        * folder of the mariner's own cells lives in their home and still has a
@@ -300,7 +300,7 @@ lk_chart_sets_remove (LkChartSets *self, const char *path, char **out_prepared)
   lk_chart_sets_sync_paths (self);
 
   /* The core deletes nothing, and neither does this. What Lookout prepared
-   * from the set can be made again, so it goes — but the delete is thousands
+   * from the set can be made again, so it goes, but the delete is thousands
    * of files and says where it has got to, and this unit has nowhere to say
    * it. The caller does the deleting. The mariner's own folder is never
    * touched either way. */
@@ -368,7 +368,7 @@ lk_chart_sets_note (LkChartSets *self, const char *path)
   return TRUE;
 }
 
-/* The UNION of the sets switched on — the library the chart opens as. The core
+/* The UNION of the sets switched on, the library the chart opens as. The core
  * composes it: two sets may hold the same cell, and it is opened once. */
 char **
 lk_chart_sets_compose (LkChartSets *self)
@@ -595,7 +595,7 @@ lk_chart_band_name (int band)
   return band >= 1 && band <= 6 ? names[band - 1] : "Unknown";
 }
 
-/* "512 charts · 3 pictures · Coastal to Harbor · 1.2 GB" — what a settings row
+/* "512 charts · 3 pictures · Coastal to Harbor · 1.2 GB": what a settings row
  * reads under the name. The counts are the core's; the wording is this
  * shell's, and each shell writes its own. */
 static char *

@@ -1,4 +1,4 @@
-/* ui/charts/coverage-map.h — picking the waters to download.
+/* ui/charts/coverage-map.h: picking the waters to download.
  *
  * Setup asks this on its coverage step, and Mariner settings asks it again
  * from Charts. One map and one row of regions, so the two places name the same

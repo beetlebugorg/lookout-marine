@@ -1,4 +1,4 @@
-/* ui/settings/display.c — the Display page.
+/* ui/settings/display.c: the Display page.
  *
  * The colour scheme, the display category, and how soundings follow it. The
  * three schemes are shown as their own palettes rather than named, because a
@@ -40,7 +40,7 @@ static const double LK_SCHEME_PALETTE[3][6][3] = {
 };
 
 /* A shore in one scheme: the depth shades stacked out to deep water, then land
-   behind a curved coastline. A piece of chart, not a colour chip — the same
+   behind a curved coastline. A piece of chart, not a colour chip, the same
    drawing the reference makes (SchemeSwatch, SettingsRows.swift), because a
    mariner picking a scheme is picking how the WATER will read, and six equal
    bars of colour do not answer that. */

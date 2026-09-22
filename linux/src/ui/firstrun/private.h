@@ -1,4 +1,4 @@
-/* ui/firstrun/private.h — setup's shared state.
+/* ui/firstrun/private.h: setup's shared state.
  *
  * The flow is built from one unit per step. They all read the one model below
  * and write into the one struct, so both live here rather than in flow.c.

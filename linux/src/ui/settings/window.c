@@ -1,4 +1,4 @@
-/* ui/settings/window.c — the settings window itself.
+/* ui/settings/window.c: the settings window itself.
  *
  * The lifecycle, the sidebar that chooses a pane, and the two pages small
  * enough to live here. Every other page is a unit beside this one: it builds
@@ -80,7 +80,7 @@ lk_build_text_page (LkSettings *settings)
   lk_plugin_fill_tab (page, settings, "text");
 }
 
-/* Commits on Enter or focus loss, never per keystroke — half a date is not a
+/* Commits on Enter or focus loss, never per keystroke, half a date is not a
    date the chart should redraw against. */
 static void
 lk_date_commit (GtkEntry *entry, gpointer user_data)
@@ -265,7 +265,7 @@ lk_settings_select_section (LkSettings *settings, const char *id)
     gtk_list_box_select_row (GTK_LIST_BOX (settings->sidebar), wanted);
 }
 
-/* Esc closes it — a tiling compositor draws no titlebar X. */
+/* Esc closes it, a tiling compositor draws no titlebar X. */
 static gboolean
 lk_settings_key_pressed (GtkEventControllerKey *controller,
                          guint keyval, guint keycode,
@@ -409,7 +409,7 @@ lk_settings_window_new (LkAppModel *model, GtkWindow *parent, const char *tab)
 
   lk_settings_select_section (settings, tab);
 
-  /* While the window is up, the connection lines move on their own — but only
+  /* While the window is up, the connection lines move on their own, but only
      when a plugin shows a status line. With nothing to watch the poll would
      read the whole registry once a second to change nothing. A hot install
      rebuilds this window, so a plugin added later starts the poll then. */

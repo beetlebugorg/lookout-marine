@@ -1,4 +1,4 @@
-/* test-hud.c — the readouts capsule and its scale entry, as widgets.
+/* test-hud.c: the readouts capsule and its scale entry, as widgets.
  *
  * The model is real and the engine has no chart, so the readouts arrive the
  * way the render loop pushes them: through lk_app_model_push_readouts. Each
@@ -62,7 +62,7 @@ static void
 test_fix_pill_without_source (void)
 {
   /* No position source at all: the pill says how to get one, and the readout
-   * shows no numbers — never the view centre. */
+   * shows no numbers, never the view centre. */
   push (14.0, 12000, 1.0);
 
   GtkWidget *pill = lk_test_find_button (capsule, "Configure GPS");

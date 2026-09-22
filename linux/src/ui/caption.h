@@ -1,4 +1,4 @@
-/* ui/caption.h — the small dim line under a control or beside a row.
+/* ui/caption.h: the small dim line under a control or beside a row.
  *
  * Three properties set the same way at every one of them, so they are set
  * here. Inline, because this has no state and the header is all of it.

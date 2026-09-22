@@ -1,4 +1,4 @@
-/* test-charts.c — the Charts pane, and the chart gallery in it.
+/* test-charts.c: the Charts pane, and the chart gallery in it.
  *
  * One chart draws at a time, so the gallery is a pick-one control. What is
  * checked here is what a mariner sees before they have picked anything: the
@@ -335,7 +335,7 @@ test_pick_holds_the_scroll (void)
 /* The pick STAYS on the tile the mariner picked while the core reads it.
  *
  * An add does not set the core's active url until the style has landed, and no
- * active url means Lookout's own chart — so a row that drops the pick the
+ * active url means Lookout's own chart, so a row that drops the pick the
  * moment the core is told puts the ACTIVE ring straight back on the Lookout
  * tile, which reads as the pick being refused. */
 static void

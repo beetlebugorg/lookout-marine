@@ -1,4 +1,4 @@
-/* ui/firstrun/parts.c — the pieces every setup step is built from.
+/* ui/firstrun/parts.c: the pieces every setup step is built from.
  *
  * A step is a heading, some rows or cards, and at most one warning. The sizes
  * come from the design board; the colours come from the CSS in src/main.c,

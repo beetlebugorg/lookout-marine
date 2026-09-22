@@ -1,4 +1,4 @@
-/* test-window.c — the main window, its actions, and the overlays that follow
+/* test-window.c: the main window, its actions, and the overlays that follow
  * the model's flags.
  *
  * The window is built against the real model with no chart open, so the
@@ -59,7 +59,7 @@ test_chart_only_disabled (void)
 
 /* Activating a command with no chart is safe: the chart-only ones are disabled
  * no-ops, and the ones that work do not crash. The dialog-raising commands are
- * left out — a test must not spawn a file chooser. */
+ * left out, a test must not spawn a file chooser. */
 static void
 test_activate_no_chart_safe (void)
 {

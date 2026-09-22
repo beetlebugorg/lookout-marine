@@ -1,12 +1,12 @@
-/* library/sets.h — the installed chart sets.
+/* library/sets.h: the installed chart sets.
  *
- * A SET is a folder the mariner added, or one .zip — how a chart agency
+ * A SET is a folder the mariner added, or one .zip, how a chart agency
  * publishes them. The list answers what is installed and what is being sailed
  * on: switching a set off keeps it installed and takes it out of the chart, and
  * the chart is composed as the UNION of the sets switched on.
  *
  * Every mutator answers whether anything changed. The owner decides what a
- * change means — reopen the chart, tell the windows — so this unit never
+ * change means, reopen the chart, tell the windows, so this unit never
  * reaches into the model. The one thing it announces on its own is a
  * background scan landing, through the changed callback.
  */
@@ -159,7 +159,7 @@ gboolean lk_chart_sets_set_on (LkChartSets *self, const char *path, gboolean on)
 gboolean lk_chart_sets_remove (LkChartSets *self, const char *path,
                                char **out_prepared);
 
-/* The UNION of the sets switched on — the library the chart opens as.
+/* The UNION of the sets switched on, the library the chart opens as.
  * Transfer full strv. */
 char **lk_chart_sets_compose (LkChartSets *self);
 

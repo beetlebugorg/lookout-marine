@@ -1,4 +1,4 @@
-/* ui/open-dialogs.c — every file picker the window and the settings raise.
+/* ui/open-dialogs.c: every file picker the window and the settings raise.
  *
  * Under a portal a GtkFileDialog is asynchronous and can outlive the window
  * that raised it. So no callback here stores an LkWindow: each carries the
@@ -30,7 +30,7 @@ lk_open_finished (GObject *source, GAsyncResult *result, gpointer user_data)
     lk_app_model_open_chart (model, path);
   else
     lk_app_model_set_open_error (model,
-                                 "That location isn't a local folder — the engine mmaps "
+                                 "That location isn't a local folder, the engine mmaps "
                                  "chart cells and needs a real path.");
 }
 
@@ -150,7 +150,7 @@ lk_window_open_path (GtkWindow *parent, LkAppModel *model, const char *path)
 /* An exchange set arrives as one .zip as often as a folder: that is the shape a
  * chart agency publishes. GtkFileDialog picks folders or files, never both, so
  * the two are separate ways in rather than one that does both. Nothing is
- * unpacked — the engine bakes each cell where it lies inside the archive. */
+ * unpacked, the engine bakes each cell where it lies inside the archive. */
 static void
 lk_open_archive_finished (GObject *source, GAsyncResult *result, gpointer user_data)
 {
@@ -220,7 +220,7 @@ lk_raster_files_chosen (GObject *source, GAsyncResult *result, gpointer user_dat
   if (paths->len == 0)
     {
       lk_app_model_set_open_error (model,
-                                   "Those aren't local files — the engine reads a raster "
+                                   "Those aren't local files, the engine reads a raster "
                                    "chart off the disk and needs a real path.");
       return;
     }

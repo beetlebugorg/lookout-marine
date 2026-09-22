@@ -1,4 +1,4 @@
-/* ui/charts/catalog.c — see ui/charts/catalog.h. */
+/* ui/charts/catalog.c: see ui/charts/catalog.h. */
 #include "ui/charts/catalog.h"
 
 #include "lk-resources.h"

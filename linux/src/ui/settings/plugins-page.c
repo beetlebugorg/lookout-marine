@@ -1,4 +1,4 @@
-/* ui/settings/plugins-page.c — the Plugins page.
+/* ui/settings/plugins-page.c: the Plugins page.
  *
  * What is loaded, what each one may reach, and how to add or remove one. The
  * controls a plugin declared are on the pages they were filed under; this page

@@ -1,4 +1,4 @@
-/* main.c — the GtkApplication entry point.
+/* main.c: the GtkApplication entry point.
  *
  * One window and one LkAppModel for the life of the app. Accelerators mirror
  * the macOS menu bar, Ctrl for Command.
@@ -111,7 +111,7 @@ static const char *LK_CSS =
     "  padding: 5px 12px;"
     "  box-shadow: 0 1px 4px alpha(black, 0.18);"
     "}"
-    /* A floating panel: the pick report. It is opaque — the chart showing
+    /* A floating panel: the pick report. It is opaque, the chart showing
      * through a table of numbers makes both hard to read. */
     ".lk-panel {"
     "  background: @theme_base_color;"
@@ -311,7 +311,7 @@ static const char *LK_CSS =
     ".lk-raster-pill.lk-off > button:hover { background: alpha(@warning_color, 0.42); }"
     ".lk-raster-bar { opacity: 0.5; }"
     /* Night. The dark-theme flip (ui/window.c, lk_window_apply_scheme) does
-     * most of the work — every chrome fill above rides @theme_bg_color — and
+     * most of the work, every chrome fill above rides @theme_bg_color, and
      * this class quiets the surfaces further, so the brightest thing on deck
      * is the chart, never the readouts floating over it. The fix pill keeps
      * its state tints: they are the readout. */
@@ -563,7 +563,7 @@ main (int argc, char *argv[])
      nothing will ever mention again. */
   lk_chart_bake_sweep_trash ();
 
-  /* One instance is the rule — a dock click focuses the chart already
+  /* One instance is the rule, a dock click focuses the chart already
    * sailing. LOOKOUT_MULTI is the development escape hatch every shell keeps:
    * a second live window for side-by-side comparison and recording. */
   GApplicationFlags flags = G_APPLICATION_DEFAULT_FLAGS;

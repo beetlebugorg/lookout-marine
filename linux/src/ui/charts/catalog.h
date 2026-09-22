@@ -1,4 +1,4 @@
-/* ui/charts/catalog.h — the online charts the app offers on a fresh install,
+/* ui/charts/catalog.h: the online charts the app offers on a fresh install,
  * and the pictures it ships for them.
  *
  * A first run has no links, so the online chart step would show an empty shelf

@@ -1,4 +1,4 @@
-/* pick-fixture.h — a decoded pick built by hand.
+/* pick-fixture.h: a decoded pick built by hand.
  *
  * lookout_picks_read needs an open chart, and these suites have none, so they
  * build the decoded feature the card draws. The fields are the ones

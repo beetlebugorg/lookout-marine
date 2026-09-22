@@ -1,4 +1,4 @@
-/* test-bands.c — the usage-band ramp.
+/* test-bands.c: the usage-band ramp.
  *
  * A set that stops at Coastal does not draw the harbour a passage ends in, so
  * the bar says which scales a set holds and how much of it is at each. The

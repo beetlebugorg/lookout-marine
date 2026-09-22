@@ -1,4 +1,4 @@
-/* test-noaa.c — NOAA's charts, as the shell holds them.
+/* test-noaa.c: NOAA's charts, as the shell holds them.
  *
  * The region table comes from the core and is static, so it can be read with
  * no chart open. The pick, the words and the staging directory are the shell's

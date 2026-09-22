@@ -1,4 +1,4 @@
-/* library/raster.h — the raster charts the mariner installed, and which of them are
+/* library/raster.h: the raster charts the mariner installed, and which of them are
  * switched on. The Linux twin of RasterCharts.kt and AppModel's raster list.
  *
  * A raster chart is a chart made of pictures the mariner supplies: MBTiles of
@@ -8,7 +8,7 @@
  * the soundings, and sees the water as well.
  *
  * WHY THE LIST LIVES HERE AND NOT IN THE ENGINE. The engine holds what is open
- * now. A chart set must outlive both a change of ENC and a restart — it is the
+ * now. A chart set must outlive both a change of ENC and a restart. It is the
  * mariner's own material, gathered for one coast, and half a gigabyte a file.
  * So the list is persisted here and replayed into each chart the engine opens.
  */
@@ -89,7 +89,7 @@ typedef struct _LkRasterState LkRasterState;
 LkRasterState *lk_raster_state_new (void);
 void           lk_raster_state_free (LkRasterState *self);
 
-/* Read the engine's account. TRUE when something moved — the caller decides
+/* Read the engine's account. TRUE when something moved, the caller decides
  * whether that alone warrants rebuilding the chrome. A real move is also
  * written down through `charts`. */
 gboolean lk_raster_state_sync (LkRasterState *self, LkChartController *controller,

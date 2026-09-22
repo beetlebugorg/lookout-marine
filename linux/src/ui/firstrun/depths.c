@@ -1,4 +1,4 @@
-/* ui/firstrun/depths.c — the depth settings, asked as two questions about the
+/* ui/firstrun/depths.c: the depth settings, asked as two questions about the
  * boat.
  *
  * The step asks for a draft and a clearance under the keel. It derives the two

@@ -1,4 +1,4 @@
-/* library/agent.h — how this shell announces itself on the network.
+/* library/agent.h: how this shell announces itself on the network.
  *
  * A unique, identifiable agent with a way to reach the developer. Public tile
  * hosts serve "access blocked" placeholder tiles to anonymous or

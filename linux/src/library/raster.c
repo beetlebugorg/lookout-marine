@@ -324,8 +324,8 @@ lk_raster_charts_in_dir (const char *dir)
 /*
  * Which set is drawn, which one covers this view, and whether the ENC is
  * hidden under it: all of that is the engine's account, read back after every
- * change. The engine owns the election — showing one set turns off the sets
- * covering the same water — so what it says after a change is the only account
+ * change. The engine owns the election, showing one set turns off the sets
+ * covering the same water, so what it says after a change is the only account
  * that can be right.
  */
 
@@ -383,7 +383,7 @@ lk_raster_sets_equal (GPtrArray *a, GPtrArray *b)
  * settings, which can move the selection on its own.
  *
  * Read back from the engine rather than tracked here. The engine owns the
- * election — showing one set turns off the sets covering the same water — so
+ * election, showing one set turns off the sets covering the same water, so
  * what it says after the change is the only account that can be right. */
 static void
 lk_raster_state_note_shown (LkRasterState *self, LkRasterCharts *charts)
@@ -403,8 +403,8 @@ lk_raster_state_note_shown (LkRasterState *self, LkRasterCharts *charts)
   lk_raster_charts_note_shown (charts, lk_raster_strv (shown), lk_raster_strv (hidden));
 }
 
-/* Read the engine's raster state into the model. TRUE when something moved —
- * the caller decides whether that alone warrants rebuilding the chrome. */
+/* Read the engine's raster state into the model. TRUE when something moved.
+ * The caller decides whether that alone warrants rebuilding the chrome. */
 gboolean
 lk_raster_state_sync (LkRasterState *self, LkChartController *controller,
                       LkRasterCharts *charts)
@@ -437,7 +437,7 @@ lk_raster_state_sync (LkRasterState *self, LkChartController *controller,
 
 /* Put back which sets the mariner had drawn. Adding a source draws its set,
  * which is right for a chart just picked and wrong for one being re-installed
- * at launch, so every open has to correct it — after every source is in,
+ * at launch, so every open has to correct it, after every source is in,
  * because switching one chart off can move which set is drawn, and before the
  * first frame, or a set the mariner switched off flashes on screen.
  *

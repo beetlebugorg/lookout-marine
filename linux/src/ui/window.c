@@ -426,7 +426,7 @@ lk_window_build_chart_menu (LkWindow *self)
   g_menu_append (scheme, "Night", "win.set-scheme(2)");
   g_menu_append (scheme, "Cycle", "win.cycle-scheme");
   /* "Color Scheme" in the menu, the reference's American spelling, while the
-     settings header keeps "Colour scheme" — each mirrors macOS as it is. */
+     settings header keeps "Colour scheme", each mirrors macOS as it is. */
   g_menu_append_submenu (chart, "Color Scheme", G_MENU_MODEL (scheme));
 
   /* Charts: a toggle per set, disabled when the library is empty. Each set gets
@@ -637,7 +637,7 @@ lk_window_update_overlays (LkWindow *self)
   gboolean drawing = !lk_app_model_get_nothing_to_draw (self->model);
 
   /* Without a chart these commands have nothing to act on, so their bubbles
-   * and menu items grey out — as the reference's do. Search stays: the go-to
+   * and menu items grey out, as the reference's do. Search stays: the go-to
    * works from an empty view. */
   static const char *chart_actions[] = {
     "zoom-in", "zoom-out", "zoom-fit", "north-up", "follow",
@@ -958,8 +958,8 @@ lk_window_show_open_error (LkWindow *self)
  * whatever the desktop preferred. */
 /* The chrome pins two colours as FILLS: the accent (#0a5bb5) carries white text
  * on a bubble, and the theme's error red carries a light panel. Used as TEXT on
- * a dark chrome they measure about 1.5:1 against it, which is not readable —
- * the scale readout, the fix pill and a connection's "unreachable" line all sat
+ * a dark chrome they measure about 1.5:1 against it, which is not readable.
+ * The scale readout, the fix pill and a connection's "unreachable" line all sat
  * at that. Neither colour flips with the theme, so a dark scheme swaps in the
  * light pair those same roles use on a dark desktop.
  *
@@ -1055,7 +1055,7 @@ lk_window_apply_scheme (LkWindow *self)
 
   /* The menu radio tracks the chart's scheme. A cycle (Ctrl+L) or a load
      changes the scheme without touching the action, so push the state back
-     here — the same way raster-select follows the active set. */
+     here, the same way raster-select follows the active set. */
   GAction *action = g_action_map_lookup_action (G_ACTION_MAP (self->window),
                                                 "set-scheme");
   if (action != NULL)
@@ -1090,7 +1090,7 @@ lk_window_notify (GObject *object, GParamSpec *pspec, gpointer user_data)
 
 /* The titlebar carries the chart's name and the window controls, and nothing
  * else. Every control that acts on the chart is a bubble over the chart, where
- * the SwiftUI, WinUI and Compose shells put it — so no control stands in two
+ * the SwiftUI, WinUI and Compose shells put it, so no control stands in two
  * places, and the chart gets the whole window. */
 static GtkWidget *
 lk_window_build_header (void)
@@ -1141,7 +1141,7 @@ lk_window_new (GtkApplication *app, LkAppModel *model)
   gtk_widget_set_vexpand (self->overlay, TRUE);
 
   /* The chart is a subsurface below a transparent hole in the window, so the
-   * chrome composites over it — the layout every shell uses: north at the top
+   * chrome composites over it, the layout every shell uses: north at the top
    * right, zoom at the bottom right, the distance bar at the bottom left, the
    * readouts at the bottom centre, the build indicator at the top centre. */
 

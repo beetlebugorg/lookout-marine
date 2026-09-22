@@ -1,4 +1,4 @@
-/* test-noaa-cycle.c — the NOAA downloader over a whole cycle.
+/* test-noaa-cycle.c: the NOAA downloader over a whole cycle.
  *
  * Add a region, restart, remove it, add it again. What the picker shows at
  * each of those steps comes from two places: a record of the regions this

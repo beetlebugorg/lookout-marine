@@ -1,4 +1,4 @@
-/* ui/settings/private.h — the settings window's shared state.
+/* ui/settings/private.h: the settings window's shared state.
  *
  * The window is built from one unit per page. They all read and write the one
  * struct below, so it lives here rather than in ui/settings/window.c.
@@ -27,7 +27,7 @@ typedef struct _LkSettings LkSettings;
  * Every one of them is driven by a signal it raises itself: a control in the
  * list changes the model, which signals straight back. Rebuilding inside that
  * would free the control that is still emitting, so the rebuild waits for the
- * next idle — which also folds a burst of changes into one pass. */
+ * next idle, which also folds a burst of changes into one pass. */
 typedef struct {
   GtkWidget  *box;      /* the list, NULL until the page builds it */
   guint       idle_id;
