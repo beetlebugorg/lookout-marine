@@ -41,7 +41,7 @@ namespace winrt::LookoutMarine::implementation
         void RevealOnChart(double lon, double lat);
 
         // One tile lookout wants. Public: the C tile-provider thunk (a free
-        // function — the engine takes a plain function pointer) calls it.
+        // function, since the engine takes a plain function pointer) calls it.
         void TileRequest(std::string source, uint64_t id, int z, int x, int y);
 
     private:
@@ -280,9 +280,10 @@ namespace winrt::LookoutMarine::implementation
         void ThemeSettingsPane(Microsoft::UI::Xaml::ElementTheme want); // settings/ui/Settings.cpp
 
         // ---- chart sets (the folders of installed charts) ----------------------
-        // A set is a folder — the baked library, a folder of .pmtiles, a
-        // folder of pictures — with an on/off switch. What opens is the UNION
-        // of the switched-on sets. Mirrors the macOS "installed sets" model.
+        // A set is a folder, which may be the baked library, a folder of
+        // .pmtiles or a folder of pictures, with an on/off switch. What opens
+        // is the UNION of the switched-on sets. Mirrors the macOS "installed
+        // sets" model.
         struct ChartSetRow
         {
             std::string path;
@@ -675,7 +676,7 @@ namespace winrt::LookoutMarine::implementation
         lk_controller *controller{ nullptr };
 
         /* 10 Hz: the readout poll and the open retry. A DispatcherTimer, not
-         * CompositionTarget::Rendering — that subscription ticked the UI
+         * CompositionTarget::Rendering. That subscription ticked the UI
          * thread at refresh rate for the process life, idle or not. */
         Microsoft::UI::Xaml::DispatcherTimer readout_timer{ nullptr };
         // Software (WARP) frames can take tens of ms: rendering runs on its
@@ -684,7 +685,7 @@ namespace winrt::LookoutMarine::implementation
         std::atomic<bool> render_run{ false };
         std::atomic<int> warmup_frames{ 0 }; // force presents while DWM starts composing us
 
-        // Dev hooks — the interactive-path profile (MainWindow.xaml.cpp):
+        // Dev hooks: the interactive-path profile (MainWindow.xaml.cpp):
         // $LOOKOUT_FRAME_PROF rows append on the render thread and the CSV
         // rewrites at every loop exit; $LOOKOUT_GESTURE_BENCH steps a
         // scripted gesture once per tick; $LOOKOUT_HITMAP logs hit tests.
@@ -733,7 +734,7 @@ namespace winrt::LookoutMarine::implementation
         // the lookout handle the open destroyed). UI thread only.
         std::vector<std::string> raster_paths;
         std::wstring raster_pill_shown; // change-detect: last pill text ("" = hidden)
-        // Which raster SETS are not drawn, by set name — the saved per-set
+        // Which raster SETS are not drawn, by set name. The saved per-set
         // choice. Entries for sets not installed this launch are kept: a
         // mariner who unplugs the drive holding one has not changed their
         // mind about it.
@@ -784,7 +785,7 @@ namespace winrt::LookoutMarine::implementation
         Microsoft::UI::Xaml::Controls::TextBlock bake_pane_eta{ nullptr };
         Microsoft::UI::Xaml::Controls::ProgressBar bake_pane_bar{ nullptr };
         /* The removal panel: the same three parts, fed by removal_job. A
-         * removal has no Cancel — the charts are already moved aside. */
+         * removal has no Cancel: the charts are already moved aside. */
         Microsoft::UI::Xaml::Controls::TextBlock removal_pane_title{ nullptr };
         Microsoft::UI::Xaml::Controls::TextBlock removal_pane_count{ nullptr };
         Microsoft::UI::Xaml::Controls::ProgressBar removal_pane_bar{ nullptr };

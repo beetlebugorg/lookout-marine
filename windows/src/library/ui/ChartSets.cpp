@@ -1,6 +1,6 @@
 // Chart sets: the folders of charts the mariner has installed, each with an
-// on/off switch. A set is a folder — the baked library, a folder of .pmtiles,
-// a folder of pictures — and what the engine opens is the UNION of the
+// on/off switch. A set is a folder: the baked library, a folder of
+// .pmtiles, or a folder of pictures. What the engine opens is the UNION of
 // switched-on sets, deduplicated and sorted. A set whose water is not today's
 // water is switched off, not removed.
 //
@@ -687,11 +687,11 @@ namespace winrt::LookoutMarine::implementation
             return;
         LoadChartSets(nullptr);
         // CLOSE, DELETE, THEN OPEN. The handle maps every archive it opened,
-        // and Windows refuses to rename a directory under a mapped file. The
-        // reopen here used to stand in for the close, and with another set
-        // still on it opens through OpenPaths, which defers the close by 50
-        // ms. The rename then ran under the old handle and failed, and the
-        // charts stayed on the disk for the next import to find.
+        // and Windows refuses to rename a directory under a mapped file. A
+        // reopen in place of the close opens through OpenPaths with another
+        // set still on, and that defers the close by 50 ms: the rename then
+        // runs under the old handle, fails, and the charts stay on the disk
+        // for the next import to find.
         CloseChartHandle();
         DeletePreparedCharts(path, name);
         ReopenChartSets({});

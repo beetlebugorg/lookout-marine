@@ -3,7 +3,7 @@
 // lookout owns the whole feature: it probes the link, inlines TileJSON
 // sources, generates a wrapper style for bare tiles, fetches the sprite packs,
 // builds the credit line, templates the tile urls and persists the list. This
-// file is the shell's two halves of it — a WinHTTP fetcher for the urls
+// file is the shell's two halves of it: a WinHTTP fetcher for the urls
 // lookout asks for, and the read the Chart list and the scale-bar credit
 // render. See lookout.h, lookout_set_http_provider.
 #include "pch.h"
@@ -242,7 +242,7 @@ namespace
     }
 
     // The path a local url names, or an empty string when it names a host.
-    // A mariner's own style.json is a real way to install a chart —
+    // A mariner's own style.json is a real way to install a chart,
     // offline, or one they wrote themselves.
     std::string LocalPath(std::string const &url)
     {
@@ -287,8 +287,9 @@ namespace
     // The fetch pool. lookout raises its asks on the render thread with its
     // lock held, so the thunk does the least possible: queue the job and
     // return. Every job is ANSWERED, because an id that is neither answered
-    // nor cancelled holds one of lookout's outstanding-request slots — except
-    // one lookout has itself cancelled, which released its slot already.
+    // nor cancelled holds one of lookout's outstanding-request slots. The
+    // exception is one lookout has itself cancelled, which released its
+    // slot already.
     class HttpPool
     {
     public:
@@ -344,7 +345,7 @@ namespace
             return true;
         }
 
-        // Advisory. A job not yet started is dropped and never answered —
+        // Advisory. A job not yet started is dropped and never answered:
         // lookout released its slot when it cancelled. One already running
         // finishes and answers, which lookout ignores.
         void Cancel(uint64_t id)
@@ -424,8 +425,8 @@ namespace winrt::LookoutMarine::implementation
     }
 
     // The C entry point: fired on the render thread with lookout's lock held.
-    // Copy the url out — it is lookout's memory and valid only for this call —
-    // queue the fetch, return.
+    // Copy the url out, since it is lookout's memory and valid only for
+    // this call, queue the fetch, return.
     void MainWindow::HttpGetThunk(void *user, unsigned long long req_id,
                                   const char *url, int allow_file)
     {
@@ -654,12 +655,12 @@ namespace winrt::LookoutMarine::implementation
     void MainWindow::SelectChartLink(std::string const &url)
     {
         // Every pick reaches the core. The core's list can name a chart as
-        // PICKED while something else DRAWS — a resolve that failed, or a list
-        // just loaded off the store — and this used to refuse the pick in
-        // exactly that state, which left the mariner tapping a tile that never
-        // drew. Asking for the chart already drawing is the only no-op, and
-        // the core makes that one cheap itself: it re-marks the pick, saves,
-        // and resolves nothing (src/chartlinks.zig, Links.select).
+        // PICKED while something else DRAWS, after a resolve that failed or
+        // a list just loaded off the store. A pick refused in exactly that
+        // state left the mariner tapping a tile that never drew.
+        // Asking for the chart already drawing is the only no-op, and the
+        // core makes that one cheap: it re-marks the pick, saves, and
+        // resolves nothing (src/chartlinks.zig, Links.select).
         lk_controller_chart_link_select(controller, url.empty() ? nullptr : url.c_str());
         PollChartLinks();
     }

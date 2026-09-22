@@ -720,17 +720,20 @@ namespace winrt::LookoutMarine::implementation
         }
     }
 
+
     // ---- the two services, on a timer -------------------------------------
 
     // Whether there is anything to watch, and the timer started or stopped to
     // match.
     //
-    // It used to be started in one place only, when a download began, so the
-    // coverage step never noticed its catalog read finish: the line said
-    // "Reading NOAA's chart catalog…" for as long as the step was up, and the
-    // map kept the rough extents it was built with. A read, a transfer, a bake
-    // and a bake waiting to be handed over are the four things worth a tick;
-    // with none of them the timer stops, so an idle card keeps no clock.
+    // A read, a transfer, a bake and a bake waiting to be handed over are the
+    // four things a tick is for. With none of them the timer stops, so an idle
+    // card keeps no clock.
+    //
+    // The coverage step is the reason a catalog read is one of them. A clock
+    // that runs only for a transfer leaves the line reading "Reading NOAA's
+    // chart catalog…" for as long as the step is up, over a map holding the
+    // rough extents it was built with.
     void MainWindow::FirstRunPollAsNeeded()
     {
         bool want = false;
@@ -924,7 +927,7 @@ namespace winrt::LookoutMarine::implementation
 
         // The catalog lands on its own, and the coverage map's boxes, the
         // prices and whether a region can be picked at all come from it. So
-        // the step follows it — once, when it changes. Rendering on every tick
+        // the step follows it once, when it changes. Rendering on every tick
         // would rebuild the map four times a second.
         if (first_run.step() == lkw::FirstRunStep::Coverage)
         {
@@ -1535,8 +1538,8 @@ namespace winrt::LookoutMarine::implementation
         // three: they span 128 degrees of longitude, and at that scale their
         // latitude span is taller than the card. An atlas prints them as
         // insets for the same reason.
-        // west, east, south, north — the order the struct declares, not the
-        // labelled order the reference writes them in.
+        // west, east, south, north, the order the struct declares rather than
+        // the labelled order the reference writes them in.
         lkw::MapWindow const lower48{ -132.0, -64.0, 20.0, 52.0 };
         lkw::MapWindow const alaska{ -172.0, -128.0, 50.5, 72.0 };
         lkw::MapWindow const hawaii{ -161.0, -154.0, 18.3, 22.6 };

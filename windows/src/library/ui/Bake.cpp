@@ -1,5 +1,5 @@
 // Chart import: raw S-57 cells, from a folder or an exchange-set .zip, baked
-// into charts the app can draw — and the panel that reports it.
+// into charts the app can draw, and the panel that reports it.
 #include "pch.h"
 #include "MainWindow.xaml.h"
 
@@ -30,9 +30,10 @@ namespace winrt::LookoutMarine::implementation
 
     /* The one way charts arrive: scan first, bake what is raw, then open.
      *
-     * Scanning before offering anything is the point — a chart folder also holds
-     * files that are not charts, and an archive may hold pictures rather than a
-     * chart. Both open in a file panel and neither draws, which is what made
+     * Scanning before offering anything is the point. A chart folder also
+     * holds files that are not charts, and an archive may hold pictures
+     * rather than a chart.
+     * Both open in a file panel and neither draws, which is what made
      * picking a folder of .000 cells look like it did nothing: the old path
      * collected .pmtiles only, found none, and opened an empty list. */
     void MainWindow::ImportCharts(std::string const &path)
@@ -49,8 +50,8 @@ namespace winrt::LookoutMarine::implementation
 
         /* Scanned off the UI thread: an archive's central directory is 8 ms,
          * but a FOLDER scan walks the filesystem and opens every archive it
-         * finds — seconds on a network share, with the window frozen for all
-         * of it. One scan at a time (`import_scanning`): the two scan entry
+         * finds, which is seconds on a network share with the window frozen
+         * for all of it. One scan at a time (`import_scanning`): the two scan
          * points share one buffer in the core and are not reentrant. */
         import_scanning = true;
         auto queue = DispatcherQueue();
@@ -278,7 +279,7 @@ namespace winrt::LookoutMarine::implementation
         /* Open the whole LIBRARY at once, not this import's output alone: an
          * import adds to what earlier imports baked, a resume skips what is
          * already there, and a restart reopens the same whole set. Opening it
-         * once at the end (rather than batch by batch) is deliberate — each
+         * once at the end, rather than batch by batch, is deliberate: each
          * handover rebuilt the ownership partition over a growing library.
          *
          * The recent is the library too, never the source: the source is what
@@ -296,7 +297,7 @@ namespace winrt::LookoutMarine::implementation
     }
 
     /* Baked sheets join the raster underlay. When a vector open is about to
-     * happen they only need noting — the open re-installs the stored list
+     * happen they only need noting, since the open re-installs the stored
      * (InstallStoredRasters) on the new handle. With no open coming they are
      * added to the chart on screen right away. */
     void MainWindow::AdoptBakedRasters(std::vector<std::string> const &rasters, bool opening)
@@ -353,7 +354,7 @@ namespace winrt::LookoutMarine::implementation
     }
 
     /* An exchange set as a chart agency publishes it: one .zip. Nothing is
-     * unpacked — each cell is inflated as its turn comes, so importing NOAA's
+     * unpacked. Each cell is inflated as its turn comes, so importing NOAA's
      * 792 MB All_ENCs.zip never costs the disk a second copy of the 2.1 GB of
      * source it holds. */
     fire_and_forget MainWindow::PickChartArchive()

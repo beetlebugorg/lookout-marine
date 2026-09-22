@@ -24,8 +24,8 @@ namespace
     /* The chart colours of one scheme: the presentation library's own sRGB
      * values (S-101 colour profile, tokens DEPDW/DEPMD/DEPMS/DEPVS/LANDA/
      * CSTLN), copied so a swatch can be drawn without opening a chart. A
-     * legend of the palette, not the palette itself — the engine draws from
-     * the tables in the chart (the reference's SchemePalette, hex for hex). */
+     * legend of the palette rather than the palette itself. The engine draws
+     * from the tables in the chart (the reference's SchemePalette, hex for hex). */
     struct SchemePalette
     {
         winrt::Windows::UI::Color deep, medium, shallow, very_shallow, land, coastline;
@@ -686,7 +686,7 @@ namespace winrt::LookoutMarine::implementation
 
     // The sections, in the order the strip shows them. The four the app owns are
     // always listed; Vessels, Alarms and Connections only while something puts
-    // settings in them, and today that something is a plugin — the mariner is
+    // settings in them, and today that something is a plugin. The mariner is
     // never told which. Plugins is the one section that talks ABOUT plugins.
     // Advanced is last: it is where anything unclaimed lands.
     void MainWindow::BuildSettingsTabs()
@@ -711,9 +711,9 @@ namespace winrt::LookoutMarine::implementation
         settings_tabs.push_back({ "plugins", L"Plugins", L"\uE71D" });
         settings_tabs.push_back({ "advanced", L"Advanced", L"\uE713" });
 
-        // A section can go away — a plugin that never came up takes its section
-        // with it — so a stale selection falls back rather than indexing off the
-        // end of the strip.
+        // A section can go away, since a plugin that never came up takes its
+        // section with it, so a stale selection falls back rather than indexing
+        // off the end of the strip.
         settings_tab = 0;
         for (int i = 0; i < (int)settings_tabs.size(); ++i)
         {
@@ -729,7 +729,7 @@ namespace winrt::LookoutMarine::implementation
 
         // The highlight shades, as alpha over the pane's dark chrome (black
         // tints, matching the existing selection): hover sits below the
-        // selection, and the selected row under the pointer a step above it —
+        // selection, and the selected row under the pointer a step above it,
         // the ordering a Windows list uses, so hover and selection read apart.
         auto tint = [](uint8_t a) { return Media::SolidColorBrush{ winrt::Windows::UI::Color{ a, 0x00, 0x00, 0x00 } }; };
         constexpr uint8_t kHover = 0x14, kSelected = 0x28, kSelectedHover = 0x38;
@@ -833,8 +833,8 @@ namespace winrt::LookoutMarine::implementation
 
     // The band strip, redrawn in place: which shades exist for the current
     // settings and which contour separates each pair, labelled in the
-    // mariner's unit. Colours approximate the day palette — a legend, not
-    // the palette itself.
+    // mariner's unit. Colours approximate the day palette: a legend rather
+    // than the palette itself.
     void MainWindow::RefreshBandPreview()
     {
         if (band_preview == nullptr)
@@ -903,12 +903,12 @@ namespace winrt::LookoutMarine::implementation
     }
 
     // The pane wears the chart's scheme: dusk and night take the dark palette
-    // whatever the OS says — a bright panel has no place on a night passage.
+    // whatever the OS says. A bright panel has no place on a night passage.
     //
     // EXPLICIT Light, never Default. The pane is declared inside Root but
     // detached from it at construction and handed to a window of its own, so
     // Default does not mean "the chart's day scheme", it means "whatever the
-    // OS is set to" — and under a dark system theme that gave a dark pane
+    // OS is set to", and under a dark system theme that gave a dark pane
     // with the day scheme's dark ink written on it.
     void MainWindow::ThemeSettingsPane(ElementTheme want)
     {
@@ -1333,7 +1333,7 @@ namespace winrt::LookoutMarine::implementation
         {
             // The three schemes DRAWN, not named: each swatch is a piece of
             // chart in that scheme's own colours, so the choice is made by
-            // eye — day is unreadable at night and night by day, and the
+            // eye: day is unreadable at night and night by day, and the
             // swatches say so without words (the reference's SchemeSwatches).
             {
                 Controls::TextBlock tb;
@@ -1378,7 +1378,7 @@ namespace winrt::LookoutMarine::implementation
 
                     Controls::Grid::SetColumn(cell, i);
                     // A tap picks the scheme; the page rebuilds so the ring
-                    // moves, and the pane takes the new scheme's chrome —
+                    // moves, and the pane picks up the new scheme's chrome,
                     // WITHOUT re-reading `pending` (LoadSettings would
                     // discard the change the apply timer has not pushed yet).
                     cell.Tapped([this, i](auto &&, auto &&) {
@@ -2334,7 +2334,7 @@ namespace winrt::LookoutMarine::implementation
                 Controls::TextBox date;
                 date.Text(winrt::to_hstring(pending.date_view));
                 date.MaxLength(8);
-                /* Commits on Enter or focus loss, never per keystroke — half
+                /* Commits on Enter or focus loss, never per keystroke: half
                  * a date is not a date the chart should redraw against. */
                 auto commit_date = [this](Controls::TextBox const &b) {
                     if (settings_loading)
