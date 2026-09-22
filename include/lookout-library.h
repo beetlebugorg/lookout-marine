@@ -382,7 +382,9 @@ void                lookout_chart_sets_close(lookout_chart_sets *s);
  * that is the only change this announces on its own. */
 int lookout_chart_sets_changed(lookout_chart_sets *s);
 
-/* The list, in the order added. Borrowed until the next call that changes it. */
+/* The list, in the order added. Borrowed until the next call that changes it.
+ * A background scan landing does not end the borrow: the list read before it
+ * stays readable, and the next read returns the new scan. */
 const lookout_chart_set *const *lookout_chart_sets_all(lookout_chart_sets *s, size_t *out_n);
 
 /* Every file one set holds, as the background scan found it: the charts ready
@@ -391,7 +393,8 @@ const lookout_chart_set *const *lookout_chart_sets_all(lookout_chart_sets *s, si
  * once. `lookout_chart_file` is the scan read's own row.
  *
  * Empty until the scan has read the folder, which lookout_chart_sets_changed
- * announces. Borrowed until the next call that changes the list. */
+ * announces. Borrowed until the next call that changes the list, as
+ * lookout_chart_sets_all is. */
 const lookout_chart_file *const *lookout_chart_set_files(lookout_chart_sets *s,
                                                          const char *path,
                                                          size_t *out_n);

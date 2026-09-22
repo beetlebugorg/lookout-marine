@@ -133,12 +133,20 @@ pub const Sets = struct {
     /// shell reads `files` inside a loop over `all`, and a scan can land
     /// between the two reads.
     reads: std.heap.ArenaAllocator,
+    /// Bumped by every landing scan. A read made in the same generation as
+    /// the last one of its kind returns that one again, so reads between two
+    /// changes allocate once.
+    gen: u64 = 0,
+    all_read: ?Kept(*const Set) = null,
+    compose_read: ?Kept([*:0]const u8) = null,
+    /// One per set path read.
+    files_reads: std.ArrayList(Kept(*const library.File)) = .empty,
     /// What landing scans replaced.
     ///
     /// A read hands out pointers into a row's files_arena, its openable paths
     /// and its producer. `land` runs on the scan worker, and a shell may be
-    /// walking the list on its own thread. They are held here and freed at
-    /// the head of the next read.
+    /// walking the list on its own thread. They are held here and freed with
+    /// the read arena, by the next call that changes the list.
     retired: std.ArrayList(Retired) = .empty,
 
     const group = settings.group_chartsets;
@@ -209,6 +217,7 @@ pub const Sets = struct {
         self.queue.deinit(self.gpa);
         for (self.retired.items) |*x| x.free(self.gpa);
         self.retired.deinit(self.gpa);
+        self.files_reads.deinit(self.gpa);
         self.gpa.free(self.prepared_root);
         self.reads.deinit();
         self.gpa.destroy(self);
@@ -233,32 +242,48 @@ pub const Sets = struct {
         return was;
     }
 
+    /// Free everything a read handed out, and what landing scans replaced.
+    /// Called with `mu` held, by each call that changes the list.
+    fn resetReads(self: *Sets) void {
+        _ = self.reads.reset(.retain_capacity);
+        self.all_read = null;
+        self.compose_read = null;
+        self.files_reads.clearRetainingCapacity();
+        for (self.retired.items) |*x| x.free(self.gpa);
+        self.retired.clearRetainingCapacity();
+    }
+
     /// Every file one set holds, as the scan found it: the charts ready to
     /// draw and the ones that bake first, with the band and the size. A shell
     /// bakes from this rather than walking the folder again.
     ///
     /// Borrowed until the next call that changes the list. Empty until the
     /// background scan has read the folder.
-    /// Free what a landing scan replaced. Every read calls this first, under
-    /// the lock, so the generation a caller was handed last time goes only
-    /// once that caller has come back for another.
-    fn releaseRetired(self: *Sets) void {
-        for (self.retired.items) |*x| x.free(self.gpa);
-        self.retired.clearRetainingCapacity();
-    }
-
     pub fn files(self: *Sets, path: []const u8) []const *const library.File {
         self.mu.lock();
         defer self.mu.unlock();
-        self.releaseRetired();
         for (self.rows.items) |r| {
             if (!std.mem.eql(u8, r.path, path)) continue;
-            const a = self.reads.allocator();
-            const out = a.alloc(*const library.File, r.files.len) catch return &.{};
+            const kept = self.keptFiles(r.path) orelse return &.{};
+            if (kept.gen == self.gen) return kept.out;
+            const out = self.reads.allocator().alloc(*const library.File, r.files.len) catch return &.{};
             for (r.files, out) |*f, *dst| dst.* = f;
+            kept.gen = self.gen;
+            kept.out = out;
             return out;
         }
         return &.{};
+    }
+
+    /// The kept `files` read for one set path, made stale when new. `path` is
+    /// the row's own, which outlives the entry. Called with `mu` held.
+    fn keptFiles(self: *Sets, path: []const u8) ?*Kept(*const library.File) {
+        for (self.files_reads.items) |*k| {
+            if (k.path.ptr == path.ptr) return k;
+        }
+        const k = self.files_reads.addOne(self.gpa) catch return null;
+        k.* = .{ .gen = self.gen -% 1, .out = &.{}, .path = path };
+        return k;
     }
 
     /// The list, in the order added. Borrowed until the next call that changes
@@ -266,7 +291,9 @@ pub const Sets = struct {
     pub fn all(self: *Sets) []const *const Set {
         self.mu.lock();
         defer self.mu.unlock();
-        self.releaseRetired();
+        if (self.all_read) |k| {
+            if (k.gen == self.gen) return k.out;
+        }
         const a = self.reads.allocator();
         const out = a.alloc(Set, self.rows.items.len) catch return &.{};
         const by_ptr = a.alloc(*const Set, out.len) catch return &.{};
@@ -290,6 +317,7 @@ pub const Sets = struct {
             };
             p.* = dst;
         }
+        self.all_read = .{ .gen = self.gen, .out = by_ptr };
         return by_ptr;
     }
 
@@ -352,7 +380,7 @@ pub const Sets = struct {
             if (self.gpa.dupeZ(u8, path)) |owned| {
                 self.queue.append(self.gpa, owned) catch self.gpa.free(owned);
             } else |_| {}
-            _ = self.reads.reset(.retain_capacity);
+            self.resetReads();
         }
         self.mu.unlock();
         if (found) self.startScans();
@@ -370,7 +398,7 @@ pub const Sets = struct {
             found = true;
             break;
         }
-        _ = self.reads.reset(.retain_capacity);
+        self.resetReads();
         self.mu.unlock();
         if (found) self.save();
         return found;
@@ -388,7 +416,7 @@ pub const Sets = struct {
             }
             break;
         }
-        if (changed) _ = self.reads.reset(.retain_capacity);
+        if (changed) self.resetReads();
         self.mu.unlock();
         if (changed) self.save();
         return changed;
@@ -407,7 +435,7 @@ pub const Sets = struct {
             }
             break;
         }
-        if (changed) _ = self.reads.reset(.retain_capacity);
+        if (changed) self.resetReads();
         self.mu.unlock();
         if (changed) self.save();
         return changed;
@@ -445,7 +473,9 @@ pub const Sets = struct {
     pub fn compose(self: *Sets) []const [*:0]const u8 {
         self.mu.lock();
         defer self.mu.unlock();
-        self.releaseRetired();
+        if (self.compose_read) |k| {
+            if (k.gen == self.gen) return k.out;
+        }
         const a = self.reads.allocator();
         var out = std.ArrayList([:0]const u8).empty;
         // The winner so far for each dataset name, as its index in `out`.
@@ -489,6 +519,7 @@ pub const Sets = struct {
         }.lt);
         const ptrs = a.alloc([*:0]const u8, out.items.len) catch return &.{};
         for (out.items, ptrs) |p, *dst| dst.* = p.ptr;
+        self.compose_read = .{ .gen = self.gen, .out = ptrs };
         return ptrs;
     }
 
@@ -539,7 +570,7 @@ pub const Sets = struct {
             .scanned = false,
         });
         try self.queue.append(self.gpa, try self.gpa.dupeZ(u8, path));
-        _ = self.reads.reset(.retain_capacity);
+        self.resetReads();
         return true;
     }
 
@@ -796,6 +827,7 @@ pub const Sets = struct {
                 } else |_| {}
             }
             self.retired.append(self.gpa, old) catch old.free(self.gpa);
+            self.gen +%= 1;
             self.dirty = true;
             return;
         }
@@ -808,6 +840,16 @@ pub const Sets = struct {
         files_arena.deinit();
     }
 };
+
+/// A read's result, and the generation it was made in.
+fn Kept(comptime T: type) type {
+    return struct {
+        gen: u64,
+        out: []const T,
+        /// The set path, for a `files` read.
+        path: []const u8 = "",
+    };
+}
 
 /// What one landing scan replaced on a row. A read may still point into any
 /// of it.
@@ -907,7 +949,7 @@ const Watch = struct {
     }
 
     /// True when `ptr` lies in memory freed since it was last allocated.
-    fn wasFreed(self: *Watch, ptr: *const anyopaque) bool {
+    fn wasFreed(self: *Watch, ptr: anytype) bool {
         const at = @intFromPtr(ptr);
         self.mu.lock();
         defer self.mu.unlock();
@@ -1491,12 +1533,17 @@ test "a landing scan retires the file arena rather than freeing it" {
     s.mu.unlock();
     try t.expectEqual(@as(usize, 1), retired);
 
-    // The caller coming back is what releases the generation before it.
+    // A read keeps it. A call that changes the list frees it.
     try t.expect(s.files(dir).len > 0);
     s.mu.lock();
-    const after = s.retired.items.len;
+    const after_read = s.retired.items.len;
     s.mu.unlock();
-    try t.expectEqual(@as(usize, 0), after);
+    try t.expectEqual(@as(usize, 1), after_read);
+    try t.expect(s.setOn(dir, false));
+    s.mu.lock();
+    const after_change = s.retired.items.len;
+    s.mu.unlock();
+    try t.expectEqual(@as(usize, 0), after_change);
 }
 
 test "the list stays valid across a file read after a scan lands" {
@@ -1558,4 +1605,69 @@ test "a list held across a finished scan keeps its producer" {
     try t.expect(!w.wasFreed(producer));
     try t.expectEqualStrings("US", std.mem.span(producer));
     try t.expect(!w.wasFreed(composed[0]));
+}
+
+test "a list and a file read held across a finished scan stay valid through more reads" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const dir = try f.folder("Set A");
+    defer t.allocator.free(dir);
+
+    var w: Watch = .{};
+    defer w.deinit();
+    const s = try Sets.open(w.allocator(), f.io, f.store, "", null);
+    defer s.close();
+    try t.expect(s.add(dir));
+    settle(s);
+
+    try t.expect(s.rescan(dir));
+    const rows = s.all();
+    const held = s.files(dir);
+    try t.expect(held.len > 0);
+    settle(s);
+
+    // A shell reads again after the scan. Both reads return the new scan,
+    // and what was held before stays readable.
+    try t.expect(s.files(dir).ptr != held.ptr);
+    try t.expect(s.all().ptr != rows.ptr);
+    _ = s.compose();
+    try t.expect(!w.wasFreed(rows.ptr));
+    try t.expect(!w.wasFreed(rows[0].producer));
+    try t.expect(!w.wasFreed(held.ptr));
+    try t.expect(!w.wasFreed(held[0].path));
+    try t.expectEqualStrings(dir, std.mem.span(rows[0].path));
+
+    // A call that changes the list ends the borrow.
+    try t.expect(s.setOn(dir, false));
+    try t.expect(w.wasFreed(held[0].path));
+}
+
+test "reads between two changes allocate once" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const a = try f.folder("Set A");
+    defer t.allocator.free(a);
+    const b = try f.folder("Set B");
+    defer t.allocator.free(b);
+
+    var w: Watch = .{};
+    defer w.deinit();
+    const s = try Sets.open(w.allocator(), f.io, f.store, "", null);
+    defer s.close();
+    try t.expect(s.add(a));
+    try t.expect(s.add(b));
+    settle(s);
+
+    const Reads = struct {
+        fn round(x: *Sets, p: []const u8, q: []const u8) void {
+            _ = x.all();
+            _ = x.files(p);
+            _ = x.files(q);
+            _ = x.compose();
+        }
+    };
+    Reads.round(s, a, b);
+    const live = w.liveBytes();
+    for (0..1000) |_| Reads.round(s, a, b);
+    try t.expectEqual(live, w.liveBytes());
 }
