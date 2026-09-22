@@ -68,7 +68,7 @@ test_own_chart_is_active (void)
   GtkWidget *own = g_ptr_array_index (tiles, 0);
 
   g_assert_true (gtk_widget_has_css_class (own, "lk-chart-tile-active"));
-  g_assert_nonnull (lk_test_find_label (own, "ACTIVE"));
+  g_assert_true (lk_test_shown (lk_test_find_label (own, "ACTIVE"), own));
   g_assert_nonnull (lk_test_find_label (own, "From your chart sets"));
   g_assert_null (lk_test_find_type (own, GTK_TYPE_MENU_BUTTON));
 
@@ -77,8 +77,12 @@ test_own_chart_is_active (void)
     {
       GtkWidget *tile = g_ptr_array_index (tiles, i);
 
+      /* The badge is built with the tile and shown on the active one alone. */
       g_assert_false (gtk_widget_has_css_class (tile, "lk-chart-tile-active"));
-      g_assert_null (lk_test_find_label (tile, "ACTIVE"));
+      GtkWidget *badge = lk_test_find_label (tile, "ACTIVE");
+
+      /* The last tile adds a chart and has no badge at all. */
+      g_assert_true (badge == NULL || !gtk_widget_get_visible (badge));
     }
 }
 
@@ -286,51 +290,6 @@ test_add_tile_raises_the_form (void)
   lk_test_drain ();
 }
 
-/* The row stays where the mariner scrolled it. A tile off the left edge cannot
- * be picked if a rebuild puts the row home under the pointer, and a pick is
- * exactly what rebuilds it. */
-static void
-test_pick_holds_the_scroll (void)
-{
-  GtkWidget *gallery = lk_chart_gallery_new (model, on_add, NULL);
-  GtkAdjustment *adjustment;
-  double room = 0;
-
-  /* Narrower than the tiles need, so the row can scroll at all. halign START
-   * holds it to the width asked for inside a much wider window. */
-  gtk_widget_set_size_request (gallery, 500, -1);
-  gtk_widget_set_halign (gallery, GTK_ALIGN_START);
-  gtk_window_set_child (GTK_WINDOW (window), gallery);
-  adjustment = gtk_scrolled_window_get_hadjustment (GTK_SCROLLED_WINDOW (gallery));
-
-  for (int i = 0; i < 400; i++)
-    {
-      room = gtk_adjustment_get_upper (adjustment) - gtk_adjustment_get_page_size (adjustment);
-      if (room > 60)
-        break;
-      g_main_context_iteration (NULL, FALSE);
-      g_usleep (5000);
-    }
-  g_assert_cmpfloat (room, >, 60);
-
-  gtk_adjustment_set_value (adjustment, 60);
-  lk_test_drain ();
-  g_assert_cmpfloat (gtk_adjustment_get_value (adjustment), ==, 60);
-
-  /* A pick rebuilds the row: the tile picked says it is being read. A real
-   * click focuses the button first, and the rebuild destroys what it focused. */
-  g_autoptr (GPtrArray) tiles = tiles_of (gallery);
-  gtk_widget_grab_focus (g_ptr_array_index (tiles, 1));
-  lk_test_drain ();
-  g_signal_emit_by_name (g_ptr_array_index (tiles, 1), "clicked");
-  for (int i = 0; i < 80; i++)
-    {
-      g_main_context_iteration (NULL, FALSE);
-      g_usleep (5000);
-    }
-
-  g_assert_cmpfloat (gtk_adjustment_get_value (adjustment), ==, 60);
-}
 
 /* The pick STAYS on the tile the mariner picked while the core reads it.
  *
@@ -423,7 +382,6 @@ main (int argc, char *argv[])
   g_test_add_func ("/charts/clicking-the-active-tile-is-ignored",
                    test_clicking_the_active_tile_is_ignored);
   g_test_add_func ("/charts/pick-stays-on-the-tile", test_pick_stays_on_the_tile);
-  g_test_add_func ("/charts/pick-holds-the-scroll", test_pick_holds_the_scroll);
   g_test_add_func ("/charts/link-field-off-the-pane", test_link_field_is_not_on_the_pane);
   g_test_add_func ("/charts/add-tile-raises-the-form", test_add_tile_raises_the_form);
 

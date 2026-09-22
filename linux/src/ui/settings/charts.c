@@ -570,7 +570,6 @@ static void
 lk_set_row_column (LkSettings *settings, const LkChartSetRow *set, GtkWidget *column)
 {
     GtkWidget *title = gtk_label_new (set->title);
-    GtkWidget *action;
 
     gtk_widget_add_css_class (title, "heading");
     gtk_label_set_xalign (GTK_LABEL (title), 0.0);
