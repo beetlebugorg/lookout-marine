@@ -49,30 +49,13 @@ namespace
     // close through one lock, so the handle closes once.
     struct LiveFetch
     {
-        std::mutex        mu;
-        HINTERNET         req{ nullptr };
         std::atomic<bool> ended{ false };
 
-        void Hold(HINTERNET h)
-        {
-            std::lock_guard<std::mutex> lock(mu);
-            if (ended.load())
-            {
-                WinHttpCloseHandle(h);
-                return;
-            }
-            req = h;
-        }
-        void End()
-        {
-            ended.store(true);
-            std::lock_guard<std::mutex> lock(mu);
-            if (req != nullptr)
-            {
-                WinHttpCloseHandle(req);
-                req = nullptr;
-            }
-        }
+        // Marked only. The worker owns the request handle and closes it after
+        // its read loop, so no other thread closes a handle this one is
+        // inside. A transfer ends at the next piece, one read of up to 64 KB
+        // or one 8 second timeout away.
+        void End() { ended.store(true); }
     };
 
     std::mutex                                     g_fetch_mu;
@@ -116,6 +99,9 @@ namespace
 
     int FetchUrl(std::wstring const &url, ChunkSink const &sink, uint64_t id)
     {
+        // Registered before any work: a cancel that arrives while this job
+        // is still in the queue marks it here.
+        auto live = BeginFetch(id);
         URL_COMPONENTS parts{};
         wchar_t host[256]{}, path[2048]{}, extra[2048]{};
         parts.dwStructSize = sizeof parts;
@@ -129,7 +115,10 @@ namespace
         parts.lpszExtraInfo = extra;
         parts.dwExtraInfoLength = _countof(extra);
         if (!WinHttpCrackUrl(url.c_str(), 0, 0, &parts))
+        {
+            EndFetch(id);
             return 0;
+        }
         std::wstring object = std::wstring(path) + extra;
 
         // A unique, identifiable agent with a way to reach the developer:
@@ -140,7 +129,10 @@ namespace
                                     WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
                                     WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
         if (ses == nullptr)
+        {
+            EndFetch(id);
             return 0;
+        }
         // A stalled fetch must not hold a worker forever: the chart is drawn
         // from whatever HAS landed, so a slow tile costs only itself, and a
         // style that asks a base map past the zoom it actually serves fails
@@ -157,10 +149,6 @@ namespace
             req = WinHttpOpenRequest(con, L"GET", object.c_str(), nullptr, L"https://beetlebug.org/",
                                      WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
         }
-        // Reachable by a cancel or a stop from this point on.
-        auto live = BeginFetch(id);
-        if (req != nullptr)
-            live->Hold(req);
         if (req != nullptr &&
             WinHttpSendRequest(req, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
                                WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
@@ -206,7 +194,8 @@ namespace
                 std::vector<uint8_t> buf(kReadChunk);
                 uint64_t             total = 0;
                 DWORD                avail = 0;
-                while (WinHttpQueryDataAvailable(req, &avail) && avail > 0)
+                while (!live->ended.load() &&
+                       WinHttpQueryDataAvailable(req, &avail) && avail > 0)
                 {
                     DWORD want = avail < (DWORD)kReadChunk ? avail : (DWORD)kReadChunk;
                     DWORD got  = 0;
@@ -242,8 +231,9 @@ namespace
                 }
             }
         }
-        // The handle closes here or in End, whichever runs first.
-        live->End();
+        // On this thread. No other thread touches the handle.
+        if (req != nullptr)
+            WinHttpCloseHandle(req);
         EndFetch(id);
         if (con != nullptr)
             WinHttpCloseHandle(con);
