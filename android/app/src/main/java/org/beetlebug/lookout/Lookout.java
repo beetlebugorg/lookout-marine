@@ -300,6 +300,37 @@ public final class Lookout implements AutoCloseable {
     public static String[] chartSetsCompose(long s) {
         return s == 0 ? new String[0] : nChartSetsCompose(s);
     }
+    /** Read a set again after a bake wrote into its prepared directory. False
+     *  when it is not on the list. */
+    public static boolean chartSetsRescan(long s, String path) {
+        return s != 0 && nChartSetsRescan(s, path);
+    }
+    /** Mark a set as a downloader's. True when the mark changed. */
+    public static boolean chartSetsSetManaged(long s, String path, boolean managed) {
+        return s != 0 && nChartSetsSetManaged(s, path, managed);
+    }
+    /** The files one set still has to prepare, in chartSetFiles' row shape. */
+    public static String[] chartSetToPrepare(long s, String path) {
+        return s == 0 ? new String[0] : nChartSetToPrepare(s, path);
+    }
+    /** What each set still has to prepare, in the order chartSetsAll lists
+     *  them: path, toPrepare, refused, then band 1 to 6. */
+    public static String[] chartSetsTodo(long s) {
+        return s == 0 ? new String[0] : nChartSetsTodo(s);
+    }
+    /** The set whose prepare to finish, or null. */
+    public static String chartSetsResume(long s) {
+        return s == 0 ? null : nChartSetsResume(s);
+    }
+    /** Record that the mariner stopped the prepare of a set. */
+    public static void chartSetsNoteCancel(long s, String path) {
+        if (s != 0) nChartSetsNoteCancel(s, path);
+    }
+    /** Record how a bake of a set ended. Call once the bake has stopped and
+     *  before bakeFree, then rescan the set. */
+    public static boolean chartSetsNoteBake(long s, String path, long job) {
+        return s != 0 && nChartSetsNoteBake(s, path, job);
+    }
 
     /**
      * Hand the store to this chart handle. The engine then restores the camera
@@ -447,6 +478,13 @@ public final class Lookout implements AutoCloseable {
     private static native boolean nChartSetsSetOn(long s, String path, boolean on);
     private static native boolean nChartSetsIsOn(long s, String path);
     private static native String[] nChartSetsCompose(long s);
+    private static native boolean nChartSetsRescan(long s, String path);
+    private static native boolean nChartSetsSetManaged(long s, String path, boolean managed);
+    private static native String[] nChartSetToPrepare(long s, String path);
+    private static native String[] nChartSetsTodo(long s);
+    private static native String nChartSetsResume(long s);
+    private static native void nChartSetsNoteCancel(long s, String path);
+    private static native boolean nChartSetsNoteBake(long s, String path, long job);
     private static native String nFmtPosition(double lat, double lon);
     private static native String nFmtCoordDm(double value, boolean isLat);
     private static native String nFmtScale(double denominator);

@@ -3605,6 +3605,8 @@ extern fn lookout_chart_sets_changed(s: ?*c_sets) c_int;
 extern fn lookout_chart_sets_all(s: ?*c_sets, out_n: *usize) ?[*]const ?*const CChartSet;
 extern fn lookout_chart_set_files(s: ?*c_sets, path: ?[*:0]const u8, out_n: *usize) ?[*]const ?*const CChartFile;
 extern fn lookout_chart_sets_add(s: ?*c_sets, path: ?[*:0]const u8) c_int;
+extern fn lookout_chart_sets_rescan(s: ?*c_sets, path: ?[*:0]const u8) c_int;
+extern fn lookout_chart_sets_set_managed(s: ?*c_sets, path: ?[*:0]const u8, managed: c_int) c_int;
 extern fn lookout_chart_sets_remove(s: ?*c_sets, path: ?[*:0]const u8) c_int;
 extern fn lookout_chart_sets_set_on(s: ?*c_sets, path: ?[*:0]const u8, on: c_int) c_int;
 extern fn lookout_chart_sets_is_on(s: ?*c_sets, path: ?[*:0]const u8) c_int;
@@ -3681,6 +3683,24 @@ export fn Java_org_beetlebug_lookout_Lookout_nChartSetsAdd(env: [*c]j.JNIEnv, cl
     const p = Borrowed.get(env, path) orelse return 0;
     defer p.release(env);
     return if (lookout_chart_sets_add(setsOf(s), p.ptr()) != 0) 1 else 0;
+}
+
+/// boolean nChartSetsRescan(long s, String path) -- read the set again, after a
+/// bake wrote into its prepared directory. False when it is not on the list.
+export fn Java_org_beetlebug_lookout_Lookout_nChartSetsRescan(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong, path: j.jstring) j.jboolean {
+    _ = cls;
+    const p = Borrowed.get(env, path) orelse return 0;
+    defer p.release(env);
+    return if (lookout_chart_sets_rescan(setsOf(s), p.ptr()) != 0) 1 else 0;
+}
+
+/// boolean nChartSetsSetManaged(long s, String path, boolean managed) -- mark
+/// the set as a downloader's. True when the mark changed.
+export fn Java_org_beetlebug_lookout_Lookout_nChartSetsSetManaged(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong, path: j.jstring, managed: j.jboolean) j.jboolean {
+    _ = cls;
+    const p = Borrowed.get(env, path) orelse return 0;
+    defer p.release(env);
+    return if (lookout_chart_sets_set_managed(setsOf(s), p.ptr(), if (managed != 0) 1 else 0) != 0) 1 else 0;
 }
 
 export fn Java_org_beetlebug_lookout_Lookout_nChartSetsRemove(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong, path: j.jstring) j.jboolean {
