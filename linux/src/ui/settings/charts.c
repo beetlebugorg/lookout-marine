@@ -25,6 +25,7 @@
 #include "ui/charts/noaa-window.h"
 #include "model/store.h"
 #include "ui/open-dialogs.h"
+#include "ui/work-panel.h"
 
 /* ---- the ways in --------------------------------------------------------- */
 
@@ -939,75 +940,27 @@ lk_settings_fill_work_list (LkSettings *settings)
 
   if (noaa->phase == LK_NOAA_DOWNLOADING)
     {
-      GtkWidget *head = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 10);
+      GtkWidget *panel = lk_work_panel_new ("Cancel", G_CALLBACK (lk_noaa_cancel_clicked),
+                                            settings);
       g_autofree char *counts = g_strdup_printf ("Downloading from NOAA · %u of %u charts",
                                                  noaa->done, noaa->total);
-      GtkWidget *label = gtk_label_new (counts);
-      GtkWidget *cancel = gtk_button_new_with_label ("Cancel");
-      GtkWidget *bar = gtk_progress_bar_new ();
+      g_autofree char *failed =
+          noaa->failed > 0 ? g_strdup_printf ("%u failed", noaa->failed) : NULL;
 
-      gtk_widget_add_css_class (label, "caption");
-      gtk_label_set_xalign (GTK_LABEL (label), 0.0);
-      gtk_widget_set_hexpand (label, TRUE);
-      gtk_box_append (GTK_BOX (head), label);
-
-      if (noaa->failed > 0)
-        {
-          g_autofree char *failed = g_strdup_printf ("%u failed", noaa->failed);
-          GtkWidget *bad = gtk_label_new (failed);
-
-          gtk_widget_add_css_class (bad, "error");
-          gtk_widget_add_css_class (bad, "caption");
-          gtk_box_append (GTK_BOX (head), bad);
-        }
-
-      gtk_widget_set_valign (cancel, GTK_ALIGN_CENTER);
-      g_signal_connect (cancel, "clicked", G_CALLBACK (lk_noaa_cancel_clicked), settings);
-      gtk_box_append (GTK_BOX (head), cancel);
-
-      gtk_progress_bar_set_fraction (GTK_PROGRESS_BAR (bar),
-                                     noaa->total > 0 ? (double) noaa->done / noaa->total
-                                                     : 0.0);
-      gtk_box_append (GTK_BOX (list), head);
-      gtk_box_append (GTK_BOX (list), bar);
+      lk_work_panel_show (panel, counts, failed, NULL, NULL, (int) noaa->done,
+                          (int) noaa->total);
+      gtk_box_append (GTK_BOX (list), panel);
     }
 
   if (bake != NULL)
     {
-      GtkWidget *head = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 10);
+      GtkWidget *panel = lk_work_panel_new ("Stop", G_CALLBACK (lk_bake_cancel_clicked),
+                                            settings);
       g_autofree char *title = lk_bake_progress_title (bake);
       g_autofree char *left = lk_bake_progress_remaining (bake);
-      GtkWidget *label = gtk_label_new (title);
-      GtkWidget *cancel = gtk_button_new_with_label ("Stop");
-      GtkWidget *bar = gtk_progress_bar_new ();
 
-      gtk_widget_add_css_class (label, "caption");
-      gtk_label_set_xalign (GTK_LABEL (label), 0.0);
-      gtk_label_set_ellipsize (GTK_LABEL (label), PANGO_ELLIPSIZE_END);
-      gtk_widget_set_hexpand (label, TRUE);
-      gtk_box_append (GTK_BOX (head), label);
-
-      if (left != NULL)
-        {
-          GtkWidget *remaining = gtk_label_new (left);
-
-          gtk_widget_add_css_class (remaining, "dim-label");
-          gtk_widget_add_css_class (remaining, "caption");
-          gtk_box_append (GTK_BOX (head), remaining);
-        }
-
-      gtk_widget_set_valign (cancel, GTK_ALIGN_CENTER);
-      gtk_widget_set_tooltip_text (cancel,
-                                   "Whatever has been prepared stays. Coarse charts are "
-                                   "prepared first, so a passage is covered even if this "
-                                   "is stopped part way.");
-      g_signal_connect (cancel, "clicked", G_CALLBACK (lk_bake_cancel_clicked), settings);
-      gtk_box_append (GTK_BOX (head), cancel);
-
-      gtk_progress_bar_set_fraction (GTK_PROGRESS_BAR (bar),
-                                     lk_bake_progress_fraction (bake));
-      gtk_box_append (GTK_BOX (list), head);
-      gtk_box_append (GTK_BOX (list), bar);
+      lk_work_panel_show (panel, title, left, NULL, NULL, bake->done, bake->total);
+      gtk_box_append (GTK_BOX (list), panel);
     }
 
   /* A removal, the same way. Deleting a library is thousands of files and it
@@ -1017,31 +970,13 @@ lk_settings_fill_work_list (LkSettings *settings)
    * not a state to stop in. */
   if (gone != NULL)
     {
-      GtkWidget *head = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 10);
+      GtkWidget *panel = lk_work_panel_new (NULL, NULL, NULL);
       g_autofree char *title = lk_bake_progress_title (gone);
-      GtkWidget *label = gtk_label_new (title);
-      GtkWidget *bar = gtk_progress_bar_new ();
+      g_autofree char *counts =
+          gone->total > 0 ? g_strdup_printf ("%d of %d", gone->done, gone->total) : NULL;
 
-      gtk_widget_add_css_class (label, "caption");
-      gtk_label_set_xalign (GTK_LABEL (label), 0.0);
-      gtk_label_set_ellipsize (GTK_LABEL (label), PANGO_ELLIPSIZE_MIDDLE);
-      gtk_widget_set_hexpand (label, TRUE);
-      gtk_box_append (GTK_BOX (head), label);
-
-      if (gone->total > 0)
-        {
-          g_autofree char *counts = g_strdup_printf ("%d of %d", gone->done, gone->total);
-          GtkWidget *count = gtk_label_new (counts);
-
-          gtk_widget_add_css_class (count, "dim-label");
-          gtk_widget_add_css_class (count, "caption");
-          gtk_box_append (GTK_BOX (head), count);
-        }
-
-      gtk_progress_bar_set_fraction (GTK_PROGRESS_BAR (bar),
-                                     lk_bake_progress_fraction (gone));
-      gtk_box_append (GTK_BOX (list), head);
-      gtk_box_append (GTK_BOX (list), bar);
+      lk_work_panel_show (panel, title, counts, NULL, NULL, gone->done, gone->total);
+      gtk_box_append (GTK_BOX (list), panel);
     }
 
   /* A section with nothing in it is a heading over empty space. */

@@ -181,6 +181,7 @@ sources = files(
   'src/ui/open-dialogs.c',
   'src/ui/startup-view.c',
   'src/ui/window.c',
+  'src/ui/work-panel.c',
   'src/util/json.c',
 )
 

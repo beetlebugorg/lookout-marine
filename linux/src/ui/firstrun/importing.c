@@ -22,6 +22,7 @@
 #include "ui/charts/band-ramp.h"
 #include "library/sets.h"
 #include "library/noaa.h"
+#include "ui/work-panel.h"
 
 /* The left column, in the reference's proportion: the phases beside the bands
  * rather than above them. */
@@ -47,9 +48,7 @@ typedef struct {
   GtkWidget *name;
   GtkWidget *under;
   GtkWidget *why;   /* why no chart arrived */
-  GtkWidget *bar;
-  GtkWidget *percent;
-  GtkWidget *remaining;
+  GtkWidget *work;  /* the bar, the percent and the time left */
   GtkWidget *bands;      /* the box the band rows go in */
   LkPhaseRow download;   /* built only for a NOAA run */
   LkPhaseRow find;
@@ -308,18 +307,12 @@ lk_first_run_importing_sync (GtkWidget *step)
       total = work->total;
     }
 
-  if (total > 0)
-    gtk_progress_bar_set_fraction (GTK_PROGRESS_BAR (self->bar), (double) done / total);
-  else
-    gtk_progress_bar_pulse (GTK_PROGRESS_BAR (self->bar));
-
   g_autofree char *percent =
       total > 0 ? g_strdup_printf ("%d%%", (int) ((double) done / total * 100 + 0.5))
                 : g_strdup ("");
-  gtk_label_set_text (GTK_LABEL (self->percent), percent);
-
   g_autofree char *left = running ? lk_bake_progress_remaining (bake) : NULL;
-  gtk_label_set_text (GTK_LABEL (self->remaining), left != NULL ? left : "");
+
+  lk_work_panel_show (self->work, NULL, NULL, percent, left, done, total);
 
   /* The phases.
    *
@@ -383,7 +376,6 @@ lk_first_run_importing_new (LkFirstRunFlow *flow)
   GtkWidget *columns = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 26);
   GtkWidget *column = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
   GtkWidget *phases = gtk_box_new (GTK_ORIENTATION_VERTICAL, 8);
-  GtkWidget *numbers = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
   LkImporting *self = g_new0 (LkImporting, 1);
   const char *regions = NULL;
   guint32 ordered = 0;
@@ -424,22 +416,9 @@ lk_first_run_importing_new (LkFirstRunFlow *flow)
   gtk_widget_set_visible (self->why, FALSE);
   gtk_box_append (GTK_BOX (column), self->why);
 
-  self->bar = gtk_progress_bar_new ();
-  gtk_widget_set_margin_top (self->bar, 16);
-  gtk_box_append (GTK_BOX (column), self->bar);
-
-  self->percent = gtk_label_new ("");
-  self->remaining = gtk_label_new ("");
-  gtk_widget_add_css_class (self->percent, "caption");
-  gtk_widget_add_css_class (self->percent, "dim-label");
-  gtk_label_set_xalign (GTK_LABEL (self->percent), 0.0);
-  gtk_widget_set_hexpand (self->percent, TRUE);
-  gtk_widget_add_css_class (self->remaining, "caption");
-  gtk_widget_add_css_class (self->remaining, "dim-label");
-  gtk_box_append (GTK_BOX (numbers), self->percent);
-  gtk_box_append (GTK_BOX (numbers), self->remaining);
-  gtk_widget_set_margin_top (numbers, 8);
-  gtk_box_append (GTK_BOX (column), numbers);
+  self->work = lk_work_panel_new (NULL, NULL, NULL);
+  gtk_widget_set_margin_top (self->work, 16);
+  gtk_box_append (GTK_BOX (column), self->work);
 
   if (self->from_noaa)
     {

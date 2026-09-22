@@ -1,5 +1,6 @@
 /* ui/hud/pills.c: the two progress pills at the top of the chart. */
 #include "ui/hud/pills.h"
+#include "ui/work-panel.h"
 #include "ui/hud/hud.h"
 #include "util/tether.h"
 #include "ui/startup-view.h"
@@ -65,15 +66,12 @@ typedef struct {
   GtkWidget *small_spin;  /* stands in for the count until there is one */
   GtkWidget *chevron;
   GtkWidget *detail;
-  GtkWidget *bar;
-  GtkWidget *percent;
-  GtkWidget *remaining;
+  GtkWidget *work;  /* the bar, the percent and the time left */
   GtkWidget *step_find;
   GtkWidget *step_import;
   GtkWidget *stop;
   gboolean   open;        /* the pill's disclosure; the page form is always open */
   gboolean   compact;
-  guint      pulse_id;    /* pulses the bar while there is nothing to count */
 } LkBakePanel;
 
 static void
@@ -82,18 +80,9 @@ lk_bake_panel_free (gpointer data, GClosure *closure)
   (void) closure;
   LkBakePanel *panel = data;
 
-  g_clear_handle_id (&panel->pulse_id, g_source_remove);
   g_free (panel);
 }
 
-static gboolean
-lk_bake_pulse (gpointer user_data)
-{
-  LkBakePanel *panel = user_data;
-
-  gtk_progress_bar_pulse (GTK_PROGRESS_BAR (panel->bar));
-  return G_SOURCE_CONTINUE;
-}
 
 static void
 lk_bake_cancel_clicked (GtkButton *button, gpointer user_data)
@@ -161,11 +150,7 @@ lk_bake_notify (GObject *object, GParamSpec *pspec, gpointer user_data)
 
   gtk_widget_set_visible (panel->root, p != NULL);
   if (p == NULL)
-    {
-      /* Idle means idle: nothing left to say, so nothing left ticking. */
-      g_clear_handle_id (&panel->pulse_id, g_source_remove);
-      return;
-    }
+    return;
 
   gboolean counted = p->total > 0;
   gboolean compact = lk_app_model_get_has_chart (model);
@@ -184,27 +169,12 @@ lk_bake_notify (GObject *object, GParamSpec *pspec, gpointer user_data)
   gtk_label_set_text (GTK_LABEL (panel->head_big), title);
   gtk_label_set_text (GTK_LABEL (panel->small_title), title);
 
-  /* Counted or not, the bar has to look like work. A determinate bar with
-     nothing in it reads as stuck, which is what looking through a big folder
-     looked like, so it pulses until there is a count. */
-  if (counted)
-    {
-      g_clear_handle_id (&panel->pulse_id, g_source_remove);
-      gtk_progress_bar_set_fraction (GTK_PROGRESS_BAR (panel->bar),
-                                     lk_bake_progress_fraction (p));
-    }
-  else if (panel->pulse_id == 0)
-    {
-      panel->pulse_id = g_timeout_add (120, lk_bake_pulse, panel);
-    }
-
   g_autofree char *pct = counted
       ? g_strdup_printf ("%d%%", (int) (lk_bake_progress_fraction (p) * 100))
       : g_strdup ("");
-  gtk_label_set_text (GTK_LABEL (panel->percent), pct);
-
   g_autofree char *left = lk_bake_progress_remaining (p);
-  gtk_label_set_text (GTK_LABEL (panel->remaining), left != NULL ? left : "");
+
+  lk_work_panel_show (panel->work, NULL, NULL, pct, left, p->done, p->total);
 
   g_autofree char *count = counted ? g_strdup_printf ("%d of %d", p->done, p->total) : NULL;
   gtk_label_set_text (GTK_LABEL (panel->small_count), count != NULL ? count : "");
@@ -269,23 +239,8 @@ lk_bake_pill_new (LkAppModel *model)
   panel->detail = gtk_box_new (GTK_ORIENTATION_VERTICAL, 11);
   gtk_widget_set_size_request (panel->detail, LK_BAKE_WIDTH, -1);
 
-  GtkWidget *bar_block = gtk_box_new (GTK_ORIENTATION_VERTICAL, 6);
-  panel->bar = gtk_progress_bar_new ();
-  GtkWidget *figures = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
-  panel->percent = gtk_label_new ("");
-  panel->remaining = gtk_label_new ("");
-  gtk_widget_add_css_class (panel->percent, "caption");
-  gtk_widget_add_css_class (panel->percent, "dim-label");
-  gtk_widget_add_css_class (panel->remaining, "caption");
-  gtk_widget_add_css_class (panel->remaining, "dim-label");
-  gtk_label_set_xalign (GTK_LABEL (panel->percent), 0.0);
-  gtk_label_set_xalign (GTK_LABEL (panel->remaining), 1.0);
-  gtk_widget_set_hexpand (panel->remaining, TRUE);
-  gtk_box_append (GTK_BOX (figures), panel->percent);
-  gtk_box_append (GTK_BOX (figures), panel->remaining);
-  gtk_box_append (GTK_BOX (bar_block), panel->bar);
-  gtk_box_append (GTK_BOX (bar_block), figures);
-  gtk_box_append (GTK_BOX (panel->detail), bar_block);
+  panel->work = lk_work_panel_new (NULL, NULL, NULL);
+  gtk_box_append (GTK_BOX (panel->detail), panel->work);
 
   GtkWidget *steps = gtk_box_new (GTK_ORIENTATION_VERTICAL, 7);
   panel->step_find = lk_loader_step_new (steps);
