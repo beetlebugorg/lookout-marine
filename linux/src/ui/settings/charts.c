@@ -802,8 +802,15 @@ lk_settings_fill_sets_list (LkSettings *settings)
           gtk_widget_add_css_class (update, "caption");
           gtk_widget_add_css_class (update, "lk-accent");
           gtk_widget_set_valign (update, GTK_ALIGN_CENTER);
+          /* A transfer already running is replaced by lookout_noaa_update
+           * with no word to the mariner, so Update stands down while one
+           * runs and while what it brought is prepared. */
+          const LkNoaaState *state =
+              lk_noaa_state (lk_app_model_get_noaa (settings->model));
+
           gtk_widget_set_sensitive (update,
-                                    !lk_app_model_get_baking (settings->model));
+                                    state->phase != LK_NOAA_DOWNLOADING &&
+                                        !lk_app_model_get_baking (settings->model));
           g_signal_connect (update, "clicked", G_CALLBACK (lk_charts_update_clicked),
                             settings);
 
@@ -1070,6 +1077,9 @@ lk_settings_work_changed (gpointer subject, gpointer user_data)
   if (settings != NULL)
     {
       lk_deferred_list_schedule (&settings->work);
+      /* The managed row states what NOAA has reissued and offers Update, so
+       * it follows the service too. */
+      lk_deferred_list_schedule (&settings->sets);
       lk_settings_refresh_noaa_checked (settings);
     }
 }

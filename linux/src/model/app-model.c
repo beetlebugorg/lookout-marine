@@ -1105,6 +1105,18 @@ lk_app_model_bake_done (const char *out_dir, guint baked, gpointer user_data)
   /* And the download that ended while this bake ran. */
   if (self->noaa_open_held && !self->scanning && !self->baking)
     lk_app_model_prepare_noaa_download (self);
+
+  /* The count the managed row states is against the editions on the disk, and
+   * this bake has changed them. Counting again needs the catalog alone, so it
+   * runs here rather than through the cadence. */
+  if (self->noaa_outdated > 0)
+    {
+      self->noaa_checked_this_run = FALSE;
+      if (lk_noaa_state (self->noaa)->have_catalog)
+        lk_app_model_count_noaa_outdated (self);
+      else
+        self->noaa_outdated = 0;
+    }
 }
 
 typedef struct {
