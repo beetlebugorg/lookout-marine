@@ -2545,8 +2545,13 @@ test "a refused order and a failed transfer each set retry by cause" {
     try testing.expectEqual(@as(u8, 0), snap.retry);
 
     // No download directory: its parent is a file.
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "file", .data = "x" });
+    const under_file = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}/file/lookout-noaa-retry", .{tmp.sub_path});
+    defer alloc.free(under_file);
     s.setProvider(Recorder.get, null, null, &rec);
-    s.start(&.{5}, "/dev/null/lookout-noaa-retry", false);
+    s.start(&.{5}, under_file, false);
     snap = s.snapshot();
     try testing.expectEqual(@as(u8, @intFromEnum(Outcome.refused)), snap.outcome);
     try testing.expectEqual(@as(u8, 0), snap.retry);

@@ -4408,17 +4408,16 @@ test "a NOAA download on its own handle runs through two chart handles closing" 
     std.Io.Dir.cwd().deleteTree(io, dest) catch {};
     defer std.Io.Dir.cwd().deleteTree(io, dest) catch {};
 
-    // A chart handle reads the mariner's chart links from under $HOME. Point
-    // it at an empty directory.
+    // A chart handle reads the mariner's chart links from the support
+    // directory, and writes its cache under the cache root. Point both at an
+    // empty directory.
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const home = try std.fmt.allocPrintSentinel(alloc, ".zig-cache/tmp/{s}", .{tmp.sub_path}, 0);
+    const home = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{tmp.sub_path});
     defer alloc.free(home);
-    const old_home = std.c.getenv("HOME");
-    const kept = if (old_home) |h| try alloc.dupeZ(u8, std.mem.span(h)) else null;
-    defer if (kept) |k| alloc.free(k);
-    _ = setenv("HOME", home.ptr, 1);
-    defer _ = if (kept) |k| setenv("HOME", k.ptr, 1) else unsetenv("HOME");
+    marks.test_support_dir = home;
+    defer marks.test_support_dir = null;
+    cachedir.setRoot(home);
 
     const Fetch = struct {
         ids: std.ArrayList(u64) = .empty,
@@ -4464,5 +4463,3 @@ test "a NOAA download on its own handle runs through two chart handles closing" 
     try std.testing.expectEqual(@as(u32, 1), st.done);
 }
 
-extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
-extern "c" fn unsetenv(name: [*:0]const u8) c_int;
