@@ -327,7 +327,6 @@ pub const Links = struct {
     }
 
     pub fn deinit(self: *Links) void {
-        self.gather.deinit();
         self.dropResolve();
         for (self.entries.items) |*e| self.freeEntry(e);
         self.entries.deinit(self.alloc);
@@ -340,6 +339,8 @@ pub const Links = struct {
         for (self.tile_queue.items) |q| self.alloc.free(q.url);
         self.tile_queue.deinit(self.alloc);
         self.reqs.deinit(self.alloc);
+        // After clearSources, whose cancels close entries in it.
+        self.gather.deinit();
         for (self.inbox.items) |a| self.alloc.free(a.bytes);
         self.inbox.deinit(self.alloc);
         if (self.dir) |d| self.alloc.free(d);

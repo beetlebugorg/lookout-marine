@@ -258,10 +258,11 @@ pub const Service = struct {
     }
 
     pub fn deinit(self: *Service) void {
-        self.gather.deinit();
         for (self.held.items) |n| self.alloc.free(n);
         self.held.deinit(self.alloc);
         self.cancelAll();
+        // After cancelAll, which clears it.
+        self.gather.deinit();
         self.stopUnpacker();
         self.reap.deinit(self.alloc);
         self.freeStr(&self.stage_dest);
