@@ -292,6 +292,13 @@ pub const Service = struct {
     /// the bundle fallback, which plans the same cells a second time.
     again: bool = false,
 
+    /// Set by a piece of a transfer, and cleared by the adopt that publishes
+    /// the bytes it brought.
+    progress: std.atomic.Value(bool) = .init(false),
+    /// When a piece last woke the shell, in monotonic milliseconds. Pieces
+    /// arrive on several fetch threads at once.
+    progress_woke_ms: std.atomic.Value(i64) = .init(0),
+
     /// Answers from the shell's fetch threads, guarded by inbox_mu alone.
     inbox_mu: Lock = .{},
     inbox: std.ArrayList(Answer) = .empty,
@@ -864,13 +871,29 @@ pub const Service = struct {
     /// lock, so its pieces are gathered instead.
     pub fn respondChunk(self: *Service, req_id: u64, bytes: []const u8, status: c_int, done: bool) void {
         if (self.appendStaged(req_id, bytes, status)) {
-            if (!done) return;
+            if (!done) return self.noteProgress(bytes.len);
             self.finishStaged(req_id, status);
             return;
         }
 
         const whole = self.gather.take(req_id, bytes, status, done) orelse return;
         self.post(.{ .id = req_id, .bytes = whole.bytes, .status = whole.status });
+    }
+
+    /// The shortest gap between two wakes for bytes arriving.
+    pub const progress_every_ms: i64 = 250;
+
+    /// Mark the byte count moved, and wake the shell at most four times a
+    /// second for it. The piece that ends a transfer wakes it through post.
+    fn noteProgress(self: *Service, len: usize) void {
+        if (len == 0) return;
+        self.progress.store(true, .release);
+        const w = self.wake orelse return;
+        const now = clock.ticksMs();
+        const last = self.progress_woke_ms.load(.acquire);
+        if (now - last < progress_every_ms) return;
+        if (self.progress_woke_ms.cmpxchgStrong(last, now, .acq_rel, .acquire) != null) return;
+        w(self.user);
     }
 
     /// Close a finished transfer and hand it to the unpack thread.
@@ -1116,11 +1139,12 @@ pub const Service = struct {
     /// Adopt every queued answer. Called from the frame loop under the api
     /// lock.
     pub fn adopt(self: *Service) void {
+        const moved = self.progress.swap(false, .acq_rel);
         if (!self.pending()) {
             // No answer arrived. The api side may still have changed the
-            // state since the last frame.
+            // state since the last frame, and bytes may have arrived.
             self.idleUnpacker();
-            if (self.changed) self.publish();
+            if (self.changed or moved) self.publish();
             return;
         }
         while (true) {
@@ -2895,4 +2919,88 @@ test "the update check follows the cadence and records a read that succeeded" {
     next.setProvider(Recorder.get, null, null, &rec);
     try testing.expect(next.updateDue(now));
     try testing.expectEqual(@as(usize, 4), rec.ids.items.len);
+}
+
+test "a streamed transfer wakes the shell as its bytes arrive, and an idle service stays asleep" {
+    const alloc = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dest = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}/NOAA", .{tmp.sub_path});
+    defer alloc.free(dest);
+
+    const Fetch = struct {
+        ids: std.ArrayList(u64) = .empty,
+        wakes: std.atomic.Value(u32) = .init(0),
+
+        fn get(user: ?*anyopaque, req_id: u64, url: [*:0]const u8, allow_file: c_int) callconv(.c) void {
+            _ = url;
+            _ = allow_file;
+            const self: *@This() = @ptrCast(@alignCast(user orelse return));
+            self.ids.append(testing.allocator, req_id) catch {};
+        }
+        fn wake(user: ?*anyopaque) callconv(.c) void {
+            const self: *@This() = @ptrCast(@alignCast(user orelse return));
+            _ = self.wakes.fetchAdd(1, .monotonic);
+        }
+    };
+    var f = Fetch{};
+    defer f.ids.deinit(alloc);
+
+    var h = Handle.init(alloc);
+    defer h.deinit();
+    h.svc.cat = try oneDistrict(alloc, 5, 1);
+    h.svc.phase = .ready;
+    h.setProvider(Fetch.get, null, Fetch.wake, &f);
+    _ = h.changed();
+
+    // Idle: no wake and no change.
+    for (0..5) |_| try testing.expect(!h.changed());
+    try testing.expectEqual(@as(u32, 0), f.wakes.load(.monotonic));
+
+    h.download(&.{5}, dest, false);
+    try testing.expect(h.changed());
+    try testing.expectEqual(@as(u32, 0), f.wakes.load(.monotonic));
+
+    const zip = try testZip(alloc, &.{.{ .name = "ENC_ROOT/US505000/US505000.000", .data = "cell" }});
+    defer alloc.free(zip);
+    const third = zip.len / 3;
+    const id = f.ids.items[0];
+
+    // The first piece wakes the shell, and the bytes are there to read.
+    h.respondChunk(id, zip[0..third], 200, false);
+    try testing.expectEqual(@as(u32, 1), f.wakes.load(.monotonic));
+    try testing.expect(h.changed());
+    try testing.expectEqual(@as(u64, third), h.poll().bytes_done);
+
+    // A second piece inside the quarter second raises no wake.
+    h.respondChunk(id, zip[third .. 2 * third], 200, false);
+    try testing.expectEqual(@as(u32, 1), f.wakes.load(.monotonic));
+
+    // After it, the next piece wakes the shell again.
+    lock.sleepMs(Service.progress_every_ms + 10);
+    h.respondChunk(id, zip[2 * third .. zip.len - 1], 200, false);
+    try testing.expectEqual(@as(u32, 2), f.wakes.load(.monotonic));
+    try testing.expect(h.changed());
+    try testing.expectEqual(@as(u64, zip.len - 1), h.poll().bytes_done);
+    try testing.expectEqual(@as(u8, @intFromEnum(Outcome.running)), h.poll().outcome);
+
+    h.respondChunk(id, zip[zip.len - 1 ..], 200, true);
+    var tries: usize = 0;
+    while (h.poll().outcome == @intFromEnum(Outcome.running) and tries < 2000) : (tries += 1) {
+        _ = h.changed();
+        lock.sleepMs(1);
+    }
+    try testing.expectEqual(@as(u8, @intFromEnum(Outcome.finished)), h.poll().outcome);
+
+    // Idle again: the wakes stop.
+    tries = 0;
+    while (h.svc.unpackerRunning() and tries < 2000) : (tries += 1) {
+        _ = h.changed();
+        lock.sleepMs(1);
+    }
+    const woke = f.wakes.load(.monotonic);
+    for (0..5) |_| try testing.expect(!h.changed());
+    lock.sleepMs(Service.progress_every_ms + 10);
+    try testing.expect(!h.changed());
+    try testing.expectEqual(woke, f.wakes.load(.monotonic));
 }

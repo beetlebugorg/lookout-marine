@@ -1117,8 +1117,10 @@ lookout_noaa *lookout_noaa_open(lookout_store *store, lookout_chart_sets *sets);
  * lookout_noaa_svc_http_respond_chunk on `n` before this. */
 void lookout_noaa_close(lookout_noaa *n);
 
-/* Called once for each response queued for adopt, so a shell whose frame loop
- * has stopped knows to call lookout_noaa_svc_changed. Called from any thread,
+/* Called once for each response queued for adopt, and at most four times a
+ * second while a transfer's bytes arrive, so a shell whose frame loop has
+ * stopped knows to call lookout_noaa_svc_changed. An idle service does not
+ * call it. Called from any thread,
  * including from inside lookout_noaa_svc_http_respond_chunk and from a thread
  * of lookout's own. Post to the shell's own loop and return. Do not call into
  * lookout from it. */
