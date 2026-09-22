@@ -120,7 +120,10 @@ namespace winrt::LookoutMarine::implementation
         void TryOpen();
         // The LOOKOUT_* development and screenshot hooks (app/ui/DevHooks.cpp),
         // read once after the first chart is up.
+#if defined(LOOKOUT_DEV_HOOKS)
         void ApplyDevHooks();
+        bool dev_hooks_done{ false };
+#endif
         bool OpenChart(std::vector<std::string> const &paths);
         void SyncChartBounds();
         void ApplyPanelScale();

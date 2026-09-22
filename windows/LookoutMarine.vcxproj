@@ -106,6 +106,8 @@
            step with build.zig.zon's version, the way linux/meson.build passes
            its own project version through as LK_VERSION. -->
       <PreprocessorDefinitions>LK_VERSION=0.1.0;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <!-- The development and screenshot hooks, compiled with DevHooks.cpp. -->
+      <PreprocessorDefinitions Condition="'$(Configuration)'=='Debug' Or '$(LookoutDevHooks)'=='true'">LOOKOUT_DEV_HOOKS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <WarningLevel>Level3</WarningLevel>
       <Optimization Condition="'$(Configuration)'=='Debug'">Disabled</Optimization>
       <Optimization Condition="'$(Configuration)'=='Release'">MaxSpeed</Optimization>
@@ -165,7 +167,9 @@
       <DependentUpon>MainWindow.xaml</DependentUpon>
     </ClCompile>
     <ClCompile Include="src\app\ui\Menu.cpp" />
-    <ClCompile Include="src\app\ui\DevHooks.cpp" />
+    <!-- The development and screenshot hooks read environment variables to
+         drive the app. A shipped build has no use for them. -->
+    <ClCompile Include="src\app\ui\DevHooks.cpp" Condition="'$(Configuration)'=='Debug' Or '$(LookoutDevHooks)'=='true'" />
     <ClCompile Include="src\app\ui\winrt_glue.cpp" />
     <ClCompile Include="src\app\ui\lk_backdrop.cpp" />
   </ItemGroup>

@@ -27,6 +27,10 @@ namespace winrt::LookoutMarine::implementation
     // Run once, from chart/ui/Open.cpp, after the first chart is up.
     void MainWindow::ApplyDevHooks()
     {
+        // Once a launch. Both callers run on every open.
+        if (dev_hooks_done)
+            return;
+        dev_hooks_done = true;
         // $LOOKOUT_WINDOW="1400x900": the client size in logical points,
         // so a screenshot frame is the same on any machine (the
         // reference's hook).

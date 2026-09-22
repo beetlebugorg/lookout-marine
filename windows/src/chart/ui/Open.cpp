@@ -261,7 +261,9 @@ namespace winrt::LookoutMarine::implementation
             // LOOKOUT_WINDOW, LOOKOUT_OPEN_SETTINGS, LOOKOUT_ADD,
             // LOOKOUT_REMOVE and LOOKOUT_SHOW. Read once, now that there
             // is a chart for them to act on.
+#if defined(LOOKOUT_DEV_HOOKS)
             ApplyDevHooks();
+#endif
         }
         else
         {
@@ -313,7 +315,9 @@ namespace winrt::LookoutMarine::implementation
         // $LOOKOUT_WINDOW is what makes a capture the same size on any
         // machine, and setup is a page that needs capturing. It is the page a
         // mariner with no charts sees.
+#if defined(LOOKOUT_DEV_HOOKS)
         ApplyDevHooks();
+#endif
         if (first_run.ShouldRun(true, lk_controller_chart_link_selected(controller) != 0))
         {
             readout_timer.Stop(); // nothing to read out under a setup card
