@@ -5,6 +5,7 @@
 #include <cmath>
 
 #include "lk_format.h"
+#include "lk_chrome.h"
 
 using namespace winrt;
 using namespace Microsoft::UI::Xaml;

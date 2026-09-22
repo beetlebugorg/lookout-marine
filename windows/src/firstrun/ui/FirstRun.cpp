@@ -26,6 +26,7 @@
 #include "lk_bake.h"
 #include "lk_coastline.h"
 #include "lk_firstrun.h"
+#include "lk_chrome.h"
 #include "lk_format.h"
 #include "lk_paths.h"
 
@@ -45,23 +46,8 @@ namespace
     // brushes live in Root's resources rather than the application's, and they
     // are theme dictionaries, so a code-side Lookup of one throws. Settings has
     // the same need and uses Opacity for it.
-    TextBlock Line(std::wstring const &text, double size, bool strong = false)
-    {
-        TextBlock t;
-        t.Text(text);
-        t.FontSize(size);
-        t.TextWrapping(TextWrapping::Wrap);
-        if (strong)
-            t.FontWeight(Windows::UI::Text::FontWeights::SemiBold());
-        return t;
-    }
-
-    TextBlock Muted(std::wstring const &text, double size = 12.5)
-    {
-        auto t = Line(text, size, false);
-        t.Opacity(0.7);
-        return t;
-    }
+    using lkw::Line;
+    using lkw::Muted;
 
 
     // The accent, from the palette both this file and the settings pane
@@ -383,14 +369,6 @@ namespace
         b.BorderThickness(picked ? Thickness{ 2, 2, 2, 2 } : Thickness{ 1, 1, 1, 1 });
         b.BorderBrush(picked ? AccentBrush(dark) : HairlineBrush(dark));
         return b;
-    }
-
-    // The setup pictures, beside the executable. The loader and the directory
-    // are shared with the chart shelf: lkw::ShippedPicture and
-    // lkw::ShippedDataDir.
-    Media::Imaging::BitmapImage FirstRunPicture(wchar_t const *name)
-    {
-        return lkw::ShippedPicture(name);
     }
 
     // The shape the other shells price a region in, so "1,238 charts,
@@ -1165,7 +1143,7 @@ namespace winrt::LookoutMarine::implementation
     // and clipped both edges.
     void MainWindow::FirstRunHero(Controls::StackPanel const &body)
     {
-        auto picture = FirstRunPicture(L"welcome-chart.png");
+        auto picture = lkw::ShippedPicture(L"welcome-chart.png");
         if (picture == nullptr)
             return;
         Image hero;

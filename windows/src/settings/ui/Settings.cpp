@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <map>
 
+#include "lk_chrome.h"
 #include "lk_format.h"
 #include "lk_licenses.h"
 #include "lk_paths.h"
@@ -31,10 +32,8 @@ namespace
         winrt::Windows::UI::Color deep, medium, shallow, very_shallow, land, coastline;
     };
 
-    winrt::Windows::UI::Color Hex(uint32_t v)
-    {
-        return { 0xFF, (uint8_t)(v >> 16), (uint8_t)(v >> 8), (uint8_t)v };
-    }
+    using lkw::Card;
+    using lkw::Hex;
 
     SchemePalette PaletteOf(int scheme)
     {
@@ -228,30 +227,6 @@ namespace
         return column;
     }
 
-    /* The panel a section's rows sit in. The pane is a list of cards, the way
-     * the reference's form is. */
-    Controls::Border Card(bool dark)
-    {
-        Controls::Border b;
-        b.CornerRadius({ 10, 10, 10, 10 });
-        b.BorderThickness({ 1, 1, 1, 1 });
-        b.BorderBrush(Media::SolidColorBrush{
-            dark ? winrt::Windows::UI::Color{ 0x33, 0xFF, 0xFF, 0xFF }
-                 : winrt::Windows::UI::Color{ 0x33, 0x00, 0x00, 0x00 } });
-        b.Background(Media::SolidColorBrush{
-            dark ? winrt::Windows::UI::Color{ 0x14, 0xFF, 0xFF, 0xFF }
-                 : winrt::Windows::UI::Color{ 0x0A, 0x00, 0x00, 0x00 } });
-        b.Padding({ 12, 10, 12, 12 });
-        b.Margin({ 0, 4, 0, 0 });
-        return b;
-    }
-
-    // One shipped picture. The loader is lkw::ShippedPicture, which setup
-    // reads from as well.
-    Media::Imaging::BitmapImage ChartArt(wchar_t const *name)
-    {
-        return lkw::ShippedPicture(name);
-    }
 }
 
 namespace winrt::LookoutMarine::implementation
@@ -364,7 +339,7 @@ namespace winrt::LookoutMarine::implementation
         crop.Height(kTileArt);
         crop.HorizontalAlignment(HorizontalAlignment::Stretch);
         crop.CornerRadius({ 10, 10, 0, 0 });
-        if (auto picture = ChartArt(art))
+        if (auto picture = lkw::ShippedPicture(art))
         {
             Controls::Image pic;
             pic.Source(picture);

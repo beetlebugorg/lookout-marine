@@ -88,7 +88,7 @@
          pill with the raster paths. A change to one feature is a change in
          one directory. See README.md. -->
     <LkSrc>$(MSBuildThisFileDirectory)src</LkSrc>
-    <LkSourceDirs>$(LkSrc)\app\ui;$(LkSrc)\chart;$(LkSrc)\chart\ui;$(LkSrc)\hud;$(LkSrc)\hud\ui;$(LkSrc)\library;$(LkSrc)\library\ui;$(LkSrc)\plugins;$(LkSrc)\plugins\ui;$(LkSrc)\settings\ui;$(LkSrc)\about;$(LkSrc)\about\ui;$(LkSrc)\engine;$(LkSrc)\util;$(LkSrc)\firstrun;$(LkSrc)\firstrun\ui</LkSourceDirs>
+    <LkSourceDirs>$(LkSrc)\chrome;$(LkSrc)\app\ui;$(LkSrc)\chart;$(LkSrc)\chart\ui;$(LkSrc)\hud;$(LkSrc)\hud\ui;$(LkSrc)\library;$(LkSrc)\library\ui;$(LkSrc)\plugins;$(LkSrc)\plugins\ui;$(LkSrc)\settings\ui;$(LkSrc)\about;$(LkSrc)\about\ui;$(LkSrc)\engine;$(LkSrc)\util;$(LkSrc)\firstrun;$(LkSrc)\firstrun\ui</LkSourceDirs>
   </PropertyGroup>
 
   <ItemDefinitionGroup>
@@ -207,6 +207,7 @@
     <ClCompile Include="src\hud\ui\Overlay.cpp" />
     <ClCompile Include="src\hud\ui\Scale.cpp" />
     <ClCompile Include="src\hud\ui\lk_format.cpp" />
+    <ClCompile Include="src\chrome\lk_chrome.cpp" />
   </ItemGroup>
 
   <!-- library: the installed charts — sets, raster, the bake, charts by link. -->
