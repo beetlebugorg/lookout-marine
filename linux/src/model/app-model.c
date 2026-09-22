@@ -31,6 +31,11 @@ struct _LkAppModel {
   /* One check per run for the "startup" cadence. The only hook a catalog read
    * can hang off is a chart opening, and a chart opens more than once. */
   gboolean           noaa_checked_this_run;
+  /* A folder imported and waiting for the core's scan of it. The bake reads
+   * what the core lists to prepare, and that list is empty until the scan has
+   * read the folder. */
+  char              *import_source;
+  gboolean           import_pictures;
 
   gboolean has_chart;
   char    *chart_path;
@@ -300,6 +305,9 @@ static void lk_app_model_remove_progress (const LkBakeProgress *progress,
 static void lk_app_model_noaa_note_all (LkAppModel *self);
 static void lk_app_model_prepare_noaa_download (LkAppModel *self);
 static void lk_app_model_count_noaa_outdated (LkAppModel *self);
+static void lk_app_model_start_import (LkAppModel *self);
+static void lk_app_model_open_prepared (LkAppModel *self, const char *source,
+                                        gboolean pictures);
 static void lk_app_model_bake_progress (const LkBakeProgress *progress, gpointer user_data);
 static void lk_app_model_bake_done (const char *out_dir, guint baked, gpointer user_data);
 
@@ -315,6 +323,60 @@ lk_app_model_emit_chart_sets_changed (LkAppModel *self)
  * The NOAA service is told as well. What this device holds comes from the
  * scan, and a set it had yet to reach reported no cells: the picker priced
  * water the mariner already had, and read their regions as gone. */
+/* Bake an imported folder once the core has read it.
+ *
+ * The core lists what to prepare, and that list is empty until its scan has
+ * read the folder. A folder holding no work opens as it is. */
+static void
+lk_app_model_start_import (LkAppModel *self)
+{
+  g_autoptr (GPtrArray) rows = NULL;
+  const LkChartSetRow *found = NULL;
+
+  if (self->import_source == NULL || self->baking || self->scanning ||
+      self->is_opening)
+    return;
+
+  rows = lk_chart_sets_rows (self->chart_sets);
+  for (guint i = 0; i < rows->len; i++)
+    {
+      const LkChartSetRow *row = g_ptr_array_index (rows, i);
+
+      if (g_strcmp0 (row->path, self->import_source) == 0)
+        found = row;
+    }
+  /* The set is off the list, so there is no import to finish. */
+  if (found == NULL)
+    {
+      g_clear_pointer (&self->import_source, g_free);
+      return;
+    }
+  if (!found->scanned)
+    return;
+
+  g_autofree char *dir = g_steal_pointer (&self->import_source);
+  gboolean pictures = self->import_pictures;
+
+  if (found->to_prepare > 0)
+    {
+      g_free (self->pending_open_source);
+      self->pending_open_source = g_strdup (dir);
+      self->bake = lk_chart_bake_start (dir, self->chart_sets,
+                                        lk_app_model_bake_progress,
+                                        lk_app_model_bake_done, self);
+      if (self->bake != NULL)
+        {
+          self->baking = TRUE;
+          lk_app_model_set_open_error (self, NULL);
+          g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_BAKING]);
+          return;
+        }
+      g_clear_pointer (&self->pending_open_source, g_free);
+    }
+
+  lk_app_model_open_prepared (self, dir, pictures);
+}
+
 /* Finish a set the core states still has files to prepare.
  *
  * The core picks it: a managed set, switched on and scanned, with a file to
@@ -334,7 +396,7 @@ lk_app_model_resume_prepare (LkAppModel *self)
 
   g_free (self->pending_open_source);
   self->pending_open_source = g_strdup (path);
-  self->bake = lk_chart_bake_start (path, NULL, self->chart_sets,
+  self->bake = lk_chart_bake_start (path, self->chart_sets,
                                     lk_app_model_bake_progress,
                                     lk_app_model_bake_done, self);
   if (self->bake == NULL)
@@ -355,6 +417,7 @@ lk_app_model_sets_changed (GObject *owner)
   if (!lk_chart_sets_scanning (self->chart_sets))
     lk_app_model_noaa_note_all (self);
   lk_app_model_emit_chart_sets_changed (self);
+  lk_app_model_start_import (self);
   lk_app_model_resume_prepare (self);
 }
 
@@ -1179,16 +1242,6 @@ lk_scan_done_idle (gpointer data)
 
   self->scanning = FALSE;
 
-  /* The count comes from the cells rather than set->sources, which holds the
-     vector sources alone. A folder of BSB/KAP sheets, and an archive whose
-     charts are already baked, both need preparing before anything draws.
-     lk_chart_bake_to_prepare also drops the cells this folder has already
-     prepared. A source cell keeps its kind after the bake writes its chart,
-     so a count from the kind alone reported the whole folder on every
-     import. */
-  g_autoptr (GPtrArray) todo = lk_chart_bake_to_prepare (dir, set);
-  guint to_prepare = todo->len;
-
   /* The pictures in the pick are installed here as well.
    *
    * A survey and a picture arrive in the same folder, so one pick adds
@@ -1202,39 +1255,16 @@ lk_scan_done_idle (gpointer data)
   if (any_pictures)
     lk_app_model_add_raster_charts (self, (const char *const *) pictures);
 
-  if (set != NULL && to_prepare > 0)
-    {
-      /* One bake at a time — the engine's import is not reentrant. A set
-       * that needs preparing while another is importing is refused with the
-       * reason, never quietly added as an empty set nothing will fill. */
-      if (self->baking)
-        {
-          g_autofree char *name = g_path_get_basename (dir);
-          g_autofree char *message =
-              g_strdup_printf ("Still working on %s. Wait for it to finish.",
-                               self->bake_progress.name != NULL
-                                   ? self->bake_progress.name : name);
-          lk_app_model_set_open_error (self, message);
-          goto out;
-        }
+  /* THE FOLDER JOINS THE CORE'S LIST FIRST. What to prepare comes from the
+   * core, and its list is empty until its own scan has read the folder, so
+   * the bake waits for that scan. lk_app_model_start_import runs it. */
+  if (lk_chart_sets_note (self->chart_sets, dir))
+    lk_app_model_emit_chart_sets_changed (self);
 
-      g_free (self->pending_open_source);
-      self->pending_open_source = g_strdup (dir);
-
-      self->bake = lk_chart_bake_start (dir, set, self->chart_sets,
-                                        lk_app_model_bake_progress,
-                                        lk_app_model_bake_done, self);
-      if (self->bake != NULL)
-        {
-          self->baking = TRUE;
-          lk_app_model_set_open_error (self, NULL);
-          g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_BAKING]);
-          goto out;
-        }
-      g_clear_pointer (&self->pending_open_source, g_free);
-    }
-
-  lk_app_model_open_prepared (self, dir, any_pictures);
+  g_free (self->import_source);
+  self->import_source = g_strdup (dir);
+  self->import_pictures = any_pictures;
+  lk_app_model_start_import (self);
 
 out:
   /* A download that ended while this scan ran asked to be prepared and was

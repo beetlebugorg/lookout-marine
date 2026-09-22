@@ -85,11 +85,9 @@ typedef void (*LkBakeDoneFunc) (const char *out_dir, guint baked, gpointer user_
  * none or the output directory cannot be made.
  *
  * The list comes from `sets`, which reads it off the core's own scan and
- * includes a cell whose prepared chart is older than it. A folder on its
- * first import is on no list and has had no core scan, so `set` is what the
- * bake reads for that one. Both are borrowed for the length of the call. */
+ * includes a cell whose prepared chart is older than it. The folder is on
+ * that list and read by that scan before this is called. */
 LkChartBake *lk_chart_bake_start (const char        *source,
-                                  const LkChartSet  *set,
                                   LkChartSets       *sets,
                                   LkBakeProgressFunc on_progress,
                                   LkBakeDoneFunc     on_done,
@@ -118,19 +116,6 @@ gboolean lk_chart_bake_is_derived (const char *path);
 /* Where charts prepared from `source` live, whether or not any have been.
  * Free with g_free. */
 char *lk_chart_bake_prepared_dir (const char *source);
-
-/* The cells of `set` that still need preparing, given what `source` has
- * already prepared.
- *
- * lk_scanned_cell_needs_prepare reads the kind of one file. An S-57 cell keeps
- * the kind LOOKOUT_FILE_SOURCE after the bake writes its chart, so that
- * predicate stays true for every source cell in a folder, import after import.
- * The rest of the answer is on disk under the prepared directory. Use this
- * function for any count of the work left.
- *
- * Transfer container, empty when the set is fully prepared. The cells belong
- * to `set`. */
-GPtrArray *lk_chart_bake_to_prepare (const char *source, const LkChartSet *set);
 
 /* Which of `names` this device actually holds under `prepared` or `source`.
  * Transfer full, NULL-terminated. The count a warning states has to be the

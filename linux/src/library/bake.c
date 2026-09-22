@@ -559,59 +559,6 @@ lk_chart_bake_sweep_trash (void)
  * counters and the cancel are all lookout_bake's. What is left here is the
  * directory the shell prepares into, the poll that feeds the pill, and the
  * wording that pill reads. */
-
-static lookout_prepare
-lk_prepare_for (const LkScannedCell *cell)
-{
-  if (cell->kind == LOOKOUT_FILE_SOURCE)
-    return LOOKOUT_PREPARE_CELL;
-  if (cell->kind == LOOKOUT_FILE_RASTER_SOURCE)
-    return LOOKOUT_PREPARE_SHEET;
-  return LOOKOUT_PREPARE_LIFT;
-}
-
-GPtrArray *
-lk_chart_bake_to_prepare (const char *source, const LkChartSet *set)
-{
-  GPtrArray *todo = g_ptr_array_new ();
-
-  if (set == NULL || set->cells == NULL)
-    return todo;
-
-  /* This directory may not exist yet. lk_chart_bake_start creates it before
-     it writes the first chart. */
-  g_autofree char *prepared = lk_chart_bake_prepared_dir (source);
-
-  for (guint i = 0; i < set->cells->len; i++)
-    {
-      const LkScannedCell *cell = g_ptr_array_index (set->cells, i);
-
-      if (!lk_scanned_cell_needs_prepare (cell))
-        continue;
-
-      lookout_bake_item item = {
-        .path = cell->path,
-        .name = cell->name,
-        .band = cell->band,
-        .work = lk_prepare_for (cell),
-      };
-      char path[2048];
-
-      /* Already prepared. lookout_bake_output_path gives the file this cell
-         is prepared into, so the import count and the bake use one rule for
-         it. The test is for a regular file, because the bake also creates a
-         directory of the chart's name under this root. */
-      if (prepared != NULL
-          && lookout_bake_output_path (prepared, source, &item, path, sizeof path) != 0
-          && g_file_test (path, G_FILE_TEST_IS_REGULAR))
-        continue;
-
-      g_ptr_array_add (todo, (gpointer) cell);
-    }
-
-  return todo;
-}
-
 const lookout_bake *
 lk_chart_bake_job (LkChartBake *bake)
 {
@@ -686,7 +633,6 @@ lk_prepare_for_kind (lookout_file_kind kind)
 
 LkChartBake *
 lk_chart_bake_start (const char        *source,
-                     const LkChartSet  *set,
                      LkChartSets       *sets,
                      LkBakeProgressFunc on_progress,
                      LkBakeDoneFunc     on_done,
@@ -713,26 +659,6 @@ lk_chart_bake_start (const char        *source,
       g_array_append_val (items, item);
     }
 
-  /* The core lists a set once it is on the list and its scan has read the
-   * folder. A folder on its first import is neither, so the shell's own scan
-   * of it is what the bake reads. */
-  if (n_listed == 0 && set != NULL && set->cells != NULL)
-    {
-      g_autoptr (GPtrArray) todo = lk_chart_bake_to_prepare (source, set);
-
-      for (guint i = 0; i < todo->len; i++)
-        {
-          const LkScannedCell *cell = g_ptr_array_index (todo, i);
-          lookout_bake_item item = {
-            .path = cell->path,
-            .name = cell->name,
-            .band = cell->band,
-            .work = lk_prepare_for (cell),
-          };
-
-          g_array_append_val (items, item);
-        }
-    }
   if (items->len == 0)
     return NULL;
 
