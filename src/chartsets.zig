@@ -42,7 +42,8 @@ pub const Set = extern struct {
     /// The vector charts ready to draw, and the pictures.
     charts: usize,
     pictures: usize,
-    /// Files that bake before they draw.
+    /// Files that bake before they draw. Inside a .zip that is every chart,
+    /// because a baked one is lifted out of the archive first.
     unprepared: usize,
     bytes: u64,
     /// The coarsest and finest usage bands present, 1 to 6. 0 when the set
@@ -111,9 +112,10 @@ const Row = struct {
     files: []library.File = &.{},
     /// The arena the files' strings live in, freed with them.
     files_arena: ?std.heap.ArenaAllocator = null,
-    /// The files that bake before they draw and have no current prepared
-    /// chart, as indices into `files`. In `files_arena`. Refused files are
-    /// left out when read, because a refusal can arrive after the scan.
+    /// The files that bake or lift before they draw and have no current
+    /// prepared chart, as indices into `files`. In `files_arena`. Refused
+    /// files are left out when read, because a refusal can arrive after the
+    /// scan.
     todo: []const u32 = &.{},
     /// The files to prepare when the last bake of this set was cancelled or
     /// failed, as hashes of `refusalKey`. Null when none is recorded. A
@@ -353,7 +355,8 @@ pub const Sets = struct {
 
     /// The files one set still has to prepare: each file that bakes before it
     /// draws and has no prepared chart, or whose prepared chart is older than
-    /// it. A file a finished bake refused is left out.
+    /// it. Inside a .zip a baked chart is listed too, until it is lifted out.
+    /// A file a finished bake refused is left out.
     ///
     /// Borrowed until the next call that changes the list, as `files` is.
     pub fn toPrepare(self: *Sets, path: []const u8) []const *const library.File {
@@ -912,12 +915,15 @@ pub const Sets = struct {
         const fa = files_arena.allocator();
         var found = std.ArrayList(library.File).empty;
         var todo = std.ArrayList(u32).empty;
+        // Inside a .zip every chart is prepared before it draws. A baked
+        // chart there is lifted out of the archive.
+        const archive = bake.isArchive(path);
 
-        // The first source cell of each stem, for the stale test below.
+        // The first cell to prepare of each stem, for the stale test below.
         var sources = std.StringHashMap(*const library.Cell).init(self.gpa);
         defer sources.deinit();
         for (scan.cells) |*o| {
-            if (o.kind != .source) continue;
+            if (o.kind != .source and !archive) continue;
             const gop = sources.getOrPut(library.stemOf(o.name)) catch continue;
             if (!gop.found_existing) gop.value_ptr.* = o;
         }
@@ -984,7 +990,7 @@ pub const Sets = struct {
                 f.stale = @intFromBool(stale.contains(stem));
                 const at: u32 = @intCast(found.items.len);
                 found.append(fa, f) catch continue;
-                if (c.kind == .source or c.kind == .raster_source) todo.append(fa, at) catch {};
+                if (c.kind == .source or c.kind == .raster_source or archive) todo.append(fa, at) catch {};
             }
         }
 
@@ -1012,7 +1018,7 @@ pub const Sets = struct {
         }
         for (scan.cells) |c| {
             if (ready.contains(library.stemOf(c.name))) continue;
-            if (c.kind == .source) {
+            if (c.kind == .source or archive) {
                 unprepared += 1;
             } else {
                 charts += 1;
@@ -1025,7 +1031,7 @@ pub const Sets = struct {
         }
         for (scan.raster) |c| {
             if (ready.contains(library.stemOf(c.name))) continue;
-            if (c.kind == .raster_source) unprepared += 1 else pictures += 1;
+            if (c.kind == .raster_source or archive) unprepared += 1 else pictures += 1;
         }
 
         self.mu.lock();
@@ -2120,4 +2126,58 @@ test "the counts match the list" {
     try t.expectEqualSlices(usize, &bands, &row.band_todo);
     try t.expectEqual(@as(usize, 1), row.band_todo[2]);
     try t.expectEqual(@as(usize, 1), row.band_todo[4]);
+}
+
+/// An inventory that lists one baked chart inside any .zip, as the engine
+/// lists an archive's entries. Any other path falls back to the name walk.
+fn oneBakedEntry(
+    _: ?*anyopaque,
+    alloc: std.mem.Allocator,
+    path: []const u8,
+    out: *std.ArrayList(library.InventoryRow),
+) bool {
+    if (!bake.isArchive(path)) return false;
+    out.append(alloc, .{
+        .path = alloc.dupe(u8, "US5MD1MC/US5MD1MC.pmtiles") catch return false,
+        .name = alloc.dupe(u8, "US5MD1MC") catch return false,
+        .kind = .baked,
+        .bytes = 900,
+    }) catch return false;
+    return true;
+}
+
+test "a zip's baked chart is listed to prepare until it is lifted" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    try f.tmp.dir.writeFile(f.io, .{ .sub_path = "Set.zip", .data = "x" });
+    const zip = try std.fmt.allocPrint(t.allocator, "{s}/Set.zip", .{f.dir});
+    defer t.allocator.free(zip);
+    const root = try f.folderNamed("Prepared", &.{});
+    defer t.allocator.free(root);
+
+    const s = try Sets.open(t.allocator, f.io, f.store, root, oneBakedEntry);
+    defer s.close();
+    try t.expect(s.add(zip));
+    settle(s);
+
+    const list = s.toPrepare(zip);
+    try t.expectEqual(@as(usize, 1), list.len);
+    try t.expectEqual(library.FileKind.baked, list[0].kind);
+    try t.expectEqualStrings("US5MD1MC/US5MD1MC.pmtiles", std.mem.span(list[0].path));
+    var row = s.all()[0];
+    try t.expectEqual(@as(usize, 1), row.to_prepare);
+    try t.expectEqual(@as(usize, 1), row.band_todo[4]);
+    try t.expectEqual(@as(usize, 0), row.charts);
+    // An entry name is no file the engine can open.
+    try t.expectEqual(@as(usize, 0), s.compose().len);
+
+    // The bake lifts the chart out under the prepared root.
+    try prepare(&f, "Set", "US5MD1MC");
+    try t.expect(s.rescan(zip));
+    settle(s);
+    try t.expectEqual(@as(usize, 0), s.toPrepare(zip).len);
+    row = s.all()[0];
+    try t.expectEqual(@as(usize, 0), row.to_prepare);
+    try t.expectEqual(@as(usize, 1), row.charts);
+    try t.expectEqual(@as(usize, 1), s.compose().len);
 }

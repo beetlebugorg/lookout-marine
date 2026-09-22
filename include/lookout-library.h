@@ -352,7 +352,8 @@ typedef struct {
     /* The vector charts ready to draw, and the pictures. */
     size_t charts;
     size_t pictures;
-    /* Files that bake before they draw. */
+    /* Files that bake before they draw. Inside a .zip that is every chart,
+     * because a baked one is lifted out of the archive first. */
     size_t unprepared;
     uint64_t bytes;
     /* The coarsest and finest usage bands present, 1 to 6. 0 when the set
@@ -411,9 +412,10 @@ const lookout_chart_file *const *lookout_chart_set_files(lookout_chart_sets *s,
 
 /* The files one set still has to prepare: each file that bakes before it
  * draws and has no prepared chart, or whose prepared chart is older than it,
- * as an update leaves it. A file a finished bake refused is left out. This is
- * the list to hand lookout_bake_start, and its length is the set's
- * `to_prepare`.
+ * as an update leaves it. Inside a .zip each baked chart is listed as well,
+ * for a LOOKOUT_PREPARE_LIFT, until it is lifted out. A file a finished bake
+ * refused is left out. This is the list to hand
+ * lookout_bake_start, and its length is the set's `to_prepare`.
  *
  * Empty until the scan has read the folder. Borrowed until the next call that
  * changes the list, as lookout_chart_sets_all is. */
