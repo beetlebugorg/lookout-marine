@@ -875,8 +875,10 @@ namespace winrt::LookoutMarine::implementation
             // recent is the library rather than the download it was baked from.
             auto charts = lkw::CollectCells(BakeOutputDir());
             if (!charts.empty())
+            {
                 open_after_write = true; // the bake wrote into the library
                 OpenPaths(charts, lkw::ChartLibraryDir(), lkw::AgencyForCells(charts));
+            }
             // A successful open puts setup away. Setup has the depth step left
             // to ask, so put it back.
             FirstRunRender();

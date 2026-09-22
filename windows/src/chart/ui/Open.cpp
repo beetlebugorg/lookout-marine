@@ -96,7 +96,11 @@ namespace winrt::LookoutMarine::implementation
                                std::string const &label)
     {
         if (paths.empty() || controller == nullptr || open_pending)
+        {
+            // An open that does not happen leaves no rescan to ask for.
+            open_after_write = false;
             return;
+        }
         open_pending = true;
         // The loader stands over the setup card, which is up for the open that
         // ends an import: the card went behind it and came back when the open

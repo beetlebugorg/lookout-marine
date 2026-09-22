@@ -146,14 +146,12 @@ namespace winrt::LookoutMarine::implementation
                 auto lib = lkw::CollectCells(BakeOutputDir());
                 lib.insert(lib.end(), baked.begin(), baked.end());
                 AdoptBakedRasters(pictures, !lib.empty());
-                open_after_write = true; // a bake wrote into that folder
                 OpenPaths(lib, lkw::ChartLibraryDir(), lkw::AgencyForCells(lib));
                 return;
             }
             if (baked.empty() && pictures.empty())
                 baked = lkw::CellsFor(path);
             AdoptBakedRasters(pictures, !baked.empty());
-            open_after_write = true; // a bake wrote into that folder
             OpenPaths(baked, path, lkw::AgencyForCells(baked));
             return;
         }
@@ -266,13 +264,13 @@ namespace winrt::LookoutMarine::implementation
          * The recent is the library too, never the source: the source is what
          * the charts were baked FROM, and reopening it hands the vector open a
          * file it can only skip. The label is the office whose charts these
-         * are — "All_ENCs.zip" is what a download happened to be called. */
+         * are. "All_ENCs.zip" is what a download happened to be called. */
         auto charts = bake_rasters_only ? std::vector<std::string>{}
                                         : lkw::CollectCells(BakeOutputDir());
         AdoptBakedRasters(rasters, !charts.empty());
         if (!charts.empty())
         {
-            open_after_write = true; // a bake wrote into that folder
+            open_after_write = true; // the bake wrote into the library
             OpenPaths(charts, lkw::ChartLibraryDir(), lkw::AgencyForCells(charts));
         }
     }
