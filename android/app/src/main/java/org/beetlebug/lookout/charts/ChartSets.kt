@@ -104,6 +104,30 @@ object ChartSets {
      *  union, the list the engine opens. */
     fun compose(): List<String> = Lookout.chartSetsCompose(handle).toList()
 
+    /** Read a set again after a bake wrote into its prepared directory. */
+    fun rescan(path: String): Boolean = Lookout.chartSetsRescan(handle, path)
+
+    /** Mark a set as a downloader's. True when the mark changed. */
+    fun setManaged(path: String, managed: Boolean): Boolean =
+        Lookout.chartSetsSetManaged(handle, path, managed)
+
+    /** The files the core lists to prepare for one set: each that bakes or
+     *  lifts before it draws and has no current prepared chart, less the ones
+     *  a finished bake refused. Empty until the set is scanned. */
+    fun toPrepare(path: String): List<ChartScanRead.ChartFile> =
+        ChartScanRead.decodeFiles(Lookout.chartSetToPrepare(handle, path))
+
+    /** The managed set whose prepare is unfinished and was not stopped since
+     *  it last changed, or null. */
+    fun resume(): String? = Lookout.chartSetsResume(handle)
+
+    /** Record that the mariner stopped the prepare of the set at [path]. */
+    fun noteCancel(path: String) = Lookout.chartSetsNoteCancel(handle, path)
+
+    /** Record how the bake [job] of the set at [path] ended. Call once it has
+     *  stopped and before it is freed, then [rescan] the set. */
+    fun noteBake(path: String, job: Long): Boolean = Lookout.chartSetsNoteBake(handle, path, job)
+
     /**
      * The flat read: thirteen strings per set. `internal` so the suite drives the
      * same walk with no core.

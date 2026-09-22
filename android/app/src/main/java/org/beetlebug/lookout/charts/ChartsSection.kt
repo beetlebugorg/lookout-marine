@@ -40,7 +40,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -115,11 +114,7 @@ fun ChartsSection(
     if (charts.chartPaths.isNotEmpty()) Footer(charts.activeLabel)
 
     charts.lastEmptyPick?.let {
-        Footer(
-            "No baked cells (*.pmtiles) under $it — that looks like an ENC " +
-                "source tree, not a tile57 bake. Pick the bake's output folder: " +
-                "the one holding partition.tpart next to tiles/.",
-        )
+        Footer("Lookout found no charts under $it.")
     }
 
     // An import keeps running when the dialog closes; its progress must not
@@ -664,30 +659,18 @@ private fun FolderBrowser(charts: ChartsModel, onOpened: () -> Unit = {}) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Button(
-            enabled = cur != null && !charts.scanning,
+            enabled = cur != null && !charts.scanning && charts.importer.state?.running != true,
             onClick = {
                 val dir = cur ?: return@Button
-                // select() walks the tree off the main thread and only then
-                // swaps the library, so a mis-pick never blanks the chart.
-                // The dialog closes once the library is open — the pick was
-                // the errand it opened for.
+                // The core scans the folder, then what it lists to prepare
+                // bakes into the app's own library. The dialog closes once
+                // the scan is done.
                 scope.launch {
                     charts.add(dir)
                     onOpened()
                 }
             },
         ) { Text(if (charts.scanning) "Scanning…" else "Add this folder") }
-        // The import: bake what stands here — raw ENC cells, BSB/KAP sheets,
-        // an agency archive — into the app's own library, and open THAT.
-        OutlinedButton(
-            enabled = cur != null && charts.importer.state?.running != true,
-            onClick = {
-                val dir = cur ?: return@OutlinedButton
-                charts.importer.start(dir) { out ->
-                    if (out != null) scope.launch { charts.add(out) }
-                }
-            },
-        ) { Text("Import") }
         if (charts.scanning) CircularProgressIndicator(Modifier.size(20.dp))
     }
 
@@ -761,7 +744,7 @@ private fun libraryHint(dir: File): String? {
         ?: top.firstOrNull { d -> d.isDirectory && d.listFiles()?.any { it.extension == "pmtiles" } == true }
     if (nested != null) return "Baked cells under ${nested.name}/."
     if (top.any { it.isFile && it.name.endsWith(".000") }) {
-        return "ENC source charts (*.000) — Import bakes them into the library."
+        return "ENC source charts (*.000). Adding the folder prepares them."
     }
     return null
 }

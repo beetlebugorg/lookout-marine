@@ -375,8 +375,8 @@ fun ChartScreen(
     }
 
     // A NOAA download, then the bake on what it left. One watcher for both the
-    // places a download starts, setup and the Charts pane, because two would
-    // each start a bake on the same directory.
+    // places a download starts, setup and the Charts pane, so one bake starts
+    // on the download directory. That directory is the managed set.
     val noaa = controller.noaaController
     var fetching by remember { mutableStateOf(false) }
     LaunchedEffect(noaa.phase) {
@@ -388,9 +388,7 @@ fun ChartScreen(
         fetching = false
         if (noaa.done == 0) return@LaunchedEffect
         controller.firstRun.sawBake = true
-        charts.importer.start(charts.noaaDir) { out ->
-            if (out != null) scope.launch { charts.add(out) }
-        }
+        scope.launch { charts.add(charts.noaaDir, managed = true) }
     }
 
     // Setup, over the running chart. It comes up on any launch that settles on
