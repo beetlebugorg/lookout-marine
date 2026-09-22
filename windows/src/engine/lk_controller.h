@@ -135,6 +135,10 @@ void lk_controller_chart_links_import(lk_controller *self, const char *json);
  * poll. Free with lookout_links_free. ONE consumer: whoever polls it clears
  * the flag. */
 lookout_links *lk_controller_chart_links_changed_read(lk_controller *self);
+/* Whether a chart link is the selected chart, resolved or not. A style
+ * picked on a previous launch is selected from the first frame and draws
+ * once its style resolves, which is several frames later. */
+int lk_controller_chart_link_selected(lk_controller *self);
 
 /* ---- NOAA charts ---------------------------------------------------------
  *

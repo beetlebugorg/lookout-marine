@@ -921,5 +921,12 @@ void TestFirstRun()
         LK_EQ(At(FirstRunStep::Welcome).ShouldRun(true, false), true);
         LK_EQ(At(FirstRunStep::Welcome).ShouldRun(true, true), false);
         LK_EQ(At(FirstRunStep::Welcome).ShouldRun(false, false), false);
+
+        /* The shell passes whether a link is SELECTED. A style picked on a
+         * previous launch is selected from the first frame and draws once it
+         * resolves, several frames later, so a rule fed the drawing state put
+         * setup over that mariner's chart at every launch. */
+        Case("a link picked and not yet drawing keeps setup down");
+        LK_EQ(At(FirstRunStep::Welcome).ShouldRun(true, true), false);
     }
 }

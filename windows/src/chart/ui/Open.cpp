@@ -168,9 +168,10 @@ namespace winrt::LookoutMarine::implementation
         }
         if (raster_paths.empty())
         {
-            // A mariner drawing an online chart has one, so setup has no
-            // reason to stand over it. The model states that rule.
-            if (first_run.ShouldRun(true, lk_controller_alt_style_active(controller) != 0))
+            // A mariner who picked an online chart has a chart, so setup has no
+            // reason to stand over it. The pick counts from the first frame,
+            // and the style it names resolves several frames later.
+            if (first_run.ShouldRun(true, lk_controller_chart_link_selected(controller) != 0))
             {
                 readout_timer.Stop(); // a basemap under a setup card reads out nothing
                 FirstRunBegin();
@@ -309,7 +310,7 @@ namespace winrt::LookoutMarine::implementation
         // machine, and setup is a page that needs capturing. It is the page a
         // mariner with no charts sees.
         ApplyDevHooks();
-        if (first_run.ShouldRun(true, lk_controller_alt_style_active(controller) != 0))
+        if (first_run.ShouldRun(true, lk_controller_chart_link_selected(controller) != 0))
         {
             readout_timer.Stop(); // nothing to read out under a setup card
             FirstRunBegin();

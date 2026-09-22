@@ -1104,6 +1104,25 @@ lk_controller_chart_links_changed_read(lk_controller *self)
     return lookout_links_read(self->handle);
 }
 
+int
+lk_controller_chart_link_selected(lk_controller *self)
+{
+    lookout_links *read;
+    const lookout_link_state *state;
+    int selected = 0;
+
+    if (!lk_controller_is_open(self))
+        return 0;
+    read = lookout_links_read(self->handle);
+    if (read == NULL)
+        return 0;
+    state = lookout_links_state(read);
+    if (state != NULL && state->active != NULL && state->active[0] != '\0')
+        selected = 1;
+    lookout_links_free(read);
+    return selected;
+}
+
 /* ---- markers ------------------------------------------------------------- */
 
 static void
