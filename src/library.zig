@@ -317,17 +317,18 @@ pub fn scanWith(
             rows.deinit(alloc);
         }
         if (ask(inventory_ctx, alloc, root, &rows)) {
-            // The highest update file beside each base cell, by stem. A base
+            // The highest update file beside each base cell, keyed by the
+            // path without its extension: the folder and the stem. A base
             // cell states UPDN 0 however many updates have been written beside
             // it, and NOAA's catalog states the number of the last one, so a
             // cell fully up to date read as one update behind for every update
-            // it had.
+            // it had. An update file in another folder is for another copy of
+            // the cell.
             var applied = std.StringHashMap(u32).init(alloc);
             defer applied.deinit();
             for (rows.items) |r| {
                 if (r.kind != .update) continue;
-                const base = std.fs.path.basename(r.path);
-                const p = split(base);
+                const p = split(r.path);
                 const n = std.fmt.parseInt(u32, p.ext, 10) catch continue;
                 const seen = applied.get(p.stem) orelse 0;
                 if (n > seen) applied.put(p.stem, n) catch {};
@@ -375,7 +376,7 @@ pub fn scanWith(
                         .bounds = r.bounds,
                         .edition = r.edition,
                         .update = if (r.kind == .source)
-                            @max(r.update, applied.get(stemOf(std.fs.path.basename(path))) orelse 0)
+                            @max(r.update, applied.get(split(path).stem) orelse 0)
                         else
                             r.update,
                     },
@@ -1075,6 +1076,45 @@ test "a cell's update number is the last update written beside it" {
     // NOAA's catalog states 3 for the same cell.
     try t.expectEqual(@as(u32, 3), s.cells[0].facts.update);
     try t.expectEqual(@as(usize, 3), s.updates);
+}
+
+/// Two copies of one cell in two folders, and three updates beside only the
+/// first.
+fn twoCopiesOneUpdated(
+    _: ?*anyopaque,
+    alloc: std.mem.Allocator,
+    _: []const u8,
+    out: *std.ArrayList(InventoryRow),
+) bool {
+    for ([_][]const u8{ "/Charts/old", "/Charts/new" }) |dir| {
+        out.append(alloc, .{
+            .path = std.fmt.allocPrint(alloc, "{s}/US1GC09M/US1GC09M.000", .{dir}) catch return false,
+            .name = alloc.dupe(u8, "US1GC09M") catch return false,
+            .kind = .source,
+            .bytes = 900,
+            .edition = 74,
+            .update = 0,
+        }) catch return false;
+    }
+    out.append(alloc, .{
+        .path = alloc.dupe(u8, "/Charts/old/US1GC09M/US1GC09M.003") catch return false,
+        .name = alloc.dupe(u8, "US1GC09M") catch return false,
+        .kind = .update,
+        .bytes = 90,
+    }) catch return false;
+    return true;
+}
+
+test "an update file counts only for the cell in its own folder" {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var s = try scanWith(t.allocator, io, "/Charts", null, null, twoCopiesOneUpdated, null);
+    defer s.deinit();
+
+    try t.expectEqual(@as(usize, 2), s.cells.len);
+    for (s.cells) |c| {
+        const want: u32 = if (std.mem.startsWith(u8, c.path, "/Charts/old/")) 3 else 0;
+        try t.expectEqual(want, c.facts.update);
+    }
 }
 
 test "a file that states no identity reports edition 0" {
