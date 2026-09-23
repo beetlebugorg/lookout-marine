@@ -36,6 +36,8 @@ class NoaaController(
         val south: Double,
         val east: Double,
         val north: Double,
+        /** The map panel it is drawn on, a Lookout.PANEL_ value. */
+        val panel: Int,
     )
 
     /** One box of a region's coverage, in degrees. */
@@ -303,15 +305,16 @@ class NoaaController(
         } catch (e: UnsatisfiedLinkError) {
             return emptyList()
         }
-        val out = ArrayList<Region>(flat.size / 4)
+        val out = ArrayList<Region>(flat.size / 5)
         var i = 0
-        while (i + 3 < flat.size) {
+        while (i + 4 < flat.size) {
             val extent = flat[i + 3].split(",").mapNotNull { it.toDoubleOrNull() }
-            if (extent.size == 4) {
+            val panel = flat[i + 4].toIntOrNull()
+            if (extent.size == 4 && panel != null) {
                 out.add(Region(flat[i], flat[i + 1], flat[i + 2],
-                               extent[0], extent[1], extent[2], extent[3]))
+                               extent[0], extent[1], extent[2], extent[3], panel))
             }
-            i += 4
+            i += 5
         }
         return out
     }

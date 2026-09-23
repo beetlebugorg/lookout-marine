@@ -1,5 +1,6 @@
 package org.beetlebug.lookout.charts
 
+import org.beetlebug.lookout.Lookout
 import org.beetlebug.lookout.hud.Chrome
 
 import androidx.compose.foundation.Canvas
@@ -31,14 +32,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.toSize
-import kotlin.math.PI
-import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.tan
 
 /**
  * Where the regions are.
@@ -52,40 +49,29 @@ import kotlin.math.tan
  * on it works, and the rows under it are how a thumb does the same thing.
  */
 
-/** The ground one panel covers, and the projection onto it. */
+/** The ground one panel covers. The core projects onto it, in Mercator. */
 class MapWindow(val west: Double, val south: Double, val east: Double, val north: Double) {
-    private val lonSpan get() = east - west
-
     /** Width over height, so a panel keeps its shape at any size. */
-    val aspect: Float
-        get() {
-            val h = mercator(north) - mercator(south)
-            return if (h <= 0) 1f else (lonSpan * PI / 180 / h).toFloat()
+    val aspect: Float get() = Lookout.mapAspect(west, east, south, north).toFloat()
+
+    /** Longitude and latitude pairs as x and y pairs in a rectangle of [size]. */
+    fun project(lonlat: DoubleArray, size: Size): FloatArray =
+        Lookout.mapProject(west, east, south, north, size.width, size.height, lonlat)
+
+    /** Each box's corners, north-west then south-east, projected. */
+    fun corners(boxes: List<NoaaController.Box>, size: Size): FloatArray {
+        val lonlat = DoubleArray(boxes.size * 4)
+        boxes.forEachIndexed { i, b ->
+            lonlat[i * 4] = b.west
+            lonlat[i * 4 + 1] = b.north
+            lonlat[i * 4 + 2] = b.east
+            lonlat[i * 4 + 3] = b.south
         }
-
-    fun x(lon: Double, size: Size): Float = ((lon - west) / lonSpan * size.width).toFloat()
-
-    fun y(lat: Double, size: Size): Float {
-        val top = mercator(north)
-        val h = top - mercator(south)
-        val dy = if (h == 0.0) 0.0 else (top - mercator(lat)) / h
-        return (dy * size.height).toFloat()
-    }
-
-    fun intersects(w: Double, s: Double, e: Double, n: Double): Boolean =
-        e >= west && w <= east && n >= south && s <= north
-
-    companion object {
-        /** Mercator y, clamped clear of the poles. */
-        fun mercator(lat: Double): Double {
-            val phi = max(-85.05, min(85.05, lat)) * PI / 180
-            return ln(tan(PI / 4 + phi / 2))
-        }
+        return project(lonlat, size)
     }
 }
 
 private val MAIN = MapWindow(-132.0, 20.0, -64.0, 52.0)
-private val MAIN_IDS = setOf("d1", "d5", "d7", "d8", "d9", "d11", "d13")
 private val ALASKA = MapWindow(-172.0, 50.5, -128.0, 72.0)
 private val HAWAII = MapWindow(-161.0, 18.3, -154.0, 22.6)
 
@@ -106,21 +92,19 @@ fun CoverageMap(
     onToggle: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val context = LocalContext.current
-    val rings = remember { Coastline.rings(context) }
     val accent = MaterialTheme.colorScheme.primary
     val edge = MaterialTheme.colorScheme.outlineVariant
 
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        panel(MAIN, MAIN_IDS, rings, regions, picked, enabled, coverage, accent, edge, onToggle,
+        panel(MAIN, Lookout.PANEL_LOWER48, regions, picked, enabled, coverage, accent, edge, onToggle,
               Modifier.fillMaxWidth().aspectRatio(MAIN.aspect))
         // Alaska and Hawaii keep their own frames, under the map rather than
         // in a corner of it: on a narrow screen a frame in the corner covers
         // the west coast, and a region cannot be picked through another one.
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            inset("Alaska", ALASKA, setOf("d17"), rings, regions, picked, enabled, coverage,
+            inset("Alaska", ALASKA, Lookout.PANEL_ALASKA, regions, picked, enabled, coverage,
                   accent, edge, onToggle, 104.dp)
-            inset("Hawaii", HAWAII, setOf("d14"), rings, regions, picked, enabled, coverage,
+            inset("Hawaii", HAWAII, Lookout.PANEL_HAWAII, regions, picked, enabled, coverage,
                   accent, edge, onToggle, 56.dp)
         }
     }
@@ -130,8 +114,7 @@ fun CoverageMap(
 private fun inset(
     label: String,
     window: MapWindow,
-    ids: Set<String>,
-    rings: List<Coastline.Ring>,
+    which: Int,
     regions: List<NoaaController.Region>,
     picked: Set<String>,
     enabled: Boolean,
@@ -148,7 +131,7 @@ private fun inset(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(2.dp))
-        panel(window, ids, rings, regions, picked, enabled, coverage, accent, edge, onToggle,
+        panel(window, which, regions, picked, enabled, coverage, accent, edge, onToggle,
               Modifier.width(width).height(width / window.aspect))
     }
 }
@@ -156,8 +139,7 @@ private fun inset(
 @Composable
 private fun panel(
     window: MapWindow,
-    ids: Set<String>,
-    rings: List<Coastline.Ring>,
+    which: Int,
     regions: List<NoaaController.Region>,
     picked: Set<String>,
     enabled: Boolean,
@@ -167,7 +149,7 @@ private fun panel(
     onToggle: (String) -> Unit,
     modifier: Modifier,
 ) {
-    val mine = remember(regions, ids) { regions.filter { ids.contains(it.id) } }
+    val mine = remember(regions, which) { regions.filter { it.panel == which } }
     val water = water()
     val land = land()
     Surface(
@@ -181,11 +163,12 @@ private fun panel(
                 if (!enabled) return@pointerInput
                 detectTapGestures { at ->
                     val hit = mine.firstOrNull { r ->
-                        boxesOf(r, coverage).any { b ->
-                            val x0 = window.x(b.west, size.toSize())
-                            val x1 = window.x(b.east, size.toSize())
-                            val y0 = window.y(b.north, size.toSize())
-                            val y1 = window.y(b.south, size.toSize())
+                        val c = window.corners(boxesOf(r, coverage), size.toSize())
+                        (0 until c.size / 4).any { i ->
+                            val x0 = c[i * 4]
+                            val y0 = c[i * 4 + 1]
+                            val x1 = c[i * 4 + 2]
+                            val y1 = c[i * 4 + 3]
                             at.x in min(x0, x1)..max(x0, x1) && at.y in min(y0, y1)..max(y0, y1)
                         }
                     }
@@ -193,7 +176,7 @@ private fun panel(
                 }
             },
         ) {
-            drawLand(rings, window, land, water)
+            drawLand(window, land, water)
             for (r in mine) {
                 val on = picked.contains(r.id)
                 drawRegion(boxesOf(r, coverage), window, accent.copy(alpha = if (on) 0.5f else 0.16f))
@@ -215,23 +198,24 @@ private fun boxesOf(
 }
 
 /**
- * Every ring that reaches into this window. Land and lakes are drawn in level
- * order, so a lake paints water back over the land it sits in.
+ * The coastline rings that reach into this window. Land and lakes are drawn in
+ * level order, so a lake paints water back over the land it sits in.
  */
-private fun DrawScope.drawLand(rings: List<Coastline.Ring>, window: MapWindow, land: Color, water: Color) {
-    for (level in intArrayOf(1, 2)) {
+private fun DrawScope.drawLand(window: MapWindow, land: Color, water: Color) {
+    for (level in intArrayOf(Lookout.COAST_LAND, Lookout.COAST_LAKE)) {
+        val rings = Lookout.coastlineRings(level, window.west, window.east, window.south,
+                                           window.north, size.width, size.height)
+        val xy = rings[0] as FloatArray
+        val ends = rings[1] as IntArray
         val path = Path()
-        for (ring in rings) {
-            if (ring.level != level) continue
-            if (!ring.touches(window.west, window.south, window.east, window.north)) continue
-            for (i in ring.lon.indices) {
-                val x = window.x(ring.lon[i].toDouble(), size)
-                val y = window.y(ring.lat[i].toDouble(), size)
-                if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
-            }
+        var start = 0
+        for (end in ends) {
+            path.moveTo(xy[start * 2], xy[start * 2 + 1])
+            for (i in start + 1 until end) path.lineTo(xy[i * 2], xy[i * 2 + 1])
             path.close()
+            start = end
         }
-        drawPath(path, if (level == 1) land else water)
+        drawPath(path, if (level == Lookout.COAST_LAND) land else water)
     }
 }
 
@@ -243,11 +227,12 @@ private fun DrawScope.drawRegion(
     color: Color,
 ) {
     val path = Path()
-    for (b in boxes) {
-        val x0 = window.x(b.west, size)
-        val x1 = window.x(b.east, size)
-        val y0 = window.y(b.north, size)
-        val y1 = window.y(b.south, size)
+    val c = window.corners(boxes, size)
+    for (i in 0 until c.size / 4) {
+        val x0 = c[i * 4]
+        val y0 = c[i * 4 + 1]
+        val x1 = c[i * 4 + 2]
+        val y1 = c[i * 4 + 3]
         path.addRect(
             androidx.compose.ui.geometry.Rect(
                 Offset(min(x0, x1), min(y0, y1)),

@@ -18,14 +18,14 @@ import org.junit.runner.RunWith
 class NoaaBridgeTest {
 
     /**
-     * Nine Coast Guard districts, four strings each. District 3 was
+     * Nine Coast Guard districts, five strings each. District 3 was
      * disestablished and ships no cells, so it is not among them.
      */
     @Test
     fun regionsAreTheDistricts() {
         val flat = Lookout.noaaRegions()
-        assertEquals("four strings per region", 0, flat.size % 4)
-        val ids = (flat.indices step 4).map { flat[it] }
+        assertEquals("five strings per region", 0, flat.size % 5)
+        val ids = (flat.indices step 5).map { flat[it] }
         assertEquals(9, ids.size)
         for (id in listOf("d1", "d5", "d7", "d8", "d9", "d11", "d13", "d14", "d17")) {
             assertTrue("no region $id", ids.contains(id))
@@ -33,13 +33,19 @@ class NoaaBridgeTest {
         assertFalse("district 3 ships no cells", ids.contains("d3"))
 
         // Each row carries a name, a line of water and an extent that parses.
-        for (i in flat.indices step 4) {
+        for (i in flat.indices step 5) {
             assertTrue("region ${flat[i]} has no name", flat[i + 1].isNotEmpty())
             assertTrue("region ${flat[i]} has no blurb", flat[i + 2].isNotEmpty())
             val extent = flat[i + 3].split(",").mapNotNull { it.toDoubleOrNull() }
             assertEquals("region ${flat[i]} extent", 4, extent.size)
             assertTrue("west is east of east", extent[0] < extent[2])
             assertTrue("south is north of north", extent[1] < extent[3])
+            val panel = when (flat[i]) {
+                "d17" -> Lookout.PANEL_ALASKA
+                "d14" -> Lookout.PANEL_HAWAII
+                else -> Lookout.PANEL_LOWER48
+            }
+            assertEquals("region ${flat[i]} panel", panel.toString(), flat[i + 4])
         }
     }
 

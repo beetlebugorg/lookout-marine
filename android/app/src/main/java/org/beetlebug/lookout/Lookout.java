@@ -1010,10 +1010,42 @@ public final class Lookout implements AutoCloseable {
         return nS52Color(token, scheme, rgba);
     }
 
+    // ---- the coverage coastline ----------------------------------------
+
+    /** lookout_noaa_region.panel: the map panel a region is drawn on. */
+    public static final int PANEL_LOWER48 = 0;
+    public static final int PANEL_ALASKA = 1;
+    public static final int PANEL_HAWAII = 2;
+
+    /** GSHHG levels. A lake is its own ring, filled over the land. */
+    public static final int COAST_LAND = 1;
+    public static final int COAST_LAKE = 2;
+
+    /** Width over height of a lon/lat window drawn in Mercator. */
+    public static double mapAspect(double w, double e, double s, double n) {
+        return nMapAspect(w, e, s, n);
+    }
+
+    /** Longitude and latitude pairs as x and y pairs in a pxW by pxH
+     *  rectangle showing the window. */
+    public static float[] mapProject(double w, double e, double s, double n,
+                                     float pxW, float pxH, double[] lonlat) {
+        return nMapProject(w, e, s, n, pxW, pxH, lonlat);
+    }
+
+    /** The coastline rings of one level that reach into the window, projected
+     *  into its rectangle, as { float[] xy, int[] ends }. ends[i] is the point
+     *  index one past ring i. */
+    public static Object[] coastlineRings(int level, double w, double e, double s, double n,
+                                          float pxW, float pxH) {
+        return nCoastlineRings(level, w, e, s, n, pxW, pxH);
+    }
+
     // ---- NOAA's charts --------------------------------------------------
 
-    /** The region table: id, name, blurb and "west,south,east,north" for each,
-     *  four strings per region. Static for the life of the process. */
+    /** The region table: id, name, blurb, "west,south,east,north" and the map
+     *  panel (a PANEL_ number) for each, five strings per region. Static for
+     *  the life of the process. */
     public static String[] noaaRegions()         { return nNoaaRegions(); }
     /** Open the NOAA service over the store and the chart sets. It outlives
      *  every chart handle, so a download runs while charts reopen. 0 when it
@@ -1112,6 +1144,11 @@ public final class Lookout implements AutoCloseable {
     private static native void nChartLinkDraw(long h, String url);
     private static native boolean nSnapshotRgba(long h, byte[] dst);
     private static native boolean nS52Color(String token, int scheme, float[] out);
+    private static native double nMapAspect(double w, double e, double s, double n);
+    private static native float[] nMapProject(double w, double e, double s, double n,
+                                              float pxW, float pxH, double[] lonlat);
+    private static native Object[] nCoastlineRings(int level, double w, double e, double s,
+                                                   double n, float pxW, float pxH);
     private static native String[] nNoaaRegions();
     private static native long nNoaaOpen(long store, long sets);
     private static native void nNoaaClose(long n);

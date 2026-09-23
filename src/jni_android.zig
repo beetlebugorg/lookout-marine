@@ -2062,8 +2062,9 @@ const lookout_noaa_state = @import("noaajob.zig").State;
 
 extern fn lookout_noaa_regions(out: *?[*]const lookout_noaa_region) usize;
 
-/// String[] nNoaaRegions() -- the region table, four strings per region:
-/// id, name, blurb, and the extent as "west,south,east,north".
+/// String[] nNoaaRegions() -- the region table, five strings per region:
+/// id, name, blurb, the extent as "west,south,east,north", and the map panel
+/// as a LOOKOUT_NOAA_PANEL_ number.
 ///
 /// Static for the life of the process, so the shell reads it once. No handle:
 /// the table is the core's own and does not wait on a chart.
@@ -2073,19 +2074,80 @@ export fn Java_org_beetlebug_lookout_Lookout_nNoaaRegions(env: [*c]j.JNIEnv, cls
     const n = lookout_noaa_regions(&base);
     const rows = base orelse return jstrArray(env, &.{});
     const strcls = env_(env).FindClass.?(env, "java/lang/String") orelse return null;
-    const arr = env_(env).NewObjectArray.?(env, @intCast(n * 4), strcls, null) orelse return null;
+    const arr = env_(env).NewObjectArray.?(env, @intCast(n * 5), strcls, null) orelse return null;
     var i: usize = 0;
     while (i < n) : (i += 1) {
         const r = rows[i];
         var extent: [96]u8 = undefined;
         const text = std.fmt.bufPrintZ(&extent, "{d},{d},{d},{d}", .{ r.west, r.south, r.east, r.north }) catch "0,0,0,0";
-        const cells = [_]?[*:0]const u8{ r.id, r.name, r.blurb, text.ptr };
+        var panel: [16]u8 = undefined;
+        const ptext = std.fmt.bufPrintZ(&panel, "{d}", .{r.panel}) catch "0";
+        const cells = [_]?[*:0]const u8{ r.id, r.name, r.blurb, text.ptr, ptext.ptr };
         for (cells, 0..) |cell, k| {
             const js = jstr(env, cell) orelse continue;
-            env_(env).SetObjectArrayElement.?(env, arr, @intCast(i * 4 + k), js);
+            env_(env).SetObjectArrayElement.?(env, arr, @intCast(i * 5 + k), js);
             env_(env).DeleteLocalRef.?(env, js);
         }
     }
+    return arr;
+}
+
+// ---- the coverage coastline ---------------------------------------------
+
+extern fn lookout_map_aspect(w: f64, e: f64, s: f64, n: f64) f64;
+extern fn lookout_map_project(w: f64, e: f64, s: f64, n: f64, px_w: f64, px_h: f64, lonlat: [*]const f64, xy: [*]f32, count: usize) void;
+extern fn lookout_coastline_rings(level: c_int, w: f64, e: f64, s: f64, n: f64, px_w: f64, px_h: f64, xy: ?[*]f32, cap: usize, ends: ?[*]u32, ends_cap: usize) usize;
+
+/// double nMapAspect(double w, double e, double s, double n) -- width over
+/// height of a Mercator window.
+export fn Java_org_beetlebug_lookout_Lookout_nMapAspect(env: [*c]j.JNIEnv, cls: j.jclass, w: j.jdouble, e: j.jdouble, s: j.jdouble, n: j.jdouble) j.jdouble {
+    _ = env;
+    _ = cls;
+    return lookout_map_aspect(w, e, s, n);
+}
+
+/// float[] nMapProject(double w, double e, double s, double n, float pxW,
+/// float pxH, double[] lonlat) -- longitude and latitude pairs as x and y
+/// pairs in the window's rectangle.
+export fn Java_org_beetlebug_lookout_Lookout_nMapProject(env: [*c]j.JNIEnv, cls: j.jclass, w: j.jdouble, e: j.jdouble, s: j.jdouble, n: j.jdouble, px_w: j.jfloat, px_h: j.jfloat, lonlat: j.jdoubleArray) j.jfloatArray {
+    _ = cls;
+    const len: usize = if (lonlat == null) 0 else @intCast(env_(env).GetArrayLength.?(env, lonlat));
+    const count = len / 2;
+    const src = gpa.alloc(f64, count * 2) catch return null;
+    defer gpa.free(src);
+    const xy = gpa.alloc(f32, count * 2) catch return null;
+    defer gpa.free(xy);
+    if (count > 0) env_(env).GetDoubleArrayRegion.?(env, lonlat, 0, @intCast(count * 2), src.ptr);
+    lookout_map_project(w, e, s, n, px_w, px_h, src.ptr, xy.ptr, count);
+    const out = env_(env).NewFloatArray.?(env, @intCast(count * 2)) orelse return null;
+    env_(env).SetFloatArrayRegion.?(env, out, 0, @intCast(count * 2), xy.ptr);
+    return out;
+}
+
+/// Object[] nCoastlineRings(int level, double w, double e, double s, double n,
+/// float pxW, float pxH) -- the coastline rings of one level in a window, as
+/// { float[] xy, int[] ends }. ends[i] is the point index one past ring i.
+export fn Java_org_beetlebug_lookout_Lookout_nCoastlineRings(env: [*c]j.JNIEnv, cls: j.jclass, level: j.jint, w: j.jdouble, e: j.jdouble, s: j.jdouble, n: j.jdouble, px_w: j.jfloat, px_h: j.jfloat) j.jobjectArray {
+    _ = cls;
+    const points = lookout_coastline_rings(level, w, e, s, n, px_w, px_h, null, 0, null, 0);
+    const xy = gpa.alloc(f32, points * 2) catch return null;
+    defer gpa.free(xy);
+    const ends = gpa.alloc(u32, points / 4) catch return null;
+    defer gpa.free(ends);
+    _ = lookout_coastline_rings(level, w, e, s, n, px_w, px_h, xy.ptr, points, ends.ptr, ends.len);
+    // The last ring ends at the point count.
+    var rings: usize = 0;
+    var last: usize = 0;
+    while (last < points) : (rings += 1) last = ends[rings];
+
+    const objcls = env_(env).FindClass.?(env, "java/lang/Object") orelse return null;
+    const arr = env_(env).NewObjectArray.?(env, 2, objcls, null) orelse return null;
+    const jxy = env_(env).NewFloatArray.?(env, @intCast(points * 2)) orelse return null;
+    env_(env).SetFloatArrayRegion.?(env, jxy, 0, @intCast(points * 2), xy.ptr);
+    const jends = env_(env).NewIntArray.?(env, @intCast(rings)) orelse return null;
+    env_(env).SetIntArrayRegion.?(env, jends, 0, @intCast(rings), @ptrCast(ends.ptr));
+    env_(env).SetObjectArrayElement.?(env, arr, 0, jxy);
+    env_(env).SetObjectArrayElement.?(env, arr, 1, jends);
     return arr;
 }
 
