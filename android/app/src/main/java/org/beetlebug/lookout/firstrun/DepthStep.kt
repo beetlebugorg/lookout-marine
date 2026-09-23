@@ -66,7 +66,6 @@ import kotlin.math.sin
 @Composable
 fun DepthStep(m: MarinerState) {
     val feet = m.depthUnit == DepthUnit.FEET
-    val unit = if (feet) "ft" else "m"
 
     // The boat, in metres. MarinerState keeps the numbers the chart draws
     // with; these two are the question behind them. The core's starting
@@ -81,6 +80,10 @@ fun DepthStep(m: MarinerState) {
     val safetyDepth = plan.safetyDepth
     val safetyContour = plan.safetyContour
     val deepContour = plan.deepContour
+
+    // A depth in the unit on screen, with its unit and without.
+    fun measure(v: Double) = Lookout.fmtDepth(v * plan.metresPerUnit, feet, false)
+    fun bare(v: Double) = Lookout.fmtDepth(v * plan.metresPerUnit, feet, true)
 
     // Every change goes to the engine, so the chart behind the page is already
     // drawn the mariner's way when the page closes.
@@ -100,7 +103,7 @@ fun DepthStep(m: MarinerState) {
             blurb = "Lookout shades water your boat cannot cross. It needs one number to do that, and everything else follows from it.",
         )
 
-        numberRow("Draft", draft, unit, step = if (feet) 0.5 else 0.1) {
+        numberRow("Draft", draft, measure(draft), step = if (feet) 0.5 else 0.1) {
             draftM = it * plan.metresPerUnit
         }
         Text(
@@ -142,7 +145,7 @@ fun DepthStep(m: MarinerState) {
                 FilterChip(
                     selected = clearance == c,
                     onClick = { clearanceM = c * plan.metresPerUnit },
-                    label = { Text("${trim(c)} $unit") },
+                    label = { Text(measure(c)) },
                 )
             }
         }
@@ -153,14 +156,14 @@ fun DepthStep(m: MarinerState) {
         )
 
         HorizontalDivider()
-        derived("Safety depth", "${trim(safetyDepth)} $unit",
+        derived("Safety depth", measure(safetyDepth),
                 "Soundings at or shallower than this print bold. It does not shade water.")
-        derived("Safety contour", "${trim(safetyContour)} $unit",
-                "Water shallower than this shades as unsafe. Rounded up to a contour the survey draws, so ${trim(safetyDepth)} $unit reads as ${trim(safetyContour)} $unit.")
-        derived("Deep contour", "${trim(deepContour)} $unit",
+        derived("Safety contour", measure(safetyContour),
+                "Water shallower than this shades as unsafe. Rounded up to a contour the survey draws, so ${measure(safetyDepth)} reads as ${measure(safetyContour)}.")
+        derived("Deep contour", measure(deepContour),
                 "Water deeper than this draws in the lightest shade. Twice the safety contour, up the same ladder the safety contour came off.")
 
-        seabed(safetyDepth, safetyContour, deepContour, unit)
+        seabed(safetyDepth, safetyContour, deepContour, ::measure, ::bare)
         StepWarning(
             lead = "Shading is not a depth sounder.",
             body = "Soundings are not corrected for tide, surge or squat, and a survey can be decades old. Keep your own margin.",
@@ -173,7 +176,7 @@ fun DepthStep(m: MarinerState) {
 private fun numberRow(
     label: String,
     value: Double,
-    unit: String,
+    text: String,
     step: Double,
     onChange: (Double) -> Unit,
 ) {
@@ -188,7 +191,7 @@ private fun numberRow(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 stepper("−") { onChange(max(step, round1(value - step))) }
                 Text(
-                    "${trim(value)} $unit",
+                    text,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.width(86.dp).semantics {
@@ -238,7 +241,13 @@ private fun derived(name: String, value: String, blurb: String) {
  * the first pixel of the panel and a 30 ft one halfway up it.
  */
 @Composable
-private fun seabed(safetyDepth: Double, safetyContour: Double, deepContour: Double, unit: String) {
+private fun seabed(
+    safetyDepth: Double,
+    safetyContour: Double,
+    deepContour: Double,
+    measure: (Double) -> String,
+    bare: (Double) -> String,
+) {
     val unsafe = s52("DEPVS", Color(0xFF9BD3FF))
     val shallow = s52("DEPMS", Color(0xFFBFE3FF))
     val medium = s52("DEPMD", Color(0xFFDDF0FF))
@@ -303,9 +312,9 @@ private fun seabed(safetyDepth: Double, safetyContour: Double, deepContour: Doub
         }
         Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            key(unsafe, "Unsafe", "0 – ${trim(safetyContour)} $unit", Modifier.weight(1f))
-            key(shallow, "Shallow", "${trim(safetyContour)} – ${trim(deepContour)} $unit", Modifier.weight(1f))
-            key(medium, "Medium", "${trim(deepContour)} $unit +", Modifier.weight(1f))
+            key(unsafe, "Unsafe", "0 – ${measure(safetyContour)}", Modifier.weight(1f))
+            key(shallow, "Shallow", "${bare(safetyContour)} – ${measure(deepContour)}", Modifier.weight(1f))
+            key(medium, "Medium", "${measure(deepContour)} +", Modifier.weight(1f))
             key(deep, "Deep", "open water", Modifier.weight(1f))
         }
     }
@@ -368,9 +377,6 @@ private fun s52(token: String, fallback: Color): Color {
 
 private fun round1(v: Double) = kotlin.math.round(v * 10.0) / 10.0
 
-/** A depth as a mariner writes it: no trailing zero on a whole number. */
-private fun trim(v: Double): String =
-    if (v == kotlin.math.floor(v)) v.toInt().toString() else String.format("%.1f", v)
 
 /** Each spot depth: how deep it is as a multiple of the safety contour, and
  *  how far along its line it stands. */

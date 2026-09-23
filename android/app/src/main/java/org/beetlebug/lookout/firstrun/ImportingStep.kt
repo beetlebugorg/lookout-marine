@@ -1,5 +1,7 @@
 package org.beetlebug.lookout.firstrun
 
+import org.beetlebug.lookout.Lookout
+
 import org.beetlebug.lookout.charts.ChartImport
 import org.beetlebug.lookout.charts.NoaaController
 
@@ -85,7 +87,7 @@ fun ImportingStep(
         )
         if (order != null) {
             Text(
-                "NOAA · ${order.charts} charts · ${NoaaController.sizeText(order.bytes)}",
+                "NOAA · ${order.charts} charts · ${Lookout.fmtBytes(order.bytes)}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

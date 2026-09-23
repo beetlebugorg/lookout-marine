@@ -1,5 +1,7 @@
 package org.beetlebug.lookout.charts
 
+import org.beetlebug.lookout.Lookout
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -146,7 +148,7 @@ fun NoaaPickerDialog(
                     if (noaa.haveCatalog && (noaa.cells > 0 || noaa.held > 0 || removing.isNotEmpty())) {
                         // What Apply is about to do.
                         val plan = listOfNotNull(
-                            if (adding) "Add ${noaa.cells} charts, ${NoaaController.sizeText(noaa.bytes)}" else null,
+                            if (adding) "Add ${Lookout.fmtCount(noaa.cells.toLong())} charts, ${Lookout.fmtBytes(noaa.bytes)}" else null,
                             if (removing.isNotEmpty()) "remove ${removing.joinToString(", ") { it.name }}" else null,
                         )
                         Text(

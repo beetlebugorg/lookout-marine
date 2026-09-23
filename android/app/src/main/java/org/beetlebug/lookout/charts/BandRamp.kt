@@ -1,5 +1,7 @@
 package org.beetlebug.lookout.charts
 
+import org.beetlebug.lookout.Lookout
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -124,12 +126,4 @@ private fun bandColor(band: Int): Color = when (band) {
     else -> Color(0xFF2E7DB5)
 }
 
-private fun bandLabel(band: Int): String = when (band) {
-    1 -> "Overview"
-    2 -> "General"
-    3 -> "Coastal"
-    4 -> "Approach"
-    5 -> "Harbor"
-    6 -> "Berthing"
-    else -> "Other"
-}
+private fun bandLabel(band: Int): String = Lookout.usageBandName(band)

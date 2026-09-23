@@ -2125,6 +2125,10 @@ extern fn lookout_fmt_coord_dm(value: f64, is_lat: c_int, out: [*]u8, cap: usize
 extern fn lookout_fmt_position(lat: f64, lon: f64, out: [*]u8, cap: usize) usize;
 extern fn lookout_fmt_scale(denominator: f64, out: [*]u8, cap: usize) usize;
 extern fn lookout_band_name(denominator: f64) [*:0]const u8;
+extern fn lookout_usage_band_name(band: c_int) [*:0]const u8;
+extern fn lookout_fmt_bytes(bytes: u64, out: [*]u8, cap: usize) usize;
+extern fn lookout_fmt_count(n: u64, out: [*]u8, cap: usize) usize;
+extern fn lookout_fmt_depth(v_m: f64, unit: c_int, out: [*]u8, cap: usize) usize;
 extern fn lookout_parse_position(text: [*:0]const u8, out_lat: ?*f64, out_lon: ?*f64) c_int;
 extern fn lookout_parse_scale(text: [*:0]const u8, out_denominator: ?*f64) c_int;
 extern fn lookout_zoom_delta_for_scale(current: f64, wanted: f64) f64;
@@ -2185,6 +2189,37 @@ export fn Java_org_beetlebug_lookout_Lookout_nFmtScale(env: [*c]j.JNIEnv, cls: j
 export fn Java_org_beetlebug_lookout_Lookout_nBandName(env: [*c]j.JNIEnv, cls: j.jclass, denominator: j.jdouble) j.jstring {
     _ = cls;
     return env_(env).NewStringUTF.?(env, lookout_band_name(denominator));
+}
+
+/// String nUsageBandName(int band) -- "Overview" to "Berthing" for bands 1 to 6.
+export fn Java_org_beetlebug_lookout_Lookout_nUsageBandName(env: [*c]j.JNIEnv, cls: j.jclass, band: j.jint) j.jstring {
+    _ = cls;
+    return env_(env).NewStringUTF.?(env, lookout_usage_band_name(band));
+}
+
+/// String nFmtBytes(long bytes) -- "226.5 MB", "1.23 GB". A negative size is 0.
+export fn Java_org_beetlebug_lookout_Lookout_nFmtBytes(env: [*c]j.JNIEnv, cls: j.jclass, bytes: j.jlong) j.jstring {
+    _ = cls;
+    var buf: [32]u8 = undefined;
+    _ = lookout_fmt_bytes(@intCast(@max(bytes, 0)), &buf, buf.len);
+    return env_(env).NewStringUTF.?(env, &buf);
+}
+
+/// String nFmtCount(long n) -- "7,214". A negative count is 0.
+export fn Java_org_beetlebug_lookout_Lookout_nFmtCount(env: [*c]j.JNIEnv, cls: j.jclass, n: j.jlong) j.jstring {
+    _ = cls;
+    var buf: [32]u8 = undefined;
+    _ = lookout_fmt_count(@intCast(@max(n, 0)), &buf, buf.len);
+    return env_(env).NewStringUTF.?(env, &buf);
+}
+
+/// String nFmtDepth(double metres, boolean feet, boolean bare) -- "5 m", "12 ft".
+export fn Java_org_beetlebug_lookout_Lookout_nFmtDepth(env: [*c]j.JNIEnv, cls: j.jclass, metres: j.jdouble, feet: j.jboolean, bare: j.jboolean) j.jstring {
+    _ = cls;
+    var buf: [32]u8 = undefined;
+    const unit: c_int = (if (feet != 0) @as(c_int, 1) else 0) | (if (bare != 0) @as(c_int, 2) else 0);
+    _ = lookout_fmt_depth(metres, unit, &buf, buf.len);
+    return env_(env).NewStringUTF.?(env, &buf);
 }
 
 /// double[] nParsePosition(String text) -- {lat, lon}, or null when the text is

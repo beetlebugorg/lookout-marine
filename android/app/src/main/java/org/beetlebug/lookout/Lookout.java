@@ -353,6 +353,21 @@ public final class Lookout implements AutoCloseable {
     /** The S-52 navigational purpose band for a display scale. */
     public static String bandName(double denominator)  { return nBandName(denominator); }
 
+    /** The name of an S-57 usage band, 1 to 6: "Overview" to "Berthing". */
+    public static String usageBandName(int band)       { return nUsageBandName(band); }
+
+    /** A size, a thousand to the megabyte: "226.5 MB", "1.23 GB". */
+    public static String fmtBytes(long bytes)          { return nFmtBytes(bytes); }
+
+    /** A count grouped in threes: "7,214". */
+    public static String fmtCount(long n)              { return nFmtCount(n); }
+
+    /** A depth given in metres, in feet or metres to a tenth: "5 m", "12 ft".
+     *  With bare, the number alone. */
+    public static String fmtDepth(double metres, boolean feet, boolean bare) {
+        return nFmtDepth(metres, feet, bare);
+    }
+
     /** {lat, lon} for a position the mariner typed, or null. */
     public static double[] parsePosition(String text)  { return nParsePosition(text); }
 
@@ -490,6 +505,10 @@ public final class Lookout implements AutoCloseable {
     private static native String nFmtCoordDm(double value, boolean isLat);
     private static native String nFmtScale(double denominator);
     private static native String nBandName(double denominator);
+    private static native String nUsageBandName(int band);
+    private static native String nFmtBytes(long bytes);
+    private static native String nFmtCount(long n);
+    private static native String nFmtDepth(double metres, boolean feet, boolean bare);
     private static native double[] nParsePosition(String text);
     private static native double nParseScale(String text);
     private static native double nZoomDeltaForScale(double current, double wanted);

@@ -1,5 +1,7 @@
 package org.beetlebug.lookout.charts
 
+import org.beetlebug.lookout.Lookout
+
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -76,11 +78,12 @@ fun NoaaRegionPicker(noaa: NoaaController) {
  * prices as that rather than reading as an empty pick.
  */
 fun costLine(noaa: NoaaController): String {
-    val charts = if (noaa.cells == 1) "1 chart" else "${noaa.cells} charts"
+    val charts = if (noaa.cells == 1) "1 chart" else "${Lookout.fmtCount(noaa.cells.toLong())} charts"
+    val held = Lookout.fmtCount(noaa.held.toLong())
     return when {
-        noaa.cells == 0 -> "${noaa.held} charts, all installed"
-        noaa.held > 0 -> "$charts, ${NoaaController.sizeText(noaa.bytes)} · ${noaa.held} already installed"
-        else -> "$charts, ${NoaaController.sizeText(noaa.bytes)}"
+        noaa.cells == 0 -> "$held charts, all installed"
+        noaa.held > 0 -> "$charts, ${Lookout.fmtBytes(noaa.bytes)} · $held already installed"
+        else -> "$charts, ${Lookout.fmtBytes(noaa.bytes)}"
     }
 }
 

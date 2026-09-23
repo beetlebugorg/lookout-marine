@@ -1,5 +1,6 @@
 package org.beetlebug.lookout.charts
 
+import org.beetlebug.lookout.Lookout
 
 import org.beetlebug.lookout.ui.Footer
 import org.beetlebug.lookout.ui.SectionHeader
@@ -546,15 +547,7 @@ private fun bandCounts(set: ChartSets.Set): List<Pair<Int, Int>> {
 private fun bandRange(lo: Int, hi: Int): String =
     if (lo == hi) bandName(lo) else "${bandName(lo)} to ${bandName(hi)}"
 
-internal fun bandName(band: Int): String = when (band) {
-    1 -> "Overview"
-    2 -> "General"
-    3 -> "Coastal"
-    4 -> "Approach"
-    5 -> "Harbor"
-    6 -> "Berthing"
-    else -> "—"
-}
+internal fun bandName(band: Int): String = Lookout.usageBandName(band)
 
 private fun bytes(n: Long): String = when {
     n >= 1_000_000_000 -> String.format(Locale.US, "%.1f GB", n / 1e9)
