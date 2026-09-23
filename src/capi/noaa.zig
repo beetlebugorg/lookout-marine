@@ -157,6 +157,19 @@ export fn lookout_noaa_update_due(n: ?*lookout_noaa) c_int {
     return @intFromBool(x.updateDue(@divFloor(clock.wallMs(), 1000)));
 }
 
+export fn lookout_noaa_update_check(n: ?*lookout_noaa) c_int {
+    const x = n orelse return @intFromEnum(noaajob.Cadence.daily);
+    x.mu.lock();
+    defer x.mu.unlock();
+    return @intFromEnum(x.cadence());
+}
+
+export fn lookout_noaa_set_update_check(n: ?*lookout_noaa, cadence: c_int) void {
+    const x = n orelse return;
+    const c = std.enums.fromInt(noaajob.Cadence, cadence) orelse return;
+    x.setCadence(c);
+}
+
 export fn lookout_noaa_cancel(n: ?*lookout_noaa) void {
     if (n) |x| x.cancel();
 }

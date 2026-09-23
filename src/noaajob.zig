@@ -36,7 +36,6 @@ pub const id_mark: u64 = @as(u64, 1) << 63;
 /// mariner on a marina uplink gains little past four.
 pub const MAX_INFLIGHT = 4;
 
-
 /// A cell zip larger than this is not the file we asked for. The catalog has
 /// a limit of its own, noaa.max_catalog_bytes.
 pub const MAX_ZIP_BYTES: u64 = 64 << 20;
@@ -223,7 +222,21 @@ pub const State = extern struct {
     /// The same by usage band: band_done[0] is band 1.
     band_done: [6]u32 = @splat(0),
     band_total: [6]u32 = @splat(0),
+    /// 1 while an update check waits on its catalog read.
+    update_checking: u8 = 0,
+    /// Unix seconds of the last update check recorded, or 0.
+    update_checked_at: i64 = 0,
 };
+
+/// The update check, as the snapshot reads it. The Handle writes it under
+/// the api lock.
+pub const CheckView = struct {
+    checking: bool = false,
+    checked_at: i64 = 0,
+};
+
+/// How often the update check runs. The values are LOOKOUT_NOAA_CHECK_*.
+pub const Cadence = enum(c_int) { never = 0, startup = 1, daily = 2 };
 
 /// The prepare's counts, as the snapshot reads them. Handle.stepPrepare
 /// writes them under the api lock.
@@ -273,6 +286,8 @@ pub const Service = struct {
     transfers_end: ?Outcome = null,
     /// The prepare's counts, for the snapshot.
     prep: PrepView = .{},
+    /// The update check, for the snapshot.
+    check: CheckView = .{},
 
     next_req: u64 = 1,
     reqs: std.ArrayList(Req) = .empty,
@@ -1512,6 +1527,8 @@ pub const Service = struct {
             .to_prepare = self.prep.to_prepare,
             .band_done = self.prep.band_done,
             .band_total = self.prep.band_total,
+            .update_checking = @intFromBool(self.check.checking),
+            .update_checked_at = self.check.checked_at,
         };
         for (self.removers.items) |r| {
             s.removing = 1;
@@ -1631,8 +1648,9 @@ pub const Handle = struct {
     /// A check has been recorded since the handle opened. The startup
     /// cadence checks once per launch.
     checked_run: bool = false,
-    /// The last check, for a handle with no store.
+    /// The last check and the cadence, for a handle with no store.
     last_check: i64 = 0,
+    cadence_mem: Cadence = .daily,
 
     /// The regions the mariner asked for, a bit per entry of noaa.regions.
     /// Null before any is recorded. Read from the store on first use.
@@ -1690,6 +1708,7 @@ pub const Handle = struct {
         self.mu.lock();
         defer self.mu.unlock();
         self.svc.setProvider(get, stop, wake, user);
+        self.noteCheck();
         self.svc.publish();
         // A scan that ended before the fetcher was set has woken no one.
         if (wake) |w| if (self.scans_moved.load(.acquire)) w(user);
@@ -2157,25 +2176,43 @@ pub const Handle = struct {
     pub const checked_key = "noaa-update-checked";
     const day_s: i64 = 24 * 60 * 60;
 
+    /// How often the update check runs: the store's "noaa-update-check",
+    /// daily when unset.
+    pub fn cadence(self: *Handle) Cadence {
+        const st = self.store orelse return self.cadence_mem;
+        const v = st.text(settings.group_chartsets, cadence_key) orelse return .daily;
+        if (std.mem.eql(u8, v, "never")) return .never;
+        if (std.mem.eql(u8, v, "startup")) return .startup;
+        return .daily;
+    }
+
+    pub fn setCadence(self: *Handle, c: Cadence) void {
+        self.mu.lock();
+        defer self.mu.unlock();
+        self.cadence_mem = c;
+        const st = self.store orelse return;
+        st.setText(settings.group_chartsets, cadence_key, @tagName(c));
+    }
+
     /// Start an update check when the cadence calls for one, and return true
     /// while one is running or has just been recorded. The count is
     /// outdated once the catalog read ends.
     ///
-    /// The cadence is "never", "startup" or "daily", daily when unset. A
-    /// check needs a catalog read from the network. One read within the day
-    /// is used as it is, and otherwise a read starts here. The check is
+    /// A check needs a catalog read from the network. One read within the
+    /// day is used as it is, and otherwise a read starts here. The check is
     /// recorded only when that read succeeds, so a failed read leaves it due.
     /// With no managed cell that states an edition there is no check to make,
     /// and no request goes out.
     pub fn updateDue(self: *Handle, now_s: i64) bool {
         self.mu.lock();
         defer self.mu.unlock();
-        const cadence: []const u8 = if (self.store) |st|
-            st.text(settings.group_chartsets, cadence_key) orelse "daily"
-        else
-            "daily";
-        if (std.mem.eql(u8, cadence, "never")) return false;
-        const startup = std.mem.eql(u8, cadence, "startup");
+        defer {
+            self.noteCheck();
+            self.svc.publish();
+        }
+        const c = self.cadence();
+        if (c == .never) return false;
+        const startup = c == .startup;
 
         const held = self.managedEditions() catch return false;
         chartsets.Sets.freeHeld(self.svc.alloc, held);
@@ -2194,9 +2231,14 @@ pub const Handle = struct {
         self.check_pending = true;
         self.check_reads = self.svc.fresh_reads;
         self.svc.refresh();
-        self.svc.publish();
         self.settleCheck();
         return true;
+    }
+
+    /// Copy the check's state where the snapshot reads it. Called with `mu`
+    /// held.
+    fn noteCheck(self: *Handle) void {
+        self.svc.check = .{ .checking = self.check_pending, .checked_at = self.lastCheck() };
     }
 
     /// End a pending check once its catalog read has ended, and record it
@@ -2205,6 +2247,8 @@ pub const Handle = struct {
         if (!self.check_pending or self.svc.catalog_inflight) return;
         self.check_pending = false;
         if (self.svc.fresh_reads != self.check_reads) self.recordCheck(self.svc.checked_at);
+        self.noteCheck();
+        self.svc.changed = true;
     }
 
     fn lastCheck(self: *Handle) i64 {
@@ -3557,10 +3601,14 @@ test "the update check follows the cadence and records a read that succeeded" {
     try testing.expect(!h.updateDue(now));
     try testing.expectEqual(@as(usize, 0), rec.ids.items.len);
 
-    // Daily, never checked: due, and one read goes out.
-    f.store.setText(group, Handle.cadence_key, "daily");
+    // Daily, never checked: due, and one read goes out. The state says a
+    // check is running and none is recorded.
+    h.setCadence(.daily);
+    try testing.expectEqual(Cadence.daily, h.cadence());
     try testing.expect(h.updateDue(now));
     try testing.expectEqual(@as(usize, 1), rec.ids.items.len);
+    try testing.expectEqual(@as(u8, 1), h.poll().update_checking);
+    try testing.expectEqual(@as(i64, 0), h.poll().update_checked_at);
     // A second call while it runs sends no second read.
     try testing.expect(h.updateDue(now));
     try testing.expectEqual(@as(usize, 1), rec.ids.items.len);
@@ -3576,6 +3624,8 @@ test "the update check follows the cadence and records a read that succeeded" {
     h.respondChunk(rec.ids.items[1], xml, 200, true);
     _ = h.changed();
     try testing.expect(f.store.has(group, Handle.checked_key));
+    try testing.expectEqual(@as(u8, 0), h.poll().update_checking);
+    try testing.expect(h.poll().update_checked_at != 0);
     try testing.expectEqual(@as(u32, 1), h.outdated());
     try testing.expect(!h.updateDue(now + 60 * 60));
     try testing.expectEqual(@as(usize, 2), rec.ids.items.len);
@@ -3585,7 +3635,8 @@ test "the update check follows the cadence and records a read that succeeded" {
     _ = h.changed();
 
     // At startup: once per handle, whenever the last check was.
-    f.store.setText(group, Handle.cadence_key, "startup");
+    h.setCadence(.startup);
+    try testing.expectEqualStrings("startup", f.store.text(group, Handle.cadence_key).?);
     try testing.expect(!h.updateDue(now + 25 * 60 * 60));
     try testing.expectEqual(@as(usize, 3), rec.ids.items.len);
 

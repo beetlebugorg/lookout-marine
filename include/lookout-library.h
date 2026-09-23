@@ -954,6 +954,12 @@ typedef struct {
      * no entry. */
     uint32_t band_done[6];
     uint32_t band_total[6];
+    /* 1 while an update check waits on its catalog read. See
+     * lookout_noaa_update_due. */
+    uint8_t update_checking;
+    /* Unix seconds of the last update check recorded, or 0 when none has
+     * been. `checked_at` is any catalog read, this one is the check. */
+    int64_t update_checked_at;
 } lookout_noaa_state;
 
 /* ---- The NOAA service handle ----------------------------------------------
@@ -1148,16 +1154,24 @@ uint32_t lookout_noaa_outdated(lookout_noaa *n);
  * skipped. */
 void lookout_noaa_update(lookout_noaa *n, const char *dest_dir);
 
+/* How often the update check runs: LOOKOUT_NOAA_CHECK_*, daily when the
+ * mariner has not picked one. Kept in the store the handle was opened with,
+ * or for the life of the handle with none. */
+#define LOOKOUT_NOAA_CHECK_NEVER   0
+#define LOOKOUT_NOAA_CHECK_STARTUP 1 /* once per handle */
+#define LOOKOUT_NOAA_CHECK_DAILY   2
+int lookout_noaa_update_check(lookout_noaa *n);
+/* A value that is not LOOKOUT_NOAA_CHECK_* is ignored. */
+void lookout_noaa_set_update_check(lookout_noaa *n, int cadence);
+
 /* The update check. Returns 1 when a check is due and has started, or is
- * still running, else 0. The count is lookout_noaa_outdated once the
- * catalog read ends: `phase` is no longer LOOKOUT_NOAA_READING.
+ * still running, else 0. The count is lookout_noaa_outdated once
+ * `update_checking` in the state is 0 again.
  *
- * The cadence is the store's "noaa-update-check" in the chart sets group:
- * "never", "startup" (once per handle) or "daily" (the default). The last
- * check is "noaa-update-checked", in unix seconds. A check reads the catalog
- * from the network, and uses one read under a day old as it is. The time is
- * recorded only when that read succeeds, so a failed read leaves the check
- * due. With no managed cell that states an edition it returns 0 and sends no
+ * The cadence is lookout_noaa_update_check. The last check is
+ * `update_checked_at` in the state. A check reads the catalog from the
+ * network, and uses one read under a day old as it is. The time is recorded
+ * only when that read succeeds, so a failed read leaves the check due. With no managed cell that states an edition it returns 0 and sends no
  * request.
  *
  * No timer starts a check. Call this when a chart opens and when
