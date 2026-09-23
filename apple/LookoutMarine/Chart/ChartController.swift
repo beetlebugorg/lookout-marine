@@ -537,6 +537,10 @@ final class ChartController: NSObject {
         // the startup loader.
         if model?.charts.firstBuildDone == false { model?.charts.firstBuildDone = true }
 
+        // A chart picture finishing raises the chart-link flag with no frame
+        // to draw, so pushReadouts does not run for it.
+        model?.chartLinks.poll()
+
         // A gesture bench drives from this tick, so pausing would strand it in
         // whatever phase it had reached.
         guard gestureBench == nil else { return }

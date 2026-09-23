@@ -8,9 +8,9 @@
 //  the url its tiles come from, so an entry offers a link to somebody else's
 //  chart rather than a chart of Lookout's.
 //
-//  Each entry ships a picture of its style, rendered by ChartPreviewEngine and
-//  saved into the asset catalog, so the step draws its cards before a single
-//  tile is fetched. A render of the mariner's own water replaces the shipped
+//  Each entry ships a picture of its style, rendered by the core
+//  (lookout_chart_link_picture) and saved into the asset catalog, so the step
+//  draws its cards before a single tile is fetched. A render of the mariner's own water replaces the shipped
 //  picture once it arrives.
 
 import SwiftUI

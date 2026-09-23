@@ -5,10 +5,9 @@
 //  rather than a list, so two styles with similar names are told apart by
 //  looking.
 //
-//  A tile shows the chart it names only for Lookout's own chart. Rendering a
-//  publisher's style needs the style resolved and its tiles fetched, and the
-//  engine renders one chart at a time, so a linked tile shows its kind and its
-//  url instead of a picture.
+//  The core draws each tile's picture: the chart on screen as the engine draws
+//  it, and one publisher tile for any other raster style. A chart with no
+//  picture shows its kind and its url.
 
 import SwiftUI
 
@@ -22,6 +21,7 @@ struct ChartGallery: View {
     private var links: ChartLinksModel { model.chartLinks }
     /// One tile of each linked chart, at the water the mariner is on.
     @State private var previews = ChartPreviews()
+    @Environment(\.displayScale) private var displayScale
 
     var body: some View {
         ScrollView(.horizontal) {
@@ -51,28 +51,25 @@ struct ChartGallery: View {
         }
         .onAppear {
             previews.bind(to: model.controller)
-            // The chart on screen, as the engine draws it. Whichever chart the
-            // mariner picks next is captured the same way, so the row fills
-            // with real portrayals as they look through it.
-            previews.capture(active: links.active)
-            previews.refresh(links.list.map(\.url))
+            askPictures()
         }
-        // A linked chart resolves its style and fetches its tiles before it
-        // has anything to picture, so this keeps looking rather than deciding
-        // on the first frame.
-        .task(id: links.active) {
-            let want = links.active
-            await previews.watch(active: want) {
-                links.active == want && links.error == nil
-            }
-        }
-        // The core answers a style read by raising its changed flag, and the
-        // list model polls that. A new template is a new picture to ask for.
-        .onChange(of: links.list) { _, now in previews.refresh(now.map(\.url)) }
+        // A picture finishing, a pick and a new link all change the revision.
+        .onChange(of: links.revision) { _, _ in askPictures() }
+        .onDisappear { previews.stop() }
         .scrollIndicators(.automatic)
         // The row starts at its first tile. Without this the form can hand the
         // scroll view an offset and the active tile is cut off at the left.
         .defaultScrollAnchor(.leading)
+    }
+
+    /// Every tile's picture, at the water the mariner is on. The zoom is low
+    /// enough that one publisher tile holds a recognisable stretch of coast.
+    private func askPictures() {
+        guard let at = model.controller?.viewCenter() else { return }
+        previews.ask([""] + links.list.map(\.url), kind: .tile, lon: at.lon, lat: at.lat,
+                     zoom: 9,
+                     width: Int((Metrics.tile * displayScale).rounded()),
+                     height: Int((Metrics.art * displayScale).rounded()))
     }
 
     /// What Lookout's own chart is built from.

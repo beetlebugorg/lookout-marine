@@ -86,23 +86,17 @@ final class FakeEngine: RasterEngine, ChartLinkEngine, PluginEngine,
     func importChartLinks(_ json: String) { note("importChartLinks") }
     func chartLinksSnapshot() -> ChartLinkSnapshot? { links }
 
-    /// What chartIsDrawing returns. A test that wants a preview captured
-    /// leaves it false, the way a chart that has settled reads.
-    var drawing = false
-    func chartIsDrawing() -> Bool { drawing }
-
-    /// The pictures. A test sets what the core can name: `previewTiles` maps a
-    /// link's url to the tile url for it, and an absent entry stands for a
-    /// style that names no raster tiles.
-    var previewTiles: [String: String] = [:]
+    /// The pictures. A test sets what the core returns for each link's url,
+    /// and an absent entry stands for a chart with no picture.
+    var pictures: [String: ChartPicture] = [:]
     var viewCentre: (lon: Double, lat: Double)? = (lon: -76.0, lat: 39.0)
-    func previewChartLinks() { note("previewChartLinks") }
-    func chartLinkPreviewURL(_ url: String, lon: Double, lat: Double, zoom: Int) -> String? {
-        note("chartLinkPreviewURL(\(url))")
-        return previewTiles[url]
+    func chartLinkPicture(_ url: String, kind: ChartPictureKind, lon: Double, lat: Double,
+                          zoom: Double, width: Int, height: Int) -> ChartPicture {
+        note("chartLinkPicture(\(url))")
+        return pictures[url] ?? .none
     }
+    func cancelChartLinkPictures() { note("cancelChartLinkPictures") }
     func viewCenter() -> (lon: Double, lat: Double)? { viewCentre }
-    func snapshot() -> Image? { nil }
 
     // MARK: Plugins
     var specs: [PluginTableSpec] = []

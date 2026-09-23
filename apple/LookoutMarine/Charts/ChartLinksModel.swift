@@ -49,6 +49,8 @@ final class ChartLinksModel {
     /// draws (tile usage policies make the credit a condition of service). Nil
     /// when the Lookout chart is up.
     var attribution: String? = nil
+    /// Counts the core's changes, a finished chart picture among them.
+    private(set) var revision = 0
 
     weak var engine: (any ChartLinkEngine)?
 
@@ -93,6 +95,7 @@ final class ChartLinksModel {
     /// the changed flag has one consumer.
     func poll() {
         guard let snap = engine?.chartLinksSnapshot() else { return }
+        revision &+= 1
         if list != snap.links { list = snap.links }
         if active != snap.active { active = snap.active }
         if busy != snap.busy { busy = snap.busy }

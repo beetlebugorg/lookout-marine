@@ -79,9 +79,10 @@ struct OnlineChartStep: View {
             previews.bind(to: model.controller)
             drawPreviews()
         }
-        // The list arrives from the core a moment after the step appears.
-        .onChange(of: links.list) { _, _ in drawPreviews() }
-        .onDisappear { previews.stopRendering() }
+        // The list arrives from the core a moment after the step appears, and
+        // a finished picture changes the revision too.
+        .onChange(of: links.revision) { _, _ in drawPreviews() }
+        .onDisappear { previews.stop() }
     }
 
     /// Paste a link, or open one already on this device. The app treats both
@@ -152,7 +153,10 @@ struct OnlineChartStep: View {
             .filter { own || ChartCatalog.art(for: $0) == nil }
         guard !charts.isEmpty else { return }
         let at = model.controller?.viewCenter() ?? (lon: -76.48, lat: 38.97)
-        previews.renderAll(charts, lon: at.lon, lat: at.lat, zoom: 12)
+        // The size of the pictures in ChartCatalog, so a render replacing a
+        // shipped one is the same picture at the same sharpness.
+        previews.ask(charts, kind: .render, lon: at.lon, lat: at.lat, zoom: 12,
+                     width: 960, height: 720)
     }
 
     private func submit() {

@@ -45,17 +45,31 @@ protocol ChartLinkEngine: AnyObject {
     @discardableResult func selectChartLink(_ url: String?) -> Bool
     func importChartLinks(_ json: String)
     func chartLinksSnapshot() -> ChartLinkSnapshot?
-    /// True while the engine still has drawing to do.
-    func chartIsDrawing() -> Bool
-    /// Read every link's style for the tile its picture comes from.
-    func previewChartLinks()
-    /// The tile url that pictures one chart at a point, or nil when the style
-    /// names no raster tiles.
-    func chartLinkPreviewURL(_ url: String, lon: Double, lat: Double, zoom: Int) -> String?
+    /// One chart's picture at a point, drawn by the core. `url` "" is
+    /// Lookout's own chart.
+    func chartLinkPicture(_ url: String, kind: ChartPictureKind, lon: Double, lat: Double,
+                          zoom: Double, width: Int, height: Int) -> ChartPicture
+    /// Drop the pictures still being drawn.
+    func cancelChartLinkPictures()
     /// Where the chart is now, for a preview every tile shares.
     func viewCenter() -> (lon: Double, lat: Double)?
-    /// The chart as it is drawing. The one true picture of the active chart.
-    func snapshot() -> Image?
+}
+
+/// Which picture of a chart the core draws. See lookout_chart_link_picture.
+enum ChartPictureKind {
+    /// The chart on screen as the engine draws it, or one publisher tile.
+    case tile
+    /// The chart drawn on a second engine with no window.
+    case render
+}
+
+enum ChartPicture {
+    case ready(Image)
+    /// The core is drawing it. The list model's revision changes when it is
+    /// done.
+    case pending
+    /// No picture. The view draws its own art.
+    case none
 }
 
 /// NOAA's chart catalog and the downloads run from it. The core reads the
