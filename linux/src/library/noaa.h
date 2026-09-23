@@ -46,13 +46,6 @@ typedef struct {
   double west, south, east, north;
 } LkNoaaBox;
 
-/* A cell already installed, for the update check. */
-typedef struct {
-  const char *name; /* the cell name, "US5MD1MC" */
-  guint32     edition;
-  guint32     update;
-} LkNoaaInstalled;
-
 /* Open the core's NOAA service on `store` and `sets`, with a fetcher of its
  * own. Both are borrowed and must outlive the object. */
 LkNoaa *lk_noaa_new (lookout_store *store, lookout_chart_sets *sets);
@@ -114,9 +107,9 @@ gboolean lk_noaa_region_held (LkNoaa *self, const char *id, guint32 *out_cells,
 
 /* The cells THE DOWNLOADER holds. The pills read this, and only this: counting
  * every installed cell reads an archive the mariner merely lists as water they
- * can delete, so unticking asked to remove cells no download ever wrote.
- * lk_noaa_note_installed still names every installed cell, because skipping
- * what the mariner holds elsewhere is the right price for a download. */
+ * can delete, so unticking asked to remove cells no download ever wrote. The
+ * core prices a download against every installed cell, read off the chart
+ * sets. This also prices the pick again, because the sets have changed. */
 void lk_noaa_note_managed (LkNoaa *self, const char *const *names);
 
 /* The regions this device has downloaded, as the picker opens them. Written
@@ -154,11 +147,6 @@ char *lk_noaa_cost_line (LkNoaa *self);
  * rather than as an empty pick. Free with g_free. */
 char *lk_noaa_cost_words (guint32 cells, guint64 bytes, guint32 held, guint64 held_bytes);
 
-/* Hand the core the NOAA cells already installed, then price again. The names
- * come off the chart sets, so a set added by hand counts the same as one this
- * app downloaded. NULL forgets the list. */
-void lk_noaa_note_installed (LkNoaa *self, const char *const *names);
-
 /* Download `region_ids`, a comma separated list, into `dest_dir`. `again`
  * fetches the cells already held as well. An empty list orders no download. */
 void lk_noaa_download (LkNoaa *self, const char *region_ids, const char *dest_dir,
@@ -167,11 +155,10 @@ void lk_noaa_download (LkNoaa *self, const char *region_ids, const char *dest_di
 /* Stop the download that is running. The cells already written stay. */
 void lk_noaa_cancel (LkNoaa *self);
 
-/* How many of these cells NOAA has reissued, and the download that replaces
- * them. */
-guint32 lk_noaa_outdated (LkNoaa *self, const LkNoaaInstalled *have, guint n);
-void    lk_noaa_update (LkNoaa *self, const LkNoaaInstalled *have, guint n,
-                        const char *dest_dir);
+/* How many of the managed sets' cells NOAA has reissued, and the download
+ * that replaces them. The core reads the editions off the managed sets. */
+guint32 lk_noaa_outdated (LkNoaa *self);
+void    lk_noaa_update (LkNoaa *self, const char *dest_dir);
 
 /* Where downloaded cells are staged before they bake. ONE directory, so the
  * whole download bakes as a single chart set. Free with g_free. */

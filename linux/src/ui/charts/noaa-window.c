@@ -495,17 +495,13 @@ lk_noaa_window_present (GtkWindow *parent, LkAppModel *model)
    * already holds.
    *
    * BEFORE THE HANDLER IS CONNECTED. The sync seeds the pick, and the seed
-   * reads the per-region counts these calls recompute. Each call also
-   * emits ::changed, so connecting first ran the seed on the counts the
-   * FIRST of the two left: a picker opened after the charts had gone seeded
-   * from a device that still held them, and opened ticked on water it had
-   * deleted. */
+   * reads the per-region counts this call recomputes. The call also emits
+   * ::changed, and a handler connected first seeds the pick from stale
+   * counts. */
   if (!lk_app_model_library_scanning (model))
     {
-      g_auto (GStrv) have = lk_app_model_installed_cell_names (model);
       g_auto (GStrv) mine = lk_app_model_managed_cell_names (model);
 
-      lk_noaa_note_installed (noaa, (const char *const *) have);
       lk_noaa_note_managed (noaa, (const char *const *) mine);
     }
 

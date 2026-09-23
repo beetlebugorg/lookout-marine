@@ -659,29 +659,18 @@ lk_app_model_get_noaa (LkAppModel *self)
 }
 
 char **
-lk_app_model_installed_cell_names (LkAppModel *self)
-{
-  g_return_val_if_fail (LK_IS_APP_MODEL (self), g_new0 (char *, 1));
-  return lk_chart_sets_cell_names (self->chart_sets);
-}
-
-char **
 lk_app_model_managed_cell_names (LkAppModel *self)
 {
   g_return_val_if_fail (LK_IS_APP_MODEL (self), g_new0 (char *, 1));
   return lk_chart_sets_managed_cell_names (self->chart_sets);
 }
 
-/* Both halves of what the NOAA picker reads: every installed cell, which is
- * what a download is priced against, and the downloader's own cells, which is
- * what the pills state. */
+/* The downloader's own cells, which the pills state. */
 static void
 lk_app_model_noaa_note_all (LkAppModel *self)
 {
-  g_auto (GStrv) have = lk_app_model_installed_cell_names (self);
   g_auto (GStrv) mine = lk_app_model_managed_cell_names (self);
 
-  lk_noaa_note_installed (self->noaa, (const char *const *) have);
   lk_noaa_note_managed (self->noaa, (const char *const *) mine);
 }
 
@@ -1069,25 +1058,9 @@ lk_app_model_noaa_outdated (LkAppModel *self)
 static void
 lk_app_model_count_noaa_outdated (LkAppModel *self)
 {
-  g_autoptr (GArray) have = lk_chart_sets_managed_editions (self->chart_sets);
-  g_autofree LkNoaaInstalled *installed = NULL;
-
   self->noaa_checking = FALSE;
-  self->noaa_outdated = 0;
   lk_store_save_noaa_update_checked (g_get_real_time () / G_USEC_PER_SEC);
-  if (have->len == 0)
-    return;
-
-  installed = g_new0 (LkNoaaInstalled, have->len);
-  for (guint i = 0; i < have->len; i++)
-    {
-      const LkChartSetEdition *one = &g_array_index (have, LkChartSetEdition, i);
-
-      installed[i].name = one->name;
-      installed[i].edition = one->edition;
-      installed[i].update = one->update;
-    }
-  self->noaa_outdated = lk_noaa_outdated (self->noaa, installed, have->len);
+  self->noaa_outdated = lk_noaa_outdated (self->noaa);
 }
 
 void
@@ -1122,16 +1095,10 @@ lk_app_model_check_noaa_updates (LkAppModel *self)
 void
 lk_app_model_download_noaa_updates (LkAppModel *self)
 {
-  g_autoptr (GArray) have = NULL;
-  g_autofree LkNoaaInstalled *installed = NULL;
   g_autofree char *dest = NULL;
   guint32 before;
 
   g_return_if_fail (LK_IS_APP_MODEL (self));
-
-  have = lk_chart_sets_managed_editions (self->chart_sets);
-  if (have->len == 0)
-    return;
 
   dest = lk_noaa_download_dir ();
   if (g_mkdir_with_parents (dest, 0700) != 0)
@@ -1140,19 +1107,9 @@ lk_app_model_download_noaa_updates (LkAppModel *self)
       return;
     }
 
-  installed = g_new0 (LkNoaaInstalled, have->len);
-  for (guint i = 0; i < have->len; i++)
-    {
-      const LkChartSetEdition *one = &g_array_index (have, LkChartSetEdition, i);
-
-      installed[i].name = one->name;
-      installed[i].edition = one->edition;
-      installed[i].update = one->update;
-    }
-
   g_clear_pointer (&self->noaa_order_ids, g_free);
   before = lk_noaa_state (self->noaa)->run;
-  lk_noaa_update (self->noaa, installed, have->len, dest);
+  lk_noaa_update (self->noaa, dest);
   lk_app_model_noaa_ordered (self, dest, before);
 }
 

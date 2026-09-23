@@ -243,12 +243,6 @@ gboolean lk_app_model_noaa_alert (LkAppModel *self, gboolean *out_retry);
  * reads the catalog first and orders when that read ends. */
 void lk_app_model_retry_noaa (LkAppModel *self);
 
-/* Every survey cell this device holds, by dataset name. Transfer full strv.
- *
- * What NOAA is told before it prices a pick, so water already downloaded is
- * not paid for twice. See lk_chart_sets_cell_names. */
-char **lk_app_model_installed_cell_names (LkAppModel *self);
-
 /* What the pill is built from. The sets are borrowed. */
 GPtrArray  *lk_app_model_get_raster_sets (LkAppModel *self);
 int         lk_app_model_get_raster_active (LkAppModel *self);

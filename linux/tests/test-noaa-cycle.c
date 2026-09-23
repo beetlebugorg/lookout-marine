@@ -153,16 +153,11 @@ test_a_failed_read_does_not_hide_the_catalog (void)
 
   g_assert_true (lk_noaa_state (noaa)->have_catalog);
 
-  /* Now a failure, with the catalog still in hand. */
-  {
-    g_auto (GStrv) cells = lk_noaa_region_cells (noaa, LK_TEST_REGION);
-
-    lk_noaa_note_installed (noaa, (const char *const *) cells);
-    lk_noaa_clear_picks (noaa);
-    lk_noaa_toggle (noaa, LK_TEST_REGION);
-    lk_noaa_download (noaa, LK_TEST_REGION, "/tmp", FALSE);
-    lk_test_drain ();
-  }
+  /* Now a failed read, with the catalog still in hand. With no fetcher the
+   * read fails at once. */
+  lookout_noaa_set_http_provider (lk_noaa_service (noaa), NULL, NULL, NULL, NULL);
+  lk_noaa_refresh (noaa);
+  lk_test_drain ();
 
   const char *error = lk_noaa_state (noaa)->error;
   g_assert_cmpstr (error, !=, "");

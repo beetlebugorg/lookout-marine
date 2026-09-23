@@ -376,6 +376,7 @@ lk_noaa_note_managed (LkNoaa *self, const char *const *names)
     g_hash_table_add (self->managed, g_strdup (names[i]));
 
   lk_noaa_recost_regions (self);
+  lk_noaa_recost (self);
   g_signal_emit (self, signals[SIGNAL_CHANGED], 0);
 }
 
@@ -481,18 +482,6 @@ lk_noaa_cost_line (LkNoaa *self)
   g_return_val_if_fail (LK_IS_NOAA (self), g_strdup (""));
 
   return lk_noaa_cost_words (self->cells, self->bytes, self->held, self->held_bytes);
-}
-
-void
-lk_noaa_note_installed (LkNoaa *self, const char *const *names)
-{
-  g_return_if_fail (LK_IS_NOAA (self));
-
-  lookout_noaa_have (self->service, names,
-                         names != NULL ? g_strv_length ((char **) names) : 0);
-  lk_noaa_recost_regions (self);
-  lk_noaa_recost (self);
-  g_signal_emit (self, signals[SIGNAL_CHANGED], 0);
 }
 
 /* ---- downloading --------------------------------------------------------- */
@@ -632,40 +621,19 @@ lk_noaa_cancel (LkNoaa *self)
 }
 
 guint32
-lk_noaa_outdated (LkNoaa *self, const LkNoaaInstalled *have, guint n)
+lk_noaa_outdated (LkNoaa *self)
 {
   g_return_val_if_fail (LK_IS_NOAA (self), 0);
-
-  if (have == NULL || n == 0)
-    return 0;
-
-  g_autofree lookout_noaa_installed *raw = g_new0 (lookout_noaa_installed, n);
-  for (guint i = 0; i < n; i++)
-    {
-      raw[i].name = have[i].name;
-      raw[i].edition = have[i].edition;
-      raw[i].update = have[i].update;
-    }
-  return lookout_noaa_outdated (self->service, raw, n);
+  return lookout_noaa_outdated (self->service);
 }
 
 void
-lk_noaa_update (LkNoaa *self, const LkNoaaInstalled *have, guint n, const char *dest_dir)
+lk_noaa_update (LkNoaa *self, const char *dest_dir)
 {
   g_return_if_fail (LK_IS_NOAA (self));
   g_return_if_fail (dest_dir != NULL);
 
-  if (have == NULL || n == 0)
-    return;
-
-  g_autofree lookout_noaa_installed *raw = g_new0 (lookout_noaa_installed, n);
-  for (guint i = 0; i < n; i++)
-    {
-      raw[i].name = have[i].name;
-      raw[i].edition = have[i].edition;
-      raw[i].update = have[i].update;
-    }
-  lookout_noaa_update (self->service, raw, n, dest_dir);
+  lookout_noaa_update (self->service, dest_dir);
   lk_noaa_sync (self);
 }
 
