@@ -1,6 +1,17 @@
-/* lookout-library.h - the installed charts: the library open now, the folder
- * scan, the raster underlay, a host-supplied style and the charts reached by
- * link. Included from lookout.h. */
+/* lookout-library.h - the installed charts: the library open now, the bake,
+ * the folder scan, the chart sets, the raster underlay, the charts reached by
+ * link, NOAA's charts and the setup flow. Included from lookout.h.
+ *
+ * OWNERSHIP. Each call that hands out a pointer names which of these it is:
+ *
+ *   - Static: valid for the life of the process.
+ *   - Borrowed until the list changes: valid until the next call that
+ *     changes the list it came from.
+ *   - Borrowed from the read: valid until the read it came from is freed.
+ *   - Borrowed from an argument: valid while the argument the shell passed
+ *     is.
+ *   - Caller-owned: the shell frees it with the call named. A call that
+ *     writes into a buffer the shell passed in keeps no pointer to it. */
 #ifndef LOOKOUT_LIBRARY_H
 #define LOOKOUT_LIBRARY_H
 #include <stdint.h>
@@ -12,7 +23,7 @@ extern "C" {
 
 /* ---- the chart library --------------------------------------------------- */
 
-/* Add baked charts to the OPEN library and compose again. Answers how many
+/* Add baked charts to the OPEN library and compose again. Returns how many
  * opened, or -1 on error; a chart that will not open is skipped, as at open.
  *
  * This is how charts arrive into a running app: a bake finishing, a download
@@ -73,7 +84,7 @@ typedef struct {
 } lookout_bake_progress;
 
 /* Start a bake on a thread of its own. NULL when it does not start. The
- * strings are copied. */
+ * strings are copied. Caller-owned: free with lookout_bake_free. */
 lookout_bake *lookout_bake_start(const char *source,
                                  const char *const *ins, const char *const *outs,
                                  size_t cells, size_t sheets, size_t lifts,
@@ -149,7 +160,7 @@ int lookout_bake_is_derived(const char *root, const char *path);
 
 /* Removing a set renames first and deletes behind: a 7,224-chart library is
  * 36,000 files, measured at 3.7 seconds of disk work. This is the prefix to
- * rename to. Static storage. */
+ * rename to. Static. */
 const char *lookout_bake_trash_prefix(void);
 
 /* Delete every directory directly under `root` whose name has the trash
@@ -243,13 +254,14 @@ typedef struct {
  * taken as one file, because the open panel takes one archive as readily as a
  * folder of them; a path that is not there reads as one file that is not a
  * chart. NULL only when the read cannot be allocated. No handle needed: this
- * runs before anything is open. */
+ * runs before anything is open. Caller-owned: free with lookout_scan_free. */
 lookout_scan *lookout_scan_read(const char *path);
 /* lookout_scan_read for a chart set that arrives as ONE .zip. Only the
  * archive's central directory is read; nothing is inflated and nothing is
- * written. */
+ * written. Caller-owned: free with lookout_scan_free. */
 lookout_scan *lookout_scan_zip_read(const char *path);
 void          lookout_scan_free(lookout_scan *s);
+/* The three calls below are borrowed from the read. */
 const lookout_scan_summary *lookout_scan_found(const lookout_scan *s);
 /* The baked archives and the source cells, by name. */
 const lookout_chart_file *const *lookout_scan_cells(const lookout_scan *s, size_t *out_n);
@@ -264,8 +276,9 @@ const lookout_chart_file *const *lookout_scan_raster(const lookout_scan *s, size
  * them. The chart is composed as the UNION of the sets switched on, so
  * switching one off keeps the set installed and drops it from the chart.
  *
- * Every mutator returns whether anything changed. What a change MEANS is the
- * shell's: reopen the chart, redraw a settings page.
+ * The calls that add, remove, rescan or switch a set return whether anything
+ * changed. What a change MEANS is the shell's: reopen the chart, redraw a
+ * settings page.
  *
  * The metadata scans run in the background, ONE AT A TIME: two scans of a big
  * library compete for the same disk, and the full NOAA library is 7,217
@@ -329,7 +342,8 @@ typedef struct {
  * after an import does not ask to be imported again. Pass NULL or "" when the
  * shell prepares nowhere.
  *
- * NULL only when the model cannot be allocated. */
+ * NULL only when the model cannot be allocated. Caller-owned: free with
+ * lookout_chart_sets_close. */
 lookout_chart_sets *lookout_chart_sets_open(lookout_store *store,
                                             const char *prepared_root);
 void                lookout_chart_sets_close(lookout_chart_sets *s);
@@ -338,8 +352,8 @@ void                lookout_chart_sets_close(lookout_chart_sets *s);
  * that is the only change this announces on its own. */
 int lookout_chart_sets_changed(lookout_chart_sets *s);
 
-/* The list, in the order added. Borrowed until the next call that changes it.
- * A background scan landing does not end the borrow: the list read before it
+/* The list, in the order added. Borrowed until the list changes. A
+ * background scan landing does not end the borrow: the list read before it
  * stays readable, and the next read returns the new scan. */
 const lookout_chart_set *const *lookout_chart_sets_all(lookout_chart_sets *s, size_t *out_n);
 
@@ -349,8 +363,7 @@ const lookout_chart_set *const *lookout_chart_sets_all(lookout_chart_sets *s, si
  * once. `lookout_chart_file` is the scan read's own row.
  *
  * Empty until the scan has read the folder, which lookout_chart_sets_changed
- * announces. Borrowed until the next call that changes the list, as
- * lookout_chart_sets_all is. */
+ * announces. Borrowed until the list changes. */
 const lookout_chart_file *const *lookout_chart_set_files(lookout_chart_sets *s,
                                                          const char *path,
                                                          size_t *out_n);
@@ -362,8 +375,8 @@ const lookout_chart_file *const *lookout_chart_set_files(lookout_chart_sets *s,
  * refused is left out. This is the list to hand
  * lookout_bake_start, and its length is the set's `to_prepare`.
  *
- * Empty until the scan has read the folder. Borrowed until the next call that
- * changes the list, as lookout_chart_sets_all is. */
+ * Empty until the scan has read the folder. Borrowed until the list
+ * changes. */
 const lookout_chart_file *const *lookout_chart_set_to_prepare(lookout_chart_sets *s,
                                                               const char *path,
                                                               size_t *out_n);
@@ -418,9 +431,8 @@ int lookout_chart_sets_is_on(lookout_chart_sets *s, const char *path);
 int lookout_chart_sets_set_managed(lookout_chart_sets *s, const char *path, int managed);
 
 /* Every chart the switched-on sets hold, sorted and deduplicated: the UNION,
- * the list lookout_open_charts_in_window reads. Two sets may overlap, and
- * the same cell twice would be composed twice. Borrowed until the next call
- * that changes the list. */
+ * the list lookout_open_charts_in_window reads. Two sets may overlap, and a
+ * cell in both is listed once. Borrowed until the list changes. */
 const char *const *lookout_chart_sets_compose(lookout_chart_sets *s, size_t *out_n);
 
 
@@ -463,8 +475,8 @@ void lookout_raster_cycle(lookout *h);
  * coverage meets are a choice, and the cycle settles it. So one name describes
  * one view, not the whole selection.
  *
- * Borrowed: valid until the set list changes. *out_len (NULL to ignore)
- * receives the length. */
+ * Borrowed until the set list changes. *out_len (NULL to ignore) receives
+ * the length. */
 const char *lookout_raster_active_name(lookout *h, size_t *out_len);
 
 /* 1 while the chart is drawing WITHOUT its opaque water and land fills, because
@@ -488,7 +500,7 @@ int lookout_raster_over_chart(lookout *h);
  * Atlantic on does not switch the Pacific on with it.
  *
  * lookout_raster_select(h, -1) turns off what is drawn over THIS view, not
- * every set. Names are borrowed and valid until the set list changes. */
+ * every set. Names are borrowed until the set list changes. */
 const char *lookout_raster_set_name(lookout *h, uint32_t i, size_t *out_len);
 int lookout_raster_set_in_view(lookout *h, uint32_t i);
 int32_t lookout_raster_active_index(lookout *h);
@@ -525,7 +537,7 @@ int lookout_raster_enabled(lookout *h, const char *path);
 /* The name of a set that covers this view, DRAWN OR NOT, or "". Use it to tell
  * the mariner a picture is available here while it is switched off — otherwise
  * a mariner sailing into coverage sees no reason to turn it on, and never
- * learns the raster chart they installed is under them. Borrowed; valid until the
+ * learns the raster chart they installed is under them. Borrowed until the
  * set list changes. */
 const char *lookout_raster_available_name(lookout *h, size_t *out_len);
 
@@ -544,8 +556,8 @@ const char *lookout_raster_available_name(lookout *h, size_t *out_len);
  * This is the ENGINE'S OWN rule, the one it names the sets it draws by, so a
  * shell that groups by anything else disagrees with what the pill then shows.
  *
- * Static storage: valid for the life of the process. *out_len (NULL to ignore)
- * receives the length. NULL for a NULL path. */
+ * Static, or borrowed from the argument `path`. It is NOT NUL-terminated:
+ * read *out_len bytes. NULL for a NULL path. */
 const char *lookout_raster_set_name_for(const char *path, size_t *out_len);
 
 /* Hide the vector chart WHERE A PICTURE COVERS IT. The chart stays everywhere
@@ -733,7 +745,7 @@ void lookout_chart_link_pictures_cancel(lookout *h);
  *    "busy":true|false}   // a resolve is in flight
  *
  * One document on purpose: borrowed per-field getters could be freed under the
- * caller by a resolve finishing on a fetch thread. Free it with
+ * caller by a resolve finishing on a fetch thread. Caller-owned: free with
  * lookout_string_free. NULL only when it could not be built.
  *
  * `attribution` is a condition of service on public tile hosts, not a
@@ -782,9 +794,11 @@ typedef struct {
 } lookout_link_state;
 
 /* NULL only when the read cannot be allocated. Poll after
- * lookout_chart_links_changed, which has ONE consumer. */
+ * lookout_chart_links_changed, which has ONE consumer. Caller-owned: free
+ * with lookout_links_free. */
 lookout_links *lookout_links_read(lookout *h);
 void           lookout_links_free(lookout_links *r);
+/* This call and the next are borrowed from the read. */
 const lookout_link_state *lookout_links_state(const lookout_links *r);
 /* The links the mariner added, in the order they were added. */
 const lookout_chart_link *const *lookout_links_all(const lookout_links *r, size_t *out_n);
@@ -794,9 +808,11 @@ const lookout_chart_link *const *lookout_links_all(const lookout_links *r, size_
  * NOAA publishes an ENC for every United States waterway at no cost, and a
  * product catalog (ENCProdCat.xml) listing each cell with its edition, its
  * download url and the Coast Guard district it is filed under. lookout reads
- * that catalog, decides which cells a region needs, fetches them, writes
- * the exchange sets into a directory, and prepares what arrived. See
- * THE PREPARE below.
+ * that catalog, decides which cells a region needs, and fetches them as
+ * NOAA publishes them: a district's bundle zip when more than a handful of
+ * its cells are needed, else one zip for each cell. It unpacks each zip into
+ * a directory as it arrives, so the directory is an ordinary ENC_ROOT, and
+ * prepares what arrived. See THE PREPARE below.
  *
  * The shell keeps the one job it has for chart links: fetch the bytes at a
  * url. The service has a handle of its own, lookout_noaa, opened with
@@ -845,23 +861,8 @@ typedef struct {
 #define LOOKOUT_NOAA_PANEL_ALASKA  1
 #define LOOKOUT_NOAA_PANEL_HAWAII  2
 
-/* ---- S-52 colours ------------------------------------------------------ */
-
-/* One colour from the palette the engine draws with, by S-52 token (DEPVS,
- * DEPMS, DEPMD, DEPDW, LANDA, ...) and scheme (tile57_scheme: 0 day, 1 dusk,
- * 2 night), as RGBA in 0..1. Returns 1 and fills `out` when the token is in
- * the table, else 0.
- *
- * The core adds BAND1 to BAND6, a ramp for the six usage bands from overview
- * to berthing. In the day scheme BAND2 to BAND5 equal DEPDW, DEPMD, DEPMS and
- * DEPVS. Dusk and night have a ramp of their own, dimmest at BAND1.
- *
- * For a shell drawing its own chart legend. Reading the engine's own table
- * keeps a legend and the chart from drifting apart. */
-int lookout_s52_color(const char *token, uint32_t scheme, float out[4]);
-
 /* The regions, and how many. `out` may be NULL to ask only for the count. The
- * table is static and valid for the life of the process. */
+ * table is static. */
 size_t lookout_noaa_regions(const lookout_noaa_region **out);
 
 /* One box of a region's coverage, in degrees. */
@@ -980,7 +981,7 @@ typedef struct lookout_noaa lookout_noaa;
  * under the prepared root the sets were opened with. With no store, the
  * update check is daily and its time is kept for the life of the handle. The
  * service reads its cached catalog on the first lookout_noaa_refresh. NULL
- * when it cannot be allocated. */
+ * when it cannot be allocated. Caller-owned: free with lookout_noaa_close. */
 lookout_noaa *lookout_noaa_open(lookout_store *store, lookout_chart_sets *sets);
 
 /* Cancel the download and free the handle. The shell stops calling
@@ -1265,7 +1266,7 @@ typedef struct {
 } lookout_setup_state;
 
 /* A setup handle, down, with no facts noted. NULL when it cannot be
- * allocated. */
+ * allocated. Caller-owned: free with lookout_setup_free. */
 lookout_setup *lookout_setup_new(void);
 void lookout_setup_free(lookout_setup *s);
 

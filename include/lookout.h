@@ -341,6 +341,21 @@ int lookout_font_covers(const uint8_t *bytes, size_t len, uint32_t codepoint);
  * first, finds a Latin face it did not need, and leaves the syllabics blank. */
 int lookout_label_font_covers(uint32_t codepoint);
 
+/* ---- S-52 colours ------------------------------------------------------ */
+
+/* One colour from the palette the engine draws with, by S-52 token (DEPVS,
+ * DEPMS, DEPMD, DEPDW, LANDA, ...) and scheme (tile57_scheme: 0 day, 1 dusk,
+ * 2 night), as RGBA in 0..1. Returns 1 and fills `out` when the token is in
+ * the table, else 0.
+ *
+ * The core adds BAND1 to BAND6, a ramp for the six usage bands from overview
+ * to berthing. In the day scheme BAND2 to BAND5 equal DEPDW, DEPMD, DEPMS and
+ * DEPVS. Dusk and night have a ramp of their own, dimmest at BAND1.
+ *
+ * For a shell drawing its own chart legend. Reading the engine's own table
+ * keeps a legend and the chart from drifting apart. */
+int lookout_s52_color(const char *token, uint32_t scheme, float out[4]);
+
 /* ---- build + render ---------------------------------------------------- */
 int lookout_build(lookout *h);                 /* force (re)tessellation */
 int lookout_render(lookout *h);                /* one window frame (1=drawn, 0=headless) */

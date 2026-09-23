@@ -2146,8 +2146,8 @@ export fn Java_org_beetlebug_lookout_Lookout_nRasterSetNameFor(env: [*c]j.JNIEnv
     var n: usize = 0;
     const name = lookout_raster_set_name_for(@ptrCast(c), &n) orelse
         return env_(env).NewStringUTF.?(env, "");
-    // The engine hands out ptr+len over static storage; NewStringUTF needs a
-    // NUL terminator.
+    // The engine hands out ptr+len, static or inside `c`, with no NUL
+    // terminator. NewStringUTF needs one.
     var buf: [128]u8 = undefined;
     if (n >= buf.len) return env_(env).NewStringUTF.?(env, "");
     @memcpy(buf[0..n], name[0..n]);

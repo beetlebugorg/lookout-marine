@@ -300,6 +300,21 @@ export fn lookout_label_font_covers(codepoint: u32) c_int {
     return @intFromBool(covers);
 }
 
+/// One S-52 colour by token, for a shell drawing its own chart legend.
+/// See lookout.h.
+export fn lookout_s52_color(token: ?[*:0]const u8, scheme: u32, out: ?*[4]f32) c_int {
+    const t = token orelse return 0;
+    const dst = out orelse return 0;
+    // The header declares a uint32_t. translate-c tags tile57_scheme signed under
+    // the MSVC ABI and unsigned under Apple's, so the cast is what makes the
+    // call build for both. A value past the signed range is refused here
+    // rather than narrowed into a scheme that exists.
+    if (scheme > std.math.maxInt(i32)) return 0;
+    const rgba = lk.s52Color(std.mem.span(t), @intCast(scheme)) orelse return 0;
+    dst.* = rgba;
+    return 1;
+}
+
 /// True when a face can draw a codepoint. See lookout.h.
 export fn lookout_font_covers(bytes: ?[*]const u8, len: usize, codepoint: u32) c_int {
     const b = bytes orelse return 0;

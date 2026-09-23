@@ -1,6 +1,6 @@
 //! The chart-library half of the C ABI (see include/lookout-library.h): the
-//! installed charts, the scan, the raster underlay, the host-supplied style
-//! the charts reached by link.
+//! installed charts, the scan, the raster underlay, the charts reached by
+//! link and the NOAA region table.
 
 const std = @import("std");
 
@@ -256,7 +256,7 @@ export fn lookout_raster_cycle(h: ?*lookout) void {
     l.cycleRaster();
 }
 
-/// The active set's name (borrowed, valid until the next raster call), or "".
+/// The active set's name, or "". Borrowed until the set list changes.
 export fn lookout_raster_active_name(h: ?*lookout, out_len: ?*usize) [*:0]const u8 {
     const l = locked(h);
     defer l.apiUnlock();
@@ -415,21 +415,6 @@ const noaa_regions = blk: {
 };
 
 /// The regions and how many. See lookout-library.h.
-/// One S-52 colour by token, for a shell drawing its own chart legend.
-/// See lookout-library.h.
-export fn lookout_s52_color(token: ?[*:0]const u8, scheme: u32, out: ?*[4]f32) c_int {
-    const t = token orelse return 0;
-    const dst = out orelse return 0;
-    // The header takes a uint32_t. translate-c tags tile57_scheme signed under
-    // the MSVC ABI and unsigned under Apple's, so the cast is what makes the
-    // call build for both. A value past the signed range is refused here
-    // rather than narrowed into a scheme that exists.
-    if (scheme > std.math.maxInt(i32)) return 0;
-    const rgba = lk.s52Color(std.mem.span(t), @intCast(scheme)) orelse return 0;
-    dst.* = rgba;
-    return 1;
-}
-
 export fn lookout_noaa_regions(out: ?*[*]const lookout_noaa_region) usize {
     if (out) |o| o.* = &noaa_regions;
     return noaa_regions.len;
