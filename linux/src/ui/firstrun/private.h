@@ -117,11 +117,6 @@ void     lk_first_run_set_order (LkFirstRun *self, const char *regions,
 gboolean lk_first_run_order (LkFirstRun *self, const char **out_regions,
                             guint32 *out_charts, guint64 *out_bytes);
 
-/* TRUE once a bake has been seen running. Without it an import that has yet to
- * start reads the same as one that has finished, because both report no
- * work. */
-gboolean lk_first_run_saw_bake (LkFirstRun *self);
-void     lk_first_run_note_bake (LkFirstRun *self);
 
 /* Whether the depth step has been shown in this run. FALSE the first time it
  * is asked, and TRUE from then on, so the step seeds the boat and the unit

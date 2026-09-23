@@ -18,8 +18,6 @@ struct _LkFirstRun {
    * because finishing setup put it away for the run. */
   gboolean saw_charts;
 
-  /* A bake has been seen running. */
-  gboolean saw_bake;
   gboolean asked_depths;
 
   /* The NOAA download as it was ordered. */
@@ -341,13 +339,6 @@ lk_first_run_order (LkFirstRun *self, const char **out_regions, guint32 *out_cha
 }
 
 gboolean
-lk_first_run_saw_bake (LkFirstRun *self)
-{
-  g_return_val_if_fail (LK_IS_FIRST_RUN (self), FALSE);
-  return self->saw_bake;
-}
-
-gboolean
 lk_first_run_asked_depths (LkFirstRun *self)
 {
   g_return_val_if_fail (LK_IS_FIRST_RUN (self), TRUE);
@@ -356,17 +347,6 @@ lk_first_run_asked_depths (LkFirstRun *self)
     return TRUE;
   self->asked_depths = TRUE;
   return FALSE;
-}
-
-void
-lk_first_run_note_bake (LkFirstRun *self)
-{
-  g_return_if_fail (LK_IS_FIRST_RUN (self));
-
-  if (self->saw_bake)
-    return;
-  self->saw_bake = TRUE;
-  g_signal_emit (self, signals[SIGNAL_CHANGED], 0);
 }
 
 /* ---- GObject ------------------------------------------------------------- */

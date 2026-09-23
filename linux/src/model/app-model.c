@@ -14,9 +14,8 @@ struct _LkAppModel {
   LkChartController *controller;
   LkChartLinks      *chart_links;
   LkNoaa            *noaa;
-  /* The directory a NOAA download is filling, and the `run` of the download
-   * this model follows to its end, or 0 when it follows none. */
-  char              *noaa_dest;
+  /* The `run` of the download this model follows to its end, or 0 when it
+   * follows none. */
   guint32            noaa_run;
   /* The last order, which Retry repeats: the regions and `again` of a
    * download, or an update when `noaa_order_ids` is NULL. */
@@ -28,9 +27,11 @@ struct _LkAppModel {
    * it when `noaa_alert_retry` is set. */
   gboolean           noaa_alert;
   gboolean           noaa_alert_retry;
-  /* A download that ended while a scan or a bake was running. The open is
-   * refused then, and this is what brings it back. */
-  gboolean           noaa_open_held;
+  /* The core's prepare, drawn as a bake. */
+  gboolean           noaa_preparing;
+  gint64             noaa_prepare_started_us;
+  LkBakeProgress     noaa_prepare_progress;
+  LkBakeBand         noaa_prepare_bands[6];
   /* How many managed charts NOAA has reissued, and whether a check is waiting
    * on the catalog it reads that from. */
   guint32            noaa_outdated;
@@ -177,7 +178,9 @@ lk_app_model_get_property (GObject *object, guint prop_id, GValue *value, GParam
     case PROP_SCALE_DENOMINATOR:   g_value_set_double (value, self->scale_denominator); break;
     case PROP_SCHEME:              g_value_set_int (value, self->scheme); break;
     case PROP_BUILDING:            g_value_set_boolean (value, self->building); break;
-    case PROP_BAKING:              g_value_set_boolean (value, self->baking); break;
+    case PROP_BAKING:
+      g_value_set_boolean (value, self->baking || self->noaa_preparing);
+      break;
     case PROP_REMOVING:
       g_value_set_boolean (value, self->removing || self->noaa_removing);
       break;
@@ -219,7 +222,6 @@ lk_app_model_dispose (GObject *object)
   g_clear_pointer (&self->pending_open_source, g_free);
   g_clear_pointer (&self->bake_name, g_free);
   g_clear_pointer (&self->remove_name, g_free);
-  g_clear_pointer (&self->noaa_dest, g_free);
   g_clear_pointer (&self->noaa_order_ids, g_free);
   g_clear_pointer (&self->recents, g_strfreev);
   g_clear_pointer (&self->overlay_pin, g_free);
@@ -309,7 +311,6 @@ lk_app_model_class_init (LkAppModelClass *klass)
 static void lk_app_model_remove_progress (const LkBakeProgress *progress,
                                           gpointer user_data);
 static void lk_app_model_noaa_note_all (LkAppModel *self);
-static void lk_app_model_prepare_noaa_download (LkAppModel *self);
 static void lk_app_model_raise_error (LkAppModel *self, const char *message,
                                       gboolean noaa, gboolean retry);
 static void lk_app_model_order_noaa_download (LkAppModel *self, const char *ids,
@@ -386,38 +387,6 @@ lk_app_model_start_import (LkAppModel *self)
   lk_app_model_open_prepared (self, dir, pictures);
 }
 
-/* Finish a set the core states still has files to prepare.
- *
- * The core picks it: a managed set, switched on and scanned, with a file to
- * prepare and no stop recorded since it last changed. The bake reads the
- * core's own list, so this needs no scan of its own. */
-static void
-lk_app_model_resume_prepare (LkAppModel *self)
-{
-  const char *path;
-
-  if (self->baking || self->scanning || self->is_opening)
-    return;
-
-  path = lk_chart_sets_resume (self->chart_sets);
-  if (path == NULL)
-    return;
-
-  g_free (self->pending_open_source);
-  self->pending_open_source = g_strdup (path);
-  self->bake = lk_chart_bake_start (path, self->chart_sets,
-                                    lk_app_model_bake_progress,
-                                    lk_app_model_bake_done, self);
-  if (self->bake == NULL)
-    {
-      g_clear_pointer (&self->pending_open_source, g_free);
-      return;
-    }
-  self->baking = TRUE;
-  lk_app_model_set_open_error (self, NULL);
-  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_BAKING]);
-}
-
 static void
 lk_app_model_sets_changed (GObject *owner)
 {
@@ -430,7 +399,6 @@ lk_app_model_sets_changed (GObject *owner)
   lk_app_model_check_noaa_updates (self);
   lk_app_model_emit_chart_sets_changed (self);
   lk_app_model_start_import (self);
-  lk_app_model_resume_prepare (self);
 }
 
 /* Reopen the chart from the current library. If every set is off, close
@@ -477,11 +445,8 @@ lk_app_model_noaa_follow (LkAppModel *self)
     return;
   self->noaa_run = 0;
 
-  if (state->outcome == LOOKOUT_NOAA_FINISHED ||
-      (state->outcome == LOOKOUT_NOAA_CANCELLED && state->done > 0))
-    lk_app_model_prepare_noaa_download (self);
-  else if (state->outcome == LOOKOUT_NOAA_FAILED ||
-           (state->outcome == LOOKOUT_NOAA_REFUSED && state->retry))
+  if (state->outcome == LOOKOUT_NOAA_FAILED ||
+      (state->outcome == LOOKOUT_NOAA_REFUSED && state->retry))
     lk_app_model_raise_error (self,
                               state->error[0] != '\0'
                                   ? state->error
@@ -528,16 +493,52 @@ lk_app_model_noaa_alert (LkAppModel *self, gboolean *out_retry)
 /* Follow the download or update just ordered. `before` is the `run` read
  * before the order. */
 static void
-lk_app_model_noaa_ordered (LkAppModel *self, const char *dest, guint32 before)
+lk_app_model_noaa_ordered (LkAppModel *self, guint32 before)
 {
   guint32 run = lk_noaa_state (self->noaa)->run;
 
   if (run == before)
     return;
-  g_free (self->noaa_dest);
-  self->noaa_dest = g_strdup (dest);
   self->noaa_run = run;
   lk_app_model_noaa_follow (self);
+}
+
+/* The core's prepare of a download, drawn as a bake. Its end opens the chart
+ * on what it made. */
+static void
+lk_app_model_noaa_prepare (LkAppModel *self, const lookout_noaa_state *state)
+{
+  gboolean was = self->noaa_preparing;
+
+  if (!state->preparing && !was)
+    return;
+  self->noaa_preparing = state->preparing != 0;
+  if (self->noaa_preparing && !was)
+    self->noaa_prepare_started_us = g_get_monotonic_time ();
+
+  self->noaa_prepare_progress = (LkBakeProgress) {
+    .kind = LK_BAKE_IMPORT,
+    .done = (int) state->prepared,
+    .total = (int) state->to_prepare,
+    /* The download directory's name, as the shell's bake titled it. */
+    .name = "NOAA",
+    .elapsed = (g_get_monotonic_time () - self->noaa_prepare_started_us) / 1e6,
+    .bands = self->noaa_prepare_bands,
+  };
+  for (guint i = 0; i < G_N_ELEMENTS (state->band_total); i++)
+    if (state->band_total[i] > 0)
+      self->noaa_prepare_bands[self->noaa_prepare_progress.n_bands++] = (LkBakeBand) {
+        .band = (int) i + 1,
+        .total = state->band_total[i],
+        .done = state->band_done[i],
+      };
+  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_BAKING]);
+
+  if (was && !self->noaa_preparing)
+    {
+      lk_app_model_recompose_library (self);
+      lk_app_model_emit_chart_sets_changed (self);
+    }
 }
 
 static void
@@ -559,6 +560,7 @@ lk_app_model_noaa_changed (LkNoaa *noaa, gpointer user_data)
       lk_app_model_noaa_reorder (self);
     }
   lk_app_model_noaa_follow (self);
+  lk_app_model_noaa_prepare (self, state);
 
   /* A removal an apply started. Each change notifies, so the panel moves. */
   if (state->removing || self->noaa_removing)
@@ -574,29 +576,6 @@ lk_app_model_noaa_changed (LkNoaa *noaa, gpointer user_data)
     }
 }
 
-/* Prepare what the download left. Refused while a scan or a bake runs, so the
- * ask is held and made again when that work ends.
- *
- * Without the retry the cells stayed raw: the set is noted inside the scan,
- * so a folder that was never scanned is on no list, and
- * lk_app_model_initial_source cannot resume it at the next launch either. */
-static void
-lk_app_model_prepare_noaa_download (LkAppModel *self)
-{
-  if (self->noaa_dest == NULL)
-    return;
-  if (self->scanning || self->baking)
-    {
-      self->noaa_open_held = TRUE;
-      return;
-    }
-
-  self->noaa_open_held = FALSE;
-  lk_app_model_open_chart_directory (self, self->noaa_dest);
-  /* The downloader's own set. The picker states what THIS holds. */
-  lk_chart_sets_set_managed (self->chart_sets, self->noaa_dest, TRUE);
-}
-
 static void
 lk_app_model_init (LkAppModel *self)
 {
@@ -610,13 +589,6 @@ lk_app_model_init (LkAppModel *self)
    * says so through this callback. */
   self->chart_sets = lk_chart_sets_new (lk_app_model_sets_changed, G_OBJECT (self));
 
-  /* The downloader's own set. A library downloaded before the mark existed is
-   * on the list without it, and the NOAA picker states what this set holds. */
-  {
-    g_autofree char *dest = lk_noaa_download_dir ();
-
-    lk_chart_sets_set_managed (self->chart_sets, dest, TRUE);
-  }
   self->overscale = 1.0;
   self->pick_results = g_ptr_array_new_with_free_func ((GDestroyNotify) lk_pick_decoded_free);
 
@@ -718,7 +690,7 @@ lk_app_model_apply_noaa_pick (LkAppModel *self)
       lk_app_model_recompose_library (self);
       lk_app_model_emit_chart_sets_changed (self);
     }
-  lk_app_model_noaa_ordered (self, dest, before);
+  lk_app_model_noaa_ordered (self, before);
 }
 
 static void
@@ -743,7 +715,7 @@ lk_app_model_order_noaa_download (LkAppModel *self, const char *ids, gboolean ag
   self->noaa_order_again = again;
   before = lk_noaa_state (self->noaa)->run;
   lk_noaa_download (self->noaa, ids, dest, again);
-  lk_app_model_noaa_ordered (self, dest, before);
+  lk_app_model_noaa_ordered (self, before);
 }
 
 /* ---- opening charts ----------------------------------------------------- */
@@ -1066,7 +1038,7 @@ lk_app_model_download_noaa_updates (LkAppModel *self)
   g_clear_pointer (&self->noaa_order_ids, g_free);
   before = lk_noaa_state (self->noaa)->run;
   lk_noaa_update (self->noaa, dest);
-  lk_app_model_noaa_ordered (self, dest, before);
+  lk_app_model_noaa_ordered (self, before);
 }
 
 static void
@@ -1097,8 +1069,6 @@ lk_app_model_bake_done (const char *out_dir, guint baked, gpointer user_data)
        * next bake's open. */
       g_clear_pointer (&self->pending_open_source, g_free);
       lk_app_model_set_open_error (self, "Those charts could not be prepared.");
-      if (self->noaa_open_held && !self->scanning)
-        lk_app_model_prepare_noaa_download (self);
       return;
     }
 
@@ -1111,10 +1081,6 @@ lk_app_model_bake_done (const char *out_dir, guint baked, gpointer user_data)
       g_autofree char *src = g_steal_pointer (&self->pending_open_source);
       lk_app_model_open_prepared (self, src, FALSE);
     }
-
-  /* And the download that ended while this bake ran. */
-  if (self->noaa_open_held && !self->scanning && !self->baking)
-    lk_app_model_prepare_noaa_download (self);
 }
 
 typedef struct {
@@ -1158,11 +1124,6 @@ lk_scan_done_idle (gpointer data)
   lk_app_model_start_import (self);
 
 out:
-  /* A download that ended while this scan ran asked to be prepared and was
-   * refused. The scan is over, so ask again. */
-  if (self->noaa_open_held && !self->scanning && !self->baking)
-    lk_app_model_prepare_noaa_download (self);
-
   g_object_unref (job->model);
   g_free (job->dir);
   g_free (job);
@@ -1954,7 +1915,11 @@ double      lk_app_model_get_overscale (LkAppModel *self)         { return self-
 double      lk_app_model_get_scale_denominator (LkAppModel *self) { return self->scale_denominator; }
 int         lk_app_model_get_scheme (LkAppModel *self)            { return self->scheme; }
 gboolean    lk_app_model_get_building (LkAppModel *self)          { return self->building; }
-gboolean    lk_app_model_get_baking (LkAppModel *self)            { return self->baking; }
+gboolean
+lk_app_model_get_baking (LkAppModel *self)
+{
+  return self->baking || self->noaa_preparing;
+}
 
 gboolean
 lk_app_model_get_chart_is_empty (LkAppModel *self)
@@ -1986,7 +1951,9 @@ const LkBakeProgress *
 lk_app_model_get_bake_progress (LkAppModel *self)
 {
   g_return_val_if_fail (LK_IS_APP_MODEL (self), NULL);
-  return self->baking ? &self->bake_progress : NULL;
+  if (self->baking)
+    return &self->bake_progress;
+  return self->noaa_preparing ? &self->noaa_prepare_progress : NULL;
 }
 
 const LkBakeProgress *
@@ -2002,8 +1969,13 @@ void
 lk_app_model_cancel_bake (LkAppModel *self)
 {
   g_return_if_fail (LK_IS_APP_MODEL (self));
+  /* The core prepares a download, so its stop is the NOAA service's. */
   if (self->bake == NULL)
-    return;
+    {
+      if (self->noaa_preparing)
+        lk_noaa_cancel (self->noaa);
+      return;
+    }
   /* The stop is recorded so the resume leaves this set alone until a scan
      finds a file to prepare that was not there when it stopped. */
   if (self->pending_open_source != NULL)

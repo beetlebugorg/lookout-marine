@@ -272,12 +272,6 @@ lk_chart_sets_note_cancel (LkChartSets *self, const char *path)
   lookout_chart_sets_note_cancel (self->sets, path);
 }
 
-const char *
-lk_chart_sets_resume (LkChartSets *self)
-{
-  return self != NULL ? lookout_chart_sets_resume (self->sets) : NULL;
-}
-
 gboolean
 lk_chart_sets_rescan (LkChartSets *self, const char *path)
 {

@@ -269,7 +269,7 @@ lk_first_run_importing_sync (GtkWidget *step)
   lk_importing_remember (self, bake);
   work = bake != NULL ? bake : (self->have_last ? &self->last : NULL);
   running = bake != NULL;
-  downloading = noaa->outcome == LOOKOUT_NOAA_RUNNING;
+  downloading = noaa->phase == LOOKOUT_NOAA_DOWNLOADING;
   self->from_noaa = lk_first_run_order (self->flow->flow, &regions, &ordered, &bytes);
 
   /* What is being prepared, and what it cost. NOAA states both; a folder the
@@ -314,11 +314,9 @@ lk_first_run_importing_sync (GtkWidget *step)
 
   lk_work_panel_show (self->work, NULL, NULL, percent, left, done, total);
 
-  /* The phases.
-   *
-   * With no bake reported yet, the two import phases have either not started
-   * or already finished. Whether a bake has been SEEN tells them apart. */
-  pending = work == NULL && !lk_first_run_saw_bake (self->flow->flow);
+  /* The phases. The step keeps the last bake it saw, so no work means the
+   * import phases have not started. */
+  pending = work == NULL;
   finding = running && bake->total == 0;
   importing = running && !finding;
 

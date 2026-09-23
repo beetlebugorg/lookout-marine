@@ -184,8 +184,7 @@ lk_first_run_import_finished (LkFirstRunFlow *self)
 {
   const lookout_noaa_state *noaa = lk_noaa_state (lk_app_model_get_noaa (self->model));
 
-  return lk_first_run_saw_bake (self->flow) &&
-         noaa->outcome != LOOKOUT_NOAA_RUNNING &&
+  return noaa->outcome != LOOKOUT_NOAA_RUNNING &&
          !lk_app_model_get_baking (self->model) &&
          !lk_app_model_get_nothing_to_draw (self->model);
 }
@@ -193,18 +192,18 @@ lk_first_run_import_finished (LkFirstRunFlow *self)
 /* The import ended with no chart.
  *
  * A download that failed every cell, a Stop pressed before the first one
- * arrived, and a pick the core refused all reach this. The bake starts only
- * once a cell arrives, so the step waits on a bake that never runs: Continue
- * stays dead, Stop has no job, and Back is hidden. */
+ * arrived, and a pick the core refused all reach this. A finished download
+ * has prepared charts, and a folder waits on its scan. */
 gboolean
 lk_first_run_import_stalled (LkFirstRunFlow *self)
 {
   const lookout_noaa_state *noaa = lk_noaa_state (lk_app_model_get_noaa (self->model));
 
   return lk_first_run_step (self->flow) == LK_FIRST_RUN_IMPORTING &&
-         !lk_first_run_saw_bake (self->flow) &&
          noaa->outcome != LOOKOUT_NOAA_RUNNING &&
+         noaa->outcome != LOOKOUT_NOAA_FINISHED &&
          !lk_app_model_get_baking (self->model) &&
+         !lk_app_model_library_scanning (self->model) &&
          lk_app_model_get_nothing_to_draw (self->model);
 }
 
@@ -412,9 +411,6 @@ lk_first_run_app_moved (GtkWidget *page)
     return;
   if (!lk_first_run_showing (self->flow))
     return;
-
-  if (lk_app_model_get_baking (self->model))
-    lk_first_run_note_bake (self->flow);
 
   /* The import step reads the bake several times a second. It updates the
    * step on the card rather than building a new one. */

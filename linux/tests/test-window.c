@@ -287,19 +287,11 @@ test_an_import_with_no_chart_can_go_back (void)
 
   /* No download, no bake, and an empty library. */
   g_assert_true (lk_app_model_get_nothing_to_draw (model));
-  g_assert_false (lk_first_run_saw_bake (run));
   g_assert_true (lk_first_run_import_stalled (&flow));
 
   /* Back leaves for the coverage step, where the water is still picked. */
   lk_first_run_back (run);
   g_assert_cmpint (lk_first_run_step (run), ==, LK_FIRST_RUN_COVERAGE);
-
-  /* A bake seen is an import doing its job, so the step waits as it did. */
-  g_setenv ("LOOKOUT_FIRST_RUN", "importing", TRUE);
-  lk_first_run_begin (run);
-  g_unsetenv ("LOOKOUT_FIRST_RUN");
-  lk_first_run_note_bake (run);
-  g_assert_false (lk_first_run_import_stalled (&flow));
 }
 
 /* A download that failed ends the import, and Back leaves the step. The

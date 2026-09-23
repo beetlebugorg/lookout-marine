@@ -123,9 +123,6 @@ void lk_chart_sets_note_bake (LkChartSets *self, const char *path,
 /* Record that the mariner stopped this set's prepare. */
 void lk_chart_sets_note_cancel (LkChartSets *self, const char *path);
 
-/* The set whose prepare to finish, or NULL. Borrowed. */
-const char *lk_chart_sets_resume (LkChartSets *self);
-
 /* Read a set's folder again. Charts deleted out of a prepared directory, or
  * written into one after the scan read it, are invisible to the composed chart
  * until this runs. FALSE when the set is not on the list. */

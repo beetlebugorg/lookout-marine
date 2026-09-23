@@ -439,28 +439,6 @@ test_the_core_lists_what_a_set_has_to_prepare (void)
   lk_chart_sets_free (sets);
 }
 
-/* A set whose prepare the mariner stopped is left alone by the resume. */
-static void
-test_a_cancelled_bake_stops_the_resume (void)
-{
-  g_autoptr (GObject) owner = g_object_new (G_TYPE_OBJECT, NULL);
-  LkChartSets *sets = lk_chart_sets_new (noop_changed, owner);
-  g_autofree char *dir = g_build_filename (home, "stopped", NULL);
-
-  place_cell (dir, "US4TE3W0.000");
-  g_assert_true (lk_chart_sets_note (sets, dir));
-  g_assert_true (lk_chart_sets_set_managed (sets, dir, TRUE));
-  g_assert_true (wait_for_to_prepare (sets, dir, 1));
-
-  /* The core picks a managed, switched-on, scanned set with work left. */
-  g_assert_cmpstr (lk_chart_sets_resume (sets), ==, dir);
-
-  lk_chart_sets_note_cancel (sets, dir);
-  g_assert_null (lk_chart_sets_resume (sets));
-
-  lk_chart_sets_free (sets);
-}
-
 /* A folder the app did not download is never deleted through an apply. */
 static void
 test_only_the_downloads_directory_is_given_back (void)
@@ -498,8 +476,6 @@ main (int argc, char *argv[])
                    test_a_set_with_prepared_charts_is_derived);
   g_test_add_func ("/library/the-core-lists-what-a-set-has-to-prepare",
                    test_the_core_lists_what_a_set_has_to_prepare);
-  g_test_add_func ("/library/a-cancelled-bake-stops-the-resume",
-                   test_a_cancelled_bake_stops_the_resume);
   g_test_add_func ("/library/a-removal-reports-every-step",
                    test_a_removal_reports_every_step);
   g_test_add_func ("/library/the-whole-download-goes", test_the_whole_download_goes);
