@@ -920,6 +920,10 @@ typedef struct {
  * 2 night), as RGBA in 0..1. Returns 1 and fills `out` when the token is in
  * the table, else 0.
  *
+ * The core adds BAND1 to BAND6, a ramp for the six usage bands from overview
+ * to berthing. In the day scheme BAND2 to BAND5 equal DEPDW, DEPMD, DEPMS and
+ * DEPVS. Dusk and night have a ramp of their own, dimmest at BAND1.
+ *
  * For a shell drawing its own chart legend. Reading the engine's own table
  * keeps a legend and the chart from drifting apart. */
 int lookout_s52_color(const char *token, uint32_t scheme, float out[4]);

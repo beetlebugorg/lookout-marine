@@ -53,6 +53,7 @@ pub const noaa = @import("noaa.zig");
 pub const bakejob = @import("bakejob.zig");
 pub const bake_rules = @import("shell/bake.zig");
 const frame_rules = @import("shell/frame.zig"); // when the next frame is
+const palette = @import("shell/palette.zig"); // the colours the core adds
 
 const MAX_SCHEMES = 3; // day / dusk / night
 
@@ -70,8 +71,10 @@ fn schemeName(s: Scheme) []const u8 {
 ///
 /// The colortables are baked into tile57 and keyed by token and scheme. A
 /// shell that draws its own depth legend reads them here rather than typing
-/// hex in, so the legend and the chart cannot drift apart.
+/// hex in, so the legend and the chart cannot drift apart. The tokens the core
+/// adds (shell/palette.zig) are looked up first.
 pub fn s52Color(token: []const u8, scheme: Scheme) ?[4]f32 {
+    if (palette.color(token, schemeName(scheme))) |c| return c;
     var ct: [*c]u8 = null;
     var ct_len: usize = 0;
     var err: cc.tile57_error = undefined;
