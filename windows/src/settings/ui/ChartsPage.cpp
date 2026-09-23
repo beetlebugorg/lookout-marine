@@ -1711,29 +1711,29 @@ namespace winrt::LookoutMarine::implementation
             stack.Children().Append(card);
 
             // How often to look for newer editions of the downloaded
-            // charts. The core reads the cadence from the store.
-            static char const *const cadences[] = { "never", "startup", "daily" };
-            char const *raw = lookout_store_text(lk_store_handle(), LOOKOUT_STORE_CHARTSETS,
-                                                 "noaa-update-check");
-            std::string const cadence = raw != nullptr ? raw : "";
+            // charts. The core keeps the cadence.
+            static int const cadences[] = { LOOKOUT_NOAA_CHECK_NEVER, LOOKOUT_NOAA_CHECK_STARTUP,
+                                            LOOKOUT_NOAA_CHECK_DAILY };
+            int const cadence = noaa.UpdateCheck();
             Controls::ComboBox check;
             check.Header(winrt::box_value(L"Check for NOAA chart updates"));
             for (auto label : { L"Never", L"At startup", L"Daily" })
                 check.Items().Append(winrt::box_value(winrt::hstring{ label }));
-            check.SelectedIndex(cadence == "never" ? 0 : cadence == "startup" ? 1 : 2);
+            check.SelectedIndex(cadence == LOOKOUT_NOAA_CHECK_NEVER     ? 0
+                                : cadence == LOOKOUT_NOAA_CHECK_STARTUP ? 1
+                                                                        : 2);
             check.Margin({ 0, 10, 0, 0 });
-            check.SelectionChanged([](auto &&s, auto &&) {
+            check.SelectionChanged([this](auto &&s, auto &&) {
                 int const i = s.template as<Controls::ComboBox>().SelectedIndex();
                 if (i >= 0 && i < 3)
-                    lookout_store_set_text(lk_store_handle(), LOOKOUT_STORE_CHARTSETS,
-                                           "noaa-update-check", cadences[i]);
+                    noaa.SetUpdateCheck(cadences[i]);
             });
             stack.Children().Append(check);
             Controls::TextBlock found;
             found.FontSize(11);
             found.Opacity(0.7);
             found.Text(noaa.checking()   ? winrt::hstring{ L"Checking NOAA for newer editions\x2026" }
-                       : !noaa.checked() ? winrt::hstring{ L"Not checked this session" }
+                       : !noaa.checked() ? winrt::hstring{ L"Not checked yet" }
                        : noaa.outdated() == 0
                            ? winrt::hstring{ L"Every downloaded chart is current" }
                            : winrt::hstring{ lkw::Thousands(noaa.outdated()) +

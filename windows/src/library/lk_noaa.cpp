@@ -32,13 +32,12 @@ namespace lkw
         return true;
     }
 
-    // A check that uses a catalog read under a day old ends at once.
+    // A check the core has recorded is counted once.
     bool NoaaService::TakeCheckEnd()
     {
-        if (!checking_ || state_.phase == LOOKOUT_NOAA_READING)
+        if (state_.update_checking || state_.update_checked_at == counted_at_)
             return false;
-        checking_ = false;
-        checked_ = true;
+        counted_at_ = state_.update_checked_at;
         outdated_ = lookout_noaa_outdated(h_);
         return true;
     }
@@ -100,9 +99,19 @@ namespace lkw
 
     void NoaaService::ConsiderUpdateCheck()
     {
-        if (checked_)
+        if (checked())
             outdated_ = lookout_noaa_outdated(h_);
-        if (!checking_ && lookout_noaa_update_due(h_))
-            checking_ = true;
+        lookout_noaa_update_due(h_);
+    }
+
+    int NoaaService::UpdateCheck() const
+    {
+        return h_ != nullptr ? lookout_noaa_update_check(h_) : LOOKOUT_NOAA_CHECK_DAILY;
+    }
+
+    void NoaaService::SetUpdateCheck(int cadence)
+    {
+        if (h_ != nullptr)
+            lookout_noaa_set_update_check(h_, cadence);
     }
 }

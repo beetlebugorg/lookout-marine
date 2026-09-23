@@ -26,7 +26,7 @@ namespace lkw
         /* True when the state changed and was read. */
         bool Adopt();
         /* Each of these is true once, for the moment it names. */
-        /* The update check's catalog read ended. outdated() holds the count. */
+        /* The core recorded an update check. outdated() holds the count. */
         bool TakeCheckEnd();
         /* The catalog read a retry waits on ended with a catalog. The caller
          * repeats the order. A read that ends with none drops the retry. */
@@ -44,11 +44,14 @@ namespace lkw
         void Retry(std::string const &dest);
 
         /* Start the update check when lookout_noaa_update_due starts one.
-         * After a check has run, the count follows the sets. */
+         * After a check has been recorded, the count follows the sets. */
         void ConsiderUpdateCheck();
-        bool checking() const { return checking_; }
-        bool checked() const { return checked_; }
+        bool checking() const { return state_.update_checking != 0; }
+        bool checked() const { return state_.update_checked_at != 0; }
         uint32_t outdated() const { return outdated_; }
+        /* How often the check runs, as LOOKOUT_NOAA_CHECK_*. */
+        int UpdateCheck() const;
+        void SetUpdateCheck(int cadence);
 
     private:
         lookout_noaa      *h_{ nullptr };
@@ -58,8 +61,8 @@ namespace lkw
         std::string regions_;
         bool        again_{ false };
         bool        retry_waiting_{ false };
-        bool        checking_{ false };
-        bool        checked_{ false };
+        /* The recorded check outdated_ was counted after. */
+        int64_t     counted_at_{ 0 };
         uint32_t    outdated_{ 0 };
     };
 }
