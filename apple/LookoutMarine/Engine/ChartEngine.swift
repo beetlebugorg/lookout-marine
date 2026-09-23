@@ -92,6 +92,8 @@ protocol NoaaEngine: AnyObject {
     /// How many of the downloaded cells NOAA has reissued. 0 until a catalog
     /// has been read from the network.
     func noaaOutdated() -> UInt32
+    /// The region ids an apply of `regionIDs` gives back.
+    func noaaGivesBack(regionIDs: String) -> [String]
     func noaaUpdate(destination: String)
     /// True when an update check is due and has started, or still runs.
     func noaaUpdateDue() -> Bool

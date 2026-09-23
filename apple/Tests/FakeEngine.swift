@@ -193,6 +193,11 @@ final class FakeEngine: RasterEngine, ChartLinkEngine, PluginEngine,
 
     func noaaRegionState(_ regionID: String) -> NoaaRegionState? { noaaRegions[regionID] }
 
+    /// What noaaGivesBack returns.
+    var noaaGiven: [String] = []
+
+    func noaaGivesBack(regionIDs: String) -> [String] { noaaGiven }
+
     func noaaOutdated() -> UInt32 {
         note("noaaOutdated")
         return noaaOutdatedCount

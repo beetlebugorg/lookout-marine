@@ -58,6 +58,9 @@ final class NoaaService: NoaaEngine {
         s.error = withUnsafePointer(to: raw.error) {
             $0.withMemoryRebound(to: CChar.self, capacity: 256) { String(cString: $0) }
         }
+        s.catalogError = withUnsafePointer(to: raw.catalog_error) {
+            $0.withMemoryRebound(to: CChar.self, capacity: 256) { String(cString: $0) }
+        }
         s.outcome = NoaaState.Outcome(rawValue: raw.outcome) ?? .none
         s.run = raw.run
         s.retry = raw.retry != 0
@@ -99,6 +102,17 @@ final class NoaaService: NoaaEngine {
             destination.withCString { dest in
                 lookout_noaa_apply(handle, ids, dest, again ? 1 : 0)
             }
+        }
+    }
+
+    func noaaGivesBack(regionIDs: String) -> [String] {
+        regionIDs.withCString { ids in
+            let n = lookout_noaa_gives_back(handle, ids, nil, 0)
+            var out = [UnsafePointer<CChar>?](repeating: nil, count: n)
+            let got = out.withUnsafeMutableBufferPointer {
+                lookout_noaa_gives_back(handle, ids, $0.baseAddress, n)
+            }
+            return out.prefix(min(got, n)).compactMap { $0.map { String(cString: $0) } }
         }
     }
 

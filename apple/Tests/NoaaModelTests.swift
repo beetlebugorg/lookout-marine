@@ -35,7 +35,7 @@ final class NoaaModelTests: ShellTestCase {
         var s = NoaaState()
         s.phase = .readingCatalog
         s.haveCatalog = true
-        s.error = "could not read NOAA's chart catalog"
+        s.catalogError = "could not read NOAA's chart catalog"
         XCTAssertEqual(s.catalogLine, .reading)
     }
 
@@ -57,7 +57,7 @@ final class NoaaModelTests: ShellTestCase {
         s.haveCatalog = true
         s.catalogCells = 7318
         s.date = "20260915"
-        s.error = "could not read NOAA's chart catalog"
+        s.catalogError = "could not read NOAA's chart catalog"
         XCTAssertEqual(
             s.catalogLine,
             .summaryThenError(summary: "7318 charts published, catalog dated 20260915.",
@@ -67,8 +67,26 @@ final class NoaaModelTests: ShellTestCase {
     func testWithNoCatalogTheErrorIsTheWholeLine() {
         var s = NoaaState()
         s.phase = .ready
-        s.error = "could not read NOAA's chart catalog"
+        s.catalogError = "could not read NOAA's chart catalog"
         XCTAssertEqual(s.catalogLine, .error("could not read NOAA's chart catalog"))
+    }
+
+    /// A download's error is not the catalog's, and stays off the line.
+    func testADownloadsErrorStaysOffTheCatalogLine() {
+        var s = NoaaState()
+        s.phase = .ready
+        s.haveCatalog = true
+        s.catalogCells = 7318
+        s.error = "no catalog yet"
+        XCTAssertEqual(s.catalogLine, .summary("7318 charts published."))
+    }
+
+    /// Apply names the regions the core says it gives back.
+    func testTheRegionsGivenBackAreTheCores() {
+        let (m, fake) = model()
+        fake.noaaGiven = ["d7"]
+        m.toggle("d5")
+        XCTAssertEqual(m.givingBack, ["d7"])
     }
 
     func testNoCatalogAndNoErrorLeavesTheLineBlank() {

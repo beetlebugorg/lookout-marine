@@ -79,6 +79,8 @@ struct NoaaState: Equatable {
     var bytesTotal: UInt64 = 0
     var bytesDone: UInt64 = 0
     var error = ""
+    /// Why the last catalog read failed, apart from the download's error.
+    var catalogError = ""
     var outcome: Outcome = .none
     /// Counts the downloads ordered, refused ones included.
     var run: UInt32 = 0
@@ -117,9 +119,9 @@ struct NoaaState: Equatable {
 
     var catalogLine: CatalogLine {
         if phase == .readingCatalog { return .reading }
-        guard haveCatalog else { return error.isEmpty ? .blank : .error(error) }
-        if error.isEmpty { return .summary(catalogSummary) }
-        return .summaryThenError(summary: catalogSummary, error: error)
+        guard haveCatalog else { return catalogError.isEmpty ? .blank : .error(catalogError) }
+        if catalogError.isEmpty { return .summary(catalogSummary) }
+        return .summaryThenError(summary: catalogSummary, error: catalogError)
     }
 
     /// The catalog in the mariner's words.
@@ -269,10 +271,16 @@ final class NoaaModel {
     private func recost() {
         guard let engine, state.haveCatalog else {
             cost = NoaaCost()
+            givingBack = []
             return
         }
         cost = engine.noaaCost(regionIDs: pickedIDs) ?? NoaaCost()
+        givingBack = engine.noaaGivesBack(regionIDs: pickedIDs)
     }
+
+    /// The region ids an apply of the pick gives back, as the core names
+    /// them: recorded as held, and left out of the pick.
+    private(set) var givingBack: [String] = []
 
     /// Price the pick and each region again. The core reads the cells held
     /// off the chart sets, so a set added by hand counts the same as one this

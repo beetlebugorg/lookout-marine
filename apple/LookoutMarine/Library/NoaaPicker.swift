@@ -123,10 +123,6 @@ struct NoaaPickerSheet: View {
     var close: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
 
-    /// The regions that were fully installed when this opened. Unticking one
-    /// of these is a removal; unticking a region that was never here is a
-    /// mariner changing their mind before pressing Apply.
-    @State private var held: Set<String> = []
     @State private var confirmRemoval = false
     /// True once the ticks have been set from what is installed. A mariner who
     /// holds nothing seeds an empty set, which is not the same as not having
@@ -142,9 +138,9 @@ struct NoaaPickerSheet: View {
         if let close { DispatchQueue.main.async { close() } } else { dismiss() }
     }
 
-    /// The regions being given back: held when this opened, unticked since.
+    /// The regions Apply gives back, as the core names them.
     private var removing: [NoaaRegion] {
-        noaa.regions.filter { held.contains($0.id) && !noaa.picked.contains($0.id) }
+        noaa.regions.filter { noaa.givingBack.contains($0.id) }
     }
     private var adding: Bool { noaa.cost.cells > 0 }
 
@@ -170,7 +166,6 @@ struct NoaaPickerSheet: View {
     /// removal.
     private func startFromInstalled() {
         noaa.pickRecorded()
-        held = noaa.picked
         seeded = true
     }
 
