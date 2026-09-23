@@ -51,7 +51,6 @@ namespace lkw::setup
     inline constexpr double kSeabedH = 210;
 
     void PaintPicked(Button const &b, bool on, bool dark);
-    Windows::Foundation::Point SeabedPoint(double t, double u);
 
     Button RegionPill(std::wstring const &name, std::wstring const &blurb,
                       lkw::RegionHold const &hold, bool on, bool enabled, bool dark);

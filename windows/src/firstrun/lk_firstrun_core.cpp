@@ -131,6 +131,13 @@ namespace lkw
 
     void DepthChoice::Plan() { lookout_depth_plan(draft_m_, clearance_m_, feet_ ? 1 : 0, &plan_); }
 
+    struct ::lookout_depth_preview DepthChoice::Preview() const
+    {
+        struct ::lookout_depth_preview out{};
+        lookout_depth_preview(&plan_, &out);
+        return out;
+    }
+
     // One step of the draft field. The plan holds the draft between one step
     // and the most the step accepts. Zero is the core's starting boat, so the
     // step stops at one press above it.

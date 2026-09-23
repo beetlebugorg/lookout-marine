@@ -71,23 +71,6 @@ namespace lkw
     std::wstring SizeText(uint64_t bytes);
     std::wstring Thousands(uint64_t n);
 
-    // How far out a depth lies across the depth step's illustration, as a
-    // fraction of it, for a picture whose deepest water is `floor`. The slope
-    // is measured in contours rather than metres because the depths span a
-    // dinghy and a ship.
-    double SeabedReach(double depth, double floor);
-
-    // The spot depths the illustration draws: a depth as a multiple of the
-    // safety contour, and how far along its line it stands. Multiples hold a
-    // sounding in place while the mariner works, so it moves only when the
-    // contour steps to the next one the survey draws.
-    struct SeabedSpot
-    {
-        double of_contour;
-        double across;
-    };
-    std::vector<SeabedSpot> SeabedSpots();
-
     // The depth step's two questions, and the four numbers the engine draws
     // with, from the core's depth plan (lookout_depth_plan). The draft and the
     // clearance are held in metres. The plan states them, and the settings,
@@ -108,10 +91,9 @@ namespace lkw
         {
             return { std::begin(plan_.clearances), std::end(plan_.clearances) };
         }
-        // The deepest water the illustration draws, in the unit on screen,
-        // half again past the deep contour so the last shade has water in it.
-        double Floor() const { return plan_.deep_contour * 1.5; }
-        double Reach(double depth) const { return SeabedReach(depth, Floor()); }
+        // The illustration's seabed and soundings, from the core
+        // (lookout_depth_preview).
+        struct ::lookout_depth_preview Preview() const;
 
         void Step(int by);
         // Read a draft the mariner typed, in the unit on screen. False when it

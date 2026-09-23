@@ -6,26 +6,6 @@
 
 namespace lkw
 {
-    double SeabedReach(double depth, double floor)
-    {
-        // Where the shore stands, and how steeply the slope falls away.
-        // Shallow water gets most of the panel, because that is where both
-        // contours fall.
-        constexpr double kShoreAt = 0.14;
-        constexpr double kSlopeK = 2.07;
-        if (floor <= 0)
-            return kShoreAt;
-        double const share = std::max(0.0, std::min(1.0, depth / floor));
-        return kShoreAt + (1 - kShoreAt) * std::pow(share, 1 / kSlopeK);
-    }
-
-    std::vector<SeabedSpot> SeabedSpots()
-    {
-        return { { 0.12, 0.28 }, { 0.30, 0.68 }, { 0.45, 0.14 }, { 0.62, 0.50 },
-                 { 0.80, 0.84 }, { 1.00, 0.32 }, { 1.22, 0.62 }, { 1.48, 0.20 },
-                 { 1.78, 0.44 }, { 2.12, 0.78 }, { 2.50, 0.34 }, { 2.85, 0.58 } };
-    }
-
     bool RegionPicked(std::string const &list, std::string const &id)
     {
         if (id.empty())

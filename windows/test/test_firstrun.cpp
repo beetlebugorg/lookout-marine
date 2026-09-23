@@ -173,24 +173,6 @@ void TestFirstRun()
         LK_EQ(f.Fraction(), 1.0);
     }
 
-    Suite("lk_firstrun: the depth illustration");
-    {
-        /* The shore stands at 0.14, and a depth past the floor reaches the far
-         * edge. */
-        Case("how far out a depth lies");
-        LK_EQ(SeabedReach(0.0, 15.0), 0.14);
-        LK_EQ(SeabedReach(15.0, 15.0), 1.0);
-        LK_EQ(SeabedReach(100.0, 15.0), 1.0);
-        LK_EQ(SeabedReach(5.0, 15.0) > SeabedReach(2.0, 15.0), true);
-        LK_EQ(SeabedReach(5.0, 15.0) < SeabedReach(10.0, 15.0), true);
-
-        Case("the soundings are twelve, and they climb");
-        auto spots = SeabedSpots();
-        LK_EQ(spots.size(), size_t{ 12 });
-        LK_EQ(spots.front().of_contour, 0.12);
-        LK_EQ(spots.back().of_contour, 2.85);
-    }
-
     /* What the primary button can do on the step showing. */
     Suite("lk_firstrun: the regions picked");
     {

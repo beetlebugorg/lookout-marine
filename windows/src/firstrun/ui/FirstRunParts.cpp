@@ -120,15 +120,6 @@ namespace lkw::setup
         }
     }
 
-    // A point on one depth line, `u` of the way across. The wave and the rise
-    // to the right are the same for every line, so the lines never cross and
-    // the bands never pinch.
-    Windows::Foundation::Point SeabedPoint(double t, double u)
-    {
-        double const wave = 0.055 * std::sin(u * 3.14159265358979 * 1.7 + 0.4) + 0.045 * u;
-        return { (float)(u * kSeabedW), (float)(kSeabedH - kSeabedH * t + kSeabedH * wave) };
-    }
-
     // One region as a pill: a capsule the mariner picks, ticked and filled
     // while it is in the pick. The reference draws the districts this way in
     // setup and in the settings picker alike.

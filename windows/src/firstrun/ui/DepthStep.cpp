@@ -466,24 +466,21 @@ namespace winrt::LookoutMarine::implementation
     }
 
     // The seabed: a slope from a shore to deep water, shaded at the derived
-    // contours, with spot depths on it.
+    // contours, with spot depths on it. The core draws it
+    // (lookout_depth_preview) in a unit square, scaled here to the panel.
     //
     // The soundings are the seabed and hold still; the shading is the
-    // mariner's and moves over them. Their depths are read off this slope, so
-    // they change only when the contour steps to the next one the survey
-    // draws. A chart behaves the same way when a boat changes.
+    // mariner's and moves over them. A chart behaves the same way when a boat
+    // changes.
     void MainWindow::FirstRunDrawSeabed()
     {
         if (depth_seabed == nullptr)
             return;
         depth_seabed.Children().Clear();
-        auto const &d = depth_choice;
+        auto const v = depth_choice.Preview();
         uint32_t const scheme = lkw::SchemeOf(controller);
-        auto shade = [scheme](char const *token) {
-            return SolidColorBrush{ lkw::S52(token, scheme) };
-        };
-        auto ink = [](uint8_t alpha) {
-            return SolidColorBrush{ Windows::UI::Color{ alpha, 0, 0, 0 } };
+        auto shade = [scheme](char const *token, uint8_t alpha = 0xFF) {
+            return SolidColorBrush{ lkw::S52(token, scheme, alpha) };
         };
 
         Shapes::Rectangle back;
@@ -492,22 +489,22 @@ namespace winrt::LookoutMarine::implementation
         back.Fill(shade("DEPDW"));
         depth_seabed.Children().Append(back);
 
-        // Every line is the same shape, moved up by its depth, so each band
-        // keeps its share of the panel from edge to edge.
-        auto shoal = [](double t) {
+        // One depth line across the panel, closed along the bottom so it
+        // fills.
+        auto shoal = [&v](int line) {
             Media::PathFigure fig;
             fig.StartPoint({ 0, (float)kSeabedH });
             fig.IsClosed(true);
             fig.IsFilled(true);
-            auto step = [&fig](Windows::Foundation::Point const &p) {
+            auto step = [&fig](float x, float y) {
                 Media::LineSegment seg;
-                seg.Point(p);
+                seg.Point({ x, y });
                 fig.Segments().Append(seg);
             };
-            constexpr int kSteps = 48;
-            for (int i = 0; i <= kSteps; ++i)
-                step(SeabedPoint(t, (double)i / kSteps));
-            step({ (float)kSeabedW, (float)kSeabedH });
+            for (int i = 0; i < LOOKOUT_DEPTH_PREVIEW_POINTS; ++i)
+                step((float)(kSeabedW * i / (LOOKOUT_DEPTH_PREVIEW_POINTS - 1)),
+                     (float)(kSeabedH * v.y[line][i]));
+            step((float)kSeabedW, (float)kSeabedH);
             Media::PathGeometry geo;
             geo.FillRule(Media::FillRule::Nonzero);
             geo.Figures().Append(fig);
@@ -515,43 +512,38 @@ namespace winrt::LookoutMarine::implementation
             p.Data(geo);
             return p;
         };
-
-        constexpr double kShoreAt = 0.14;
-        auto fill = [&](double t, char const *token) {
-            auto p = shoal(t);
+        auto fill = [&](int line, char const *token) {
+            auto p = shoal(line);
             p.Fill(shade(token));
             depth_seabed.Children().Append(p);
         };
-        fill(d.Reach(d.plan().deep_contour), "DEPMD");
-        fill(d.Reach(d.plan().safety_contour), "DEPMS");
-        fill(d.Reach(d.plan().safety_depth), "DEPVS");
-
-        // The safety contour drawn bold, the way S-52 draws the contour a boat
-        // is measured against.
-        auto line = [&](double t, uint8_t alpha, double thick) {
-            auto p = shoal(t);
-            p.Stroke(ink(alpha));
+        auto stroke = [&](int line, char const *token, uint8_t alpha, double thick) {
+            auto p = shoal(line);
+            p.Stroke(shade(token, alpha));
             p.StrokeThickness(thick);
             depth_seabed.Children().Append(p);
         };
-        line(d.Reach(d.plan().safety_contour), 0x73, 1.8);
-        line(d.Reach(d.plan().deep_contour), 0x2E, 0.8);
 
-        fill(kShoreAt, "LANDA");
-        line(kShoreAt, 0x73, 1.0);
+        fill(LOOKOUT_DEPTH_LINE_DEEP_CONTOUR, "DEPMD");
+        fill(LOOKOUT_DEPTH_LINE_SAFETY_CONTOUR, "DEPMS");
+        fill(LOOKOUT_DEPTH_LINE_SAFETY_DEPTH, "DEPVS");
+        // The safety contour drawn bold, the way S-52 draws the contour a boat
+        // is measured against.
+        stroke(LOOKOUT_DEPTH_LINE_SAFETY_CONTOUR, "DEPCN", 0xFF, 1.8);
+        stroke(LOOKOUT_DEPTH_LINE_DEEP_CONTOUR, "DEPCN", 0x99, 0.8);
+        fill(LOOKOUT_DEPTH_LINE_SHORE, "LANDA");
+        stroke(LOOKOUT_DEPTH_LINE_SHORE, "CSTLN", 0xFF, 1.0);
 
         // Spot depths, bold at or shallower than the safety depth. That is
         // what the safety depth does to a chart.
-        for (auto const &spot : lkw::SeabedSpots())
+        for (int i = 0; i < LOOKOUT_DEPTH_PREVIEW_SPOTS; ++i)
         {
-            double const depth = d.plan().safety_contour * spot.of_contour;
-            auto const at = SeabedPoint(d.Reach(depth), spot.across);
-            bool const bold = depth <= d.plan().safety_depth;
-            auto label = Line(std::to_wstring((long long)std::ceil(depth)), 10.5, bold);
-            label.Foreground(ink(bold ? 0xCC : 0x8C));
+            bool const bold = v.spot_bold[i] != 0;
+            auto label = Line(std::to_wstring(v.spot_sounding[i]), 10.5, bold);
+            label.Foreground(shade(bold ? "SNDG2" : "SNDG1"));
             label.TextWrapping(TextWrapping::NoWrap);
-            Controls::Canvas::SetLeft(label, at.X - 6);
-            Controls::Canvas::SetTop(label, at.Y - 7);
+            Controls::Canvas::SetLeft(label, kSeabedW * v.spot_x[i] - 6);
+            Controls::Canvas::SetTop(label, kSeabedH * v.spot_y[i] - 7);
             depth_seabed.Children().Append(label);
         }
     }
