@@ -4,6 +4,7 @@
 #include "lk_alerts.h"
 #include "lk_bake.h"
 #include "lk_chart_sets.h"
+#include "lk_noaa.h"
 #include "lk_coastline.h"
 #include "lk_firstrun.h"
 #include "lk_controller.h"
@@ -548,11 +549,9 @@ namespace winrt::LookoutMarine::implementation
                                  const char *url, int allow_file);
         static void HttpCancelThunk(void *user, unsigned long long req_id);
 
-        // The NOAA service, open for the life of the window with its own
-        // fetcher (library/ui/ChartLinks.cpp). noaa_state is the state as of
-        // the last lookout_noaa_changed that returned 1.
-        lookout_noaa *noaa{ nullptr };
-        lookout_noaa_state noaa_state{};
+        // The NOAA service (library/lk_noaa.h), open for the life of the
+        // window with its own fetcher (library/ui/ChartLinks.cpp).
+        lkw::NoaaService noaa;
         std::atomic<bool> noaa_wake_posted{ false };
         winrt::Microsoft::UI::Dispatching::DispatcherQueue noaa_queue{ nullptr };
         void NoaaOpen();
@@ -570,18 +569,6 @@ namespace winrt::LookoutMarine::implementation
         /* Start the update check when lookout_noaa_update_due starts one.
          * Called when a chart opens and when the chart sets change. */
         void NoaaConsiderUpdateCheck();
-        /* The update check's catalog read is running, the check has run at
-         * least once this launch, and the count of reissued cells. */
-        bool noaa_checking{ false };
-        bool noaa_checked{ false };
-        uint32_t noaa_outdated{ 0 };
-        /* The run number of the download being followed, 0 for none, and
-         * the order to repeat on Retry. */
-        uint32_t noaa_watch_run{ 0 };
-        std::string noaa_watch_regions;
-        bool noaa_watch_again{ false };
-        /* Retry is waiting for the catalog read it started. */
-        bool noaa_retry_waiting{ false };
         fire_and_forget ShowNoaaError(winrt::hstring msg, bool retry);
 
         std::vector<ChartLink> chart_links;

@@ -37,7 +37,7 @@ namespace winrt::LookoutMarine::implementation
         noaa_region_id.clear();
         noaa_picked_seeded = false;
         noaa_held_at_open.clear();
-        lookout_noaa_refresh(noaa);
+        lookout_noaa_refresh(noaa.handle());
         first_run.Restart();
         SetupAct(LOOKOUT_SETUP_BEGIN_PICKER, LOOKOUT_SETUP_STEP_COVERAGE);
         FirstRunRender();
@@ -49,36 +49,20 @@ namespace winrt::LookoutMarine::implementation
     // state only when lookout_noaa_changed returns 1.
     void MainWindow::NoaaChanged()
     {
-        if (noaa == nullptr)
-            return;
-        bool const changed = lookout_noaa_changed(noaa) != 0;
-        if (changed)
-            lookout_noaa_poll(noaa, &noaa_state);
-        lookout_noaa_state const &st = noaa_state;
-
-        // The update check ends with its catalog read. A check that uses a
-        // read under a day old ends at once.
-        if (noaa_checking && st.phase != LOOKOUT_NOAA_READING)
-        {
-            noaa_checking = false;
-            noaa_checked = true;
-            noaa_outdated = lookout_noaa_outdated(noaa);
+        bool const changed = noaa.Adopt();
+        lookout_noaa_state const &st = noaa.state();
+        // The update check ends with its catalog read, which may have ended
+        // before this call.
+        if (noaa.TakeCheckEnd())
             RefreshChartsPageOnChange();
-        }
         if (!changed)
             return;
-
-        // Retry of an order refused with no catalog, once the catalog read it
-        // started has ended. A read that ended with no catalog clears the
-        // retry, so a later read does not repeat the order.
-        if (noaa_retry_waiting && st.phase != LOOKOUT_NOAA_READING)
+        // A retry waiting on the catalog read it started.
+        if (noaa.TakeRetry())
         {
-            noaa_retry_waiting = false;
-            if (st.have_catalog)
-            {
-                NoaaDownload(noaa_watch_regions, noaa_watch_again);
-                return;
-            }
+            noaa.Retry(lkw::NoaaDownloadDir());
+            NoaaChanged();
+            return;
         }
 
         // The delete behind an apply, for the removal panel. When it ends the
@@ -104,10 +88,8 @@ namespace winrt::LookoutMarine::implementation
         // ends. A run that prepared no chart ends the Preparing step when
         // setup is up. Otherwise a failure, and a refusal that a retry can
         // clear, show an error.
-        bool const ended = st.outcome != LOOKOUT_NOAA_NONE && st.outcome != LOOKOUT_NOAA_RUNNING;
-        if (noaa_watch_run != 0 && st.run == noaa_watch_run && ended)
+        if (noaa.TakeEnd())
         {
-            noaa_watch_run = 0;
             if (st.outcome == LOOKOUT_NOAA_FINISHED ||
                 (st.outcome == LOOKOUT_NOAA_CANCELLED && st.done > 0))
             {
@@ -127,33 +109,17 @@ namespace winrt::LookoutMarine::implementation
         PollNoaaPane();
     }
 
-    // Order a download of `regions` into the download set, and follow the
-    // run it starts. The run number moves by one for each order.
+    // Order a download of `regions` into the download set, or an update when
+    // `regions` is empty, and follow the run it starts.
     void MainWindow::NoaaDownload(std::string const &regions, bool again)
     {
-        if (noaa == nullptr)
-            return;
-        std::string const dest = lkw::NoaaDownloadDir();
-        std::error_code ec;
-        std::filesystem::create_directories(dest, ec);
-        noaa_watch_regions = regions;
-        noaa_watch_again = again;
-        noaa_retry_waiting = false;
-        noaa_watch_run = noaa_state.run + 1;
-        if (regions.empty())
-            lookout_noaa_update(noaa, dest.c_str());
-        else
-            lookout_noaa_download(noaa, regions.c_str(), dest.c_str(), again ? 1 : 0);
+        noaa.Order(regions, again, lkw::NoaaDownloadDir());
         NoaaChanged();
     }
 
     void MainWindow::NoaaConsiderUpdateCheck()
     {
-        if (noaa_checked)
-            noaa_outdated = lookout_noaa_outdated(noaa);
-        if (noaa_checking || !lookout_noaa_update_due(noaa))
-            return;
-        noaa_checking = true;
+        noaa.ConsiderUpdateCheck();
         NoaaChanged();
     }
 
@@ -171,13 +137,8 @@ namespace winrt::LookoutMarine::implementation
         dialog.CloseButtonText(L"OK");
         if (co_await dialog.ShowAsync() != Controls::ContentDialogResult::Primary)
             co_return;
-        if (noaa_state.have_catalog)
-            NoaaDownload(noaa_watch_regions, noaa_watch_again);
-        else
-        {
-            noaa_retry_waiting = true;
-            lookout_noaa_refresh(noaa);
-        }
+        noaa.Retry(lkw::NoaaDownloadDir());
+        NoaaChanged();
     }
 
     // Whether the setup clock has anything to watch, and the timer started or
@@ -210,18 +171,18 @@ namespace winrt::LookoutMarine::implementation
         PollChartSets();
 
         lkw::FirstRunLive live;
-        live.downloading = noaa_state.phase == LOOKOUT_NOAA_DOWNLOADING;
-        live.fetched     = noaa_state.done;
-        live.expected    = noaa_state.total;
+        live.downloading = noaa.state().phase == LOOKOUT_NOAA_DOWNLOADING;
+        live.fetched     = noaa.state().done;
+        live.expected    = noaa.state().total;
 
         // The core's prepare of the download, by usage band, coarse first.
-        live.baking = noaa_state.preparing != 0;
-        live.found  = noaa_state.to_prepare;
-        live.baked  = noaa_state.prepared;
+        live.baking = noaa.state().preparing != 0;
+        live.found  = noaa.state().to_prepare;
+        live.baked  = noaa.state().prepared;
         for (int b = 0; b < 6; ++b)
-            if (noaa_state.band_total[b] > 0)
+            if (noaa.state().band_total[b] > 0)
                 live.bands.push_back({ b + 1, lkw::FirstRunBandName(b + 1),
-                                       noaa_state.band_done[b], noaa_state.band_total[b] });
+                                       noaa.state().band_done[b], noaa.state().band_total[b] });
 
         first_run.Observe(live);
         SetupNote();
@@ -263,7 +224,7 @@ namespace winrt::LookoutMarine::implementation
             return false;
         uint32_t cells = 0, held = 0;
         uint64_t bytes = 0, held_bytes = 0;
-        if (!lookout_noaa_cost(noaa, noaa_region_id.c_str(), &cells, &bytes, &held,
+        if (!lookout_noaa_cost(noaa.handle(), noaa_region_id.c_str(), &cells, &bytes, &held,
                                      &held_bytes))
             return false;
         return cells == 0 && held > 0;
@@ -325,7 +286,7 @@ namespace winrt::LookoutMarine::implementation
         // gives back the unticked water and downloads the rest.
         uint32_t cells = 0;
         if (!noaa_region_id.empty())
-            lookout_noaa_cost(noaa, noaa_region_id.c_str(), &cells, nullptr, nullptr, nullptr);
+            lookout_noaa_cost(noaa.handle(), noaa_region_id.c_str(), &cells, nullptr, nullptr, nullptr);
         if (cells > 0)
         {
             FirstRunPrimary();
@@ -359,12 +320,7 @@ namespace winrt::LookoutMarine::implementation
         if (!gone.empty())
             CloseChartHandle();
 
-        std::string const dest = lkw::NoaaDownloadDir();
-        noaa_watch_regions = picked;
-        noaa_watch_again = again;
-        noaa_retry_waiting = false;
-        noaa_watch_run = picked.empty() ? 0 : noaa_state.run + 1;
-        uint32_t const moved = lookout_noaa_apply(noaa, picked.c_str(), dest.c_str(), again ? 1 : 0);
+        uint32_t const moved = noaa.Apply(picked, again, lkw::NoaaDownloadDir());
         if (moved > 0)
         {
             removal_job = std::make_shared<lkw::RemovalJob>();
@@ -395,7 +351,7 @@ namespace winrt::LookoutMarine::implementation
     // out: they move every tick and the step states them from its own poll.
     std::string MainWindow::NoaaCatalogSignature()
     {
-        lookout_noaa_state const &st = noaa_state;
+        lookout_noaa_state const &st = noaa.state();
         return std::to_string(st.phase) + "|" + std::to_string(st.have_catalog) + "|" +
                std::to_string(st.catalog_cells) + "|" + st.date + "|" + st.error;
     }
@@ -413,7 +369,7 @@ namespace winrt::LookoutMarine::implementation
         for (size_t i = 0; i < n && regions != nullptr; ++i)
         {
             lookout_noaa_region_info info{};
-            if (!lookout_noaa_region_state(noaa, regions[i].id, &info) || info.cells == 0)
+            if (!lookout_noaa_region_state(noaa.handle(), regions[i].id, &info) || info.cells == 0)
                 continue;
             noaa_region_hold.push_back(
                 { regions[i].id, lkw::RegionHold{ info.cells - info.held, info.held } });

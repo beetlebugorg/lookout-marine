@@ -534,9 +534,9 @@ namespace winrt::LookoutMarine::implementation
         lkw::BakeProgress p;
         p.kind = lkw::WorkKind::Importing;
         p.name = "NOAA";
-        p.done = noaa_state.prepared;
-        p.total = noaa_state.to_prepare;
-        p.running = noaa_state.preparing != 0;
+        p.done = noaa.state().prepared;
+        p.total = noaa.state().to_prepare;
+        p.running = noaa.state().preparing != 0;
         return p;
     }
 
@@ -548,7 +548,7 @@ namespace winrt::LookoutMarine::implementation
         {
             if (ChartsPageStructure() != charts_page_sig)
                 RefreshChartsPageOnChange();
-            else if (bake_pane_bar != nullptr && noaa_state.preparing)
+            else if (bake_pane_bar != nullptr && noaa.state().preparing)
             {
                 auto const p = PrepareProgress();
                 bake_pane_bar.IsIndeterminate(p.total == 0);
@@ -559,7 +559,7 @@ namespace winrt::LookoutMarine::implementation
         }
         if (noaa_pane_count == nullptr || controller == nullptr)
             return;
-        lookout_noaa_state const &nst = noaa_state;
+        lookout_noaa_state const &nst = noaa.state();
         if (nst.phase != 3)
         {
             // The transfer ended. The section goes, and the sets it landed in
@@ -601,13 +601,13 @@ namespace winrt::LookoutMarine::implementation
         // The sections that come and go with work, and the row an empty list
         // stands in for.
         s += sets.Rows().empty() ? "empty" : "sets";
-        s += bake_job != nullptr || noaa_state.preparing ? "|baking" : "|idle";
+        s += bake_job != nullptr || noaa.state().preparing ? "|baking" : "|idle";
         // The removal line comes and goes with the job that feeds it.
         s += removal_job != nullptr ? "|removing" : "|kept";
         // The update check's line and the Update button follow its result.
-        s += "|" + std::to_string(noaa_checking) + std::to_string(noaa_checked) + "|" +
-             std::to_string(noaa_outdated);
-        s += noaa_state.phase == LOOKOUT_NOAA_DOWNLOADING ? "|downloading" : "|quiet";
+        s += "|" + std::to_string(noaa.checking()) + std::to_string(noaa.checked()) + "|" +
+             std::to_string(noaa.outdated());
+        s += noaa.state().phase == LOOKOUT_NOAA_DOWNLOADING ? "|downloading" : "|quiet";
         return s;
     }
 
@@ -1133,21 +1133,21 @@ namespace winrt::LookoutMarine::implementation
 
                 // What NOAA reissued since the download, on the set the
                 // update writes into. Disabled while other chart work runs.
-                if (set.managed && noaa_outdated > 0)
+                if (set.managed && noaa.outdated() > 0)
                 {
                     Controls::StackPanel upd;
                     upd.Orientation(Controls::Orientation::Horizontal);
                     upd.Spacing(8);
                     upd.Margin({ 30, 0, 0, 0 });
                     Controls::TextBlock newer;
-                    newer.Text(lkw::Thousands(noaa_outdated) + L" charts have newer editions");
+                    newer.Text(lkw::Thousands(noaa.outdated()) + L" charts have newer editions");
                     newer.FontSize(12);
                     newer.Foreground(lkw::Brush(lkw::chrome::Accent(DarkChrome())));
                     newer.VerticalAlignment(VerticalAlignment::Center);
                     upd.Children().Append(newer);
                     Controls::Button go;
                     go.Content(winrt::box_value(L"Update"));
-                    go.IsEnabled(noaa_state.phase != LOOKOUT_NOAA_DOWNLOADING &&
+                    go.IsEnabled(noaa.state().phase != LOOKOUT_NOAA_DOWNLOADING &&
                                  bake_job == nullptr);
                     go.Click([this](auto &&, auto &&) {
                         NoaaDownload({}, false);
@@ -1403,7 +1403,7 @@ namespace winrt::LookoutMarine::implementation
         // ---- Downloading from NOAA, while a transfer runs -----------------
         // Where it was started. This window stands over the chart, so a
         // transfer begun here otherwise runs behind it.
-        if (noaa_state.phase == LOOKOUT_NOAA_DOWNLOADING)
+        if (noaa.state().phase == LOOKOUT_NOAA_DOWNLOADING)
         {
             Header(stack, L"Downloading from NOAA");
             Controls::Grid line;
@@ -1420,7 +1420,7 @@ namespace winrt::LookoutMarine::implementation
             Controls::Button stop;
             stop.Content(winrt::box_value(L"Cancel"));
             stop.Click([this](auto &&, auto &&) {
-                lookout_noaa_cancel(noaa);
+                lookout_noaa_cancel(noaa.handle());
                 BuildSettingsPage();
             });
             Controls::Grid::SetColumn(stop, 1);
@@ -1442,7 +1442,7 @@ namespace winrt::LookoutMarine::implementation
         // The bake, for the same reason. Its own panel is over the chart,
         // behind this window. The core's prepare of a NOAA download shows
         // here the same way.
-        if (bake_job != nullptr || noaa_state.preparing)
+        if (bake_job != nullptr || noaa.state().preparing)
         {
             auto p = PrepareProgress();
             Header(stack, winrt::to_hstring(p.Title()).c_str());
@@ -1479,7 +1479,7 @@ namespace winrt::LookoutMarine::implementation
                 if (bake_job == nullptr)
                 {
                     // The core records a stop of its own prepare.
-                    lookout_noaa_cancel(noaa);
+                    lookout_noaa_cancel(noaa.handle());
                     return;
                 }
                 // The mariner stopped it. The core skips this set on resume until a
@@ -1574,9 +1574,9 @@ namespace winrt::LookoutMarine::implementation
             // When NOAA's catalog was last read, which is what the prices
             // in the picker are built from.
             std::wstring checked;
-            if (noaa_state.checked_at != 0)
+            if (noaa.state().checked_at != 0)
             {
-                std::time_t at = (std::time_t)noaa_state.checked_at;
+                std::time_t at = (std::time_t)noaa.state().checked_at;
                 std::tm when{};
                 std::tm today{};
                 std::time_t now = std::time(nullptr);
@@ -1590,23 +1590,23 @@ namespace winrt::LookoutMarine::implementation
                 }
             }
 
-            Controls::Button noaa;
-            noaa.Content(face(L"\uE753", L"Get charts from NOAA…",
+            Controls::Button noaa_row;
+            noaa_row.Content(face(L"\uE753", L"Get charts from NOAA…",
                               L"Pick the waters you sail. Lookout downloads the cells "
                               L"and prepares them. Free.",
                               checked));
-            noaa.HorizontalAlignment(HorizontalAlignment::Stretch);
-            noaa.HorizontalContentAlignment(HorizontalAlignment::Stretch);
-            lkw::FlatFills(noaa, dark);
-            noaa.BorderThickness({ 0, 0, 0, 0 });
-            noaa.Padding({ 0, 6, 0, 6 });
-            noaa.IsEnabled(!working && noaa_pane_count == nullptr);
-            Automation::AutomationProperties::SetName(noaa, L"Get charts from NOAA");
+            noaa_row.HorizontalAlignment(HorizontalAlignment::Stretch);
+            noaa_row.HorizontalContentAlignment(HorizontalAlignment::Stretch);
+            lkw::FlatFills(noaa_row, dark);
+            noaa_row.BorderThickness({ 0, 0, 0, 0 });
+            noaa_row.Padding({ 0, 6, 0, 6 });
+            noaa_row.IsEnabled(!working && noaa_pane_count == nullptr);
+            Automation::AutomationProperties::SetName(noaa_row, L"Get charts from NOAA");
             // Hand it to the next tick. ShowNoaaPicker closes the settings
             // window, and closing the window that owns this button from
             // inside its own Click handler destroys the button while the
             // handler is still running.
-            noaa.Click([this](auto &&, auto &&) {
+            noaa_row.Click([this](auto &&, auto &&) {
                 DispatcherQueue().TryEnqueue([this] { ShowNoaaPicker(); });
             });
 
@@ -1647,7 +1647,7 @@ namespace winrt::LookoutMarine::implementation
             divider.Background(lkw::Brush(lkw::chrome::Rule(dark)));
             divider.Margin({ 0, 2, 0, 2 });
             Controls::StackPanel rows;
-            rows.Children().Append(noaa);
+            rows.Children().Append(noaa_row);
             rows.Children().Append(divider);
             rows.Children().Append(disk);
             auto card = Card(dark);
@@ -1676,11 +1676,11 @@ namespace winrt::LookoutMarine::implementation
             Controls::TextBlock found;
             found.FontSize(11);
             found.Opacity(0.7);
-            found.Text(noaa_checking   ? winrt::hstring{ L"Checking NOAA for newer editions\x2026" }
-                       : !noaa_checked ? winrt::hstring{ L"Not checked this session" }
-                       : noaa_outdated == 0
+            found.Text(noaa.checking()   ? winrt::hstring{ L"Checking NOAA for newer editions\x2026" }
+                       : !noaa.checked() ? winrt::hstring{ L"Not checked this session" }
+                       : noaa.outdated() == 0
                            ? winrt::hstring{ L"Every downloaded chart is current" }
-                           : winrt::hstring{ lkw::Thousands(noaa_outdated) +
+                           : winrt::hstring{ lkw::Thousands(noaa.outdated()) +
                                              L" charts have newer editions" });
             stack.Children().Append(found);
         }

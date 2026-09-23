@@ -117,11 +117,11 @@ namespace winrt::LookoutMarine::implementation
             // The catalog's boxes, or the region's rough extent until the
             // catalog is in. What downloads is the catalog's either way.
             std::vector<lookout_noaa_box> boxes;
-            size_t const have = lookout_noaa_region_coverage(noaa, r.id, nullptr, 0);
+            size_t const have = lookout_noaa_region_coverage(noaa.handle(), r.id, nullptr, 0);
             if (have > 0)
             {
                 boxes.resize(have);
-                lookout_noaa_region_coverage(noaa, r.id, boxes.data(), have);
+                lookout_noaa_region_coverage(noaa.handle(), r.id, boxes.data(), have);
             }
             else
             {
@@ -195,7 +195,7 @@ namespace winrt::LookoutMarine::implementation
         if (coastline_.empty())
             return;
 
-        lookout_noaa_state const &st = noaa_state;
+        lookout_noaa_state const &st = noaa.state();
         bool const enabled = st.have_catalog != 0;
 
         // The lower 48, with Alaska and Hawaii inset. One view cannot hold all
@@ -263,7 +263,7 @@ namespace winrt::LookoutMarine::implementation
             return;
         }
 
-        lookout_noaa_state const &st = noaa_state;
+        lookout_noaa_state const &st = noaa.state();
 
         // Ask for the catalog here rather than trusting whoever opened the
         // chart to have asked. This step is reached from a launch with no
@@ -274,7 +274,7 @@ namespace winrt::LookoutMarine::implementation
         if (!st.have_catalog && st.phase != 1 && !noaa_catalog_asked)
         {
             noaa_catalog_asked = true;
-            lookout_noaa_refresh(noaa);
+            lookout_noaa_refresh(noaa.handle());
         }
         if (st.have_catalog)
             noaa_catalog_asked = false; // a later failure may ask again
@@ -345,7 +345,7 @@ namespace winrt::LookoutMarine::implementation
                 again.Content(box_value(L"Try Again"));
                 again.Click([this](auto &&, auto &&) {
                     noaa_catalog_asked = true;
-                    lookout_noaa_refresh(noaa);
+                    lookout_noaa_refresh(noaa.handle());
                     FirstRunRender();
                 });
                 failed.Children().Append(again);

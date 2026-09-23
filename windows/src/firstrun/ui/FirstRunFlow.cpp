@@ -116,18 +116,18 @@ namespace winrt::LookoutMarine::implementation
         if (setup == nullptr)
             return;
         lookout_setup_facts f{};
-        f.catalog_ready = noaa_state.have_catalog;
+        f.catalog_ready = noaa.state().have_catalog;
         f.picked = !noaa_region_id.empty();
         f.on_link = lk_controller_chart_link_selected(controller) != 0;
         f.nothing_to_draw = setup_nothing_to_draw;
         f.has_charts = !sets.Compose().empty() || !raster_paths.empty();
-        f.work_running = bake_job != nullptr || noaa_state.preparing || !pending_set.empty();
-        f.downloading = noaa_state.phase == LOOKOUT_NOAA_DOWNLOADING;
+        f.work_running = bake_job != nullptr || noaa.state().preparing || !pending_set.empty();
+        f.downloading = noaa.state().phase == LOOKOUT_NOAA_DOWNLOADING;
         f.chart_open = lk_controller_is_open(controller) && chart_has_cells;
-        f.noaa_outcome = noaa_state.outcome;
-        f.noaa_run = noaa_state.run;
+        f.noaa_outcome = noaa.state().outcome;
+        f.noaa_run = noaa.state().run;
         if (!noaa_region_id.empty())
-            lookout_noaa_cost(noaa, noaa_region_id.c_str(), &f.pick_charts, &f.pick_bytes,
+            lookout_noaa_cost(noaa.handle(), noaa_region_id.c_str(), &f.pick_charts, &f.pick_bytes,
                               nullptr, nullptr);
         lookout_setup_note(setup, &f);
         lookout_setup_state s{};
@@ -331,7 +331,7 @@ namespace winrt::LookoutMarine::implementation
             // the mariner is watching.
             uint32_t cells = 0;
             uint64_t bytes = 0;
-            lookout_noaa_cost(noaa, noaa_region_id.c_str(), &cells, &bytes,
+            lookout_noaa_cost(noaa.handle(), noaa_region_id.c_str(), &cells, &bytes,
                                     nullptr, nullptr);
 
             lkw::FirstRunOrder order;
@@ -561,10 +561,10 @@ namespace winrt::LookoutMarine::implementation
                 // holds: charts to fetch, water to give back, or neither.
                 uint32_t cells = 0;
                 if (!noaa_region_id.empty())
-                    lookout_noaa_cost(noaa, noaa_region_id.c_str(), &cells, nullptr,
+                    lookout_noaa_cost(noaa.handle(), noaa_region_id.c_str(), &cells, nullptr,
                                             nullptr, nullptr);
                 FirstRunPrimaryBtn().IsEnabled(
-                    lkw::ApplyEnabled(noaa_state.have_catalog != 0, cells, removing.size()));
+                    lkw::ApplyEnabled(noaa.state().have_catalog != 0, cells, removing.size()));
                 // Water wholly here has nothing to add and nothing to give
                 // back, and a mariner repairing a damaged download or taking
                 // the edition NOAA reissued still needs a way to fetch it.
@@ -591,12 +591,12 @@ namespace winrt::LookoutMarine::implementation
         // footer bar covered it.
         {
             lkw::FirstRun::Footnotes f;
-            f.have_catalog = noaa_state.have_catalog != 0;
+            f.have_catalog = noaa.state().have_catalog != 0;
             f.have_charts = chart_has_cells;
             f.credit = std::wstring{ ScaleBarCredit().Text() };
             f.removing = NoaaRegionNames(removing);
             if (first_run.step() == lkw::FirstRunStep::Coverage && !noaa_region_id.empty())
-                lookout_noaa_cost(noaa, noaa_region_id.c_str(), &f.cells,
+                lookout_noaa_cost(noaa.handle(), noaa_region_id.c_str(), &f.cells,
                                         &f.bytes, &f.held, &f.held_bytes);
             std::wstring const note = first_run.Footnote(f);
             FirstRunFootnote().Text(winrt::hstring{ note });

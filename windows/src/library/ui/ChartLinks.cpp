@@ -488,7 +488,7 @@ namespace winrt::LookoutMarine::implementation
         auto *self = static_cast<MainWindow *>(user);
         QueueGet(g_noaa_pool, req_id, url, allow_file,
                  [self, req_id](void const *bytes, size_t len, int status, int done) {
-                     lookout_noaa_http_respond_chunk(self->noaa, req_id, bytes, len, status,
+                     lookout_noaa_http_respond_chunk(self->noaa.handle(), req_id, bytes, len, status,
                                                          done);
                  });
     }
@@ -519,27 +519,22 @@ namespace winrt::LookoutMarine::implementation
     // chart sets, with its own fetcher.
     void MainWindow::NoaaOpen()
     {
-        noaa = lookout_noaa_open(lk_store_handle(), sets.Model());
-        if (noaa == nullptr)
-            return;
         noaa_queue = DispatcherQueue();
         g_noaa_pool.Start(4);
-        lookout_noaa_set_http_provider(noaa, &MainWindow::NoaaGetThunk,
-                                           &MainWindow::NoaaCancelThunk,
-                                           &MainWindow::NoaaWakeThunk, this);
+        if (!noaa.Open(lk_store_handle(), sets.Model(), &MainWindow::NoaaGetThunk,
+                       &MainWindow::NoaaCancelThunk, &MainWindow::NoaaWakeThunk, this))
+            g_noaa_pool.Stop();
     }
 
     // Before the chart sets close. The fetches still queued get status 0,
     // then the fetcher is cleared and the service closed.
     void MainWindow::NoaaClose()
     {
-        if (noaa == nullptr)
+        if (noaa.handle() == nullptr)
             return;
         for (uint64_t id : g_noaa_pool.Stop())
-            lookout_noaa_http_respond_chunk(noaa, id, nullptr, 0, 0, 1);
-        lookout_noaa_set_http_provider(noaa, nullptr, nullptr, nullptr, nullptr);
-        lookout_noaa_close(noaa);
-        noaa = nullptr;
+            lookout_noaa_http_respond_chunk(noaa.handle(), id, nullptr, 0, 0, 1);
+        noaa.Close();
     }
 
     // Install the fetcher on the handle just opened, hand lookout the shell's

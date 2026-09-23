@@ -49,7 +49,7 @@ namespace winrt::LookoutMarine::implementation
         {
             body.Children().Append(WarningPanel(
                 L"No charts arrived",
-                winrt::to_hstring(noaa_state.error[0] != 0 ? noaa_state.error
+                winrt::to_hstring(noaa.state().error[0] != 0 ? noaa.state().error
                                                                 : "No charts arrived.")
                     .c_str()));
             return;
@@ -108,7 +108,7 @@ namespace winrt::LookoutMarine::implementation
             stop.Click([this](auto &&, auto &&) {
                 // Stops the transfer or the prepare. A stop during the
                 // prepare is recorded by the core, which does not resume it.
-                lookout_noaa_cancel(noaa);
+                lookout_noaa_cancel(noaa.handle());
                 FirstRunRender();
             });
             phases.Children().Append(stop);
