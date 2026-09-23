@@ -11,8 +11,7 @@
 //! hundred megabytes, so a body is written to its part file as it arrives
 //! (lookout_http_respond_chunk) and never held whole.
 //!
-//! Request ids have bit 63 set so lookout_http_respond can route an answer to
-//! this service or to chartlinks without the two sharing an id space.
+//! Request ids have bit 63 set, apart from the ids chartlinks issues.
 
 const std = @import("std");
 const noaa = @import("noaa.zig");
@@ -205,8 +204,7 @@ pub const Service = struct {
     get: ?clinks.HttpGetFn = null,
     cancel: ?clinks.HttpCancelFn = null,
     /// Called after each response is queued, so a shell with no frame loop
-    /// running knows to adopt it. Null for a service on a chart handle,
-    /// whose frame loop adopts.
+    /// running knows to adopt it. Null for a shell that adopts every frame.
     wake: ?WakeFn = null,
     user: ?*anyopaque = null,
 
@@ -254,9 +252,8 @@ pub const Service = struct {
     stage: std.ArrayList(Stage) = .empty,
 
     /// The cells this device already holds, sorted by name, so picking water
-    /// that is already downloaded fetches what is missing from it. A Handle
-    /// with chart sets reads them off the sets. The chart handle's service is
-    /// handed them by the shell.
+    /// that is already downloaded fetches what is missing from it. The Handle
+    /// reads them off the chart sets.
     held: std.ArrayList([]u8) = .empty,
 
     /// Cells fetched and not yet written, and the thread that writes them.
@@ -1422,19 +1419,16 @@ pub const Box = extern struct {
 
 /// A service and the lock that serializes calls into it.
 ///
-/// lookout_noaa is one of these on its own. A chart handle holds one as well,
-/// for the calls that take a chart handle, and adopts it from its frame loop.
-/// Every method except respondChunk and poll locks `mu`, and the shell's
-/// fetcher is called with it held.
+/// lookout_noaa is one of these. Every method except respondChunk and poll
+/// locks `mu`, and the shell's fetcher is called with it held.
 pub const Handle = struct {
     mu: Lock = .{},
     svc: Service,
     /// The names regionCells last handed out, valid until its next call.
     cells: ?std.heap.ArenaAllocator = null,
     /// Borrowed from the shell, which keeps both open for the life of the
-    /// handle. Either may be null. With sets, the held cells and their
-    /// editions are read off them. Without, the shell names them through
-    /// `have`.
+    /// handle. Either may be null. The held cells and their editions are read
+    /// off the sets. With none, no cell is held.
     store: ?*settings.Store = null,
     sets: ?*chartsets.Sets = null,
 
@@ -1497,12 +1491,6 @@ pub const Handle = struct {
         self.svc.publish();
     }
 
-    pub fn have(self: *Handle, names: []const []const u8) void {
-        self.mu.lock();
-        defer self.mu.unlock();
-        self.svc.setHeld(names);
-    }
-
     /// Null when no catalog is loaded.
     pub fn cost(self: *Handle, districts: []const u8) ?noaa.Cost {
         self.mu.lock();
@@ -1512,10 +1500,9 @@ pub const Handle = struct {
         return self.svc.costOf(districts);
     }
 
-    /// Read the held cells off the sets. Leaves `held` as the shell named it
-    /// when the handle has no sets. Called with `mu` held.
+    /// Read the held cells off the sets. Called with `mu` held.
     fn syncHeld(self: *Handle) void {
-        const sets = self.sets orelse return;
+        const sets = self.sets orelse return self.svc.setHeld(&.{});
         const alloc = self.svc.alloc;
         const cells = sets.heldCells(alloc, .names) catch return;
         defer chartsets.Sets.freeHeld(alloc, cells);
@@ -1608,27 +1595,10 @@ pub const Handle = struct {
         self.svc.publish();
     }
 
-    /// How many of `installed` the catalog has reissued. 0 with no catalog.
-    pub fn outdated(self: *Handle, installed: []const noaa.Installed) u32 {
-        self.mu.lock();
-        defer self.mu.unlock();
-        const cat = &(self.svc.cat orelse return 0);
-        const stale = noaa.outdated(self.svc.alloc, cat, installed) catch return 0;
-        defer self.svc.alloc.free(stale);
-        return @intCast(stale.len);
-    }
-
-    pub fn update(self: *Handle, installed: []const noaa.Installed, dest: []const u8) void {
-        self.mu.lock();
-        defer self.mu.unlock();
-        self.svc.startUpdate(installed, dest);
-        self.svc.publish();
-    }
-
     /// How many of the managed sets' cells the catalog has reissued. 0 until
     /// a catalog has been read from the network: the cached one can predate a
     /// reissue, and the cells it names may be the ones installed from it.
-    pub fn outdatedOfSets(self: *Handle) u32 {
+    pub fn outdated(self: *Handle) u32 {
         self.mu.lock();
         defer self.mu.unlock();
         if (self.svc.fresh_reads == 0) return 0;
@@ -1648,7 +1618,7 @@ pub const Handle = struct {
     }
 
     /// Download the reissues of the managed sets' cells into `dest`.
-    pub fn updateOfSets(self: *Handle, dest: []const u8) void {
+    pub fn update(self: *Handle, dest: []const u8) void {
         self.mu.lock();
         defer self.mu.unlock();
         const alloc = self.svc.alloc;
@@ -1667,7 +1637,7 @@ pub const Handle = struct {
 
     /// Start an update check when the cadence calls for one, and return true
     /// while one is running or has just been recorded. The count is
-    /// outdatedOfSets once the catalog read ends.
+    /// outdated once the catalog read ends.
     ///
     /// The cadence is "never", "startup" or "daily", daily when unset. A
     /// check needs a catalog read from the network. One read within the day
@@ -2635,8 +2605,8 @@ test "changed rises once for each change and stays down while idle" {
     try testing.expect(h.changed());
     for (0..5) |_| try testing.expect(!h.changed());
 
-    // Naming held cells leaves the published state as it was.
-    h.have(&.{"US509999"});
+    // Replacing the held cells leaves the published state as it was.
+    h.svc.setHeld(&.{"US509999"});
     try testing.expect(!h.changed());
 
     h.download(&.{5}, dest, false);
@@ -2807,12 +2777,12 @@ test "the update count reads a catalog from the network, and the cached one coun
 
     h.refresh();
     try testing.expect(h.svc.haveCatalog());
-    try testing.expectEqual(@as(u32, 0), h.outdatedOfSets());
+    try testing.expectEqual(@as(u32, 0), h.outdated());
     try testing.expectEqual(@as(usize, 1), rec.ids.items.len);
 
     h.respondChunk(rec.ids.items[0], xml, 200, true);
     try testing.expect(h.changed());
-    try testing.expectEqual(@as(u32, 1), h.outdatedOfSets());
+    try testing.expectEqual(@as(u32, 1), h.outdated());
 }
 
 test "with no managed cell the update check sends no request" {
@@ -2899,7 +2869,7 @@ test "the update check follows the cadence and records a read that succeeded" {
     h.respondChunk(rec.ids.items[1], xml, 200, true);
     _ = h.changed();
     try testing.expect(f.store.has(group, Handle.checked_key));
-    try testing.expectEqual(@as(u32, 1), h.outdatedOfSets());
+    try testing.expectEqual(@as(u32, 1), h.outdated());
     try testing.expect(!h.updateDue(now + 60 * 60));
     try testing.expectEqual(@as(usize, 2), rec.ids.items.len);
     try testing.expect(h.updateDue(now + 25 * 60 * 60));

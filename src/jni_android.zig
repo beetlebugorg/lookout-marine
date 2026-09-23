@@ -2036,8 +2036,8 @@ export fn Java_org_beetlebug_lookout_Lookout_nS52Color(env: [*c]j.JNIEnv, cls: j
 // ---- NOAA's charts ------------------------------------------------------
 //
 // The core reads NOAA's product catalog, works out which cells a region needs
-// and fetches them through the shell's own fetcher. These are the calls that
-// start that work and read where it got to.
+// and fetches them through the shell's own fetcher. The region table is here.
+// The service's calls are with lookout_noaa_open, further down.
 //
 // The state crosses as numbers in a long[] and its two strings separately. It
 // is polled several times a second while a download runs, and building a
@@ -2074,13 +2074,6 @@ const lookout_noaa_state = extern struct {
 };
 
 extern fn lookout_noaa_regions(out: *?[*]const lookout_noaa_region) usize;
-extern fn lookout_noaa_region_coverage(h: ?*anyopaque, region_id: [*:0]const u8, out: ?[*]lookout_noaa_box, cap: usize) usize;
-extern fn lookout_noaa_refresh(h: ?*anyopaque) void;
-extern fn lookout_noaa_poll(h: ?*anyopaque, out: *lookout_noaa_state) void;
-extern fn lookout_noaa_have(h: ?*anyopaque, names: ?[*]const ?[*:0]const u8, n: usize) void;
-extern fn lookout_noaa_cost(h: ?*anyopaque, region_ids: [*:0]const u8, out_cells: ?*u32, out_bytes: ?*u64, out_held: ?*u32, out_held_bytes: ?*u64) c_int;
-extern fn lookout_noaa_download(h: ?*anyopaque, region_ids: [*:0]const u8, dest_dir: [*:0]const u8, again: c_int) void;
-extern fn lookout_noaa_cancel(h: ?*anyopaque) void;
 
 /// String[] nNoaaRegions() -- the region table, four strings per region:
 /// id, name, blurb, and the extent as "west,south,east,north".
@@ -2107,150 +2100,6 @@ export fn Java_org_beetlebug_lookout_Lookout_nNoaaRegions(env: [*c]j.JNIEnv, cls
         }
     }
     return arr;
-}
-
-/// int nNoaaRegionCoverage(long h, String regionId, double[] out) -- the boxes
-/// of the region's finest coarse band, flattened as west, south, east, north.
-/// Returns how many boxes there are, which may be more than `out` held: a
-/// caller sizes its array by asking once with a short one.
-export fn Java_org_beetlebug_lookout_Lookout_nNoaaRegionCoverage(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, region: j.jstring, out: j.jdoubleArray) j.jint {
-    _ = cls;
-    const h = fromLong(hl) orelse return 0;
-    if (region == null) return 0;
-    const c = env_(env).GetStringUTFChars.?(env, region, null) orelse return 0;
-    defer env_(env).ReleaseStringUTFChars.?(env, region, c);
-    if (out == null) return @intCast(lookout_noaa_region_coverage(h.l, @ptrCast(c), null, 0));
-    const cap: usize = @as(usize, @intCast(env_(env).GetArrayLength.?(env, out))) / 4;
-    if (cap == 0) return @intCast(lookout_noaa_region_coverage(h.l, @ptrCast(c), null, 0));
-    const boxes = gpa.alloc(lookout_noaa_box, cap) catch return 0;
-    defer gpa.free(boxes);
-    const have = lookout_noaa_region_coverage(h.l, @ptrCast(c), boxes.ptr, cap);
-    const wrote = @min(have, cap);
-    const flat = gpa.alloc(j.jdouble, wrote * 4) catch return @intCast(have);
-    defer gpa.free(flat);
-    for (boxes[0..wrote], 0..) |b, k| {
-        flat[k * 4 + 0] = b.west;
-        flat[k * 4 + 1] = b.south;
-        flat[k * 4 + 2] = b.east;
-        flat[k * 4 + 3] = b.north;
-    }
-    env_(env).SetDoubleArrayRegion.?(env, out, 0, @intCast(wrote * 4), flat.ptr);
-    return @intCast(have);
-}
-
-/// void nNoaaRefresh(long h) -- read NOAA's product catalog. Non-blocking;
-/// the result surfaces through nNoaaPoll.
-export fn Java_org_beetlebug_lookout_Lookout_nNoaaRefresh(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) void {
-    _ = env;
-    _ = cls;
-    const h = fromLong(hl) orelse return;
-    lookout_noaa_refresh(h.l);
-}
-
-/// boolean nNoaaPoll(long h, long[] out) -- where the catalog and the download
-/// have got to. Returns whether a catalog is loaded. out[0] phase, [1] checked
-/// at, [2] catalog cells, [3] total, [4] done, [5] failed, [6] bytes total,
-/// [7] bytes done.
-export fn Java_org_beetlebug_lookout_Lookout_nNoaaPoll(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, out: j.jlongArray) j.jboolean {
-    _ = cls;
-    const h = fromLong(hl) orelse return 0;
-    var st: lookout_noaa_state = std.mem.zeroes(lookout_noaa_state);
-    lookout_noaa_poll(h.l, &st);
-    if (out != null and env_(env).GetArrayLength.?(env, out) >= 8) {
-        var buf: [8]j.jlong = .{
-            @intCast(st.phase),      st.checked_at,
-            @intCast(st.catalog_cells), @intCast(st.total),
-            @intCast(st.done),       @intCast(st.failed),
-            @bitCast(st.bytes_total), @bitCast(st.bytes_done),
-        };
-        env_(env).SetLongArrayRegion.?(env, out, 0, 8, &buf);
-    }
-    return if (st.have_catalog != 0) 1 else 0;
-}
-
-/// String nNoaaDate(long h) -- NOAA's validity date for the loaded catalog,
-/// "20250903", or an empty string.
-export fn Java_org_beetlebug_lookout_Lookout_nNoaaDate(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) j.jstring {
-    _ = cls;
-    const h = fromLong(hl) orelse return jstr(env, "");
-    var st: lookout_noaa_state = std.mem.zeroes(lookout_noaa_state);
-    lookout_noaa_poll(h.l, &st);
-    return jstr(env, @ptrCast(&st.date));
-}
-
-/// String nNoaaError(long h) -- what went wrong, or an empty string.
-export fn Java_org_beetlebug_lookout_Lookout_nNoaaError(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) j.jstring {
-    _ = cls;
-    const h = fromLong(hl) orelse return jstr(env, "");
-    var st: lookout_noaa_state = std.mem.zeroes(lookout_noaa_state);
-    lookout_noaa_poll(h.l, &st);
-    return jstr(env, @ptrCast(&st.err));
-}
-
-/// boolean nNoaaCost(long h, String regionIds, long[] out) -- what picking
-/// these regions costs. out[0] cells, [1] bytes, [2] cells already held,
-/// [3] what fetching those again would cost.
-export fn Java_org_beetlebug_lookout_Lookout_nNoaaCost(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, ids: j.jstring, out: j.jlongArray) j.jboolean {
-    _ = cls;
-    const h = fromLong(hl) orelse return 0;
-    if (ids == null) return 0;
-    const c = env_(env).GetStringUTFChars.?(env, ids, null) orelse return 0;
-    defer env_(env).ReleaseStringUTFChars.?(env, ids, c);
-    var cells: u32 = 0;
-    var bytes: u64 = 0;
-    var held: u32 = 0;
-    var held_bytes: u64 = 0;
-    const ok = lookout_noaa_cost(h.l, @ptrCast(c), &cells, &bytes, &held, &held_bytes);
-    if (out != null and env_(env).GetArrayLength.?(env, out) >= 4) {
-        var buf: [4]j.jlong = .{
-            @intCast(cells), @bitCast(bytes), @intCast(held), @bitCast(held_bytes),
-        };
-        env_(env).SetLongArrayRegion.?(env, out, 0, 4, &buf);
-    }
-    return if (ok != 0) 1 else 0;
-}
-
-/// void nNoaaHave(long h, String[] names) -- the NOAA cells this device holds,
-/// as dataset names without an extension. A pick prices what is missing from
-/// the water rather than all of it. null forgets the list.
-export fn Java_org_beetlebug_lookout_Lookout_nNoaaHave(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, names: j.jobjectArray) void {
-    _ = cls;
-    const h = fromLong(hl) orelse return;
-    if (names == null) {
-        lookout_noaa_have(h.l, null, 0);
-        return;
-    }
-    const n: usize = @intCast(env_(env).GetArrayLength.?(env, names));
-    if (n == 0) {
-        lookout_noaa_have(h.l, null, 0);
-        return;
-    }
-    const cs = copyPathArray(env, names, n) orelse return;
-    defer freePathArray(cs);
-    lookout_noaa_have(h.l, @ptrCast(cs.ptr), n);
-}
-
-/// void nNoaaDownload(long h, String regionIds, String destDir, boolean again)
-/// -- fetch the cells covering these regions into destDir, one <NAME>.zip
-/// each, so the whole directory bakes in one order. `again` fetches the cells
-/// already held too, which is how a mariner repairs a set.
-export fn Java_org_beetlebug_lookout_Lookout_nNoaaDownload(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, ids: j.jstring, dest: j.jstring, again: j.jboolean) void {
-    _ = cls;
-    const h = fromLong(hl) orelse return;
-    if (ids == null or dest == null) return;
-    const ci = env_(env).GetStringUTFChars.?(env, ids, null) orelse return;
-    defer env_(env).ReleaseStringUTFChars.?(env, ids, ci);
-    const cd = env_(env).GetStringUTFChars.?(env, dest, null) orelse return;
-    defer env_(env).ReleaseStringUTFChars.?(env, dest, cd);
-    lookout_noaa_download(h.l, @ptrCast(ci), @ptrCast(cd), if (again != 0) 1 else 0);
-}
-
-/// void nNoaaCancel(long h) -- stop the download. What arrived stays.
-export fn Java_org_beetlebug_lookout_Lookout_nNoaaCancel(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) void {
-    _ = env;
-    _ = cls;
-    const h = fromLong(hl) orelse return;
-    lookout_noaa_cancel(h.l);
 }
 
 /// boolean nAltStyleActive(long h)

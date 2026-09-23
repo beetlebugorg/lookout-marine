@@ -1,9 +1,7 @@
 //! The NOAA service's C ABI (see include/lookout-library.h).
 //!
 //! lookout_noaa_open makes a service with no chart handle, so a download runs
-//! while the shell closes and reopens its charts. Every call on it is
-//! lookout_noaa_svc_*. The lookout_noaa_* calls that take a chart handle run
-//! the same functions over the service that handle holds.
+//! while the shell closes and reopens its charts.
 
 const std = @import("std");
 
@@ -19,31 +17,13 @@ pub const lookout_noaa = noaajob.Handle;
 pub const lookout_noaa_state = noaajob.State;
 pub const lookout_noaa_box = noaajob.Box;
 
-/// A cell already installed, for the update check. See lookout-library.h.
-pub const lookout_noaa_installed = extern struct {
-    name: [*:0]const u8,
-    edition: u32,
-    update: u32,
-};
-
-// ---- the calls both ABIs share ----------------------------------------------
+// ---- argument conversion ------------------------------------------------------
 
 fn span(p: ?[*:0]const u8) []const u8 {
     return if (p) |s| std.mem.span(s) else "";
 }
 
-pub fn have(n: *noaajob.Handle, names: ?[*]const ?[*:0]const u8, count: usize) void {
-    const src = names orelse return n.have(&.{});
-    var list: std.ArrayList([]const u8) = .empty;
-    defer list.deinit(gpa);
-    for (0..count) |i| {
-        const p = src[i] orelse continue;
-        list.append(gpa, std.mem.span(p)) catch break;
-    }
-    n.have(list.items);
-}
-
-pub fn cost(n: *noaajob.Handle, region_ids: ?[*:0]const u8, out_cells: ?*u32, out_bytes: ?*u64, out_held: ?*u32, out_held_bytes: ?*u64) c_int {
+fn cost(n: *noaajob.Handle, region_ids: ?[*:0]const u8, out_cells: ?*u32, out_bytes: ?*u64, out_held: ?*u32, out_held_bytes: ?*u64) c_int {
     if (out_cells) |c| c.* = 0;
     if (out_bytes) |b| b.* = 0;
     if (out_held) |x| x.* = 0;
@@ -57,44 +37,20 @@ pub fn cost(n: *noaajob.Handle, region_ids: ?[*:0]const u8, out_cells: ?*u32, ou
     return 1;
 }
 
-pub fn regionCells(n: *noaajob.Handle, region_ids: ?[*:0]const u8, out: ?[*][*:0]const u8, cap: usize) usize {
+fn regionCells(n: *noaajob.Handle, region_ids: ?[*:0]const u8, out: ?[*][*:0]const u8, cap: usize) usize {
     var buf: [noaa.regions.len]u8 = undefined;
     return n.regionCells(noaa.districtsFromIds(&buf, span(region_ids)), out, cap);
 }
 
-pub fn regionCoverage(n: *noaajob.Handle, region_id: ?[*:0]const u8, out: ?[*]lookout_noaa_box, cap: usize) usize {
+fn regionCoverage(n: *noaajob.Handle, region_id: ?[*:0]const u8, out: ?[*]lookout_noaa_box, cap: usize) usize {
     const id = region_id orelse return 0;
     return n.regionCoverage(std.mem.span(id), out, cap);
 }
 
-pub fn download(n: *noaajob.Handle, region_ids: ?[*:0]const u8, dest_dir: ?[*:0]const u8, again: c_int) void {
+fn download(n: *noaajob.Handle, region_ids: ?[*:0]const u8, dest_dir: ?[*:0]const u8, again: c_int) void {
     const dest = dest_dir orelse return;
     var buf: [noaa.regions.len]u8 = undefined;
     n.download(noaa.districtsFromIds(&buf, span(region_ids)), std.mem.span(dest), again != 0);
-}
-
-/// The installed cells as the core reads them, or null. Owned by gpa.
-fn installedList(have_: ?[*]const lookout_noaa_installed, count: usize) ?[]noaa.Installed {
-    const src = have_ orelse return null;
-    if (count == 0) return null;
-    const list = gpa.alloc(noaa.Installed, count) catch return null;
-    for (src[0..count], 0..) |c, i| {
-        list[i] = .{ .name = std.mem.span(c.name), .edition = c.edition, .update = c.update };
-    }
-    return list;
-}
-
-pub fn outdated(n: *noaajob.Handle, have_: ?[*]const lookout_noaa_installed, count: usize) u32 {
-    const list = installedList(have_, count) orelse return 0;
-    defer gpa.free(list);
-    return n.outdated(list);
-}
-
-pub fn update(n: *noaajob.Handle, have_: ?[*]const lookout_noaa_installed, count: usize, dest_dir: ?[*:0]const u8) void {
-    const dest = dest_dir orelse return;
-    const list = installedList(have_, count) orelse return;
-    defer gpa.free(list);
-    n.update(list, std.mem.span(dest));
 }
 
 // ---- lookout_noaa ------------------------------------------------------------
@@ -176,13 +132,13 @@ export fn lookout_noaa_svc_download(n: ?*lookout_noaa, region_ids: ?[*:0]const u
 
 export fn lookout_noaa_svc_outdated(n: ?*lookout_noaa) u32 {
     const x = n orelse return 0;
-    return x.outdatedOfSets();
+    return x.outdated();
 }
 
 export fn lookout_noaa_svc_update(n: ?*lookout_noaa, dest_dir: ?[*:0]const u8) void {
     const x = n orelse return;
     const dest = dest_dir orelse return;
-    x.updateOfSets(std.mem.span(dest));
+    x.update(std.mem.span(dest));
 }
 
 export fn lookout_noaa_svc_update_due(n: ?*lookout_noaa) c_int {

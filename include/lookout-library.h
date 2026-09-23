@@ -737,13 +737,10 @@ void lookout_http_respond(lookout *h, uint64_t req_id, const void *bytes,
  * piece. A shell that already holds the whole body calls lookout_http_respond
  * instead: the same call with a single piece and `done` set.
  *
- * Use this when the body may be large. A NOAA district downloads as one zip of
- * up to a couple of hundred megabytes, and a shell that reads it into one
- * buffer needs that much again for the copy this call makes: on a phone the
- * whole-body path runs out of heap. Pieces of a chart download are written to
- * disk as they land, so the archive is never held whole. A style, a
- * TileJSON, a sprite sheet and a tile are read whole either way, and their
- * pieces are joined here.
+ * A style, a TileJSON, a sprite sheet and a tile are read whole, and their
+ * pieces are joined here. The NOAA service has a call of its own on these
+ * terms, lookout_noaa_svc_http_respond_chunk, and writes each piece of a
+ * district zip to disk as it arrives.
  *
  * A piece with len 0 and `done` clear is ignored, so a shell may call this for
  * a short read without checking. Answering a piece of a request that has
@@ -875,12 +872,6 @@ const lookout_chart_link *const *lookout_links_all(const lookout_links *r, size_
  * Every call on it is lookout_noaa_svc_*, declared at the end of this
  * section.
  *
- * THE OLD PATH. The lookout_noaa_* calls that take a chart handle run a
- * second service that the chart handle holds. It uses the fetcher from
- * lookout_set_http_provider, responded to with lookout_http_respond, and
- * lookout_close cancels its download. These calls are removed once every
- * shell uses lookout_noaa_open.
- *
  * WHAT A REGION SELECTS. NOAA files each cell under one district, and water
  * does not stop at a district line: a cell can cover the approach a mariner
  * is sailing and be filed under the district next door. Selecting a region
@@ -919,24 +910,6 @@ size_t lookout_noaa_regions(const lookout_noaa_region **out);
 typedef struct {
     double west, south, east, north;
 } lookout_noaa_box;
-
-/* The coverage of one region, as the boxes of the finest coarse band it has:
- * band 3 hugs the coast, and a district without one falls back to 2 then 1.
- * There are tens of them. Writes at most `cap`
- * boxes and returns how many there are, so a caller sizes its buffer by
- * calling once with `out` NULL. Returns 0 before a catalog is read.
- *
- * A region drawn as one rectangle claims water it does not cover: district 8
- * runs Texas to the Keys around the Florida peninsula, and its bounding box
- * paints across Miami. These boxes are what the catalog actually says. Old
- * path. */
-size_t lookout_noaa_region_coverage(lookout *h, const char *region_id,
-                                    lookout_noaa_box *out, size_t cap);
-
-/* Read NOAA's product catalog. Non-blocking, and it drives the fetcher. One
- * read is outstanding at a time; calling again while one runs does nothing.
- * Progress and the result surface through lookout_noaa_poll. Old path. */
-void lookout_noaa_refresh(lookout *h);
 
 /* lookout_noaa_state.phase: what the service is doing now. */
 #define LOOKOUT_NOAA_IDLE        0
@@ -995,96 +968,7 @@ typedef struct {
     uint8_t retry;
 } lookout_noaa_state;
 
-/* Old path. Does not block on the api lock. */
-void lookout_noaa_poll(lookout *h, lookout_noaa_state *out);
-
-/* Old path. 1 when the state lookout_noaa_poll reads has changed since the
- * last call, then clears. No api lock. The chart handle's frame loop adopts
- * the responses, so this rises only while frames run. */
-int lookout_noaa_changed(lookout *h);
-
-/* What downloading these regions costs: how many cells, and how many bytes of
- * exchange-set zip. `region_ids` is a comma separated list of region ids
- * ("d5,d8"); an id no region answers to is skipped. Returns 0 when no catalog
- * is loaded, leaving both outputs at 0. */
-/* Name the NOAA cells this device already holds, as dataset names without an
- * extension (US5MD11M). The cost below leaves them out, and a download skips
- * them: a mariner who picks water they have already downloaded fetches what is
- * missing from it rather than all of it again.
- *
- * By NAME. A cell NOAA has reissued since it was installed still counts as
- * held, because a file on disk does not say which edition it is. Reissues are
- * lookout_noaa_outdated and lookout_noaa_update, which take the editions from
- * the caller. Pass NULL to forget the list. Old path. */
-void lookout_noaa_have(lookout *h, const char *const *names, size_t n);
-
-/* What picking these regions costs. `out_cells` and `out_bytes` size the
- * download, `out_held` counts the region's cells that are already installed,
- * and `out_held_bytes` sizes fetching those again. Any may be NULL. Old
- * path. */
-int lookout_noaa_cost(lookout *h, const char *region_ids,
-                      uint32_t *out_cells, uint64_t *out_bytes,
-                      uint32_t *out_held, uint64_t *out_held_bytes);
-
-/* Download the cells covering these regions into `dest_dir`, created if it is
- * not there. Each cell's exchange set is unpacked as it arrives, so `dest_dir`
- * becomes an ordinary ENC_ROOT and bakes in one lookout_bake_start. Replaces a
- * download already running. Progress surfaces through lookout_noaa_poll.
- *
- * Cells named by lookout_noaa_have are left out, so picking water that is
- * partly installed fetches the rest of it. `again` nonzero fetches those too,
- * so a mariner can repair or refresh charts they already hold. A downloaded
- * cell replaces the copy of it already in `dest_dir`.
- *
- * A catalog read through lookout_noaa_refresh does not end a download.
- *
- * Old path: lookout_close cancels this download. */
-void lookout_noaa_download(lookout *h, const char *region_ids,
-                           const char *dest_dir, int again);
-
-/* The dataset names of every cell covering these regions, in catalog order.
- * Writes at most `cap` and returns how many there are, so a caller sizes its
- * buffer by calling once with `out` NULL. The strings are borrowed until the
- * next call on this handle, or its close. Returns 0 when no catalog is
- * loaded.
- *
- * For a shell that removes water a mariner has unpicked. Regions overlap,
- * because NOAA files a cell under one district that covers another's, so the
- * cells to delete are the unpicked regions' minus every region still picked.
- * Old path. */
-size_t lookout_noaa_region_cells(lookout *h, const char *region_ids,
-                                 const char **out, size_t cap);
-
-/* A cell already installed, for the update check. */
-typedef struct {
-    const char *name;   /* the cell name, "US5MD1MC" */
-    uint32_t edition;
-    uint32_t update;
-} lookout_noaa_installed;
-
-/* How many of these cells NOAA has reissued: the catalog carries a higher
- * edition, or the same edition with a higher update number. A cell the catalog
- * no longer lists does not count, because NOAA withdraws cells and the one on
- * the device is the last good edition of it. A catalog older than what is
- * installed counts 0. Returns 0 when no catalog is loaded. Old path. */
-uint32_t lookout_noaa_outdated(lookout *h, const lookout_noaa_installed *have,
-                               size_t n);
-
-/* Download the reissued editions of these cells into `dest_dir`, on the same
- * terms as lookout_noaa_download. Cells that are current are skipped. Old
- * path. */
-void lookout_noaa_update(lookout *h, const lookout_noaa_installed *have,
-                         size_t n, const char *dest_dir);
-
-/* Stop the download that is running and drop its outstanding requests. The
- * cells already written stay where they are. Old path. */
-void lookout_noaa_cancel(lookout *h);
-
 /* ---- The NOAA service handle ----------------------------------------------
- *
- * The same service with no chart handle under it. Each lookout_noaa_svc_*
- * call does what the old-path call of the same name does, on the terms
- * stated above, with these differences:
  *
  * - lookout_close does not touch it. Only lookout_noaa_close ends its
  *   download.
@@ -1120,10 +1004,10 @@ void lookout_noaa_close(lookout_noaa *n);
 /* Called once for each response queued for adopt, and at most four times a
  * second while a transfer's bytes arrive, so a shell whose frame loop has
  * stopped knows to call lookout_noaa_svc_changed. An idle service does not
- * call it. Called from any thread,
- * including from inside lookout_noaa_svc_http_respond_chunk and from a thread
- * of lookout's own. Post to the shell's own loop and return. Do not call into
- * lookout from it. */
+ * call it. Called from any thread, including from inside
+ * lookout_noaa_svc_http_respond_chunk and from a thread of lookout's own.
+ * Post to the shell's own loop and return. Do not call into lookout from
+ * it. */
 typedef void (*lookout_noaa_wake)(void *user);
 
 /* Install the service's fetcher, on the terms of lookout_set_http_provider.
@@ -1149,27 +1033,73 @@ int lookout_noaa_svc_changed(lookout_noaa *n);
 /* The state, as of the last call that changed it. Does not lock. */
 void lookout_noaa_svc_poll(lookout_noaa *n, lookout_noaa_state *out);
 
+/* Read NOAA's product catalog. Non-blocking, and it drives the fetcher. One
+ * read is outstanding at a time; calling again while one runs has no effect.
+ * The cached catalog, when there is one, is loaded first. The result surfaces
+ * through lookout_noaa_svc_poll. */
 void lookout_noaa_svc_refresh(lookout_noaa *n);
+
+/* What picking these regions costs. `region_ids` is a comma separated list of
+ * region ids ("d5,d8"); an id no region answers to is skipped. `out_cells`
+ * and `out_bytes` size the download of the cells not held, `out_held` counts
+ * the region's cells that are already installed, and `out_held_bytes` sizes
+ * fetching those again. Any may be NULL. Returns 0 when no catalog is loaded,
+ * leaving every output at 0. */
 int lookout_noaa_svc_cost(lookout_noaa *n, const char *region_ids,
                           uint32_t *out_cells, uint64_t *out_bytes,
                           uint32_t *out_held, uint64_t *out_held_bytes);
-/* The strings are borrowed until the next call of this on `n`, or its close. */
+
+/* The dataset names of every cell covering these regions, in catalog order.
+ * Writes at most `cap` and returns how many there are, so a caller sizes its
+ * buffer by calling once with `out` NULL. The strings are borrowed until the
+ * next call of this on `n`, or its close. Returns 0 when no catalog is
+ * loaded.
+ *
+ * For a shell that removes water a mariner has unpicked. Regions overlap,
+ * because NOAA files a cell under one district that covers another's, so the
+ * cells to delete are the unpicked regions' minus every region still picked. */
 size_t lookout_noaa_svc_region_cells(lookout_noaa *n, const char *region_ids,
                                      const char **out, size_t cap);
+
+/* The coverage of one region, as the boxes of the finest coarse band it has:
+ * band 3 hugs the coast, and a district without one falls back to 2 then 1.
+ * There are tens of them. Writes at most `cap` boxes and returns how many
+ * there are, so a caller sizes its buffer by calling once with `out` NULL.
+ * Returns 0 before a catalog is read.
+ *
+ * A region drawn as one rectangle claims water it does not cover: district 8
+ * runs Texas to the Keys around the Florida peninsula, and its bounding box
+ * paints across Miami. These boxes are what the catalog actually says. */
 size_t lookout_noaa_svc_region_coverage(lookout_noaa *n, const char *region_id,
                                         lookout_noaa_box *out, size_t cap);
+
+/* Download the cells covering these regions into `dest_dir`, created if it is
+ * not there. Each cell's exchange set is unpacked as it arrives, so `dest_dir`
+ * becomes an ordinary ENC_ROOT and bakes in one lookout_bake_start. Replaces a
+ * download already running. Progress surfaces through lookout_noaa_svc_poll.
+ *
+ * Cells already held are left out, so picking water that is partly installed
+ * fetches the rest of it. `again` nonzero fetches those too, so a mariner can
+ * repair or refresh charts they already hold. A downloaded cell replaces the
+ * copy of it already in `dest_dir`.
+ *
+ * A catalog read through lookout_noaa_svc_refresh does not end a download. */
 void lookout_noaa_svc_download(lookout_noaa *n, const char *region_ids,
                                const char *dest_dir, int again);
 
-/* How many of the managed sets' cells NOAA has reissued, on the terms of
- * lookout_noaa_outdated. Returns 0 until a catalog has been read from the
- * network since the handle opened. The cached catalog can predate a reissue.
- * The count follows the sets, so a shell reads it again when
- * lookout_chart_sets_changed returns 1. */
+/* How many of the managed sets' cells NOAA has reissued: the catalog lists a
+ * higher edition, or the same edition with a higher update number. A cell the
+ * catalog no longer lists does not count, because NOAA withdraws cells and
+ * the one on the device is the last good edition of it.
+ *
+ * Returns 0 until a catalog has been read from the network since the handle
+ * opened. The cached catalog can predate a reissue. The count follows the
+ * sets, so a shell reads it again when lookout_chart_sets_changed returns 1. */
 uint32_t lookout_noaa_svc_outdated(lookout_noaa *n);
 
 /* Download the reissued editions of the managed sets' cells into `dest_dir`,
- * on the terms of lookout_noaa_download. */
+ * on the terms of lookout_noaa_svc_download. Cells that are current are
+ * skipped. */
 void lookout_noaa_svc_update(lookout_noaa *n, const char *dest_dir);
 
 /* The update check. Returns 1 when a check is due and has started, or is
@@ -1188,6 +1118,8 @@ void lookout_noaa_svc_update(lookout_noaa *n, const char *dest_dir);
  * lookout_chart_sets_changed returns 1. */
 int lookout_noaa_svc_update_due(lookout_noaa *n);
 
+/* Stop the download that is running and drop its outstanding requests. The
+ * cells already written stay where they are. */
 void lookout_noaa_svc_cancel(lookout_noaa *n);
 
 #ifdef __cplusplus
