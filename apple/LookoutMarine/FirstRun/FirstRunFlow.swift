@@ -195,7 +195,7 @@ struct FirstRunFlow: View {
                 Spacer(minLength: 12)
                 // Stop applies while the transfer or the bake runs. After
                 // that it stood beside Continue with no job to stop.
-                if step == .importing && !importFinished && !flow.importEnded {
+                if step == .importing && !flow.primaryEnabled && !flow.importEnded {
                     Button("Stop") { stopImport() }
                         .accessibilityIdentifier("first-run-stop")
                 } else if flow.canGoBack {
@@ -259,35 +259,12 @@ struct FirstRunFlow: View {
         .buttonStyle(.plain)
         #endif
         .keyboardShortcut(.defaultAction)
-        .disabled(!primaryEnabled)
+        .disabled(!flow.primaryEnabled)
         .accessibilityIdentifier("first-run-continue")
     }
 
     private var primaryTitle: String {
         flow.primaryTitle(step == .onlineChart ? flow.chosenChartName(model.chartLinks) : nil)
-    }
-
-    /// Whether the primary action has anything to do. Download with no region
-    /// picked, and with no catalog to price it from, does nothing.
-    private var primaryEnabled: Bool {
-        switch step {
-        case .welcome, .source: return true
-        case .onlineChart: return flow.canUseOnlineChart(model.chartLinks)
-        case .coverage:
-            return model.noaa.state.haveCatalog && !model.noaa.picked.isEmpty
-        // ChartBake opens the library once the import finishes, so there is
-        // nothing to continue to until it has.
-        case .importing: return importFinished
-        case .depths: return true
-        }
-    }
-
-    /// True once the charts have arrived, converted, and opened.
-    private var importFinished: Bool {
-        flow.sawBake
-            && model.noaa.state.phase != .downloading
-            && model.charts.chartWork == nil
-            && model.charts.hasChart && !model.charts.chartIsEmpty
     }
 
     /// The line beside the primary action: the credit the active chart asks
@@ -327,6 +304,8 @@ struct FirstRunFlow: View {
     /// The primary action. The flow chooses the next step, and the shell does
     /// the part the flow cannot.
     private func act() {
+        // The order is read from the facts as they stand at the press.
+        model.noteSetup()
         guard let source = flow.advance() else { return }
         switch source {
         case .files:
@@ -335,11 +314,8 @@ struct FirstRunFlow: View {
             break   // the chart the mariner picked is already selected
         case .noaa:
             let n = model.noaa
-            flow.noaaOrder = .init(
-                regions: n.regions.filter { n.picked.contains($0.id) }
-                    .map(\.name).joined(separator: ", "),
-                charts: n.allInstalled ? n.held : n.cells,
-                bytes: n.allInstalled ? n.heldBytes : n.bytes)
+            flow.orderRegions = n.regions.filter { n.picked.contains($0.id) }
+                .map(\.name).joined(separator: ", ")
             model.startNoaaDownload(again: n.allInstalled)
         }
     }

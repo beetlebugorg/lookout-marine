@@ -282,10 +282,9 @@ struct OverlayLayer: View {
                             .transition(.opacity)
                     }
                 }
-                // Setup asks to be raised whenever the app's answer to "have
-                // I anything to draw" could have changed.
-                .task { model.considerFirstRun() }
-                .onChange(of: model.charts.nothingToDraw) { model.considerFirstRun() }
+                // The core decides from these whether setup comes up and
+                // where it stands.
+                .onChange(of: model.setupFacts, initial: true) { model.noteSetup() }
                 .animation(.easeInOut(duration: 0.3), value: model.firstRun.showing)
                 .animation(.easeInOut(duration: 0.5), value: model.charts.hasChart)
                 .animation(.easeInOut(duration: 0.25), value: model.charts.chartWork == nil)

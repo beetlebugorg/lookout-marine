@@ -47,7 +47,7 @@ final class AppModel {
     let readouts = ReadoutsModel()
     let chrome = ChromeModel()
     /// Setup. It runs over an app that has settled on having no chart to
-    /// draw, on every launch that finds one. See FirstRunModel.shouldRun.
+    /// draw, on every launch that finds one. See lookout_setup_note.
     let firstRun = FirstRunModel()
     /// Adding a set installs the pictures it carries, so this one is built
     /// with the raster model rather than beside it.
@@ -167,16 +167,28 @@ final class AppModel {
         }
     }
 
-    /// Raise setup on a first run with no chart to draw.
-    ///
-    /// Called from the overlay whenever the answer can have changed, rather
-    /// than once at launch. `nothingToDraw` is false for the first moment of
-    /// every launch while the scan reads the library, and raising the flow on
-    /// that puts it over a mariner's own charts.
-    func considerFirstRun() {
-        firstRun.noteLibrary(charts)
-        guard !firstRun.showing,
-              firstRun.shouldRun(charts: charts, links: chartLinks) else { return }
+    /// What setup reads from the app. The overlay notes it on every change.
+    var setupFacts: FirstRunModel.Facts {
+        let n = noaa
+        return .init(
+            catalogReady: n.state.haveCatalog,
+            picked: !n.picked.isEmpty,
+            onLink: chartLinks.active != nil,
+            nothingToDraw: charts.nothingToDraw,
+            hasCharts: charts.sets.contains { $0.on && $0.hasSomethingToDraw },
+            workRunning: charts.chartWork != nil,
+            downloading: n.state.phase == .downloading,
+            chartOpen: charts.hasChart && !charts.chartIsEmpty,
+            noaaOutcome: n.state.outcome.rawValue,
+            noaaRun: n.state.run,
+            pickCharts: n.allInstalled ? n.held : n.cells,
+            pickBytes: n.allInstalled ? n.heldBytes : n.bytes)
+    }
+
+    /// Note the facts, and raise setup when the core has it come up.
+    func noteSetup() {
+        firstRun.note(setupFacts)
+        guard firstRun.shouldBegin else { return }
         firstRun.begin()
         showWholeCountry()
     }
@@ -217,13 +229,8 @@ final class AppModel {
         charts = ChartsModel(raster: raster)
         // The core prepares a download, so its Stop is the NOAA service's.
         charts.cancelNoaaPrepare = { [weak self] in self?.noaa.cancel() }
-        // Setup returns over a library that went empty only if it recorded
-        // the library with charts in it. considerFirstRun runs when
-        // nothingToDraw changes, and nothingToDraw never changes while a set
-        // is drawing, so the library is recorded on every set list change.
         charts.onSetsChanged = { [weak self] in
             guard let self else { return }
-            self.firstRun.noteLibrary(self.charts)
             // The core reads the held cells and the editions off the sets.
             self.noaa.reprice()
             self.noaa.recount()

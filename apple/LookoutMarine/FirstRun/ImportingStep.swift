@@ -33,8 +33,7 @@ struct ImportingStep: View {
     private var noaa: NoaaState { model.noaa.state }
     private var downloading: Bool { noaa.phase == .downloading }
     /// The NOAA order this run began with, or nil for a dropped folder.
-    private var order: FirstRunModel.NoaaOrder? { flow.noaaOrder }
-    private var fromNoaa: Bool { order != nil }
+    private var order: (charts: UInt32, bytes: UInt64)? { flow.order }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -48,11 +47,8 @@ struct ImportingStep: View {
         }
         .padding(.horizontal, horizontalInset)
         .padding(.bottom, 22)
-        .onChange(of: model.noaa.state, initial: true) { noteImport() }
         .onChange(of: model.charts.chartWork) { _, now in
-            defer { noteImport() }
             guard let now else { return }
-            flow.sawBake = true
             // Keep the bake's own reports. ChartsModel rescans the set once
             // the bake finishes, and that scan reports through chartWork with
             // no total and no bands, which emptied the panel at the end.
@@ -186,7 +182,7 @@ struct ImportingStep: View {
     }
 
     private var setName: String {
-        if let o = order, !o.regions.isEmpty { return o.regions }
+        if order != nil, !flow.orderRegions.isEmpty { return flow.orderRegions }
         if let w = work, !w.name.isEmpty { return w.name }
         return "Your charts"
     }
@@ -199,10 +195,6 @@ struct ImportingStep: View {
         }
         if let w = work, w.total > 0 { return "\(w.total) charts" }
         return "Reading the folder"
-    }
-
-    private func noteImport() {
-        flow.noteImport(model.noaa.state, bakeRunning: model.charts.chartWork != nil)
     }
 
     /// Why an order ended with no charts to prepare. The core's error text is
@@ -231,10 +223,10 @@ struct ImportingStep: View {
                              state: downloading ? .active : .done))
         }
         // With no bake reported yet, the two import phases have either not
-        // started or already finished. flow.sawBake tells them apart.
+        // started or already finished. flow.sawWork tells them apart.
         let finding = running && (live?.kind == .finding || live?.total == 0)
         let importing = running && !finding
-        let pending = work == nil && !flow.sawBake
+        let pending = work == nil && !flow.sawWork
         out.append(Phase(title: "Finding charts",
                          detail: findingDetail,
                          state: downloading || pending ? .waiting : (finding ? .active : .done)))
