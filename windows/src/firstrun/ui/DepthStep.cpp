@@ -414,10 +414,10 @@ namespace winrt::LookoutMarine::implementation
             return;
         tile57_mariner m{};
         lk_controller_get_mariner(controller, &m);
-        m.safety_depth = depth_choice.Metres(depth_choice.SafetyDepth());
-        m.shallow_contour = depth_choice.Metres(depth_choice.SafetyDepth());
-        m.safety_contour = depth_choice.Metres(depth_choice.SafetyContour());
-        m.deep_contour = depth_choice.Metres(depth_choice.DeepContour());
+        m.safety_depth = depth_choice.plan().safety_depth_m;
+        m.shallow_contour = depth_choice.plan().shallow_contour_m;
+        m.safety_contour = depth_choice.plan().safety_contour_m;
+        m.deep_contour = depth_choice.plan().deep_contour_m;
         m.four_shade_water = true;
         // The unit the step is answered in is the unit the readouts use.
         m.depth_unit = depth_choice.feet() ? (tile57_depth_unit)1 : (tile57_depth_unit)0;
@@ -427,9 +427,9 @@ namespace winrt::LookoutMarine::implementation
     void MainWindow::FirstRunDepthsRestate()
     {
         auto const &d = depth_choice;
-        std::wstring const depth = d.Measure(d.SafetyDepth());
-        std::wstring const safety = d.Measure(d.SafetyContour());
-        std::wstring const deep = d.Measure(d.DeepContour());
+        std::wstring const depth = d.Measure(d.plan().safety_depth);
+        std::wstring const safety = d.Measure(d.plan().safety_contour);
+        std::wstring const deep = d.Measure(d.plan().deep_contour);
 
         if (depth_rows.size() == 3)
         {
@@ -523,9 +523,9 @@ namespace winrt::LookoutMarine::implementation
             p.Fill(shade(token));
             depth_seabed.Children().Append(p);
         };
-        fill(d.Reach(d.DeepContour()), L"DEPMD");
-        fill(d.Reach(d.SafetyContour()), L"DEPMS");
-        fill(d.Reach(d.SafetyDepth()), L"DEPVS");
+        fill(d.Reach(d.plan().deep_contour), L"DEPMD");
+        fill(d.Reach(d.plan().safety_contour), L"DEPMS");
+        fill(d.Reach(d.plan().safety_depth), L"DEPVS");
 
         // The safety contour drawn bold, the way S-52 draws the contour a boat
         // is measured against.
@@ -535,19 +535,19 @@ namespace winrt::LookoutMarine::implementation
             p.StrokeThickness(thick);
             depth_seabed.Children().Append(p);
         };
-        line(d.Reach(d.SafetyContour()), 0x73, 1.8);
-        line(d.Reach(d.DeepContour()), 0x2E, 0.8);
+        line(d.Reach(d.plan().safety_contour), 0x73, 1.8);
+        line(d.Reach(d.plan().deep_contour), 0x2E, 0.8);
 
         fill(kShoreAt, L"LANDA");
         line(kShoreAt, 0x73, 1.0);
 
         // Spot depths, bold at or shallower than the safety depth. That is
         // what the safety depth does to a chart.
-        for (auto const &spot : lkw::DepthChoice::Spots())
+        for (auto const &spot : lkw::SeabedSpots())
         {
-            double const depth = d.SafetyContour() * spot.of_contour;
+            double const depth = d.plan().safety_contour * spot.of_contour;
             auto const at = SeabedPoint(d.Reach(depth), spot.across);
-            bool const bold = depth <= d.SafetyDepth();
+            bool const bold = depth <= d.plan().safety_depth;
             auto label = Line(std::to_wstring((long long)std::ceil(depth)), 10.5, bold);
             label.Foreground(ink(bold ? 0xCC : 0x8C));
             label.TextWrapping(TextWrapping::NoWrap);

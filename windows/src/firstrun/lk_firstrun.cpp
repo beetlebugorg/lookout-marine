@@ -4,148 +4,22 @@
 #include <cmath>
 #include <cwchar>
 
-namespace
-{
-    // A depth rounded to a tenth, with no trailing zero on a whole number.
-    std::wstring DepthText(double v)
-    {
-        double const rounded = std::round(v * 10) / 10;
-        wchar_t buf[32];
-        if (rounded == std::round(rounded))
-            std::swprintf(buf, 32, L"%d", (int)std::llround(rounded));
-        else
-            std::swprintf(buf, 32, L"%.1f", rounded);
-        return buf;
-    }
-}
-
 namespace lkw
 {
-    std::wstring FirstRunBandName(int band)
-    {
-        switch (band)
-        {
-        case 1: return L"Overview";
-        case 2: return L"General";
-        case 3: return L"Coastal";
-        case 4: return L"Approach";
-        case 5: return L"Harbor";
-        case 6: return L"Berthing";
-        default: return L"Other";
-        }
-    }
-
-    std::wstring SizeText(uint64_t bytes)
-    {
-        // Decimal, the way NOAA states a download and the way the reference
-        // shell states it back. Dividing by 2^20 read 216.0 MB for the same
-        // region the Mac priced at 226.5 MB.
-        wchar_t buf[64];
-        if (bytes >= 1'000'000'000ull)
-            std::swprintf(buf, 64, L"%.1f GB", (double)bytes / 1e9);
-        else
-            std::swprintf(buf, 64, L"%.1f MB", (double)bytes / 1e6);
-        return buf;
-    }
-
-    std::vector<double> DepthChoice::Clearances() const
-    {
-        if (feet_)
-            return { 1, 2, 3, 5 };
-        return { 0.3, 0.6, 1, 1.5 };
-    }
-
-    std::vector<double> DepthChoice::Ladder() const
-    {
-        if (feet_)
-            return { 6, 12, 18, 30, 60, 90, 120, 180, 240, 300 };
-        return { 2, 5, 10, 20, 30, 50, 75, 100 };
-    }
-
-    double DepthChoice::SafetyDepth() const { return std::ceil(draft_ + clearance_); }
-
-    double DepthChoice::SafetyContour() const
-    {
-        auto const ladder = Ladder();
-        double const want = SafetyDepth();
-        for (double rung : ladder)
-            if (rung >= want)
-                return rung;
-        return ladder.back();
-    }
-
-    double DepthChoice::DeepContour() const
-    {
-        auto const ladder = Ladder();
-        double const want = SafetyContour() * 2;
-        for (double rung : ladder)
-            if (rung >= want)
-                return rung;
-        return ladder.back();
-    }
-
-    double DepthChoice::Reach(double depth) const
+    double SeabedReach(double depth, double floor)
     {
         // Where the shore stands, and how steeply the slope falls away.
         // Shallow water gets most of the panel, because that is where both
         // contours fall.
         constexpr double kShoreAt = 0.14;
         constexpr double kSlopeK = 2.07;
-        double const floor = Floor();
         if (floor <= 0)
             return kShoreAt;
         double const share = std::max(0.0, std::min(1.0, depth / floor));
         return kShoreAt + (1 - kShoreAt) * std::pow(share, 1 / kSlopeK);
     }
 
-    void DepthChoice::Step(int by)
-    {
-        double const step = StepSize();
-        double const most = feet_ ? 100.0 : 30.0;
-        draft_ = std::max(step, std::min(most, draft_ + step * by));
-    }
-
-    bool DepthChoice::ReadDraft(std::wstring const &text)
-    {
-        try
-        {
-            size_t used = 0;
-            double v = std::stod(text, &used);
-            if (v <= 0)
-                return false;
-            draft_ = std::min(feet_ ? 100.0 : 30.0, v);
-            return true;
-        }
-        catch (std::exception const &)
-        {
-            return false;
-        }
-    }
-
-    void DepthChoice::SetUnit(bool feet)
-    {
-        if (feet == feet_)
-            return;
-        double const f = feet ? 3.28084 : 1 / 3.28084;
-        feet_ = feet;
-        draft_ = std::round(draft_ * f * 2) / 2;
-        double const want = clearance_ * f;
-        auto const offered = Clearances();
-        double best = offered.front();
-        for (double c : offered)
-            if (std::abs(c - want) < std::abs(best - want))
-                best = c;
-        clearance_ = best;
-    }
-
-    std::wstring DepthChoice::Measure(double v) const
-    {
-        return DepthText(v) + L" " + unit();
-    }
-
-    std::wstring DepthChoice::DraftText() const { return DepthText(draft_); }
-
-    std::vector<DepthChoice::Spot> DepthChoice::Spots()
+    std::vector<SeabedSpot> SeabedSpots()
     {
         return { { 0.12, 0.28 }, { 0.30, 0.68 }, { 0.45, 0.14 }, { 0.62, 0.50 },
                  { 0.80, 0.84 }, { 1.00, 0.32 }, { 1.22, 0.62 }, { 1.48, 0.20 },
@@ -205,31 +79,6 @@ namespace lkw
         return hold.Complete() ? L"installed" : L"";
     }
 
-    std::wstring RegionLabel(std::wstring const &name, std::wstring const &blurb,
-                             RegionHold const &hold)
-    {
-        std::wstring s = name + L". " + blurb;
-        if (!hold.Known())
-            return s;
-        if (hold.Complete())
-            return s + L". All " + Thousands(hold.held) + L" charts installed.";
-        if (hold.Partial())
-            return s + L". " + Thousands(hold.held) + L" of " + Thousands(hold.Total()) +
-                   L" charts installed.";
-        return s + L". " + Thousands(hold.Total()) + L" charts, none installed.";
-    }
-
-    std::wstring CostLine(uint32_t cells, uint64_t bytes, uint32_t held, uint64_t held_bytes)
-    {
-        if (cells == 0 && held > 0)
-            return Thousands(held) + L" charts, all installed · " + SizeText(held_bytes) +
-                   L" to fetch again";
-        std::wstring s = Thousands(cells) + L" charts, " + SizeText(bytes);
-        if (held > 0)
-            s += L" · " + Thousands(held) + L" already installed";
-        return s;
-    }
-
     std::vector<std::string> Removed(std::string const &held, std::string const &picked)
     {
         std::vector<std::string> out;
@@ -246,77 +95,11 @@ namespace lkw
         return out;
     }
 
-    std::wstring PlanLine(uint32_t cells, uint64_t bytes, uint32_t held, uint64_t held_bytes,
-                          std::vector<std::wstring> const &removing)
-    {
-        std::wstring s;
-        if (cells > 0)
-            s = L"Add " + Thousands(cells) + L" charts, " + SizeText(bytes);
-        if (!removing.empty())
-        {
-            std::wstring names;
-            for (auto const &n : removing)
-                names += (names.empty() ? L"" : L", ") + n;
-            s += (s.empty() ? L"" : L" · ") + (L"remove " + names);
-        }
-        return s.empty() ? CostLine(cells, bytes, held, held_bytes) : s;
-    }
-
-    std::wstring RemovalTitle(std::vector<std::wstring> const &removing)
-    {
-        if (removing.size() == 1)
-            return L"Remove " + removing[0] + L" charts?";
-        return L"Remove charts for " + Thousands(removing.size()) + L" regions?";
-    }
-
     bool ApplyEnabled(bool have_catalog, uint32_t cells, size_t removing)
     {
         return have_catalog && (cells > 0 || removing > 0);
     }
 
-    std::wstring PrepareEstimate(size_t charts)
-    {
-        double seconds = (double)(charts < 1 ? 1 : charts) * 0.2;
-        if (seconds < 60)
-            return L"under a minute";
-        wchar_t buf[64];
-        if (seconds < 3600)
-        {
-            int minutes = (int)(seconds / 60.0 + 0.5);
-            if (minutes <= 1)
-                return L"about a minute";
-            std::swprintf(buf, 64, L"about %d minutes", minutes);
-            return buf;
-        }
-        std::swprintf(buf, 64, L"about %.1f hours", seconds / 3600.0);
-        return buf;
-    }
-
-    std::wstring RemovalNote(size_t removed, size_t failed)
-    {
-        if (removed == 0 && failed == 0)
-            return L"No downloaded charts matched that water.";
-        std::wstring s;
-        if (removed != 0)
-            s = L"Removed " + Thousands(removed) +
-                (removed == 1 ? L" chart" : L" charts") + L".";
-        if (failed != 0)
-        {
-            if (!s.empty())
-                s += L" ";
-            s += Thousands(failed) + (failed == 1 ? L" chart is" : L" charts are") +
-                 L" still in use and stayed on the disk.";
-        }
-        return s;
-    }
-
-    std::wstring Thousands(uint64_t n)
-    {
-        std::wstring s = std::to_wstring(n);
-        for (int i = (int)s.size() - 3; i > 0; i -= 3)
-            s.insert((size_t)i, L",");
-        return s;
-    }
 
     std::wstring FirstRun::Title() const
     {
@@ -364,15 +147,15 @@ namespace lkw
                 // A picker states a plan: what is being fetched, what is being
                 // given back, or what the pick holds. With nothing ticked and
                 // nothing unticked it has nothing to say.
-                if (f.cells == 0 && f.held == 0 && f.removing.empty())
+                if (!f.picked && f.removing.empty())
                     return L"";
-                return PlanLine(f.cells, f.bytes, f.held, f.held_bytes, f.removing);
+                return f.price;
             }
             // Water already here counts as picked, so a region wholly
             // installed prices as that rather than reading as an empty pick.
-            if (f.cells == 0 && f.held == 0)
+            if (!f.picked)
                 return L"Pick at least one region.";
-            return CostLine(f.cells, f.bytes, f.held, f.held_bytes);
+            return f.price;
         case FirstRunStep::Depths:
             return L"Change any of this later in Mariner settings, in Depths.";
         case FirstRunStep::OnlineChart:

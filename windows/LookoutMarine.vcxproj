@@ -203,6 +203,9 @@
     <ClCompile Include="src\firstrun\lk_coastline.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
+    <ClCompile Include="src\firstrun\lk_firstrun_core.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="src\firstrun\lk_firstrun.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>

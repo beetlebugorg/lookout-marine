@@ -69,14 +69,10 @@ namespace lkw
         if (done < 3 || total <= done || elapsed <= 1.0)
             return {};
         double per = elapsed / (double)done;
-        double left = per * (double)(total - done);
-        if (left < 60)
-            return "under a minute left";
-        if (left < 3600)
-            return "about " + std::to_string((int)(left / 60 + 0.5)) + " min left";
-        char buf[64];
-        snprintf(buf, sizeof buf, "about %.1f h left", left / 3600.0);
-        return buf;
+        char buf[LOOKOUT_DURATION_MAX];
+        size_t const n = lookout_fmt_duration(per * (double)(total - done), LOOKOUT_DURATION_LEFT,
+                                              buf, sizeof buf);
+        return std::string(buf, n);
     }
 
     ScanResult ScanCharts(std::string const &path)

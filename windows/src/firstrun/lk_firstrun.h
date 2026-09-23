@@ -12,6 +12,7 @@
 
 #include <cstdint>
 #include <lookout-library.h> // lookout_setup_state
+#include <lookout-shell.h>   // lookout_depth_plan
 #include <optional>
 #include <string>
 #include <utility>
@@ -70,85 +71,68 @@ namespace lkw
     std::wstring SizeText(uint64_t bytes);
     std::wstring Thousands(uint64_t n);
 
+    // How far out a depth lies across the depth step's illustration, as a
+    // fraction of it, for a picture whose deepest water is `floor`. The slope
+    // is measured in contours rather than metres because the depths span a
+    // dinghy and a ship.
+    double SeabedReach(double depth, double floor);
+
+    // The spot depths the illustration draws: a depth as a multiple of the
+    // safety contour, and how far along its line it stands. Multiples hold a
+    // sounding in place while the mariner works, so it moves only when the
+    // contour steps to the next one the survey draws.
+    struct SeabedSpot
+    {
+        double of_contour;
+        double across;
+    };
+    std::vector<SeabedSpot> SeabedSpots();
+
     // The depth step's two questions, and the four numbers the engine draws
-    // with that follow from them.
-    //
-    // The draft and the clearance are held in the unit on screen so every
-    // number displays round. A metric list converted into feet gives a 4.9 ft
-    // clearance and a 16.4 ft contour.
+    // with, from the core's depth plan (lookout_depth_plan). The draft and the
+    // clearance are held in metres. The plan states them, and the settings,
+    // in the unit on screen. Defined in lk_firstrun_core.cpp, which calls the
+    // core, so the model suite does not build it.
     class DepthChoice
     {
     public:
-        // A small keelboat. The stored safety depth is no help as a start: it
-        // begins at the engine's 10 m, and a draft read back out of that is
-        // 9.7 m.
-        explicit DepthChoice(bool feet = false)
-            : feet_(feet), draft_(feet ? 5.5 : 1.7), clearance_(feet ? 2.0 : 0.6)
-        {
-        }
+        // The starting keelboat: 1.7 m with 0.6 m, or 5.5 ft with 2 ft.
+        explicit DepthChoice(bool feet = false);
 
         bool feet() const { return feet_; }
-        double draft() const { return draft_; }
-        double clearance() const { return clearance_; }
         wchar_t const *unit() const { return feet_ ? L"ft" : L"m"; }
+        // The clearance picked, in the unit on screen.
+        double clearance() const { return plan_.clearance; }
+        struct ::lookout_depth_plan const &plan() const { return plan_; }
+        std::vector<double> Clearances() const
+        {
+            return { std::begin(plan_.clearances), std::end(plan_.clearances) };
+        }
+        // The deepest water the illustration draws, in the unit on screen,
+        // half again past the deep contour so the last shade has water in it.
+        double Floor() const { return plan_.deep_contour * 1.5; }
+        double Reach(double depth) const { return SeabedReach(depth, Floor()); }
 
-        // The clearances offered, round in both units.
-        std::vector<double> Clearances() const;
-        // The contours an S-57 survey draws. The safety contour is the first
-        // of these at or past the safety depth, because the chart shades on a
-        // contour the survey has.
-        std::vector<double> Ladder() const;
-
-        // Draft plus clearance, rounded up to a whole foot or metre. A chart
-        // names its depths in whole numbers, and the fraction belongs to the
-        // keel rather than to the water.
-        double SafetyDepth() const;
-        double SafetyContour() const;
-        // Twice the safety contour, up the same ladder. The step does not ask
-        // for it.
-        double DeepContour() const;
-        // The deepest water the illustration draws, half again past the deep
-        // contour so the last shade has water in it.
-        double Floor() const { return DeepContour() * 1.5; }
-
-        // How far out a depth lies, as a fraction of the illustration. The
-        // slope is measured in contours rather than metres because the
-        // answers span a dinghy and a ship.
-        double Reach(double depth) const;
-
-        // One step of the draft field: half a foot, or a tenth of a metre.
-        double StepSize() const { return feet_ ? 0.5 : 0.1; }
         void Step(int by);
-        // Read a draft the mariner typed. False when it is not a depth, in
-        // which case the draft stands.
+        // Read a draft the mariner typed, in the unit on screen. False when it
+        // is not a depth, in which case the draft stands.
         bool ReadDraft(std::wstring const &text);
-        void set_clearance(double c) { clearance_ = c; }
-        // Change the unit: convert the draft, and snap the clearance to one of
-        // the choices the new unit offers.
+        // A clearance in the unit on screen, one of Clearances().
+        void set_clearance(double c);
         void SetUnit(bool feet);
 
-        // A depth on screen with its unit on it, and the draft alone for the
-        // field.
+        // A depth in the unit on screen with its unit on it, and the draft
+        // alone for the field.
         std::wstring Measure(double v) const;
         std::wstring DraftText() const;
-        // A depth on screen in metres, which is what the engine is given.
-        double Metres(double v) const { return feet_ ? v / 3.28084 : v; }
-
-        // The spot depths the illustration draws: a depth as a multiple of
-        // the safety contour, and how far along its line it stands. Multiples
-        // hold a sounding in place while the mariner works, so it moves only
-        // when the contour steps to the next one the survey draws.
-        struct Spot
-        {
-            double of_contour;
-            double across;
-        };
-        static std::vector<Spot> Spots();
 
     private:
-        bool   feet_{ false };
-        double draft_{ 1.7 };
-        double clearance_{ 0.6 };
+        void Plan();
+
+        bool               feet_{ false };
+        double             draft_m_{ 0 };
+        double             clearance_m_{ 0 };
+        struct ::lookout_depth_plan plan_{};
     };
 
     // The regions a download covers, as the core's own comma separated list
@@ -301,10 +285,10 @@ namespace lkw
         struct Footnotes
         {
             bool         have_catalog{ false };
-            uint32_t     cells{ 0 };
-            uint64_t     bytes{ 0 };
-            uint32_t     held{ 0 };
-            uint64_t     held_bytes{ 0 };
+            // The pick holds a chart to fetch or one already here, and the
+            // line that prices it: PlanLine for a picker, else CostLine.
+            bool         picked{ false };
+            std::wstring price;
             std::wstring credit;
             bool         have_charts{ false };
             /* The regions being given back, by name. Only a picker opened

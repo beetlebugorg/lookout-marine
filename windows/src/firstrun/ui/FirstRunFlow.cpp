@@ -594,9 +594,18 @@ namespace winrt::LookoutMarine::implementation
             f.have_charts = chart_has_cells;
             f.credit = std::wstring{ ScaleBarCredit().Text() };
             f.removing = NoaaRegionNames(removing);
-            if (first_run.step() == lkw::FirstRunStep::Coverage && !noaa_region_id.empty())
-                lookout_noaa_cost(noaa.handle(), noaa_region_id.c_str(), &f.cells,
-                                        &f.bytes, &f.held, &f.held_bytes);
+            if (first_run.step() == lkw::FirstRunStep::Coverage)
+            {
+                uint32_t cells = 0, held = 0;
+                uint64_t bytes = 0, held_bytes = 0;
+                if (!noaa_region_id.empty())
+                    lookout_noaa_cost(noaa.handle(), noaa_region_id.c_str(), &cells, &bytes, &held,
+                                      &held_bytes);
+                f.picked = cells > 0 || held > 0;
+                f.price = first_run.picker_only()
+                              ? lkw::PlanLine(cells, bytes, held, held_bytes, f.removing)
+                              : lkw::CostLine(cells, bytes, held, held_bytes);
+            }
             std::wstring const note = first_run.Footnote(f);
             FirstRunFootnote().Text(winrt::hstring{ note });
             FirstRunFootnote().Visibility(note.empty() ? Visibility::Collapsed
