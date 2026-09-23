@@ -69,12 +69,14 @@ protocol NoaaEngine: AnyObject {
     func noaaChanged() -> Bool
     func noaaState() -> NoaaState
     func noaaCost(regionIDs: String) -> NoaaCost?
-    /// Name the NOAA cells already installed, so a pick prices the rest.
-    func noaaHave(_ names: [String])
     func noaaDownload(regionIDs: String, destination: String, again: Bool)
     func noaaRegionCells(regionIDs: String) -> [String]
-    func noaaOutdated(_ have: [NoaaInstalledCell]) -> UInt32
-    func noaaUpdate(_ have: [NoaaInstalledCell], destination: String)
+    /// How many of the downloaded cells NOAA has reissued. 0 until a catalog
+    /// has been read from the network.
+    func noaaOutdated() -> UInt32
+    func noaaUpdate(destination: String)
+    /// True when an update check is due and has started, or still runs.
+    func noaaUpdateDue() -> Bool
     func noaaCancel()
     func noaaRegionCoverage(_ regionID: String) -> [GeoBox]
 }

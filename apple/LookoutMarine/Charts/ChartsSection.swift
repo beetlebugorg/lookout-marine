@@ -193,7 +193,7 @@ struct ChartsSections: View {
 
     /// What the last update check found, and when it ran.
     private var updateCheckedText: String? {
-        guard let at = model.noaa.updatedCheckedAt else {
+        guard let at = model.noaa.state.checkedAt else {
             return model.noaa.updateCheck == .never ? nil : "Not checked yet"
         }
         let f = RelativeDateTimeFormatter()

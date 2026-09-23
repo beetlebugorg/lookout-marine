@@ -172,6 +172,8 @@ final class FakeEngine: RasterEngine, ChartLinkEngine, PluginEngine,
     var noaaCells: [String: [String]] = [:]
     var noaaCoverage: [String: [GeoBox]] = [:]
     var noaaOutdatedCount: UInt32 = 0
+    /// What noaaUpdateDue returns.
+    var noaaDue = false
 
     @discardableResult func noaaRefresh() -> Bool {
         note("noaaRefresh")
@@ -183,10 +185,6 @@ final class FakeEngine: RasterEngine, ChartLinkEngine, PluginEngine,
     func noaaState() -> NoaaState { noaa }
 
     func noaaCost(regionIDs: String) -> NoaaCost? { noaaCosts[regionIDs] }
-
-    func noaaHave(_ names: [String]) {
-        note("noaaHave(\(names.sorted().joined(separator: ",")))")
-    }
 
     func noaaDownload(regionIDs: String, destination: String, again: Bool) {
         note("noaaDownload(\(regionIDs), \(destination), again: \(again))")
@@ -205,13 +203,18 @@ final class FakeEngine: RasterEngine, ChartLinkEngine, PluginEngine,
         return out
     }
 
-    func noaaOutdated(_ have: [NoaaInstalledCell]) -> UInt32 {
-        note("noaaOutdated(\(have.count))")
+    func noaaOutdated() -> UInt32 {
+        note("noaaOutdated")
         return noaaOutdatedCount
     }
 
-    func noaaUpdate(_ have: [NoaaInstalledCell], destination: String) {
-        note("noaaUpdate(\(have.count), \(destination))")
+    func noaaUpdate(destination: String) {
+        note("noaaUpdate(\(destination))")
+    }
+
+    func noaaUpdateDue() -> Bool {
+        note("noaaUpdateDue")
+        return noaaDue
     }
 
     func noaaCancel() { note("noaaCancel") }

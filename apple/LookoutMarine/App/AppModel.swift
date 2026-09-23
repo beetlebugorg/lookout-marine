@@ -39,15 +39,8 @@ final class AppModel {
     /// reopening leaves its download running.
     private var noaaService: NoaaService?
     /// The download being followed to its end: its run number, where it
-    /// writes, whether an update check follows, and how to order it again.
-    /// A new order replaces it.
-    private var noaaWatch: (run: UInt32, dest: String, thenRecheck: Bool,
-                            order: () -> Void)?
-    /// True once the update check has run in this session. A chart reopens
-    /// whenever the set list changes, and the check is a launch question.
-    private var noaaChecked = false
-    /// True while the update check waits for the launch scan to finish.
-    private var noaaCheckWaiting = false
+    /// writes, and how to order it again. A new order replaces it.
+    private var noaaWatch: (run: UInt32, dest: String, order: () -> Void)?
     let raster = RasterModel()
     let plugins = PluginsModel()
     let overlay = OverlayModel()
@@ -100,11 +93,9 @@ final class AppModel {
             charts.openError = "Couldn't find a place to download charts to."
             return
         }
-        let have = charts.installedCells
-        guard !have.isEmpty else { return }
         let before = noaa.state.run
-        noaa.update(have, to: dest)
-        watchNoaaDownload(dest, after: before, thenRecheck: true) { [weak self] in
+        noaa.update(to: dest)
+        watchNoaaDownload(dest, after: before) { [weak self] in
             self?.startNoaaUpdate()
         }
     }
@@ -114,10 +105,9 @@ final class AppModel {
     /// is the run number read before ordering: an order the model did not
     /// pass on leaves it as it was, and there is no download to follow.
     private func watchNoaaDownload(_ dest: String, after before: UInt32,
-                                   thenRecheck: Bool = false,
                                    order: @escaping () -> Void) {
         guard noaa.state.run != before else { return }
-        noaaWatch = (noaa.state.run, dest, thenRecheck, order)
+        noaaWatch = (noaa.state.run, dest, order)
         noaaChanged()
     }
 
@@ -148,7 +138,6 @@ final class AppModel {
         case .empty, .none, .running:
             break
         }
-        if w.thenRecheck { Task { await recheckNoaaUpdates() } }
     }
 
     /// Order a download again. With no catalog loaded, read it first.
@@ -157,59 +146,6 @@ final class AppModel {
         Task {
             await noaa.loadCatalog()
             order()
-        }
-    }
-
-    /// Count the reissued charts again, once the new editions are in the
-    /// library.
-    ///
-    /// An update lands as cells that still have to bake, and the editions the
-    /// library reports do not change until that work ends. Reading them any
-    /// sooner puts the same count back on screen.
-    private func recheckNoaaUpdates() async {
-        // The bake and the scan run on workers of their own, and a 700 cell
-        // import is minutes. Idle four reads running rather than one, so the
-        // gap between the scan ending and the bake starting does not pass for
-        // finished work.
-        var idle = 0
-        for _ in 0..<2400 {
-            try? await Task.sleep(for: .milliseconds(500))
-            if charts.scanning || charts.chartWork != nil {
-                idle = 0
-                continue
-            }
-            idle += 1
-            if idle >= 4 { break }
-        }
-        let have = charts.installedCells
-        guard !have.isEmpty else { return }
-        noaaChecked = true
-        await noaa.checkForUpdates(have)
-    }
-
-    /// Look for reissued charts, when the cadence says to and there is
-    /// something to look for.
-    ///
-    /// Once per launch, from the first chart that opens. Daily means the last check was over a day ago,
-    /// which an app left running for a week satisfies once a day, so nothing
-    /// here wakes on a clock.
-    private func considerNoaaUpdateCheck() {
-        guard !noaaChecked, !noaaCheckWaiting, noaa.shouldCheck() else { return }
-        noaaCheckWaiting = true
-        Task { [weak self] in
-            guard let self else { return }
-            defer { self.noaaCheckWaiting = false }
-            // The scan at launch fills the set list on a worker of its own, and
-            // an empty list has no editions to ask about. The loop waits for
-            // the scan to finish, however long a slow disk makes it.
-            while self.charts.scanning || self.charts.chartWork != nil {
-                try? await Task.sleep(for: .milliseconds(250))
-            }
-            let have = self.charts.installedCells
-            // No NOAA cells yet. The check runs again on the next chart open.
-            guard !have.isEmpty else { return }
-            self.noaaChecked = true
-            await self.noaa.checkForUpdates(have)
         }
     }
 
@@ -268,6 +204,10 @@ final class AppModel {
         charts.onSetsChanged = { [weak self] in
             guard let self else { return }
             self.firstRun.noteLibrary(self.charts)
+            // The core reads the held cells and the editions off the sets.
+            self.noaa.reprice()
+            self.noaa.recount()
+            self.noaa.considerUpdateCheck()
         }
         // Anything a previous run renamed on its way to being deleted.
         ChartBake.sweepTrash()
@@ -297,7 +237,7 @@ final class AppModel {
     func chartDidOpen() {
         // Setup frames the country, which goes through the chart handle.
         if firstRun.showing { showWholeCountry() }
-        considerNoaaUpdateCheck()
+        noaa.considerUpdateCheck()
         chartLinks.migrate()
         // The chart-link calls held while no chart was open.
         chartLinks.chartDidOpen()

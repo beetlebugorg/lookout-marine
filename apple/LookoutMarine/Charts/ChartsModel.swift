@@ -124,51 +124,13 @@ final class ChartsModel {
 
     // MARK: The installed sets
 
-    /// The dataset names of every cell installed, in any set, switched on or
-    /// off. A NOAA pick prices what is missing from the water rather than the
-    /// whole of it, and a cell is that cell whichever folder it arrived in.
-    var installedCellNames: [String] {
-        var seen = Set<String>()
-        for set in sets {
-            for cell in set.cells where !cell.isRaster {
-                seen.insert(cell.stem.uppercased())
-            }
-        }
-        return Array(seen)
-    }
-
-    /// Every installed US cell that states which edition it is, for the update
-    /// check. A cell prepared before Lookout recorded an edition states 0, and
-    /// including it would report every chart as reissued: the catalog holds an
-    /// edition for it and 0 is lower than all of them.
-    ///
-    /// One entry per cell name. A cell held in two sets is one chart on the
-    /// water, and the newer edition is the one the chart draws, so the newer is
-    /// the one to ask about.
-    var installedCells: [NoaaInstalledCell] {
-        var best: [String: NoaaInstalledCell] = [:]
-        for set in sets {
-            for cell in set.cells where !cell.isRaster && cell.edition > 0 {
-                let name = cell.stem.uppercased()
-                guard name.hasPrefix("US") else { continue }
-                let held = NoaaInstalledCell(name: name,
-                                             edition: cell.edition,
-                                             update: cell.update)
-                if let had = best[name],
-                   (had.edition, had.update) >= (held.edition, held.update) { continue }
-                best[name] = held
-            }
-        }
-        return Array(best.values)
-    }
-
     /// The dataset names the NOAA downloader's own set holds.
     ///
     /// The picker states what it can add and what it can remove, and it can
-    /// only remove what it downloaded. installedCellNames counts every set,
-    /// switched off ones and archives that merely list their cells, so a
-    /// region reads as installed on the strength of a folder the downloader
-    /// never wrote, and unticking it then deletes no file.
+    /// only remove what it downloaded. The cells the core counts as held
+    /// come from every set, switched off ones and archives that merely list
+    /// their cells, so a region reads as installed on the strength of a folder
+    /// the downloader never wrote, and unticking it then deletes no file.
     var managedCellNames: [String] {
         guard let dest = NoaaModel.downloadDirectory else { return [] }
         var seen = Set<String>()

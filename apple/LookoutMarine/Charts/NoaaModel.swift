@@ -36,13 +36,6 @@ struct NoaaCost {
     var heldBytes: UInt64 = 0
 }
 
-/// A cell already installed, for the update check.
-struct NoaaInstalledCell: Hashable {
-    let name: String
-    let edition: UInt32
-    let update: UInt32
-}
-
 /// What the core is doing with NOAA's charts.
 struct NoaaState: Equatable {
     enum Phase: UInt8 { case idle = 0, readingCatalog = 1, ready = 2, downloading = 3 }
@@ -127,7 +120,7 @@ final class NoaaModel {
     /// What fetching the installed ones again costs, for a repair.
     private(set) var heldBytes: UInt64 = 0
 
-    /// Callers waiting in checkForUpdates for the catalog read to end.
+    /// Callers waiting in loadCatalog for the catalog read to end.
     private var catalogWaiters: [CheckedContinuation<Void, Never>] = []
 
     weak var engine: (any NoaaEngine)? {
@@ -139,9 +132,6 @@ final class NoaaModel {
 
     init() {
         regions = NoaaModel.readRegions()
-        if let at = Store.shared.number(NoaaModel.group, NoaaModel.checkedKey), at > 0 {
-            updatedCheckedAt = Date(timeIntervalSince1970: at)
-        }
     }
 
     /// The region table from the core. Static for the life of the process.
@@ -199,6 +189,7 @@ final class NoaaModel {
         // Assigning an equal value still invalidates every view reading it.
         guard next != state else { return }
         let gained = next.haveCatalog && !state.haveCatalog
+        let reread = next.checkedAt != state.checkedAt
         state = next
         if gained {
             recost()
@@ -210,6 +201,8 @@ final class NoaaModel {
             catalogWaiters = []
             for w in waiting { w.resume() }
         }
+        finishCheck()
+        if reread { recount() }
         onChange?()
     }
 
@@ -243,11 +236,10 @@ final class NoaaModel {
         }
     }
 
-    /// Hand the core the NOAA cells already installed, then price again. The
-    /// names come off the chart sets, so a set added by hand counts the same
-    /// as one this app downloaded.
-    func noteInstalled(_ names: [String]) {
-        engine?.noaaHave(names)
+    /// Price the pick and each region again. The core reads the cells held
+    /// off the chart sets, so a set added by hand counts the same as one this
+    /// app downloaded.
+    func reprice() {
         recost()
         repriceRegions()
     }
@@ -433,13 +425,9 @@ final class NoaaModel {
         pull()
     }
 
-    /// How many of these cells NOAA has reissued.
-    func outdatedCount(_ have: [NoaaInstalledCell]) -> UInt32 {
-        engine?.noaaOutdated(have) ?? 0
-    }
-
-    func update(_ have: [NoaaInstalledCell], to destination: String) {
-        engine?.noaaUpdate(have, destination: destination)
+    /// Download the reissues of the cells this app downloaded.
+    func update(to destination: String) {
+        engine?.noaaUpdate(destination: destination)
         pull()
     }
 
@@ -460,17 +448,16 @@ final class NoaaModel {
         }
     }
 
-    /// How many installed cells NOAA has reissued, as the last check counted
+    /// How many downloaded cells NOAA has reissued, as the last check counted
     /// them. Zero before a check has run.
     private(set) var outdated: UInt32 = 0
-    /// When the last update check finished, across launches.
-    private(set) var updatedCheckedAt: Date?
-    /// True while a check runs. The catalog read is the slow half.
+    /// True while a check reads the catalog.
     private(set) var checking = false
+    /// True once a check has run, so the count follows the library after it.
+    private var checked = false
 
     private static let group = Store.Group.chartsets
     private static let cadenceKey = "noaa-update-check"
-    private static let checkedKey = "noaa-update-checked"
 
     var updateCheck: UpdateCheck {
         get {
@@ -483,38 +470,31 @@ final class NoaaModel {
         }
     }
 
-    /// True when the cadence says to look now. Daily means the last check is
-    /// over a day old, so an app left running for a week checks once a day and
-    /// one opened twice in an hour checks once.
-    func shouldCheck(now: Date = Date()) -> Bool {
-        switch updateCheck {
-        case .never: return false
-        case .startup: return true
-        case .daily:
-            guard let last = updatedCheckedAt else { return true }
-            return now.timeIntervalSince(last) >= 24 * 60 * 60
-        }
+    /// Start an update check when the core finds one due. The core reads the
+    /// cadence and the last check from the store, and makes no request while
+    /// the library holds no downloaded cell. Called when a chart opens and
+    /// when the set list changes.
+    func considerUpdateCheck() {
+        guard let engine, engine.noaaUpdateDue() else { return }
+        checking = true
+        pull()
+        finishCheck()
     }
 
-    /// Read NOAA's catalog, then count how many of `have` it has reissued.
-    ///
-    /// One pass. It ends with the count, and waits on the catalog read with
-    /// no timer.
-    func checkForUpdates(_ have: [NoaaInstalledCell]) async {
-        guard !checking, !have.isEmpty else { return }
-        checking = true
-        defer { checking = false }
-        if !state.haveCatalog {
-            refresh()
-            if state.phase == .readingCatalog {
-                await withCheckedContinuation { catalogWaiters.append($0) }
-            }
-        }
-        guard state.haveCatalog else { return }
-        outdated = outdatedCount(have)
-        let now = Date()
-        updatedCheckedAt = now
-        Store.shared.set(now.timeIntervalSince1970, NoaaModel.group, NoaaModel.checkedKey)
+    /// End the check once its catalog read has ended, and count.
+    private func finishCheck() {
+        guard checking, state.phase != .readingCatalog else { return }
+        checking = false
+        checked = true
+        recount()
+    }
+
+    /// Count the reissued charts again. The core counts against the library
+    /// as it is now, so an update that has baked clears its charts from the
+    /// count.
+    func recount() {
+        guard checked, let engine else { return }
+        outdated = engine.noaaOutdated()
     }
 
     /// Where downloaded cells are staged before they bake. One directory, so

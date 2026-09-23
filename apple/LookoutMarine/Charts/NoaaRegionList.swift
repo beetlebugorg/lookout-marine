@@ -262,7 +262,7 @@ struct NoaaPickerSheet: View {
         }
         .onAppear {
             noaa.poll()
-            noaa.noteInstalled(model.charts.installedCellNames)
+            noaa.reprice()
             noaa.noteManaged(model.charts.managedCellNames)
             if !noaa.state.haveCatalog { noaa.refresh() } else { startFromInstalled() }
         }

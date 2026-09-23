@@ -164,42 +164,61 @@ final class NoaaModelTests: ShellTestCase {
 
     // MARK: Reissued charts
 
-    func testACheckCountsWhatTheCatalogReissued() async {
+    func testACheckCountsWhatTheCatalogReissued() {
         let (m, fake) = model(cells: ["d1": ["US1NE01"]])
         fake.noaaOutdatedCount = 721
+        fake.noaaDue = true
 
-        await m.checkForUpdates([NoaaInstalledCell(name: "US1NE01", edition: 3, update: 0)])
+        m.considerUpdateCheck()
 
+        XCTAssertFalse(m.checking)
         XCTAssertEqual(m.outdated, 721)
-        XCTAssertNotNil(m.updatedCheckedAt)
     }
 
-    /// The count comes off the library each time it is read. An update that
-    /// baked leaves the cells at the editions the catalog holds, and the line
-    /// on the charts page goes with the count.
-    func testACheckAfterAnUpdateClearsTheCount() async {
+    /// The check waits on the catalog read, and counts when it ends.
+    func testACheckCountsWhenTheCatalogReadEnds() {
         let (m, fake) = model(cells: ["d1": ["US1NE01"]])
         fake.noaaOutdatedCount = 721
-        await m.checkForUpdates([NoaaInstalledCell(name: "US1NE01", edition: 3, update: 0)])
+        fake.noaaDue = true
+        fake.noaa.phase = .readingCatalog
+
+        m.considerUpdateCheck()
+        XCTAssertTrue(m.checking)
+        XCTAssertEqual(m.outdated, 0)
+
+        fake.noaa.phase = .ready
+        m.poll()
+        XCTAssertFalse(m.checking)
+        XCTAssertEqual(m.outdated, 721)
+    }
+
+    /// The count follows the library. An update that baked leaves the cells
+    /// at the editions the catalog holds, and the line on the charts page
+    /// goes with the count.
+    func testACountAfterAnUpdateClears() {
+        let (m, fake) = model(cells: ["d1": ["US1NE01"]])
+        fake.noaaOutdatedCount = 721
+        fake.noaaDue = true
+        m.considerUpdateCheck()
         XCTAssertEqual(m.outdated, 721)
 
         // The newer edition is in the library now.
         fake.noaaOutdatedCount = 0
-        await m.checkForUpdates([NoaaInstalledCell(name: "US1NE01", edition: 4, update: 0)])
+        m.recount()
 
         XCTAssertEqual(m.outdated, 0)
     }
 
-    /// An empty library has no editions to ask about, and the core needs a
-    /// cell list to answer at all.
-    func testACheckWithAnEmptyLibraryDoesNotRun() async {
+    /// A check the core does not find due leaves the count alone.
+    func testACheckThatIsNotDueDoesNotCount() {
         let (m, fake) = model(cells: ["d1": ["US1NE01"]])
         fake.noaaOutdatedCount = 721
 
-        await m.checkForUpdates([])
+        m.considerUpdateCheck()
+        m.recount()
 
         XCTAssertEqual(m.outdated, 0)
-        XCTAssertNil(m.updatedCheckedAt)
+        XCTAssertFalse(fake.calls.contains("noaaOutdated"))
     }
 
     // MARK: What a removal deletes

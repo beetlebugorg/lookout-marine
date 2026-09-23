@@ -73,17 +73,6 @@ final class NoaaService: NoaaEngine {
                                   held: held, heldBytes: heldBytes) : nil
     }
 
-    /// Name the NOAA cells already on this device, so a pick prices what is
-    /// missing from the water rather than all of it.
-    func noaaHave(_ names: [String]) {
-        let copies = names.map { strdup($0)! }
-        defer { for c in copies { free(c) } }
-        var pointers = copies.map { UnsafePointer<CChar>?($0) }
-        pointers.withUnsafeMutableBufferPointer {
-            lookout_noaa_svc_have(handle, $0.baseAddress, $0.count)
-        }
-    }
-
     /// `again` fetches the cells already installed as well, for a mariner
     /// repairing or refreshing water they hold.
     func noaaDownload(regionIDs: String, destination: String, again: Bool) {
@@ -127,31 +116,15 @@ final class NoaaService: NoaaEngine {
         lookout_noaa_svc_cancel(handle)
     }
 
-    func noaaOutdated(_ have: [NoaaInstalledCell]) -> UInt32 {
-        guard !have.isEmpty else { return 0 }
-        return withInstalled(have) { lookout_noaa_svc_outdated(handle, $0, have.count) }
+    func noaaOutdated() -> UInt32 {
+        lookout_noaa_svc_outdated(handle)
     }
 
-    func noaaUpdate(_ have: [NoaaInstalledCell], destination: String) {
-        guard !have.isEmpty else { return }
-        withInstalled(have) { buf in
-            destination.withCString { lookout_noaa_svc_update(handle, buf, have.count, $0) }
-        }
+    func noaaUpdate(destination: String) {
+        destination.withCString { lookout_noaa_svc_update(handle, $0) }
     }
 
-    /// Build the C array of installed cells and hand it to `body`. The cell
-    /// names are held alive for the call, because the struct holds pointers
-    /// into them.
-    private func withInstalled<T>(_ have: [NoaaInstalledCell],
-                                  _ body: (UnsafePointer<lookout_noaa_installed>) -> T) -> T {
-        let names = have.map { strdup($0.name)! }
-        defer { for n in names { free(n) } }
-        var buf = [lookout_noaa_installed]()
-        buf.reserveCapacity(have.count)
-        for (i, c) in have.enumerated() {
-            buf.append(.init(name: UnsafePointer(names[i]),
-                             edition: c.edition, update: c.update))
-        }
-        return buf.withUnsafeBufferPointer { body($0.baseAddress!) }
+    func noaaUpdateDue() -> Bool {
+        lookout_noaa_svc_update_due(handle) != 0
     }
 }

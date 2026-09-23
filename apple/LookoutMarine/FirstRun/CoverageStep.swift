@@ -26,7 +26,7 @@ struct CoverageStep: View {
         .padding(.bottom, 22)
         .onAppear {
             noaa.poll()
-            noaa.noteInstalled(model.charts.installedCellNames)
+            noaa.reprice()
             if !noaa.state.haveCatalog { noaa.refresh() }
         }
     }
