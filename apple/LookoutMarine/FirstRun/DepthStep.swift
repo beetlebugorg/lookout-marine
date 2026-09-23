@@ -264,61 +264,45 @@ struct DepthStep: View {
     }
 
     /// The S-52 tokens the engine shades four-shade water with, deepest last,
-    /// and the land under them.
+    /// the land under them, and the lines and soundings drawn over them.
     private var scheme: UInt32 { UInt32(m.scheme.rawValue) }
-    private var unsafeShade: Color { Chrome.s52("DEPVS", scheme: scheme) ?? .init(red: 0.38, green: 0.72, blue: 1) }
-    private var shallowShade: Color { Chrome.s52("DEPMS", scheme: scheme) ?? .init(red: 0.51, green: 0.79, blue: 1) }
-    private var mediumShade: Color { Chrome.s52("DEPMD", scheme: scheme) ?? .init(red: 0.65, green: 0.85, blue: 0.98) }
-    private var deepShade: Color { Chrome.s52("DEPDW", scheme: scheme) ?? .init(red: 0.79, green: 0.93, blue: 1) }
-    private var shore: Color { Chrome.s52("LANDA", scheme: scheme) ?? .init(red: 0.75, green: 0.75, blue: 0.56) }
-    private var contourInk: Color { Chrome.s52("DEPCN", scheme: scheme) ?? .init(red: 0.46, green: 0.55, blue: 0.59) }
-    private var soundingInk: Color { Chrome.s52("SNDG2", scheme: scheme) ?? .black }
+    private func token(_ name: String) -> Color { Chrome.s52(name, scheme: scheme) ?? .clear }
+    private var unsafeShade: Color { token("DEPVS") }
+    private var shallowShade: Color { token("DEPMS") }
+    private var mediumShade: Color { token("DEPMD") }
+    private var deepShade: Color { token("DEPDW") }
+    private var land: Color { token("LANDA") }
+    private var coastline: Color { token("CSTLN") }
+    private var contourInk: Color { token("DEPCN") }
 
-    /// The seabed, as a fixed slope measured in safety contours.
-    ///
-    /// The soundings are the seabed and hold still; the shading is the
-    /// mariner's and moves over them. Their depths are read off this slope, so
-    /// they change only when the contour steps to the next one the survey
-    /// draws. A chart behaves the same way when a boat changes.
-    ///
-    /// Measured in contours rather than metres because the answers span a
-    /// dinghy and a ship: a fixed 40 m slope puts a 5 ft contour in the first
-    /// pixel of the panel and a 30 ft one halfway up it.
-    private static let shoreAt: CGFloat = 0.14
-    /// How steeply the slope falls away. Shallow water gets most of the
-    /// panel, because that is where both contours fall.
-    private static let slopeK = 2.07
-
-    /// The deepest water drawn, half again past the deep contour so the last
-    /// shade has water in it.
-    private var floor: Double { deepContour * 1.5 }
-
-    /// How far out a depth lies, as a fraction of the panel.
-    private func reach(_ depth: Double) -> CGFloat {
-        guard floor > 0 else { return Self.shoreAt }
-        let f = pow(max(0, min(1, depth / floor)), 1 / Self.slopeK)
-        return Self.shoreAt + (1 - Self.shoreAt) * CGFloat(f)
+    /// The seabed and its soundings, from the core (lookout_depth_preview).
+    private var preview: lookout_depth_preview {
+        var p = plan
+        var out = lookout_depth_preview()
+        lookout_depth_preview(&p, &out)
+        return out
     }
 
     private var seabed: some View {
         GeometryReader { geo in
             let w = geo.size.width
             let h = geo.size.height
+            let v = preview
             ZStack {
                 deepShade
-                shoal(w: w, h: h, at: reach(deepContour)).fill(mediumShade)
-                shoal(w: w, h: h, at: reach(safetyContour)).fill(shallowShade)
-                shoal(w: w, h: h, at: reach(safetyDepth)).fill(unsafeShade)
+                shoal(v, Int(LOOKOUT_DEPTH_LINE_DEEP_CONTOUR), w, h).fill(mediumShade)
+                shoal(v, Int(LOOKOUT_DEPTH_LINE_SAFETY_CONTOUR), w, h).fill(shallowShade)
+                shoal(v, Int(LOOKOUT_DEPTH_LINE_SAFETY_DEPTH), w, h).fill(unsafeShade)
                 // The safety contour, drawn bold the way S-52 draws the
                 // contour the boat is measured against.
-                shoal(w: w, h: h, at: reach(safetyContour))
-                    .stroke(Color.black.opacity(0.45), lineWidth: 1.8)
-                shoal(w: w, h: h, at: reach(deepContour))
-                    .stroke(Color.black.opacity(0.18), lineWidth: 0.8)
-                shoal(w: w, h: h, at: Self.shoreAt).fill(shore)
-                shoal(w: w, h: h, at: Self.shoreAt)
-                    .stroke(Color.black.opacity(0.45), lineWidth: 1)
-                soundings(w: w, h: h)
+                shoal(v, Int(LOOKOUT_DEPTH_LINE_SAFETY_CONTOUR), w, h)
+                    .stroke(contourInk, lineWidth: 1.8)
+                shoal(v, Int(LOOKOUT_DEPTH_LINE_DEEP_CONTOUR), w, h)
+                    .stroke(contourInk.opacity(0.6), lineWidth: 0.8)
+                shoal(v, Int(LOOKOUT_DEPTH_LINE_SHORE), w, h).fill(land)
+                shoal(v, Int(LOOKOUT_DEPTH_LINE_SHORE), w, h)
+                    .stroke(coastline, lineWidth: 1)
+                soundings(v, w, h)
             }
         }
     }
@@ -327,68 +311,42 @@ struct DepthStep: View {
     ///
     /// Bold at or shallower than the safety depth. That is what the safety
     /// depth does to a chart, and the only way to watch the number move.
-    private func soundings(w: CGFloat, h: CGFloat) -> some View {
-        ForEach(Self.spots, id: \.0) { spot in
-            let depth = safetyContour * spot.1
-            let at = curvePoint(w: w, h: h, t: reach(depth), u: spot.2)
-            Text(sounding(depth))
-                .font(.system(size: 10.5,
-                              weight: depth <= safetyDepth ? .bold : .regular))
+    private func soundings(_ v: lookout_depth_preview, _ w: CGFloat, _ h: CGFloat) -> some View {
+        let xs = Self.doubles(v.spot_x), ys = Self.doubles(v.spot_y)
+        let n = Self.ints(v.spot_sounding), bold = Self.ints(v.spot_bold)
+        return ForEach(0..<xs.count, id: \.self) { i in
+            Text("\(n[i])")
+                .font(.system(size: 10.5, weight: bold[i] != 0 ? .bold : .regular))
                 .monospacedDigit()
-                .foregroundStyle(Color.black.opacity(depth <= safetyDepth ? 0.8 : 0.55))
-                .position(x: at.x, y: at.y)
+                .foregroundStyle(token(bold[i] != 0 ? "SNDG2" : "SNDG1"))
+                .position(x: xs[i] * w, y: ys[i] * h)
         }
     }
 
-    /// Each spot depth: an id, its depth as a multiple of the safety contour,
-    /// and how far along its line it stands.
-    ///
-    /// Multiples, so a sounding holds both its place and its number while the
-    /// mariner works, and moves only when the contour steps to the next one
-    /// the survey draws. The shading is what answers every keystroke.
-    private static let spots: [(Int, Double, CGFloat)] = [
-        (0, 0.12, 0.28), (1, 0.30, 0.68), (2, 0.45, 0.14), (3, 0.62, 0.50),
-        (4, 0.80, 0.84), (5, 1.00, 0.32), (6, 1.22, 0.62), (7, 1.48, 0.20),
-        (8, 1.78, 0.44), (9, 2.12, 0.78), (10, 2.50, 0.34), (11, 2.85, 0.58),
-    ]
-
-    /// A sounding in the unit on screen, rounded up. Whole numbers, the way
-    /// the two contours read.
-    private func sounding(_ v: Double) -> String { "\(Int(v.rounded(.up)))" }
-
-    /// One depth line across the panel.
-    ///
-    /// Every line is the same shape, moved up by its depth, so each band keeps
-    /// its share of the panel from edge to edge. Scaling the curve by the
-    /// depth instead gathered them all into the bottom right corner, and the
-    /// deep band came out seven pixels tall on the left.
-    private func shoal(w: CGFloat, h: CGFloat, at t: CGFloat) -> Path {
-        Path { p in
+    /// One depth line across the panel, closed along the bottom so it fills.
+    private func shoal(_ v: lookout_depth_preview, _ line: Int, _ w: CGFloat, _ h: CGFloat) -> Path {
+        let ys = withUnsafeBytes(of: v.y) { raw in
+            Array(raw.bindMemory(to: Double.self)
+                .dropFirst(line * Int(LOOKOUT_DEPTH_PREVIEW_POINTS))
+                .prefix(Int(LOOKOUT_DEPTH_PREVIEW_POINTS)))
+        }
+        let last = CGFloat(ys.count - 1)
+        return Path { p in
             p.move(to: CGPoint(x: 0, y: h))
-            p.addLine(to: seabed(w: w, h: h, t: t, u: 0))
-            var i = 1
-            while i <= Self.steps {
-                p.addLine(to: seabed(w: w, h: h, t: t, u: CGFloat(i) / CGFloat(Self.steps)))
-                i += 1
+            for (i, y) in ys.enumerated() {
+                p.addLine(to: CGPoint(x: CGFloat(i) / last * w, y: y * h))
             }
             p.addLine(to: CGPoint(x: w, y: h))
             p.closeSubpath()
         }
     }
 
-    private static let steps = 48
-
-    /// A point on one depth line, `u` of the way across.
-    private func seabed(w: CGFloat, h: CGFloat, t: CGFloat, u: CGFloat) -> CGPoint {
-        // The wave and the rise to the right are the same for every line, so
-        // the lines never cross and the bands never pinch.
-        let wave = 0.055 * sin(u * .pi * 1.7 + 0.4) + 0.045 * u
-        return CGPoint(x: u * w, y: h - h * t + h * CGFloat(wave))
+    private static func doubles<T>(_ tuple: T) -> [CGFloat] {
+        withUnsafeBytes(of: tuple) { Array($0.bindMemory(to: Double.self)).map { CGFloat($0) } }
     }
 
-    /// Where a spot depth stands on its own line.
-    private func curvePoint(w: CGFloat, h: CGFloat, t: CGFloat, u: CGFloat) -> CGPoint {
-        seabed(w: w, h: h, t: t, u: u)
+    private static func ints<T>(_ tuple: T) -> [Int] {
+        withUnsafeBytes(of: tuple) { Array($0.bindMemory(to: Int32.self)).map(Int.init) }
     }
 
     private func key(_ color: Color, _ name: String, _ range: String) -> some View {
