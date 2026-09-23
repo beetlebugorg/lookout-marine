@@ -664,6 +664,30 @@ lk_noaa_sets_changed (LkNoaa *self)
   lk_noaa_check_updates (self);
 }
 
+char **
+lk_noaa_gives_back (LkNoaa *self)
+{
+  GPtrArray *out = g_ptr_array_new ();
+  g_autofree char *ids = NULL;
+  const char *back[64];
+  size_t n;
+
+  g_return_val_if_fail (LK_IS_NOAA (self), g_new0 (char *, 1));
+
+  ids = lk_noaa_picked_ids (self);
+  n = MIN (lookout_noaa_gives_back (self->service, ids, back, G_N_ELEMENTS (back)),
+           G_N_ELEMENTS (back));
+  for (size_t i = 0; i < n; i++)
+    {
+      const LkNoaaRegion *region = lk_noaa_region (self, back[i]);
+
+      if (region != NULL)
+        g_ptr_array_add (out, g_strdup (region->name));
+    }
+  g_ptr_array_add (out, NULL);
+  return (char **) g_ptr_array_free (out, FALSE);
+}
+
 int
 lk_noaa_get_update_check (LkNoaa *self)
 {

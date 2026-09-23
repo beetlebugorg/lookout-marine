@@ -158,6 +158,10 @@ void lk_noaa_check_updates (LkNoaa *self);
  * more when one is due. */
 void lk_noaa_sets_changed (LkNoaa *self);
 
+/* The names of the regions an apply of the pick gives back: those the core
+ * records as held that the pick leaves out. Transfer full. */
+char **lk_noaa_gives_back (LkNoaa *self);
+
 /* How often the update check runs, as LOOKOUT_NOAA_CHECK_*. The core keeps
  * it in the store. */
 int  lk_noaa_get_update_check (LkNoaa *self);

@@ -607,10 +607,8 @@ lk_catalog_line_sync (LkNoaa *noaa, gpointer user_data)
   GtkWidget *again = g_object_get_data (G_OBJECT (box), "lk-again");
   GtkWidget *note = g_object_get_data (G_OBJECT (box), "lk-note");
   gboolean reading = state->phase == LOOKOUT_NOAA_READING;
-  /* An empty order and a refusal that a retry cannot clear show no error. */
-  gboolean quiet = state->outcome == LOOKOUT_NOAA_EMPTY ||
-                   (state->outcome == LOOKOUT_NOAA_REFUSED && !state->retry);
-  gboolean failed = !reading && !quiet && state->error[0] != '\0';
+  /* The catalog read's own error. A download's error goes to its alert. */
+  gboolean failed = !reading && state->catalog_error[0] != '\0';
   /* A catalog already read outranks a failed read. The core loads the cached
    * catalog before it requests a new one, so a mariner with no network has a
    * working picker and a failed request at the same time. Showing the error
@@ -623,7 +621,7 @@ lk_catalog_line_sync (LkNoaa *noaa, gpointer user_data)
   gtk_widget_set_visible (again, failed);
   gtk_widget_set_visible (note, stale);
   if (stale)
-    gtk_label_set_text (GTK_LABEL (note), state->error);
+    gtk_label_set_text (GTK_LABEL (note), state->catalog_error);
 
   if (reading)
     {
@@ -643,7 +641,7 @@ lk_catalog_line_sync (LkNoaa *noaa, gpointer user_data)
     }
   else if (failed)
     {
-      gtk_label_set_text (GTK_LABEL (label), state->error);
+      gtk_label_set_text (GTK_LABEL (label), state->catalog_error);
       gtk_widget_add_css_class (label, "error");
     }
   else

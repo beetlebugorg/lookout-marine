@@ -75,27 +75,14 @@ lk_noaa_window_seed (LkNoaaWindow *self, LkNoaa *noaa)
   self->baseline = lk_noaa_picked_ids (noaa);
 }
 
-/* The names of the regions the mariner has taken out of the pick since the
- * picker opened. Transfer full. */
+/* The names of the regions Apply gives back, as the core names them.
+ * Transfer full. */
 static char **
 lk_noaa_window_dropped (LkNoaaWindow *self, LkNoaa *noaa)
 {
-  GPtrArray *out = g_ptr_array_new ();
-
-  if (self->seeded && self->baseline != NULL && self->baseline[0] != '\0')
-    {
-      g_auto (GStrv) was = g_strsplit (self->baseline, ",", -1);
-
-      for (guint i = 0; was[i] != NULL; i++)
-        {
-          const LkNoaaRegion *region = lk_noaa_region (noaa, was[i]);
-
-          if (region != NULL && !lk_noaa_is_picked (noaa, was[i]))
-            g_ptr_array_add (out, g_strdup (region->name));
-        }
-    }
-  g_ptr_array_add (out, NULL);
-  return (char **) g_ptr_array_free (out, FALSE);
+  if (!self->seeded)
+    return g_new0 (char *, 1);
+  return lk_noaa_gives_back (noaa);
 }
 
 static void
