@@ -103,8 +103,8 @@ fun DepthStep(m: MarinerState) {
             blurb = "Lookout shades water your boat cannot cross. It needs one number to do that, and everything else follows from it.",
         )
 
-        numberRow("Draft", draft, measure(draft), step = if (feet) 0.5 else 0.1) {
-            draftM = it * plan.metresPerUnit
+        numberRow("Draft", draft, measure(draft), step = plan.draftStep) {
+            draftM = DepthPlan.of(it * plan.metresPerUnit, clearanceM, feet).draftM
         }
         Text(
             "Deepest point of the hull below the waterline, keel included.",

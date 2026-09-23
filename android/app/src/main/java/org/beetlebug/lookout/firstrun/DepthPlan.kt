@@ -23,6 +23,10 @@ class DepthPlan private constructor(private val v: DoubleArray) {
     val deepContour get() = v[11]
     val clearances get() = listOf(v[12], v[13], v[14], v[15])
     val metresPerUnit get() = v[16]
+    /** One press of the draft stepper, and the deepest draft the step
+     *  accepts. The plan holds the draft between the two. */
+    val draftStep get() = v[17]
+    val draftMax get() = v[18]
 
     companion object {
         /** The plan for a boat. A draft of zero is the core's starting
