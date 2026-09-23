@@ -318,10 +318,6 @@ public final class Lookout implements AutoCloseable {
     public static String[] chartSetsTodo(long s) {
         return s == 0 ? new String[0] : nChartSetsTodo(s);
     }
-    /** The set whose prepare to finish, or null. */
-    public static String chartSetsResume(long s) {
-        return s == 0 ? null : nChartSetsResume(s);
-    }
     /** Record that the mariner stopped the prepare of a set. */
     public static void chartSetsNoteCancel(long s, String path) {
         if (s != 0) nChartSetsNoteCancel(s, path);
@@ -482,7 +478,6 @@ public final class Lookout implements AutoCloseable {
     private static native boolean nChartSetsSetManaged(long s, String path, boolean managed);
     private static native String[] nChartSetToPrepare(long s, String path);
     private static native String[] nChartSetsTodo(long s);
-    private static native String nChartSetsResume(long s);
     private static native void nChartSetsNoteCancel(long s, String path);
     private static native boolean nChartSetsNoteBake(long s, String path, long job);
     private static native String nFmtPosition(double lat, double lon);
@@ -1015,8 +1010,10 @@ public final class Lookout implements AutoCloseable {
     /** Adopt what arrived. True when the state changed since the last call. */
     public static boolean noaaChanged(long n)           { return nNoaaSvcChanged(n); }
     /** out[0] phase, [1] checked at, [2] catalog cells, [3] total, [4] done,
-     *  [5] failed, [6] bytes total, [7] bytes done, [8] outcome, [9] run.
-     *  Returns whether a catalog is loaded. */
+     *  [5] failed, [6] bytes total, [7] bytes done, [8] outcome, [9] run,
+     *  [10] preparing, [11] prepared, [12] to prepare, [13..18] prepared by
+     *  band and [19..24] to prepare by band, band 1 first. Returns whether a
+     *  catalog is loaded. */
     public static boolean noaaPoll(long n, long[] out)  { return nNoaaSvcPoll(n, out); }
     /** The catalog date and the error, each possibly empty. */
     public static String[] noaaText(long n)             { return nNoaaSvcText(n); }

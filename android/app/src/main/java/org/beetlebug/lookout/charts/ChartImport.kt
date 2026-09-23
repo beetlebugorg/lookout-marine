@@ -55,9 +55,24 @@ class ChartImport(private val appContext: Context) {
     /** The set being prepared. */
     @Volatile private var source: String? = null
 
+    /** Stops the core's prepare while [state] shows it. */
+    private var coreStop: (() -> Unit)? = null
+
+    /**
+     * Show the core's prepare of a NOAA download as [state], so the Charts
+     * pane and setup draw it as they draw a bake. [stop] is what [cancel]
+     * calls while it runs. A bake of the shell's own keeps the state.
+     */
+    fun showCorePrepare(s: State, stop: () -> Unit) {
+        if (job != 0L || source != null) return
+        coreStop = if (s.running) stop else null
+        state = s
+    }
+
     /** Stop the bake. tile57 stops at the next chart boundary. The core
      *  records the stop, so the set does not resume on its own. */
     fun cancel() {
+        coreStop?.invoke()
         source?.let { ChartSets.noteCancel(it) }
         val j = job
         if (j != 0L) Lookout.bakeCancel(j)

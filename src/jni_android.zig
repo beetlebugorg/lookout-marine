@@ -3460,7 +3460,6 @@ extern fn lookout_chart_sets_set_on(s: ?*c_sets, path: ?[*:0]const u8, on: c_int
 extern fn lookout_chart_sets_is_on(s: ?*c_sets, path: ?[*:0]const u8) c_int;
 extern fn lookout_chart_sets_compose(s: ?*c_sets, out_n: *usize) ?[*]const ?[*:0]const u8;
 extern fn lookout_chart_set_to_prepare(s: ?*c_sets, path: ?[*:0]const u8, out_n: *usize) ?[*]const ?*const CChartFile;
-extern fn lookout_chart_sets_resume(s: ?*c_sets) ?[*:0]const u8;
 extern fn lookout_chart_sets_note_cancel(s: ?*c_sets, path: ?[*:0]const u8) void;
 extern fn lookout_chart_sets_note_bake(s: ?*c_sets, path: ?[*:0]const u8, b: ?*const bakejob.Job) c_int;
 
@@ -3613,14 +3612,6 @@ export fn Java_org_beetlebug_lookout_Lookout_nChartSetToPrepare(env: [*c]j.JNIEn
     defer out.deinit();
     scanFiles(&out, files[0..n]);
     return out.toArray(env);
-}
-
-/// String nChartSetsResume(long s) -- the set whose prepare to finish, or
-/// null.
-export fn Java_org_beetlebug_lookout_Lookout_nChartSetsResume(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong) j.jstring {
-    _ = cls;
-    const p = lookout_chart_sets_resume(setsOf(s)) orelse return null;
-    return env_(env).NewStringUTF.?(env, p);
 }
 
 /// void nChartSetsNoteCancel(long s, String path) -- the mariner stopped this
@@ -3909,20 +3900,31 @@ export fn Java_org_beetlebug_lookout_Lookout_nNoaaSvcChanged(env: [*c]j.JNIEnv, 
 }
 
 /// boolean nNoaaSvcPoll(long n, long[] out) -- the slots of nNoaaPoll, then
-/// [8] outcome and [9] run.
+/// [8] outcome and [9] run, then the prepare: [10] preparing, [11] prepared,
+/// [12] to prepare, [13..18] done by band and [19..24] total by band. A
+/// shorter array gets the slots that fit.
 export fn Java_org_beetlebug_lookout_Lookout_nNoaaSvcPoll(env: [*c]j.JNIEnv, cls: j.jclass, n: j.jlong, out: j.jlongArray) j.jboolean {
     _ = cls;
     var st: lookout_noaa_state = std.mem.zeroes(lookout_noaa_state);
     lookout_noaa_poll(noaaOf(n), &st);
-    if (out != null and env_(env).GetArrayLength.?(env, out) >= 10) {
-        var buf: [10]j.jlong = .{
-            @intCast(st.phase),         st.checked_at,
-            @intCast(st.catalog_cells), @intCast(st.total),
-            @intCast(st.done),          @intCast(st.failed),
-            @bitCast(st.bytes_total),   @bitCast(st.bytes_done),
-            @intCast(st.outcome),       @intCast(st.run),
-        };
-        env_(env).SetLongArrayRegion.?(env, out, 0, 10, &buf);
+    var buf: [25]j.jlong = @splat(0);
+    buf[0..13].* = .{
+        @intCast(st.phase),         st.checked_at,
+        @intCast(st.catalog_cells), @intCast(st.total),
+        @intCast(st.done),          @intCast(st.failed),
+        @bitCast(st.bytes_total),   @bitCast(st.bytes_done),
+        @intCast(st.outcome),       @intCast(st.run),
+        @intCast(st.preparing),     @intCast(st.prepared),
+        @intCast(st.to_prepare),
+    };
+    for (st.band_done, st.band_total, 0..) |d, t, i| {
+        buf[13 + i] = @intCast(d);
+        buf[19 + i] = @intCast(t);
+    }
+    if (out != null) {
+        const len: usize = @intCast(@max(0, env_(env).GetArrayLength.?(env, out)));
+        const n_out = @min(len, buf.len);
+        if (n_out > 0) env_(env).SetLongArrayRegion.?(env, out, 0, @intCast(n_out), &buf);
     }
     return if (st.have_catalog != 0) 1 else 0;
 }

@@ -76,6 +76,17 @@ class NoaaController(
     var run by mutableStateOf(0L)
         private set
 
+    /** The core's prepare of what a download fetched. The counts by band are
+     *  band 1 first. */
+    var preparing by mutableStateOf(false)
+        private set
+    var prepared by mutableStateOf(0)
+        private set
+    var toPrepare by mutableStateOf(0)
+        private set
+    var bandTotal by mutableStateOf(List(6) { 0 })
+        private set
+
     /** What the pick costs. */
     var cells by mutableStateOf(0)
         private set
@@ -100,7 +111,7 @@ class NoaaController(
     val allInstalled: Boolean get() = held > 0 && cells == 0
 
     private val worker = Executors.newSingleThreadExecutor { Thread(it, "lookout-noaa") }
-    private val pollBuf = LongArray(10)
+    private val pollBuf = LongArray(25)
     private val costBuf = LongArray(4)
     /** Whether the last state read had a catalog. Worker only. */
     private var hadCatalog = false
@@ -154,7 +165,7 @@ class NoaaController(
         call { Lookout.noaaDownload(noaa, ids, destDir, again) }
     }
 
-    /** Stop the download. What arrived stays. */
+    /** Stop the download and the core's prepare. What arrived stays. */
     fun cancel() {
         call { Lookout.noaaCancel(noaa) }
     }
@@ -186,6 +197,10 @@ class NoaaController(
         val nBytesDone = pollBuf[7]
         val nOutcome = pollBuf[8].toInt()
         val nRun = pollBuf[9]
+        val nPreparing = pollBuf[10] != 0L
+        val nPrepared = pollBuf[11].toInt()
+        val nToPrepare = pollBuf[12].toInt()
+        val nBandTotal = List(6) { pollBuf[19 + it].toInt() }
 
         if (gained) readCost()
         val boxes = if (gained) readCoverage() else null
@@ -203,6 +218,10 @@ class NoaaController(
             bytesDone = nBytesDone
             outcome = nOutcome
             run = nRun
+            preparing = nPreparing
+            prepared = nPrepared
+            toPrepare = nToPrepare
+            bandTotal = nBandTotal
             if (boxes != null) coverage = boxes
         }
     }

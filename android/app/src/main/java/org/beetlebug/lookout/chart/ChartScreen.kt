@@ -49,8 +49,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import kotlinx.coroutines.launch
-import androidx.compose.runtime.rememberCoroutineScope
 import org.beetlebug.lookout.charts.NoaaController
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -99,7 +97,6 @@ fun ChartScreen(
     var capsuleH by remember { mutableStateOf(Chrome.capsule) }
     var viewH by remember { mutableStateOf(0.dp) }
     val density = LocalDensity.current.density
-    val scope = rememberCoroutineScope()
     val topInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
 
     // Apply-and-save on a trailing debounce, mirroring the Swift binding: a
@@ -374,25 +371,26 @@ fun ChartScreen(
         )
     }
 
-    // A NOAA download, then the bake on what it left. One watcher for both the
-    // places a download starts, setup and the Charts pane, so one bake starts
-    // on the download directory. That directory is the managed set.
-    // The run this screen saw start. Only its end starts a bake: a finished
-    // one, or a stopped one that fetched some charts first.
+    // A NOAA download, and the core's prepare of what it fetched. One watcher
+    // for both the places a download starts, setup and the Charts pane. The
+    // run ends once the prepare does. A prepare's end, or the end of a run
+    // that kept charts, reopens the chart with them.
     val noaa = controller.noaaController
     var watching by remember { mutableStateOf(0L) }
-    LaunchedEffect(noaa.run, noaa.outcome) {
+    LaunchedEffect(noaa.run, noaa.outcome, noaa.preparing, noaa.prepared) {
+        var open = charts.noteNoaaPrepare(noaa)
         if (noaa.outcome == NoaaController.OUTCOME_RUNNING) {
             watching = noaa.run
-            return@LaunchedEffect
+        } else if (watching != 0L && watching == noaa.run) {
+            watching = 0L
+            val kept = noaa.outcome == NoaaController.OUTCOME_FINISHED ||
+                (noaa.outcome == NoaaController.OUTCOME_CANCELLED && noaa.done > 0)
+            if (kept) {
+                controller.firstRun.sawBake = true
+                open = true
+            }
         }
-        if (watching == 0L || watching != noaa.run) return@LaunchedEffect
-        watching = 0L
-        val kept = noaa.outcome == NoaaController.OUTCOME_FINISHED ||
-            (noaa.outcome == NoaaController.OUTCOME_CANCELLED && noaa.done > 0)
-        if (!kept) return@LaunchedEffect
-        controller.firstRun.sawBake = true
-        scope.launch { charts.add(charts.noaaDir, managed = true) }
+        if (open) charts.adoptNoaaPrepare()
     }
 
     // Setup, over the running chart. It comes up on any launch that settles on

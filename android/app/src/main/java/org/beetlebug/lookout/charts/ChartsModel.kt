@@ -81,8 +81,8 @@ class ChartsModel(private val appContext: Context) {
 
     /**
      * Where NOAA's downloads land. The app's own external files dir, which
-     * needs no permission, and one directory for the lot: the core writes one
-     * zip per cell there, so the whole directory bakes as one set.
+     * needs no permission, and one directory for the lot: the core writes
+     * every cell there and prepares the directory as one set.
      */
     val noaaDir: File get() = File(appContext.getExternalFilesDir(null), "NOAA")
 
@@ -170,19 +170,17 @@ class ChartsModel(private val appContext: Context) {
     /**
      * Put [dir] on the core's list and wait for the core to scan it. Then
      * prepare what the core lists for it, or open it when the list is empty.
-     * [managed] marks the set as the NOAA download's.
      *
      * A folder the core found no charts in leaves the list again, surfaced
      * via [lastEmptyPick], since the usual mistake is picking the wrong
      * folder. False then.
      */
-    suspend fun add(dir: File, managed: Boolean = false): Boolean {
+    suspend fun add(dir: File): Boolean {
         val path = dir.absolutePath
         scanning = true
         try {
             val joined = ChartSets.add(path)
             if (!joined && !ChartSets.rescan(path)) return false
-            if (managed) ChartSets.setManaged(path, true)
             if (!awaitScan(path)) return false
             pullSets()
             if (importer.start(path) { afterBake(path) }) return true
@@ -230,12 +228,40 @@ class ChartsModel(private val appContext: Context) {
         }
     }
 
-    /** Prepare the set the core names to resume: the NOAA download when a bake
-     *  of it ended with the app, or an update wrote new cells into it. */
-    private fun resumePrepare() {
-        if (scanning || importer.state?.running == true) return
-        val path = ChartSets.resume() ?: return
-        importer.start(path) { afterBake(path) }
+    /** True while the core prepares a NOAA download. */
+    private var noaaPreparing = false
+
+    /** What the NOAA set is called, as its row names it. */
+    private val noaaName: String get() = sets.firstOrNull { it.managed }?.title ?: noaaDir.name
+
+    /**
+     * Show the core's prepare of a NOAA download through [importer], so the
+     * Charts pane and setup draw its bar and bands. True when a prepare has
+     * just ended.
+     */
+    fun noteNoaaPrepare(n: NoaaController): Boolean {
+        if (n.preparing) {
+            noaaPreparing = true
+            // The core bakes coarse band first, and State.bandProgress walks
+            // the count down the bands in that order.
+            val bands = n.bandTotal.withIndex().filter { it.value > 0 }
+                .map { ChartImport.Band(it.index + 1, bandName(it.index + 1), it.value) }
+            val s = ChartImport.State(noaaName, n.prepared, n.toPrepare, running = true,
+                                      failed = false, bands = bands)
+            importer.showCorePrepare(s) { n.cancel() }
+            return false
+        }
+        if (!noaaPreparing) return false
+        noaaPreparing = false
+        return true
+    }
+
+    /** The core's prepare has ended and it has read the set again. Reading
+     *  the sets moves [generation], which reopens the chart with what the
+     *  prepare made. */
+    fun adoptNoaaPrepare() {
+        importer.showCorePrepare(ChartImport.State(noaaName, 0, 0, running = false, failed = false)) {}
+        pullSets()
     }
 
     private fun installPictures(path: String) {
@@ -287,7 +313,6 @@ class ChartsModel(private val appContext: Context) {
         sets = ChartSets.all()
         composed = ChartSets.compose()
         generation++
-        resumePrepare()
     }
 
     /** True when the core's background scan has landed since the last look. */

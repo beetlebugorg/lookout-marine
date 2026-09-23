@@ -119,10 +119,6 @@ object ChartSets {
     fun toPrepare(path: String): List<ChartScanRead.ChartFile> =
         ChartScanRead.decodeFiles(Lookout.chartSetToPrepare(handle, path))
 
-    /** The managed set whose prepare is unfinished and was not stopped since
-     *  it last changed, or null. */
-    fun resume(): String? = Lookout.chartSetsResume(handle)
-
     /** Record that the mariner stopped the prepare of the set at [path]. */
     fun noteCancel(path: String) = Lookout.chartSetsNoteCancel(handle, path)
 

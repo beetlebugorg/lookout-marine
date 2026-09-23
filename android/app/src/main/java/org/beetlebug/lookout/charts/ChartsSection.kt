@@ -546,7 +546,7 @@ private fun bandCounts(set: ChartSets.Set): List<Pair<Int, Int>> {
 private fun bandRange(lo: Int, hi: Int): String =
     if (lo == hi) bandName(lo) else "${bandName(lo)} to ${bandName(hi)}"
 
-private fun bandName(band: Int): String = when (band) {
+internal fun bandName(band: Int): String = when (band) {
     1 -> "Overview"
     2 -> "General"
     3 -> "Coastal"
