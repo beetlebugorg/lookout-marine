@@ -55,39 +55,12 @@ namespace lkw
                 for (size_t b = 0; b < 6; ++b)
                     row.band_todo[b] = all[i]->band_todo[b];
                 row.bytes = all[i]->bytes;
-                // What the row says it holds. The engine's own counts split a
-                // file that bakes first out of both halves, and this line has
-                // always counted a picture waiting to be baked as a picture.
-                size_t files = 0;
-                std::vector<std::string> names;
-                auto found = lookout_chart_set_files(model, all[i]->path, &files);
-                for (size_t f = 0; f < files; ++f)
-                {
-                    switch (found[f]->kind)
-                    {
-                    case LOOKOUT_FILE_RASTER:
-                    case LOOKOUT_FILE_RASTER_SOURCE: row.pictures++; break;
-                    case LOOKOUT_FILE_BAKED:
-                        row.charts++;
-                        names.push_back(found[f]->name);
-                        if (found[f]->band >= 1 && found[f]->band <= 6)
-                            ++row.bands[found[f]->band];
-                        break;
-                    default:                         break;
-                    }
-                }
-                // The office whose charts these are, when the core fell back
-                // to the folder's own name. A NOAA library baked into the
-                // app's chart folder read as "Charts", which names where the
-                // files are rather than whose they are.
-                std::string const folder =
-                    std::filesystem::path(row.path).filename().string();
-                if (row.title == folder && !names.empty())
-                {
-                    std::string agency = AgencyForCells(names);
-                    if (!agency.empty())
-                        row.title = agency;
-                }
+                row.charts = all[i]->charts;
+                row.pictures = all[i]->pictures;
+                row.held_back = all[i]->held_back;
+                for (int b = 1; b <= 6; ++b)
+                    if (all[i]->band_count[b - 1] != 0)
+                        row.bands[b] = all[i]->band_count[b - 1];
                 rows_.push_back(std::move(row));
             }
         }

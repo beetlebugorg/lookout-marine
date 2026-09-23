@@ -681,7 +681,7 @@ namespace winrt::LookoutMarine::implementation
             uint64_t all_bytes = 0;
             for (auto const &s : sets.Rows())
             {
-                all_charts += s.charts + s.pictures;
+                all_charts += s.charts + s.unprepared + s.pictures;
                 all_bytes += s.bytes;
             }
             chart_sets_total.Text(sets.Rows().empty()
@@ -738,6 +738,19 @@ namespace winrt::LookoutMarine::implementation
                                              L" to prepare" });
             row.prepare.Visibility(set.to_prepare == 0 ? Visibility::Collapsed
                                                        : Visibility::Visible);
+            // Files a finished prepare could not read, and charts another set
+            // draws in this one's place. Two sets can hold the same cell, and
+            // the chart draws one copy, so the count on the row is more than
+            // the chart shows.
+            std::wstring notes;
+            if (set.refused != 0)
+                notes = lkw::Thousands(set.refused) +
+                        (set.refused == 1 ? L" file" : L" files") + L" Lookout could not read";
+            if (set.held_back != 0)
+                notes += (notes.empty() ? L"" : L"\n") + lkw::Thousands(set.held_back) +
+                         (set.held_back == 1 ? L" chart" : L" charts") + L" also in another set";
+            row.notes.Text(winrt::hstring{ notes });
+            row.notes.Visibility(notes.empty() ? Visibility::Collapsed : Visibility::Visible);
             // The set's title. The core names a set after the office whose
             // charts it holds once the scan has read them, and after the folder
             // until then, so this changes under a page that is already up.
@@ -982,7 +995,7 @@ namespace winrt::LookoutMarine::implementation
             uint64_t all_bytes = 0;
             for (auto const &s : sets.Rows())
             {
-                all_charts += s.charts + s.pictures;
+                all_charts += s.charts + s.unprepared + s.pictures;
                 all_bytes += s.bytes;
             }
             Controls::Grid head;
@@ -1090,6 +1103,12 @@ namespace winrt::LookoutMarine::implementation
                 prep.Opacity(0.7);
                 prep.Visibility(Visibility::Collapsed);
                 stext.Children().Append(prep);
+                Controls::TextBlock notes;
+                notes.TextWrapping(TextWrapping::Wrap);
+                notes.FontSize(11);
+                notes.Opacity(0.7);
+                notes.Visibility(Visibility::Collapsed);
+                stext.Children().Append(notes);
                 stext.VerticalAlignment(VerticalAlignment::Center);
                 Controls::Grid::SetColumn(stext, 1);
                 srow.Children().Append(stext);
@@ -1195,7 +1214,7 @@ namespace winrt::LookoutMarine::implementation
                 card.Child(body);
                 stack.Children().Append(card);
 
-                chart_set_ui.push_back({ set.path, sname, ssum, prep, sts, ramp_host, {} });
+                chart_set_ui.push_back({ set.path, sname, ssum, prep, notes, sts, ramp_host, {} });
             }
         }
 

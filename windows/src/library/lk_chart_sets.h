@@ -41,11 +41,14 @@ namespace lkw
         size_t refused{ 0 };
         std::array<size_t, 6> band_todo{};
         uint64_t bytes{ 0 };
-        // How many prepared charts this set holds in each usage band,
-        // keyed 1 to 6. A set that stops at Coastal does not draw the
-        // harbour a passage ends in, so the row says which scales are in
-        // it.
+        // How many vector charts this set holds in each usage band,
+        // prepared or not, keyed 1 to 6. A set that stops at Coastal does
+        // not draw the harbour a passage ends in, so the row says which
+        // scales are in it.
         std::map<int, size_t> bands;
+        /* The charts this set holds that another switched-on set draws
+         * instead. */
+        size_t held_back{ 0 };
         std::string title; // the agency whose charts these are, else the folder
     };
 

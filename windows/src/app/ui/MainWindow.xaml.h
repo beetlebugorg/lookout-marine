@@ -791,6 +791,8 @@ namespace winrt::LookoutMarine::implementation
             Microsoft::UI::Xaml::Controls::TextBlock name{ nullptr };
             Microsoft::UI::Xaml::Controls::TextBlock summary{ nullptr };
             Microsoft::UI::Xaml::Controls::TextBlock prepare{ nullptr };
+            /* The files a bake refused and the charts another set draws. */
+            Microsoft::UI::Xaml::Controls::TextBlock notes{ nullptr };
             Microsoft::UI::Xaml::Controls::ToggleSwitch on{ nullptr };
             Microsoft::UI::Xaml::Controls::StackPanel ramp{ nullptr };
             /* The bands the ramp was drawn from, so it is redrawn only when
