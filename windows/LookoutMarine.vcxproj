@@ -256,6 +256,7 @@
        pages read the core's mariner struct and the plugin registry direct. -->
   <ItemGroup>
     <ClCompile Include="src\settings\ui\Settings.cpp" />
+    <ClCompile Include="src\settings\ui\ChartsPage.cpp" />
   </ItemGroup>
 
   <!-- about: About and the licences. -->

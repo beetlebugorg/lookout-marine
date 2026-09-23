@@ -816,6 +816,13 @@ namespace winrt::LookoutMarine::implementation
         Microsoft::UI::Xaml::Controls::TextBlock chart_publisher_note{ nullptr };
         /* What every line on the page now says. Cheap, and safe to call from a
          * poll: it creates nothing and destroys nothing. */
+        /* Settings > Charts (settings/ui/ChartsPage.cpp), one function per
+         * section. */
+        void BuildChartsPage(Microsoft::UI::Xaml::Controls::StackPanel const &stack);
+        void ChartsActiveSection(Microsoft::UI::Xaml::Controls::StackPanel const &stack);
+        void ChartsSetsSection(Microsoft::UI::Xaml::Controls::StackPanel const &stack);
+        void ChartsWorkSection(Microsoft::UI::Xaml::Controls::StackPanel const &stack);
+        void ChartsAddSection(Microsoft::UI::Xaml::Controls::StackPanel const &stack);
         void RefreshChartsPageInPlace();
         /* The page's shape, as one string. A change here is a rebuild. */
         std::string ChartsPageStructure();
