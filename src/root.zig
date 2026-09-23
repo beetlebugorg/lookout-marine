@@ -890,8 +890,10 @@ pub const Lookout = struct {
     render_size_scale: f32 = 1.0,
 
     /// $LOOKOUT_PHASE_PROF=<path>: per-frame phase timings, written as CSV.
-    /// Null unless asked for, and every probe is behind `if (prof)`.
-    frame_prof: ?FrameProf = null,
+    /// Null unless asked for, and every probe is behind `if (prof)`. On the
+    /// heap: the rows are 512 KB, and a Debug build copies an optional struct
+    /// onto the stack to compare it with null.
+    frame_prof: ?*FrameProf = null,
     prof_checked: bool = false,
     /// The view box last handed to the plugin broker, as min_lat, min_lon,
     /// max_lat, max_lon — so an unmoved camera skips the handoff entirely.
@@ -2089,6 +2091,8 @@ pub const Lookout = struct {
         // BEFORE the links: the second handle's fetches are relayed through
         // them, and closing it cancels those.
         self.pictures.deinit(self);
+        if (self.frame_prof) |p| std.heap.c_allocator.destroy(p);
+        self.frame_prof = null;
         // BEFORE the renderer: standing the link machine down answers the
         // tiles it has outstanding, and those answers go through the renderer.
         self.links.deinit();
@@ -3215,7 +3219,10 @@ pub const Lookout = struct {
         if (!self.prof_checked) {
             self.prof_checked = true;
             if (std.c.getenv("LOOKOUT_PHASE_PROF")) |p| {
-                self.frame_prof = .{ .path = std.mem.span(p) };
+                if (std.heap.c_allocator.create(FrameProf)) |fp| {
+                    fp.* = .{ .path = std.mem.span(p) };
+                    self.frame_prof = fp;
+                } else |_| {}
             }
         }
         const prof = self.frame_prof != null;
@@ -3261,7 +3268,7 @@ pub const Lookout = struct {
                 self.view_dirty = true;
             }
         }
-        if (self.frame_prof) |*p| p.record(.{
+        if (self.frame_prof) |p| p.record(.{
             .prepare_us = t1 - t0,
             .style_us = self.prof_style_us,
             .trim_us = t2 - t1,
@@ -4511,3 +4518,37 @@ test "a NOAA download on its own handle runs through two chart handles closing" 
     try std.testing.expectEqual(@as(u32, 1), st.done);
 }
 
+test "a frame with the phase profile on runs on a thread with a 256 KB stack" {
+    // A shell's UI thread has 1 MB on Windows. The profile's rows are 512 KB,
+    // and prepareFrame and render test for a profile on every frame.
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const home = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(home);
+    marks.test_support_dir = home;
+    defer marks.test_support_dir = null;
+    cachedir.setRoot(home);
+    const l = Lookout.openCharts(std.heap.c_allocator, &.{}, .{ .width = 64, .height = 64 }) catch |e| switch (e) {
+        error.SurfaceFailed => return error.SkipZigTest,
+        else => return e,
+    };
+    defer l.close();
+    const path = try std.fmt.allocPrint(std.testing.allocator, "{s}/prof.csv", .{home});
+    defer std.testing.allocator.free(path);
+    l.frame_prof = try std.heap.c_allocator.create(FrameProf);
+    l.frame_prof.?.* = .{ .path = path };
+    l.prof_checked = true;
+
+    const Run = struct {
+        fn run(h: *Lookout) void {
+            for (0..3) |_| {
+                h.apiLock();
+                _ = h.render() catch {};
+                h.apiUnlock();
+            }
+        }
+    };
+    const th = try std.Thread.spawn(.{ .stack_size = 256 * 1024 }, Run.run, .{l});
+    th.join();
+    try std.testing.expect(l.frame_prof.?.n > 0);
+}
