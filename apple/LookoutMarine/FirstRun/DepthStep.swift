@@ -43,8 +43,12 @@ struct DepthStep: View {
     private var safetyContour: Double { plan.safety_contour }
     private var deepContour: Double { plan.deep_contour }
 
-    /// Set the draft from a value in the unit on screen.
-    private func setDraft(_ v: Double) { draftM = v * plan.metres_per_unit }
+    /// Set the draft from a value in the unit on screen. The plan holds it
+    /// between one step and the most the step accepts.
+    private func setDraft(_ v: Double) {
+        draftM = v * plan.metres_per_unit
+        draftM = plan.draft_m
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -135,7 +139,7 @@ struct DepthStep: View {
                 // Start Sailing reads the draft as typed. Parsing only on
                 // Return left the seeded draft in the engine.
                 .onChange(of: draftText) { _, now in
-                    if let v = Self.parseDraft(now, feet: feet), v != draft { setDraft(v) }
+                    if let v = Self.parseDraft(now), v != draft { setDraft(v) }
                 }
                 .accessibilityIdentifier("draft")
             Text(unit)
@@ -143,10 +147,12 @@ struct DepthStep: View {
                 .foregroundStyle(Chrome.muted)
                 .padding(.horizontal, 8)
             Stepper("Draft") {
-                setDraft(min(30, draft + stepSize))
+                setDraft(draft + plan.draft_step)
                 showDraft()
             } onDecrement: {
-                setDraft(max(stepSize, draft - stepSize))
+                // Zero is the core's starting boat, so the step stops at one
+                // press above it.
+                setDraft(max(plan.draft_step, draft - plan.draft_step))
                 showDraft()
             }
             .labelsHidden()
@@ -440,9 +446,6 @@ struct DepthStep: View {
 
     // MARK: Numbers
 
-    /// One step of the draft field: half a foot, or a tenth of a metre.
-    private var stepSize: Double { feet ? 0.5 : 0.1 }
-
     /// A depth on screen, with its unit on it.
     private func measure(_ v: Double) -> String {
         TextFormat.depth(v * plan.metres_per_unit, feet: feet)
@@ -454,7 +457,7 @@ struct DepthStep: View {
     }
 
     private func readDraft() {
-        guard let v = Self.parseDraft(draftText, feet: feet) else {
+        guard let v = Self.parseDraft(draftText) else {
             showDraft()
             return
         }
@@ -462,11 +465,11 @@ struct DepthStep: View {
         showDraft()
     }
 
-    /// The draft in the field, capped, or nil for text that is not a
-    /// positive number.
-    static func parseDraft(_ text: String, feet: Bool) -> Double? {
+    /// The draft in the field, or nil for text that is not a positive
+    /// number. The plan caps it.
+    static func parseDraft(_ text: String) -> Double? {
         guard let v = Double(text.trimmingCharacters(in: .whitespaces)), v > 0 else { return nil }
-        return min(feet ? 100 : 30, v)
+        return v
     }
 
     /// Convert the boat on a change of unit: the draft to the nearest half

@@ -49,21 +49,26 @@ final class FirstRunReturnTests: ShellTestCase {
 final class DepthStepDraftTests: XCTestCase {
 
     func testATypedDraftParses() {
-        XCTAssertEqual(DepthStep.parseDraft("7", feet: true), 7)
-        XCTAssertEqual(DepthStep.parseDraft(" 1.8 ", feet: false), 1.8)
+        XCTAssertEqual(DepthStep.parseDraft("7"), 7)
+        XCTAssertEqual(DepthStep.parseDraft(" 1.8 "), 1.8)
     }
 
-    func testADraftIsCappedPerUnit() {
-        XCTAssertEqual(DepthStep.parseDraft("250", feet: true), 100)
-        XCTAssertEqual(DepthStep.parseDraft("250", feet: false), 30)
+    /// The plan caps a draft past the most the step accepts.
+    func testThePlanCapsTheDraftPerUnit() {
+        var p = lookout_depth_plan()
+        lookout_depth_plan(250 * LOOKOUT_METRES_PER_FOOT, 0, 1, &p)
+        XCTAssertEqual(p.draft, p.draft_max)
+        XCTAssertEqual(p.draft_max, 100)
+        lookout_depth_plan(250, 0, 0, &p)
+        XCTAssertEqual(p.draft, 30)
     }
 
     /// A cleared field, or one partway through an edit, leaves the draft as
     /// it was.
     func testTextThatIsNotADraftParsesToNil() {
-        XCTAssertNil(DepthStep.parseDraft("", feet: true))
-        XCTAssertNil(DepthStep.parseDraft("0", feet: true))
-        XCTAssertNil(DepthStep.parseDraft("-", feet: true))
-        XCTAssertNil(DepthStep.parseDraft("abc", feet: true))
+        XCTAssertNil(DepthStep.parseDraft(""))
+        XCTAssertNil(DepthStep.parseDraft("0"))
+        XCTAssertNil(DepthStep.parseDraft("-"))
+        XCTAssertNil(DepthStep.parseDraft("abc"))
     }
 }
