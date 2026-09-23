@@ -90,6 +90,7 @@ lk_noaa_read_regions (LkNoaa *self)
       self->regions[i].name = all[i].name;
       self->regions[i].blurb = all[i].blurb;
       self->regions[i].district = all[i].district;
+      self->regions[i].panel = all[i].panel;
       self->regions[i].west = all[i].west;
       self->regions[i].south = all[i].south;
       self->regions[i].east = all[i].east;

@@ -13,6 +13,7 @@
 
 #include "library/fetch.h"
 #include "library/preview-engine.h"
+#include "ui/charts/catalog.h"
 #include "ui/charts/preview.h"
 
 /* The tile a point falls in, as every tile server counts them. */
@@ -303,6 +304,50 @@ test_a_live_fetcher_answers (void)
   g_remove (path);
 }
 
+/* Every picture the app ships decodes out of the binary.
+ *
+ * A missing one draws a grey box in front of a mariner on the first screen
+ * they ever see, so it fails a test instead. */
+static void
+test_shipped_pictures (void)
+{
+  guint n = 0;
+  const LkChartCatalogEntry *entries = lk_chart_catalog_entries (&n);
+  GdkTexture *hero = lk_chart_welcome_picture ();
+
+  g_assert_nonnull (hero);
+  g_assert_cmpint (gdk_texture_get_width (hero), >, 600);
+  g_assert_cmpint (gdk_texture_get_height (hero), >, 200);
+
+  g_assert_cmpuint (n, >, 0);
+  for (guint i = 0; i < n; i++)
+    {
+      GdkTexture *art;
+
+      g_assert_nonnull (entries[i].name);
+      g_assert_nonnull (entries[i].url);
+      g_assert_true (g_str_has_prefix (entries[i].url, "https://"));
+      g_assert_nonnull (entries[i].art);
+
+      art = lk_chart_catalog_art (entries[i].url);
+      g_assert_nonnull (art);
+      g_assert_cmpint (gdk_texture_get_width (art), >, 400);
+      g_assert_cmpint (gdk_texture_get_height (art), >, 300);
+
+      /* Decoded once and kept: a shelf redraws whenever the list moves. */
+      g_assert_true (lk_chart_catalog_art (entries[i].url) == art);
+
+      /* By url, and by the entry's own url. */
+      g_assert_true (lk_chart_catalog_entry (entries[i].url) == &entries[i]);
+    }
+
+  /* A link the mariner added has no shipped picture, and NULL has none. */
+  g_assert_null (lk_chart_catalog_entry ("https://example.org/style.json"));
+  g_assert_null (lk_chart_catalog_art ("https://example.org/style.json"));
+  g_assert_null (lk_chart_catalog_entry (NULL));
+  g_assert_null (lk_chart_catalog_art (NULL));
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -319,6 +364,7 @@ main (int argc, char *argv[])
   g_test_add_func ("/preview/a-file-read-is-one-piece", test_a_file_read_is_one_piece);
   g_test_add_func ("/preview/a-refused-read-fails-in-one-piece",
                    test_a_refused_read_fails_in_one_piece);
+  g_test_add_func ("/preview/shipped-pictures", test_shipped_pictures);
   g_test_add_func ("/preview/tile-numbers", test_tile_numbers);
   g_test_add_func ("/preview/cache-key", test_cache_key);
   g_test_add_func ("/preview/zoom-in-the-key", test_zoom_in_the_key);

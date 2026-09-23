@@ -1,37 +1,32 @@
 /* ui/charts/coverage-map.c — see ui/charts/coverage-map.h. */
 #include "ui/charts/coverage-map.h"
 
-#include "ui/charts/coastline.h"
-
 #include <math.h>
 
 /* One panel: the ground it covers, the regions drawn on it, and what to call
  * it. The lower 48 needs no label; an inset does, so Alaska reads as itself
- * rather than as something floating off the coast of Oregon. */
+ * rather than as something floating off the coast of Oregon. The core states
+ * which panel each region draws on. */
 typedef struct {
   LkMapWindow  window;
-  const char  *ids[4]; /* NULL terminated */
+  int          which; /* a LOOKOUT_NOAA_PANEL_ value */
   const char  *label;
 } LkPanel;
 
 static const LkPanel lk_panel_main = {
   .window = { .west = -132, .east = -64, .south = 20, .north = 52 },
-  .ids = { NULL },
-  .label = NULL,
+  .which = LOOKOUT_NOAA_PANEL_LOWER48,
 };
 
-/* Filled at build time from the region table, so a district the core adds
- * appears without this file changing. Anything not named by an inset draws on
- * the main panel. */
 static const LkPanel lk_panel_alaska = {
   .window = { .west = -172, .east = -128, .south = 50.5, .north = 72 },
-  .ids = { "d17", NULL },
+  .which = LOOKOUT_NOAA_PANEL_ALASKA,
   .label = "Alaska",
 };
 
 static const LkPanel lk_panel_hawaii = {
   .window = { .west = -161, .east = -154, .south = 18.3, .north = 22.6 },
-  .ids = { "d14", NULL },
+  .which = LOOKOUT_NOAA_PANEL_HAWAII,
   .label = "Hawaii",
 };
 
@@ -78,21 +73,23 @@ lk_panel_state_free (gpointer data)
   g_free (data);
 }
 
-/* TRUE when this panel draws this region. The main panel draws whatever no
- * inset claims. */
-static gboolean
-lk_panel_draws (const LkPanel *panel, const char *id)
+double
+lk_map_window_aspect (const LkMapWindow *window)
 {
-  if (panel != &lk_panel_main)
-    {
-      for (guint i = 0; panel->ids[i] != NULL; i++)
-        if (g_strcmp0 (panel->ids[i], id) == 0)
-          return TRUE;
-      return FALSE;
-    }
+  return lookout_map_aspect (window->west, window->east, window->south, window->north);
+}
 
-  return !lk_panel_draws (&lk_panel_alaska, id) &&
-         !lk_panel_draws (&lk_panel_hawaii, id);
+void
+lk_map_window_point (const LkMapWindow *window, double lon, double lat, double width,
+                     double height, double *out_x, double *out_y)
+{
+  const double lonlat[2] = { lon, lat };
+  float xy[2];
+
+  lookout_map_project (window->west, window->east, window->south, window->north, width,
+                       height, lonlat, xy, 1);
+  *out_x = xy[0];
+  *out_y = xy[1];
 }
 
 /* ---- the drawing --------------------------------------------------------- */
@@ -114,34 +111,26 @@ lk_panel_frame (cairo_t *cr, double width, double height, double radius)
  * non-zero rule would give water inside a lake and land outside it. They are
  * filled in two passes instead, land then lakes. */
 static void
-lk_panel_rings (cairo_t *cr, const LkMapWindow *window, guint8 level,
+lk_panel_rings (cairo_t *cr, const LkMapWindow *window, int level,
                 double width, double height)
 {
-  guint n = 0;
-  const LkCoastRing *rings = lk_coastline_rings (&n);
+  const LkMapWindow *w = window;
+  size_t n = lookout_coastline_rings (level, w->west, w->east, w->south, w->north, width,
+                                      height, NULL, 0, NULL, 0);
+  g_autofree float *xy = g_new (float, 2 * MAX (n, 1));
+  g_autofree guint32 *ends = g_new (guint32, n / 4 + 1);
 
   cairo_new_path (cr);
-  for (guint i = 0; i < n; i++)
+  if (n == 0 || lookout_coastline_rings (level, w->west, w->east, w->south, w->north, width,
+                                         height, xy, n, ends, n / 4 + 1) != n)
+    return;
+
+  /* `ends[r]` is one past ring r's last point, and the last ring ends at n. */
+  for (size_t r = 0, p = 0; p < n; r++)
     {
-      const LkCoastRing *ring = &rings[i];
-
-      if (ring->level != level)
-        continue;
-      if (!lk_map_window_intersects (window, ring->west, ring->east,
-                                     ring->south, ring->north))
-        continue;
-
-      for (guint p = 0; p < ring->n; p++)
-        {
-          double x, y;
-
-          lk_map_window_point (window, ring->points[p * 2], ring->points[p * 2 + 1],
-                               width, height, &x, &y);
-          if (p == 0)
-            cairo_move_to (cr, x, y);
-          else
-            cairo_line_to (cr, x, y);
-        }
+      cairo_move_to (cr, xy[p * 2], xy[p * 2 + 1]);
+      for (p++; p < ends[r]; p++)
+        cairo_line_to (cr, xy[p * 2], xy[p * 2 + 1]);
       cairo_close_path (cr);
     }
 }
@@ -213,7 +202,7 @@ lk_panel_draw (GtkDrawingArea *area, cairo_t *cr, int width, int height, gpointe
       const LkNoaaRegion *region = &regions[i];
       double alpha;
 
-      if (!lk_panel_draws (state->panel, region->id))
+      if (region->panel != state->panel->which)
         continue;
 
       lk_region_boxes (cr, state->noaa, region, window, width, height);
@@ -342,7 +331,7 @@ lk_panel_region_at (LkPanelState *state, double x, double y, double width, doubl
       const LkNoaaBox *boxes;
       LkNoaaBox rough = { region->west, region->south, region->east, region->north };
 
-      if (!lk_panel_draws (state->panel, region->id))
+      if (region->panel != state->panel->which)
         continue;
 
       boxes = lk_noaa_coverage (state->noaa, region->id, &n);

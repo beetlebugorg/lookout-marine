@@ -37,6 +37,7 @@ typedef struct {
   const char *name;  /* "Mid-Atlantic" */
   const char *blurb; /* the waters it covers, in one line */
   int         district;
+  int         panel;    /* a LOOKOUT_NOAA_PANEL_ value: the map panel it draws on */
   /* Where to draw the region when the catalog has not been read yet, in
    * degrees. A rough extent for display only: what a region SELECTS comes from
    * the catalog, so these never decide which cells download. */

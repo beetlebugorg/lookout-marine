@@ -13,7 +13,6 @@
 
 #include "model/app-model.h"
 #include "model/noaa.h"
-#include "ui/charts/coastline.h"
 
 #include <gtk/gtk.h>
 
@@ -37,6 +36,19 @@ GtkWidget *lk_noaa_region_pills_new (LkNoaa *noaa);
 /* The words for the two fills on the map: water already downloaded, and water
  * picked to download. */
 GtkWidget *lk_coverage_key_new (void);
+
+/* A longitude and latitude window, drawn in Mercator into a flat rectangle
+ * with its origin at the top left (lookout_map_project). */
+typedef struct {
+  double west, east, south, north;
+} LkMapWindow;
+
+/* Width over height for this window, so a panel is never stretched. */
+double lk_map_window_aspect (const LkMapWindow *window);
+
+/* Where a longitude and latitude fall inside a `width` by `height` panel. */
+void lk_map_window_point (const LkMapWindow *window, double lon, double lat,
+                          double width, double height, double *out_x, double *out_y);
 
 /* Where NOAA's catalog stands: a spinner while it is read, the failure and a
  * way to try again, or what the catalog holds once it has landed. */

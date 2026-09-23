@@ -16,8 +16,7 @@
 
   The first-run pictures travel the same way, and for the first of the same
   reasons: a build tree has installed nothing, and setup is the first thing a
-  mariner sees. Compressed, because a coastline of 1,538 rings and a chart
-  photograph are not small.
+  mariner sees.
 -->
 <gresources>
   <gresource prefix="/org/beetlebug/LookoutMarine/icons/scalable/apps">
@@ -34,7 +33,6 @@
     <file preprocess="xml-stripblanks">lk-remove-symbolic.svg</file>
   </gresource>
   <gresource prefix="/org/beetlebug/LookoutMarine/firstrun">
-    <file compressed="true">coastline.bin</file>
     <file>welcome-chart.png</file>
     <file>seascape-preview.png</file>
     <file>seamap-preview.png</file>
