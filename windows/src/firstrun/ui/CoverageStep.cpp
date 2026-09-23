@@ -14,7 +14,6 @@
 #include <system_error>
 
 #include "lk_bake.h"
-#include "lk_coastline.h"
 #include "lk_firstrun.h"
 #include "lk_chrome.h"
 #include "lk_format.h"
@@ -30,10 +29,9 @@ namespace winrt::LookoutMarine::implementation
 {
     // The coverage map, above the region list.
     //
-    // The coastline is GSHHG, read once from data\\firstrun\\coastline.bin and
-    // kept, because a step rebuild redraws this and the file is a quarter of a
-    // megabyte. Land fills first, then lakes over it: a lake is its own ring
-    // rather than a hole, so fill order is what makes it water.
+    // The coastline is the core's GSHHG rings (lookout_coastline_rings). Land
+    // fills first, then lakes over it: a lake is its own ring rather than a
+    // hole, so fill order is what makes it water.
     //
     // Each region draws as the boxes the catalog states for it, which is what a
     // download would fetch. One rectangle per region claims water it does not
@@ -47,15 +45,18 @@ namespace winrt::LookoutMarine::implementation
     // piece of water, and overlapping cells do not stack their fill. The tap
     // goes on that path, so it lands on the region's own water rather than on
     // a rectangle around it.
-    Border MainWindow::FirstRunCoveragePanel(lkw::MapWindow const &win,
-                                             std::vector<std::string> const &ids, double width,
+    Border MainWindow::FirstRunCoveragePanel(CoverageWindow const &win, int panel, double width,
                                              double radius, bool enabled)
     {
-        double const height = width / win.Aspect();
+        double const height = width / lookout_map_aspect(win.w, win.e, win.s, win.n);
 
         Controls::Canvas canvas;
         canvas.Width(width);
         canvas.Height(height);
+        // A box that runs past the panel is cut at its edge.
+        Media::RectangleGeometry clip;
+        clip.Rect({ 0, 0, (float)width, (float)height });
+        canvas.Clip(clip);
 
         // The palette's medium-depth water and its land, at 0.55 alpha, in the
         // scheme the chart draws in.
@@ -69,32 +70,21 @@ namespace winrt::LookoutMarine::implementation
         back.Fill(water);
         canvas.Children().Append(back);
 
-        auto add_rings = [&](uint8_t level, Media::Brush const &fill) {
-            for (auto const &ring : coastline_)
+        auto add_rings = [&](int level, Media::Brush const &fill) {
+            size_t const count = lookout_coastline_rings(level, win.w, win.e, win.s, win.n, width,
+                                                         height, nullptr, 0, nullptr, 0);
+            std::vector<float> xy(count * 2);
+            std::vector<uint32_t> ends(count / 4 + 1);
+            lookout_coastline_rings(level, win.w, win.e, win.s, win.n, width, height, xy.data(),
+                                    count, ends.data(), ends.size());
+            size_t start = 0;
+            for (size_t r = 0; start < count && r < ends.size(); ++r)
             {
-                if (ring.level != level || ring.points.size() < 3)
-                    continue;
-                double w = 180, e = -180, s = 90, nn = -90;
-                for (auto const &p : ring.points)
-                {
-                    w = std::min(w, (double)p.lon);
-                    e = std::max(e, (double)p.lon);
-                    s = std::min(s, (double)p.lat);
-                    nn = std::max(nn, (double)p.lat);
-                }
-                // A ring spanning more than 180 degrees crosses the
-                // antimeridian: an Aleutian island with points at +172 and
-                // -179 draws as a band across the whole panel.
-                if (e - w > 180 || !win.Intersects(w, e, s, nn))
-                    continue;
                 Shapes::Polygon poly;
                 Media::PointCollection pts;
-                for (auto const &p : ring.points)
-                {
-                    double x = 0, y = 0;
-                    win.Point(p.lon, p.lat, width, height, &x, &y);
-                    pts.Append(Windows::Foundation::Point{ (float)x, (float)y });
-                }
+                for (size_t i = start; i < ends[r]; ++i)
+                    pts.Append(Windows::Foundation::Point{ xy[i * 2], xy[i * 2 + 1] });
+                start = ends[r];
                 poly.Points(pts);
                 poly.Fill(fill);
                 // A ring simplified to 0.02 degrees can cross itself, and
@@ -103,17 +93,17 @@ namespace winrt::LookoutMarine::implementation
                 canvas.Children().Append(poly);
             }
         };
-        add_rings(1, land);
-        add_rings(2, water); // a lake is water drawn back over the land
+        add_rings(LOOKOUT_COAST_LAND, land);
+        add_rings(LOOKOUT_COAST_LAKE, water); // a lake is water drawn back over the land
 
         lookout_noaa_region const *regions = nullptr;
         size_t const n = lookout_noaa_regions(&regions);
         for (size_t i = 0; i < n && regions != nullptr; ++i)
         {
             auto const &r = regions[i];
-            std::string const rid = r.id;
-            if (std::find(ids.begin(), ids.end(), rid) == ids.end())
+            if (r.panel != panel)
                 continue;
+            std::string const rid = r.id;
             bool const picked = lkw::RegionPicked(noaa_region_id, rid);
 
             // The catalog's boxes, or the region's rough extent until the
@@ -139,25 +129,23 @@ namespace winrt::LookoutMarine::implementation
             geo.FillRule(Media::FillRule::Nonzero);
             for (auto const &b : boxes)
             {
-                if (!win.Intersects(b.west, b.east, b.south, b.north))
-                    continue;
-                double x0 = 0, y0 = 0, x1 = 0, y1 = 0;
-                win.Point(b.west, b.north, width, height, &x0, &y0);
-                win.Point(b.east, b.south, width, height, &x1, &y1);
-                if (x1 <= x0 || y1 <= y0)
+                double const corners[4] = { b.west, b.north, b.east, b.south };
+                float xy[4]{};
+                lookout_map_project(win.w, win.e, win.s, win.n, width, height, corners, xy, 2);
+                if (xy[2] <= xy[0] || xy[3] <= xy[1])
                     continue;
                 Media::PathFigure fig;
-                fig.StartPoint({ (float)x0, (float)y0 });
+                fig.StartPoint({ xy[0], xy[1] });
                 fig.IsClosed(true);
                 fig.IsFilled(true);
-                auto corner = [&](double x, double y) {
+                auto corner = [&](float x, float y) {
                     Media::LineSegment seg;
-                    seg.Point({ (float)x, (float)y });
+                    seg.Point({ x, y });
                     fig.Segments().Append(seg);
                 };
-                corner(x1, y0);
-                corner(x1, y1);
-                corner(x0, y1);
+                corner(xy[2], xy[1]);
+                corner(xy[2], xy[3]);
+                corner(xy[0], xy[3]);
                 geo.Figures().Append(fig);
             }
             if (geo.Figures().Size() == 0)
@@ -190,13 +178,6 @@ namespace winrt::LookoutMarine::implementation
 
     void MainWindow::FirstRunCoverageMap(Controls::StackPanel const &body)
     {
-        if (coastline_.empty())
-            coastline_ = lkw::LoadCoastline(
-                (std::filesystem::path(lkw::ShippedDataDir()) / L"coastline.bin")
-                    .string());
-        if (coastline_.empty())
-            return;
-
         lookout_noaa_state const &st = noaa.state();
         bool const enabled = st.have_catalog != 0;
 
@@ -206,14 +187,14 @@ namespace winrt::LookoutMarine::implementation
         // insets for the same reason.
         // west, east, south, north, the order the struct declares rather than
         // the labelled order the reference writes them in.
-        lkw::MapWindow const lower48{ -132.0, -64.0, 20.0, 52.0 };
-        lkw::MapWindow const alaska{ -172.0, -128.0, 50.5, 72.0 };
-        lkw::MapWindow const hawaii{ -161.0, -154.0, 18.3, 22.6 };
+        CoverageWindow const lower48{ -132.0, -64.0, 20.0, 52.0 };
+        CoverageWindow const alaska{ -172.0, -128.0, 50.5, 72.0 };
+        CoverageWindow const hawaii{ -161.0, -154.0, 18.3, 22.6 };
         constexpr double kMapW = 620.0;
         constexpr double kInsetW = 134.0;
 
-        auto inset = [&](lkw::MapWindow const &win, std::vector<std::string> const &ids,
-                         double width, wchar_t const *label) {
+        auto inset = [&](CoverageWindow const &win, int panel, double width,
+                         wchar_t const *label) {
             // Its own frame, so each reads as itself rather than as something
             // floating off the coast of Oregon.
             StackPanel column;
@@ -221,7 +202,7 @@ namespace winrt::LookoutMarine::implementation
             auto title = Line(label, 9, false);
             title.Opacity(0.7);
             column.Children().Append(title);
-            column.Children().Append(FirstRunCoveragePanel(win, ids, width, 5, enabled));
+            column.Children().Append(FirstRunCoveragePanel(win, panel, width, 5, enabled));
             return column;
         };
 
@@ -231,13 +212,14 @@ namespace winrt::LookoutMarine::implementation
         corners.Margin({ 8, 8, 8, 8 });
         corners.HorizontalAlignment(HorizontalAlignment::Left);
         corners.VerticalAlignment(VerticalAlignment::Bottom);
-        corners.Children().Append(inset(alaska, { "d17" }, kInsetW, L"Alaska"));
-        corners.Children().Append(inset(hawaii, { "d14" }, kInsetW * 0.54, L"Hawaii"));
+        corners.Children().Append(inset(alaska, LOOKOUT_NOAA_PANEL_ALASKA, kInsetW, L"Alaska"));
+        corners.Children().Append(
+            inset(hawaii, LOOKOUT_NOAA_PANEL_HAWAII, kInsetW * 0.54, L"Hawaii"));
 
         Controls::Grid map;
         map.HorizontalAlignment(HorizontalAlignment::Center);
         map.Children().Append(FirstRunCoveragePanel(
-            lower48, { "d1", "d5", "d7", "d8", "d9", "d11", "d13" }, kMapW, 10, enabled));
+            lower48, LOOKOUT_NOAA_PANEL_LOWER48, kMapW, 10, enabled));
         // In the Pacific, where they reach no coast.
         map.Children().Append(corners);
         Automation::AutomationProperties::SetName(map, L"Coverage map");

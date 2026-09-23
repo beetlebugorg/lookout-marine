@@ -60,8 +60,7 @@ $cppSources = @(
     'src\plugins\lk_alerts.cpp',
     'src\plugins\lk_table.cpp',
     'src\library\lk_paths.cpp',
-    'src\firstrun\lk_firstrun.cpp',
-    'src\firstrun\lk_coastline.cpp'
+    'src\firstrun\lk_firstrun.cpp'
 )
 $suites = @(
     'test\main.cpp',
@@ -74,8 +73,7 @@ $suites = @(
     'test\test_alerts.cpp',
     'test\test_table.cpp',
     'test\test_paths.cpp',
-    'test\test_firstrun.cpp',
-    'test\test_coastline.cpp'
+    'test\test_firstrun.cpp'
 )
 
 New-Item -ItemType Directory -Force $out | Out-Null

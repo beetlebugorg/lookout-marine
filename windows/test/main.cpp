@@ -24,7 +24,6 @@ void TestAlerts();
 void TestTable();
 void TestPaths();
 void TestFirstRun();
-void TestCoastline();
 
 int main()
 {
@@ -40,7 +39,6 @@ int main()
     TestTable();
     TestPaths();
     TestFirstRun();
-    TestCoastline();
 
     return lktest::Report();
 }

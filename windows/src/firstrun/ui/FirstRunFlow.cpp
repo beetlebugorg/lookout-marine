@@ -23,7 +23,6 @@
 #include <system_error>
 
 #include "lk_bake.h"
-#include "lk_coastline.h"
 #include "lk_firstrun.h"
 #include "lk_chrome.h"
 #include "lk_format.h"

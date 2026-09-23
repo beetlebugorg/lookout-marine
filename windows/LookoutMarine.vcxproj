@@ -200,9 +200,6 @@
     <ClCompile Include="src\firstrun\ui\CoverageStep.cpp" />
     <ClCompile Include="src\firstrun\ui\ImportingStep.cpp" />
     <ClCompile Include="src\firstrun\ui\DepthStep.cpp" />
-    <ClCompile Include="src\firstrun\lk_coastline.cpp">
-      <PrecompiledHeader>NotUsing</PrecompiledHeader>
-    </ClCompile>
     <ClCompile Include="src\firstrun\lk_firstrun_core.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
@@ -352,7 +349,7 @@
        Skipped when the directory is absent (a tree where build-core.ps1 has
        not run) rather than failing the build: the shell starts without
        plugins, it does not fail to link. -->
-  <!-- The first-run pictures and the coastline the coverage map draws. Each
+  <!-- The first-run pictures. Each
        shell keeps its own copy under its data directory, as they do for the
        icons. -->
   <Target Name="LkCopyFirstRunData" AfterTargets="Build">

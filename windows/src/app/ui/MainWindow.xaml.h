@@ -5,7 +5,6 @@
 #include "lk_bake.h"
 #include "lk_chart_sets.h"
 #include "lk_noaa.h"
-#include "lk_coastline.h"
 #include "lk_firstrun.h"
 #include "lk_controller.h"
 #include "lk_pick.h"
@@ -447,12 +446,17 @@ namespace winrt::LookoutMarine::implementation
         void FirstRunSource(Microsoft::UI::Xaml::Controls::StackPanel const &body);
         // The coverage map, above the region list on the coverage step.
         void FirstRunCoverageMap(Microsoft::UI::Xaml::Controls::StackPanel const &body);
-        /* One panel of that map: a window on the ground, and the regions in
-         * `ids` drawn on it as the water they cover. Each region is one
-         * tappable path, so the map picks as well as it shows. */
-        Microsoft::UI::Xaml::Controls::Border FirstRunCoveragePanel(
-            lkw::MapWindow const &win, std::vector<std::string> const &ids, double width,
-            double radius, bool enabled);
+        /* One panel of that map: a lon/lat window, west to east and south to
+         * north, and the regions whose `panel` it is, drawn as the water they
+         * cover. Each region is one tappable path, so the map picks as well as
+         * it shows. */
+        struct CoverageWindow
+        {
+            double w, e, s, n;
+        };
+        Microsoft::UI::Xaml::Controls::Border FirstRunCoveragePanel(CoverageWindow const &win,
+                                                                    int panel, double width,
+                                                                    double radius, bool enabled);
         /* The catalog state the coverage step last drew. The catalog lands on
          * its own and the map and the prices come from it, so the step is
          * rendered again when this changes rather than on every tick. */
@@ -534,9 +538,6 @@ namespace winrt::LookoutMarine::implementation
         // What the online step has been given, so the button can read Skip
         // until there is something to continue with.
         std::string chart_link_url;
-        // GSHHG rings for the coverage map, read once and kept: a step
-        // rebuild redraws the map and the file is a quarter of a megabyte.
-        std::vector<lkw::CoastRing> coastline_;
         bool first_run_footer_welcome{ false };
         bool first_run_footer_shaped{ false };
 
