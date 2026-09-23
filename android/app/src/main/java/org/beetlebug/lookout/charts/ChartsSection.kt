@@ -8,6 +8,8 @@ import org.beetlebug.lookout.ui.Footer
 import org.beetlebug.lookout.ui.SectionHeader
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.background
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.PaddingValues
@@ -104,7 +106,7 @@ fun ChartsSection(
     if (charts.sets.isEmpty() && pictures.paths.isEmpty()) {
         Footer(if (charts.scanning) "Finding charts…" else "No chart sets")
     } else {
-        for (set in charts.sets) ChartSetRow(set, charts, noaa)
+        for (set in charts.sets) ChartSetRow(set, charts, noaa) { pickingNoaa = true }
         // The pictures, in the same list. A picture and a survey are different
         // kinds of chart, and the row says which, but they arrive in the same
         // folders and switch on the same way. Two lists made the mariner
@@ -460,15 +462,25 @@ private fun PictureRows(controller: RasterController) {
 }
 
 @Composable
-private fun ChartSetRow(set: ChartSets.Set, charts: ChartsModel, noaa: NoaaController) {
+private fun ChartSetRow(
+    set: ChartSets.Set,
+    charts: ChartsModel,
+    noaa: NoaaController,
+    onManage: () -> Unit,
+) {
     var confirming by remember(set.path) { mutableStateOf(false) }
 
+    // A managed set is added to and taken from in the downloader, so the row
+    // leads there. Removing it here left the downloader recording water that
+    // had gone.
     SwitchRow(
         label = set.title,
         checked = set.on,
         onCheckedChange = { charts.setOn(set.path, it) },
-        onRemove = { confirming = true },
+        onRemove = if (set.managed) null else ({ confirming = true }),
+        onManage = if (set.managed) onManage else null,
     )
+    if (set.managed) ManagedBadge()
     Text(
         text = summary(set),
         style = MaterialTheme.typography.bodySmall,
@@ -647,6 +659,7 @@ private fun SwitchRow(
     onCheckedChange: (Boolean) -> Unit,
     indent: Boolean = false,
     onRemove: (() -> Unit)? = null,
+    onManage: (() -> Unit)? = null,
 ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -667,8 +680,31 @@ private fun SwitchRow(
         if (onRemove != null) {
             TextButton(onClick = onRemove) { Text("Remove") }
         }
+        if (onManage != null) {
+            TextButton(
+                onClick = onManage,
+                modifier = Modifier.semantics { contentDescription = "manage-noaa-set" },
+            ) { Text("Manage…") }
+        }
         Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
+}
+
+/** The mark on a set the NOAA downloader owns. */
+@Composable
+private fun ManagedBadge() {
+    Text(
+        "Managed by NOAA chart downloader",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier
+            .padding(start = 20.dp, bottom = 2.dp)
+            .background(
+                MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                RoundedCornerShape(50),
+            )
+            .padding(horizontal = 6.dp, vertical = 2.dp),
+    )
 }
 
 /**

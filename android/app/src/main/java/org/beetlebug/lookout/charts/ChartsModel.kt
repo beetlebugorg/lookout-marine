@@ -310,7 +310,10 @@ class ChartsModel(private val appContext: Context) {
      * and from the frame loop when the core's background scan lands.
      */
     fun pullSets() {
-        sets = ChartSets.all()
+        // The downloader's set leads, because it is the set the mariner adds
+        // to and removes from in another dialog. The core lists sets in the
+        // order they were added.
+        sets = ChartSets.all().sortedByDescending { it.managed }
         composed = ChartSets.compose()
         generation++
     }
