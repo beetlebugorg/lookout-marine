@@ -4432,9 +4432,13 @@ test "a NOAA download on its own handle runs through two chart handles closing" 
     n.download(&.{5}, dest, false);
     try std.testing.expectEqual(@as(usize, 1), f.ids.items.len);
 
-    // The C allocator, as lookout_open uses. close frees the handle.
+    // The C allocator, as lookout_open uses. close frees the handle. A
+    // machine with no GPU device cannot open one, and the test skips there.
     for (0..2) |_| {
-        const l = try Lookout.openCharts(std.heap.c_allocator, &.{}, .{ .width = 64, .height = 64 });
+        const l = Lookout.openCharts(std.heap.c_allocator, &.{}, .{ .width = 64, .height = 64 }) catch |e| switch (e) {
+            error.SurfaceFailed => return error.SkipZigTest,
+            else => return e,
+        };
         l.close();
     }
     try std.testing.expectEqual(noaajob.Outcome.running, n.svc.outcome);
