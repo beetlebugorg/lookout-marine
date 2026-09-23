@@ -253,9 +253,9 @@ namespace lkw
 
         // ---- what the pages read ------------------------------------------
         std::wstring Title() const;
-        // The last step names what it keeps. The online step offers Skip until
-        // a chart is chosen.
-        std::wstring PrimaryTitle(bool has_chart) const;
+        // The online step names the chart picked, `chart_name`, or reads
+        // Continue with none.
+        std::wstring PrimaryTitle(std::wstring const &chart_name = {}) const;
 
         // The facts the line beside the primary action is composed from. The
         // step decides which of them it uses.

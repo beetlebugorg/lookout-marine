@@ -79,7 +79,7 @@ namespace lkw
         return L"";
     }
 
-    std::wstring FirstRun::PrimaryTitle(bool has_chart) const
+    std::wstring FirstRun::PrimaryTitle(std::wstring const &chart_name) const
     {
         switch (step())
         {
@@ -88,7 +88,8 @@ namespace lkw
         // A picker opened from the Charts pane does both halves at once, so
         // its action is Apply rather than Download.
         case FirstRunStep::Coverage:    return picker_only() ? L"Apply" : L"Download";
-        case FirstRunStep::OnlineChart: return has_chart ? L"Continue" : L"Skip";
+        case FirstRunStep::OnlineChart:
+            return chart_name.empty() ? std::wstring{ L"Continue" } : L"Use " + chart_name;
         case FirstRunStep::Importing:   return L"Continue";
         case FirstRunStep::Depths:      return L"Start Sailing";
         }

@@ -372,6 +372,7 @@ namespace winrt::LookoutMarine::implementation
         void ChartLinksDetach();  // before the handle closes
         void MigrateChartLinks(); // the old store, handed over once
         void PollChartLinks();    // the snapshot; UI thread, one consumer
+        std::wstring ActiveChartLinkName() const;
         // ---- setup (firstrun/) ------------------------------------------
         //
         // The MODEL decides; this half only draws it. See firstrun/lk_firstrun.h.

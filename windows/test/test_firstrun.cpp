@@ -84,15 +84,15 @@ void TestFirstRun()
               std::wstring(L"Online chart"));
 
         Case("the coverage step's button says what it does");
-        LK_EQ(At(FirstRunStep::Coverage).PrimaryTitle(false), std::wstring(L"Download"));
+        LK_EQ(At(FirstRunStep::Coverage).PrimaryTitle(), std::wstring(L"Download"));
 
-        Case("the online step offers Skip until a chart is chosen");
+        Case("the online step names the chart picked");
         FirstRun f = At(FirstRunStep::OnlineChart, ChartSource::Online);
-        LK_EQ(f.PrimaryTitle(false), std::wstring(L"Skip"));
-        LK_EQ(f.PrimaryTitle(true), std::wstring(L"Continue"));
+        LK_EQ(f.PrimaryTitle(), std::wstring(L"Continue"));
+        LK_EQ(f.PrimaryTitle(L"NOAA Chart Display"), std::wstring(L"Use NOAA Chart Display"));
 
         Case("the last step names what it keeps");
-        LK_EQ(At(FirstRunStep::Depths).PrimaryTitle(true), std::wstring(L"Start Sailing"));
+        LK_EQ(At(FirstRunStep::Depths).PrimaryTitle(), std::wstring(L"Start Sailing"));
     }
 
     Suite("lk_firstrun: the counts are latched");
@@ -288,8 +288,8 @@ void TestFirstRun()
         Case("the picker's action does both halves");
         FirstRun pick = At(FirstRunStep::Coverage, ChartSource::Noaa, true);
         LK_EQ(pick.picker_only(), true);
-        LK_EQ(pick.PrimaryTitle(false), std::wstring(L"Apply"));
-        LK_EQ(At(FirstRunStep::Coverage).PrimaryTitle(false), std::wstring(L"Download"));
+        LK_EQ(pick.PrimaryTitle(), std::wstring(L"Apply"));
+        LK_EQ(At(FirstRunStep::Coverage).PrimaryTitle(), std::wstring(L"Download"));
 
         Case("the picker's plan, beside its action");
         FirstRun::Footnotes plan{};

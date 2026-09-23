@@ -227,7 +227,7 @@ namespace winrt::LookoutMarine::implementation
         FirstRunBackBtn().Visibility(picker || first_run.CanGoBack() ? Visibility::Visible
                                                                     : Visibility::Collapsed);
         FirstRunFooterShape(first_run.step() == lkw::FirstRunStep::Welcome);
-        FirstRunPrimaryBtn().Content(box_value(first_run.PrimaryTitle(!active_chart_link.empty())));
+        FirstRunPrimaryBtn().Content(box_value(first_run.PrimaryTitle(ActiveChartLinkName())));
 
         auto body = FirstRunBody();
         body.Children().Clear();
@@ -604,10 +604,6 @@ namespace winrt::LookoutMarine::implementation
             }
             else
             {
-                // Water the device already holds is fetched again rather than
-                // left with a dead button.
-                FirstRunPrimaryBtn().Content(
-                    box_value(NoaaAllHeld() ? L"Download Again" : L"Download"));
                 FirstRunAgainBtn().Visibility(Visibility::Collapsed);
             }
         }

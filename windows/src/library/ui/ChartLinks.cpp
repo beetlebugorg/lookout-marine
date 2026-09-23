@@ -680,9 +680,18 @@ namespace winrt::LookoutMarine::implementation
         if (first_run.showing() && first_run.step() == lkw::FirstRunStep::OnlineChart)
         {
             FirstRunPrimaryBtn().Content(
-                box_value(first_run.PrimaryTitle(!active_chart_link.empty())));
+                box_value(first_run.PrimaryTitle(ActiveChartLinkName())));
             FirstRunRestate();
         }
+    }
+
+    // The name of the chart link drawing, or "" for Lookout's own chart.
+    std::wstring MainWindow::ActiveChartLinkName() const
+    {
+        for (auto const &link : chart_links)
+            if (link.url == active_chart_link)
+                return std::wstring{ winrt::to_hstring(link.name) };
+        return {};
     }
 
     // ---- the management surface --------------------------------------------
