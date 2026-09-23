@@ -5,6 +5,7 @@ const std = @import("std");
 
 const capi = @import("../capi.zig");
 const format = @import("../shell/format.zig");
+const depth = @import("../shell/depth.zig");
 const lic = @import("../licenses.zig");
 
 const gpa = capi.gpa;
@@ -73,6 +74,30 @@ export fn lookout_parse_scale(text: ?[*:0]const u8, out_denominator: ?*f64) c_in
 /// A wanted scale as a zoom delta. See lookout-shell.h.
 export fn lookout_zoom_delta_for_scale(current_denominator: f64, wanted_denominator: f64) f64 {
     return format.zoomDeltaForScale(current_denominator, wanted_denominator);
+}
+
+// ---- the depth plan ----------------------------------------------------------
+
+// lookout_depth_plan in lookout-shell.h: seventeen doubles, in this order.
+comptime {
+    std.debug.assert(@sizeOf(depth.Plan) == 17 * @sizeOf(f64));
+    std.debug.assert(@offsetOf(depth.Plan, "clearances") == 12 * @sizeOf(f64));
+}
+
+/// The four depth settings for a boat. See lookout-shell.h.
+export fn lookout_depth_plan(draft_m: f64, clearance_m: f64, feet: c_int, out: ?*depth.Plan) void {
+    const dst = out orelse return;
+    dst.* = depth.plan(draft_m, clearance_m, feet != 0);
+}
+
+/// The contour ladder in the unit on screen. See lookout-shell.h.
+export fn lookout_depth_ladder(feet: c_int, out: ?[*]f64, cap: usize) usize {
+    const l = depth.ladder(feet != 0);
+    if (out) |dst| {
+        const n = @min(cap, l.len);
+        @memcpy(dst[0..n], l[0..n]);
+    }
+    return l.len;
 }
 
 // ---- licenses ----------------------------------------------------------------

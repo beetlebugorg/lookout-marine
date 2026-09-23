@@ -304,6 +304,58 @@ int lookout_parse_scale(const char *text, double *out_denominator);
 double lookout_zoom_delta_for_scale(double current_denominator,
                                     double wanted_denominator);
 
+/* ---- the depth plan ----------------------------------------------------
+ *
+ * The four depth settings, derived from the boat: its draft and the clearance
+ * the mariner wants under the keel. Depths cross in metres. `feet` picks the
+ * unit on screen, which decides the contour ladder, the clearances offered and
+ * what the step displays. None of it needs a handle. */
+
+#define LOOKOUT_METRES_PER_FOOT 0.3048
+
+/* A struct tag with no typedef, because the call has the same name, the way
+ * `struct stat` and stat() do. */
+struct lookout_depth_plan {
+    /* The boat the plan was made for, in metres. The clearance is snapped to
+     * the nearest one the unit offers. A draft of zero or less stands for the
+     * starting keelboat: 1.7 m with 0.6 m, or 5.5 ft with 2 ft. */
+    double draft_m;
+    double clearance_m;
+    /* The draft rounded to the nearest half unit. A change of unit writes this
+     * back as the draft. */
+    double draft_rounded_m;
+
+    /* The settings, in metres. The safety depth is draft plus clearance,
+     * rounded up to a whole unit. The shallow contour equals it. The safety
+     * contour is the first rung of the ladder at or past it, and the deep
+     * contour the first rung at or past twice the safety contour. Both stop at
+     * the last rung. */
+    double safety_depth_m;
+    double shallow_contour_m;
+    double safety_contour_m;
+    double deep_contour_m;
+
+    /* What the step displays, in the unit on screen. */
+    double draft;
+    double clearance;
+    double safety_depth;
+    double safety_contour;
+    double deep_contour;
+    double clearances[4];    /* the clearances offered, smallest first */
+    double metres_per_unit;  /* 1, or LOOKOUT_METRES_PER_FOOT */
+};
+
+/* Fill `out` for a boat. `feet` is 1 for feet, 0 for metres. A NULL `out` is
+ * ignored. */
+void lookout_depth_plan(double draft_m, double clearance_m, int feet,
+                        struct lookout_depth_plan *out);
+
+/* The contours an S-57 survey draws, in the unit on screen, shallowest first:
+ * 2, 5, 10, 20, 30, 50, 75, 100 m, or 6, 12, 18, 30, 60, 90, 120, 180, 240,
+ * 300 ft. Writes up to `cap` rungs and returns how many the ladder has. `out`
+ * may be NULL to ask only for the count. */
+size_t lookout_depth_ladder(int feet, double *out, size_t cap);
+
 #ifdef __cplusplus
 }
 #endif

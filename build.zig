@@ -582,6 +582,7 @@ pub fn build(b: *std.Build) void {
     const pure_test_roots = [_][]const u8{
         "src/owned.zig",
         "src/shell/format.zig",
+        "src/shell/depth.zig",
         "src/shell/bake.zig",
         "src/shell/frame.zig",
         "src/settings.zig",
