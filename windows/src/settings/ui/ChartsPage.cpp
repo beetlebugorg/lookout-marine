@@ -1220,7 +1220,10 @@ namespace winrt::LookoutMarine::implementation
             std::vector<std::pair<std::string, std::vector<std::string>>> groups;
             for (auto const &p : raster_paths)
             {
-                std::string g = lookout_raster_set_name_for(p.c_str(), nullptr);
+                // The name has no NUL terminator. Read it by its length.
+                size_t g_len = 0;
+                char const *g_at = lookout_raster_set_name_for(p.c_str(), &g_len);
+                std::string g = g_at != nullptr ? std::string(g_at, g_len) : std::string();
                 auto it = std::find_if(groups.begin(), groups.end(),
                                        [&](auto const &e) { return e.first == g; });
                 if (it == groups.end())

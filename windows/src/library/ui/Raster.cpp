@@ -211,7 +211,10 @@ namespace winrt::LookoutMarine::implementation
         // picked those files while looking at this water.
         if (!last_added.empty())
         {
-            std::string want = lookout_raster_set_name_for(last_added.c_str(), nullptr);
+            // The name has no NUL terminator. Read it by its length.
+            size_t want_len = 0;
+            char const *want_at = lookout_raster_set_name_for(last_added.c_str(), &want_len);
+            std::string want = want_at != nullptr ? std::string(want_at, want_len) : std::string();
             int count = lk_controller_raster_set_count(controller);
             for (int i = 0; i < count; ++i)
             {
