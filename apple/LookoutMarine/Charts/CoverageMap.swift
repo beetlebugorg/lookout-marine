@@ -38,7 +38,7 @@ struct CoverageMap: View {
 
     /// S-52 very shallow water and land, so the picker sits in the app's own
     /// palette.
-    private static let water = Chrome.s52("DEPVS").opacity(0.55)
+    private static let water = Chrome.s52("DEPMD").opacity(0.55)
     private static let land = Chrome.s52("LANDA").opacity(0.55)
 
     var body: some View {

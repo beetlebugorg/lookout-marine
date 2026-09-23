@@ -92,7 +92,7 @@ private val HAWAII = MapWindow(-161.0, 18.3, -154.0, 22.6)
 /** S-52 very shallow water and land, so the picker sits in the chart's own
  *  palette rather than the system's. */
 @Composable
-private fun water() = Chrome.s52("DEPVS").copy(alpha = 0.55f)
+private fun water() = Chrome.s52("DEPMD").copy(alpha = 0.55f)
 
 @Composable
 private fun land() = Chrome.s52("LANDA").copy(alpha = 0.55f)
