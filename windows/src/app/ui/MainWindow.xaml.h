@@ -446,8 +446,8 @@ namespace winrt::LookoutMarine::implementation
          * as downloaded, which the picker opens ticked. */
         std::string FirstRunRepriceRegions();
         void FirstRunPollStart();
-        /* Start or stop that poll by what there is to watch: a bake, a set
-         * scan, or an ended bake still to be handed over. */
+        /* Start or stop that poll by what there is to watch: the set scan
+         * the library opens after. */
         void FirstRunPollAsNeeded();
 
         /* The depth step: the boat the mariner describes, and the parts of the
@@ -473,11 +473,6 @@ namespace winrt::LookoutMarine::implementation
         void FirstRunDepthsApply();
         /* The seabed, drawn from the numbers. */
         void FirstRunDrawSeabed();
-        /* True when an import has nothing left to do and never will: the
-         * transfer produced no charts. Without it the rule above would keep
-         * the clock running over work that cannot start. Cleared when a
-         * download begins. */
-        bool first_run_import_idle{ false };
         void FirstRunPoll();
 
         // The welcome picture, outside the step inset so it meets the edges.
@@ -573,15 +568,9 @@ namespace winrt::LookoutMarine::implementation
         // What the online step has been given, so the button can read Skip
         // until there is something to continue with.
         std::string chart_link_url;
-        // The usage band of every file the running set bake prepares, which
-        // with the bake's own count gives the by-band breakdown. See
-        // lkw::FirstRunBands.
-        std::vector<int> noaa_scan_bands;
         // GSHHG rings for the coverage map, read once and kept: a step
         // rebuild redraws the map and the file is a quarter of a megabyte.
         std::vector<lkw::CoastRing> coastline_;
-        // The baked library has been opened and adopted, once per run.
-        bool noaa_handed_over{ false };
         bool first_run_footer_welcome{ false };
         bool first_run_footer_shaped{ false };
 
@@ -804,6 +793,8 @@ namespace winrt::LookoutMarine::implementation
         // Read the download the Charts page is reporting, and put the page
         // away once it ends.
         void PollNoaaPane();
+        /* What the Preparing section reports: the bake, or the NOAA prepare. */
+        lkw::BakeProgress PrepareProgress();
         /* What the Charts page draws, as one string, and the rebuild that
          * compares it.
          *

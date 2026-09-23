@@ -239,19 +239,6 @@ namespace lkw
     // either says the water was not this app's to give back.
     std::wstring RemovalNote(size_t removed, size_t failed);
 
-    // The band breakdown, from what the scan found and how far the bake has
-    // got. `band_of_each_chart` is the band of every chart the scan returned,
-    // in any order. `done` is the bake's own count.
-    //
-    // The bake publishes no per-band counter. lookout_bake_order runs coarse
-    // band first, so the first `done` charts of that run are the coarsest
-    // `done` charts. Spreading `done` over the bands in ascending order
-    // reports what the bake finished.
-    //
-    // A chart whose name has no usage band goes last.
-    std::vector<FirstRunBand> FirstRunBands(std::vector<int> const &band_of_each_chart,
-                                            uint32_t done);
-
     // One reading of the two services.
     struct FirstRunLive
     {
@@ -259,7 +246,7 @@ namespace lkw
         bool     downloading{ false };
         uint32_t fetched{ 0 };
         uint32_t expected{ 0 };
-        // The bake (lookout_bake_poll, plus the scan that fed it).
+        // The core's prepare of the download (lookout_noaa_poll).
         bool     baking{ false };
         uint32_t found{ 0 }; // how many the scan returned
         uint32_t baked{ 0 }; // how many are through

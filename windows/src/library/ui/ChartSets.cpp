@@ -36,17 +36,11 @@ namespace winrt::LookoutMarine::implementation
         {
             chart_sets_model =
                 lookout_chart_sets_open(lk_store_handle(), lkw::ChartLibraryDir().c_str());
-            // The download directory is the downloader's set. The core skips
-            // the mark when the directory is not on the saved list yet, and
-            // PrepareChartSet marks it when a download adds it.
             // The library directory was the managed set before it became
             // prepared_root. Its row stays listed as a set the mariner can
             // remove.
             if (chart_sets_model != nullptr)
-            {
-                lookout_chart_sets_set_managed(chart_sets_model, lkw::NoaaDownloadDir().c_str(), 1);
                 lookout_chart_sets_set_managed(chart_sets_model, lkw::ChartLibraryDir().c_str(), 0);
-            }
             // What a removal left when the app ended during its delete: in the
             // library, and beside it where earlier builds renamed to.
             std::thread([lib = std::filesystem::path(lkw::ChartLibraryDir())] {
@@ -144,7 +138,6 @@ namespace winrt::LookoutMarine::implementation
         lkw::ScanResult scan;
         scan.root = path;
         scan.ok = true;
-        noaa_scan_bands.clear();
         for (size_t i = 0; i < n; ++i)
         {
             if (files[i] == nullptr)
@@ -154,7 +147,6 @@ namespace winrt::LookoutMarine::implementation
             cell.name = files[i]->name;
             cell.kind = files[i]->kind;
             cell.band = files[i]->band;
-            noaa_scan_bands.push_back(cell.band);
             scan.cells.push_back(std::move(cell));
             ++scan.sources;
         }
@@ -200,8 +192,6 @@ namespace winrt::LookoutMarine::implementation
             return;
         if (!lookout_chart_sets_add(model, path.c_str()))
             lookout_chart_sets_rescan(model, path.c_str());
-        if (path == lkw::NoaaDownloadDir())
-            lookout_chart_sets_set_managed(model, path.c_str(), 1);
         AwaitSetScan(path, true);
         LoadChartSets(nullptr);
     }
@@ -236,17 +226,8 @@ namespace winrt::LookoutMarine::implementation
         pending_set.clear();
         BakePanel().Visibility(Visibility::Collapsed);
 
-        bool const importing =
-            first_run.showing() && first_run.step() == lkw::FirstRunStep::Importing;
         if (bake && BakeSetToPrepare(path))
-        {
-            if (importing)
-            {
-                first_run.NoteBakeStarted();
-                FirstRunRender();
-            }
             return;
-        }
 
         if (row->charts == 0 && row->pictures == 0 && row->to_prepare == 0 && !row->managed)
         {
@@ -265,17 +246,9 @@ namespace winrt::LookoutMarine::implementation
         AdoptBakedRasters(pictures, !charts.empty());
         if (!charts.empty())
             OpenPaths(charts, charts.front(), lkw::AgencyForCells(charts));
-        if (importing)
-        {
-            if (charts.empty())
-            {
-                first_run.NoteImportStalled("The download produced no charts.");
-                first_run_import_idle = true;
-            }
-            else
-                noaa_handed_over = true;
+        // An open puts setup away, and setup has the depth step left.
+        if (first_run.showing())
             FirstRunRender();
-        }
     }
     // A background scan landing is the only change the model announces on its
     // own, and the counts a row shows are what it landed. Polled beside the
@@ -309,15 +282,6 @@ namespace winrt::LookoutMarine::implementation
             auto composed = ChartSetOpenPaths();
             if (!composed.empty() && composed != opened_set_paths)
                 ReopenChartSets({});
-
-            // A set with files still to prepare and no stop recorded since it
-            // changed. An import cut short by a quit or a crash finishes here,
-            // on the first scan after the app opens.
-            if (bake_job == nullptr && chart_sets_model != nullptr)
-            {
-                if (char const *resume = lookout_chart_sets_resume(chart_sets_model))
-                    BakeSetToPrepare(resume);
-            }
         });
     }
 

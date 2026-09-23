@@ -3,14 +3,9 @@
 
 #include <cmath>
 #include <cwchar>
-#include <map>
 
 namespace
 {
-    // A chart with no usage band sorts after band 6, so it goes last in the
-    // bake and last in the list. Sorting it as band 0 puts it first.
-    constexpr int kNoBand = 7;
-
     // A depth rounded to a tenth, with no trailing zero on a whole number.
     std::wstring DepthText(double v)
     {
@@ -321,34 +316,6 @@ namespace lkw
         for (int i = (int)s.size() - 3; i > 0; i -= 3)
             s.insert((size_t)i, L",");
         return s;
-    }
-
-    std::vector<FirstRunBand> FirstRunBands(std::vector<int> const &band_of_each_chart,
-                                            uint32_t done)
-    {
-        // Count the charts per band. A band with none never appears. An
-        // empty "Berthing 0 of 0" row reads as work that failed.
-        std::map<int, uint32_t> total;
-        for (int b : band_of_each_chart)
-            ++total[b == 0 ? kNoBand : b];
-
-        // Ascending band order is the bake's order. Walking the sorted map
-        // and drawing from `done` gives each band the charts the bake
-        // finished.
-        std::vector<FirstRunBand> out;
-        out.reserve(total.size());
-        uint32_t left = done;
-        for (auto const &[band, n] : total)
-        {
-            FirstRunBand b;
-            b.band  = band == kNoBand ? 0 : band;
-            b.name  = FirstRunBandName(b.band);
-            b.total = n;
-            b.done  = left >= n ? n : left;
-            left -= b.done;
-            out.push_back(std::move(b));
-        }
-        return out;
     }
 
     void FirstRun::Back()

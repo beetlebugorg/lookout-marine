@@ -949,8 +949,38 @@ namespace winrt::LookoutMarine::implementation
         }
     }
 
+    // The work the Preparing section reports: the shell's bake, or the core's
+    // prepare of a NOAA download.
+    lkw::BakeProgress MainWindow::PrepareProgress()
+    {
+        if (bake_job != nullptr)
+            return bake_job->Snapshot();
+        lkw::BakeProgress p;
+        p.kind = lkw::WorkKind::Importing;
+        p.name = "NOAA";
+        p.done = noaa_state.prepared;
+        p.total = noaa_state.to_prepare;
+        p.running = noaa_state.preparing != 0;
+        return p;
+    }
+
     void MainWindow::PollNoaaPane()
     {
+        // The Preparing section follows the core's prepare, and the page is
+        // built again when the prepare starts or ends.
+        if (bake_job == nullptr)
+        {
+            if (ChartsPageStructure() != charts_page_sig)
+                RefreshChartsPageOnChange();
+            else if (bake_pane_bar != nullptr && noaa_state.preparing)
+            {
+                auto const p = PrepareProgress();
+                bake_pane_bar.IsIndeterminate(p.total == 0);
+                bake_pane_bar.Value(p.Fraction());
+                bake_pane_count.Text(winrt::to_hstring(std::to_string(p.done) + " of " +
+                                                       std::to_string(p.total)));
+            }
+        }
         if (noaa_pane_count == nullptr || controller == nullptr)
             return;
         lookout_noaa_state const &nst = noaa_state;
@@ -995,7 +1025,7 @@ namespace winrt::LookoutMarine::implementation
         // The sections that come and go with work, and the row an empty list
         // stands in for.
         s += chart_sets.empty() ? "empty" : "sets";
-        s += bake_job != nullptr ? "|baking" : "|idle";
+        s += bake_job != nullptr || noaa_state.preparing ? "|baking" : "|idle";
         // The removal line comes and goes with the job that feeds it.
         s += removal_job != nullptr ? "|removing" : "|kept";
         // The update check's line and the Update button follow its result.
@@ -2073,10 +2103,11 @@ namespace winrt::LookoutMarine::implementation
 
             // ---- Preparing charts, while a bake runs --------------------------
             // The bake, for the same reason. Its own panel is over the chart,
-            // behind this window.
-            if (bake_job != nullptr)
+            // behind this window. The core's prepare of a NOAA download shows
+            // here the same way.
+            if (bake_job != nullptr || noaa_state.preparing)
             {
-                auto p = bake_job->Snapshot();
+                auto p = PrepareProgress();
                 header(winrt::to_hstring(p.Title()).c_str());
 
                 bake_pane_bar = Controls::ProgressBar{};
@@ -2108,13 +2139,18 @@ namespace winrt::LookoutMarine::implementation
                 Controls::Button stop;
                 stop.Content(winrt::box_value(L"Cancel"));
                 stop.Click([this](auto &&, auto &&) {
-                    if (bake_job != nullptr)
-                        // The mariner stopped it. The core skips this set on resume until a
-                        // scan of it finds a file to prepare that was not there before.
-                        if (lookout_chart_sets *model = ChartSetsModel(); model != nullptr &&
-                            !bake_source.empty())
-                            lookout_chart_sets_note_cancel(model, bake_source.c_str());
-                        bake_job->Cancel();
+                    if (bake_job == nullptr)
+                    {
+                        // The core records a stop of its own prepare.
+                        lookout_noaa_cancel(noaa);
+                        return;
+                    }
+                    // The mariner stopped it. The core skips this set on resume until a
+                    // scan of it finds a file to prepare that was not there before.
+                    if (lookout_chart_sets *model = ChartSetsModel(); model != nullptr &&
+                        !bake_source.empty())
+                        lookout_chart_sets_note_cancel(model, bake_source.c_str());
+                    bake_job->Cancel();
                 });
                 Controls::Grid::SetColumn(stop, 1);
                 line.Children().Append(stop);

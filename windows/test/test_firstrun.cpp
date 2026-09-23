@@ -341,64 +341,6 @@ void TestFirstRun()
         LK_EQ(FirstRunBandName(9), std::wstring(L"Other"));
     }
 
-    Suite("lk_firstrun: the bands follow the bake's order");
-    {
-        /* Two Overview, three Coastal, four Harbor. The bake runs them coarse
-         * first, so `done` fills them in that order and nowhere else. */
-        std::vector<int> const scan{ 5, 3, 1, 5, 3, 1, 5, 3, 5 };
-
-        Case("nothing baked yet: every band is present and empty");
-        auto b = FirstRunBands(scan, 0);
-        LK_EQ(b.size(), size_t{ 3 });
-        LK_EQ(b[0].band, 1);
-        LK_EQ(b[0].total, 2u);
-        LK_EQ(b[0].done, 0u);
-
-        Case("the coarsest band fills first, and alone");
-        b = FirstRunBands(scan, 1);
-        LK_EQ(b[0].done, 1u);
-        LK_EQ(b[1].done, 0u);
-        LK_EQ(b[2].done, 0u);
-
-        Case("a finished band does not hold back the next");
-        b = FirstRunBands(scan, 4);
-        LK_EQ(b[0].done, 2u);
-        LK_EQ(b[0].complete(), true);
-        LK_EQ(b[1].done, 2u);
-        LK_EQ(b[1].complete(), false);
-        LK_EQ(b[2].done, 0u);
-
-        Case("everything baked: every band complete");
-        b = FirstRunBands(scan, 9);
-        for (auto const &x : b)
-            LK_EQ(x.complete(), true);
-
-        /* The bake counts a chart the scan did not, or a count arrives out of
-         * order. Neither may report more done than there are. */
-        Case("a count past the total does not overflow a band");
-        b = FirstRunBands(scan, 99);
-        LK_EQ(b[2].done, b[2].total);
-
-        Case("bands with no charts are left out entirely");
-        b = FirstRunBands({ 3, 3 }, 0);
-        LK_EQ(b.size(), size_t{ 1 });
-        LK_EQ(b[0].name, std::wstring(L"Coastal"));
-
-        /* A cell whose name has no band sorts last in the bake, so it sorts
-         * last here. Reported first, a 0 claims the wide-area slot and the
-         * page ticks off "Other" before Overview. */
-        Case("a chart with no band goes last");
-        b = FirstRunBands({ 0, 1 }, 1);
-        LK_EQ(b.size(), size_t{ 2 });
-        LK_EQ(b[0].name, std::wstring(L"Overview"));
-        LK_EQ(b[0].done, 1u);
-        LK_EQ(b[1].name, std::wstring(L"Other"));
-        LK_EQ(b[1].done, 0u);
-
-        Case("no charts at all gives no bands");
-        LK_EQ(FirstRunBands({}, 0).size(), size_t{ 0 });
-    }
-
     /* The two figures a download is priced in and a library is totalled in.
      * The settings pane reads them as well as the coverage step. */
     Suite("lk_firstrun: the figures");

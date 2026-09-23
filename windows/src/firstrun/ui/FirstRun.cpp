@@ -434,16 +434,11 @@ namespace winrt::LookoutMarine::implementation
     }
 
     // Get charts from NOAA, in the Charts pane. It opens the coverage step on
-    // its own over the chart, so the picker, the download, the bake and the
-    // handover are the same code setup runs.
+    // its own over the chart, so the picker, the download and the prepare
+    // are the same code setup runs.
     void MainWindow::ShowNoaaPicker()
     {
         CloseSettings();
-        noaa_handed_over = false;
-        // The last run's import state. A second download in one launch read
-        // the first run's bands, and its bake never started.
-        noaa_scan_bands.clear();
-        first_run_import_idle = false;
         noaa_region_id.clear();
         noaa_picked_seeded = false;
         noaa_held_at_open.clear();
@@ -632,10 +627,6 @@ namespace winrt::LookoutMarine::implementation
         {
         case lkw::ChartSource::Noaa:
         {
-            // A fresh order. What the last one left behind says nothing about
-            // this one.
-            noaa_scan_bands.clear();
-            noaa_handed_over = false;
             if (noaa_region_id.empty())
                 return;
 
@@ -667,7 +658,6 @@ namespace winrt::LookoutMarine::implementation
 
             // `again` fetches the cells this device already holds as well,
             // for a pick of water that is wholly installed.
-            first_run_import_idle = false; // a fresh import has work to watch
             // The picker's Apply also gives back the water it unticked.
             if (first_run.picker_only())
                 NoaaApply(noaa_region_id, NoaaAllHeld());
@@ -746,9 +736,11 @@ namespace winrt::LookoutMarine::implementation
             }
         }
 
-        // The end of the download being followed. An order that fetched no
-        // chart goes to the Preparing step when setup is up. Otherwise a
-        // failure, and a refusal that a retry can clear, show an error.
+        // The end of the run being followed, which comes after the core's
+        // prepare. The library opens when the rescan the prepare asked for
+        // ends. A run that prepared no chart ends the Preparing step when
+        // setup is up. Otherwise a failure, and a refusal that a retry can
+        // clear, show an error.
         bool const ended = st.outcome != LOOKOUT_NOAA_NONE && st.outcome != LOOKOUT_NOAA_RUNNING;
         if (noaa_watch_run != 0 && st.run == noaa_watch_run && ended)
         {
@@ -757,12 +749,17 @@ namespace winrt::LookoutMarine::implementation
                 first_run.showing() && first_run.step() == lkw::FirstRunStep::Importing;
             if (st.outcome == LOOKOUT_NOAA_FINISHED ||
                 (st.outcome == LOOKOUT_NOAA_CANCELLED && st.done > 0))
-                PrepareChartSet(lkw::NoaaDownloadDir());
+            {
+                // A prepare shorter than one reading of the state is marked
+                // here, so the step reads it as run.
+                first_run.NoteBakeStarted();
+                AwaitSetScan(lkw::NoaaDownloadDir(), false);
+                LoadChartSets([this] { FinishPendingSet(); });
+            }
             else if (importing)
             {
                 first_run.NoteImportStalled(st.error[0] != '\0' ? std::string(st.error)
                                                                 : std::string("No charts arrived."));
-                first_run_import_idle = true;
                 FirstRunRender();
             }
             else if (!first_run.showing() &&
@@ -832,15 +829,11 @@ namespace winrt::LookoutMarine::implementation
     }
 
     // Whether the setup clock has anything to watch, and the timer started or
-    // stopped to match: a bake, a set scan, or an ended bake still to be
-    // handed over. NoaaChanged follows the service itself.
+    // stopped to match: the set scan the library opens after. NoaaChanged
+    // follows the service, and its prepare, itself.
     void MainWindow::FirstRunPollAsNeeded()
     {
-        bool const want =
-            first_run.showing() &&
-            ((bake_job != nullptr && bake_job->Running()) || !pending_set.empty() ||
-             (first_run.step() == lkw::FirstRunStep::Importing && first_run.saw_bake() &&
-              !noaa_handed_over));
+        bool const want = first_run.showing() && !pending_set.empty();
         if (want)
             FirstRunPollStart();
         else if (first_run_timer != nullptr)
@@ -869,30 +862,16 @@ namespace winrt::LookoutMarine::implementation
         live.fetched     = noaa_state.done;
         live.expected    = noaa_state.total;
 
-        if (bake_job)
-        {
-            auto snap = bake_job->Snapshot();
-            live.baking = snap.running;
-            live.found  = snap.total;
-            live.baked  = snap.done;
-            // The bake publishes no per-band counter. The scan's bands and the
-            // bake's own count give one, because the bake runs coarse band
-            // first.
-            if (!noaa_scan_bands.empty())
-                live.bands = lkw::FirstRunBands(noaa_scan_bands, snap.done);
-        }
+        // The core's prepare of the download, by usage band, coarse first.
+        live.baking = noaa_state.preparing != 0;
+        live.found  = noaa_state.to_prepare;
+        live.baked  = noaa_state.prepared;
+        for (int b = 0; b < 6; ++b)
+            if (noaa_state.band_total[b] > 0)
+                live.bands.push_back({ b + 1, lkw::FirstRunBandName(b + 1),
+                                       noaa_state.band_done[b], noaa_state.band_total[b] });
 
         first_run.Observe(live);
-
-        // The set bake has ended. FinishPendingSet opens the set when its
-        // rescan ends. A successful open puts setup away, and setup has the
-        // depth step left, so it is rendered again.
-        if (first_run.saw_bake() && bake_job == nullptr && !noaa_handed_over)
-        {
-            noaa_handed_over = true;
-            FirstRunRender();
-            return;
-        }
 
         // The Preparing step moves four times a second. Its values are
         // restated; it is built again only when its shape changes, which is
@@ -1713,16 +1692,9 @@ namespace winrt::LookoutMarine::implementation
             stop.Content(box_value(L"Stop"));
             stop.HorizontalAlignment(HorizontalAlignment::Left);
             stop.Click([this](auto &&, auto &&) {
+                // Stops the transfer or the prepare. A stop during the
+                // prepare is recorded by the core, which does not resume it.
                 lookout_noaa_cancel(noaa);
-                if (bake_job)
-                {
-                    // The mariner stopped it. The core skips this set on resume until a
-                    // scan of it finds a file to prepare that was not there before.
-                    if (lookout_chart_sets *model = ChartSetsModel(); model != nullptr &&
-                        !bake_source.empty())
-                        lookout_chart_sets_note_cancel(model, bake_source.c_str());
-                    bake_job->Cancel();
-                }
                 FirstRunRender();
             });
             phases.Children().Append(stop);
