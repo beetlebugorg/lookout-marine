@@ -908,3 +908,38 @@ test "a render fetches through the first handle's fetcher, and is kept on disk" 
     try testing.expectEqualSlices(u8, &.{ 30, 90, 200, 255 }, dst[mid .. mid + 4]);
     try testing.expectEqual(before, f.reqs.items.len);
 }
+
+test "a render runs to the end in the frame step of a thread with a 256 KB stack" {
+    // A shell's UI thread has 1 MB on Windows, and the frame step runs on it.
+    // The settings store's atomic write, also under the frame step, needs
+    // about 790 KB of that in std's Windows file calls. 256 KB is what is
+    // left.
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var f: TestFetch = .{};
+    defer f.deinit();
+    const main = (try openForTest(&tmp, &f)) orelse return error.SkipZigTest;
+    defer closeForTest(main);
+    const tile = try solidTile(.{ 30, 90, 200, 255 });
+    defer testing.allocator.free(tile);
+
+    const Run = struct {
+        fn run(l: *Lookout, fetch: *TestFetch, body: []const u8, out: *Result) void {
+            const url = "https://t.example/style.json";
+            var dst: [48 * 32 * 4]u8 = undefined;
+            out.* = l.chartLinkPicture(url, .render, -76.48, 38.97, 12, 48, 32, &dst);
+            var tries: usize = 0;
+            while (out.* == .pending and tries < 3000) : (tries += 1) {
+                presented(l);
+                _ = l.frameStep();
+                _ = fetch.respondAll(l, test_style, body);
+                out.* = l.chartLinkPicture(url, .render, -76.48, 38.97, 12, 48, 32, &dst);
+                @import("lock.zig").sleepMs(5);
+            }
+        }
+    };
+    var got: Result = .pending;
+    const th = try std.Thread.spawn(.{ .stack_size = 256 * 1024 }, Run.run, .{ main, &f, tile, &got });
+    th.join();
+    try testing.expectEqual(Result.ready, got);
+}

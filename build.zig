@@ -600,6 +600,7 @@ pub fn build(b: *std.Build) void {
         "src/trash.zig",
         "src/httpgather.zig",
         "src/library.zig",
+        "src/png.zig",
         "src/firstrun.zig",
         "src/jni_rows.zig",
         "src/plugin_dev_replay.zig",
