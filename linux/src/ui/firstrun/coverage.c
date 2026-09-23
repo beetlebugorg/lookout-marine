@@ -38,18 +38,6 @@ lk_first_run_coverage_new (LkFirstRunFlow *flow)
   gtk_widget_set_margin_top (pills, 12);
   gtk_box_append (GTK_BOX (step), pills);
 
-  /* NOAA's own terms, in their words, on the page that installs their charts.
-   * They apply to their charts whoever prepared them. */
-  GtkWidget *terms = lk_step_warning (
-      "NOAA ENC\xc2\xae charts.",
-      "They come from the NOAA Office of Coast Survey and are updated weekly on a "
-      "best-efforts basis; you are responsible for holding the current edition and "
-      "the latest updates. NOAA makes no warranty and assumes no liability for their "
-      "use. Lookout prepares them for display: what it draws is not the official ENC "
-      "and does not meet chart carriage regulations.");
-  gtk_widget_set_margin_top (terms, 18);
-  gtk_box_append (GTK_BOX (step), terms);
-
   gtk_widget_set_margin_start (step, 20);
   gtk_widget_set_margin_end (step, 20);
   gtk_widget_set_margin_bottom (step, 22);

@@ -101,43 +101,107 @@ lk_first_run_place_order (LkFirstRunFlow *self)
   lk_app_model_start_noaa_download (self->model, lk_noaa_all_installed (noaa));
 }
 
-/* The mariner's answer to NOAA's terms. Accept moves to the coverage step;
- * anything else leaves them on the source step, as the reference does. */
+/* The mariner's answer to NOAA's terms. Agree moves to the coverage step.
+ * Cancel, or closing the window, leaves them on the source step, as the
+ * reference does. */
 static void
-lk_first_run_terms_answered (GObject *source_object, GAsyncResult *result,
-                             gpointer user_data)
+lk_first_run_terms_agreed (GtkButton *button, gpointer user_data)
 {
   LkFirstRunFlow *self = user_data;
-  g_autoptr (GError) error = NULL;
-  int chosen = gtk_alert_dialog_choose_finish (GTK_ALERT_DIALOG (source_object), result,
-                                               &error);
+  GtkWidget *window = GTK_WIDGET (gtk_widget_get_root (GTK_WIDGET (button)));
 
-  /* Cancel is 0, Agree is 1. */
-  lk_first_run_act (self->flow, chosen == 1 ? LOOKOUT_SETUP_AGREE : LOOKOUT_SETUP_DECLINE,
-                    0);
+  g_object_set_data (G_OBJECT (window), "lk-answered", GINT_TO_POINTER (1));
+  lk_first_run_act (self->flow, LOOKOUT_SETUP_AGREE, 0);
+  gtk_window_destroy (GTK_WINDOW (window));
 }
 
-/* NOAA's own terms, in their words, before their charts are picked. */
+static void
+lk_first_run_terms_cancelled (GtkButton *button, gpointer user_data)
+{
+  gtk_window_close (GTK_WINDOW (gtk_widget_get_root (GTK_WIDGET (button))));
+}
+
+static gboolean
+lk_first_run_terms_closed (GtkWindow *window, gpointer user_data)
+{
+  LkFirstRunFlow *self = user_data;
+
+  if (g_object_get_data (G_OBJECT (window), "lk-answered") == NULL)
+    lk_first_run_act (self->flow, LOOKOUT_SETUP_DECLINE, 0);
+  return FALSE;
+}
+
+/* NOAA's terms, before their charts are picked: the warning every source
+ * states, then NOAA's own words and a link to their agreement. The same sheet
+ * the reference shows (apple/LookoutMarine/FirstRun/EncTermsSheet.swift). */
 static void
 lk_first_run_ask_terms (LkFirstRunFlow *self)
 {
   GtkRoot *root = gtk_widget_get_root (self->page);
-  static const char *answers[] = { "Cancel", "Agree", NULL };
-  GtkAlertDialog *dialog = gtk_alert_dialog_new ("NOAA ENC\xc2\xae charts");
+  GtkWidget *window = gtk_window_new ();
+  GtkWidget *box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 14);
+  GtkWidget *title = gtk_label_new ("Before you download");
+  GtkWidget *warning = lk_step_warning (
+      "NOT FOR NAVIGATION",
+      "By importing charts you accept that Lookout is a prototype and not a certified "
+      "navigation system, and that the charts it prepares are processed for display "
+      "and are not the official ENC. They do not meet chart carriage regulations. You "
+      "remain responsible for the safe navigation of your vessel and for keeping clear "
+      "of every danger. Verify everything shown here against official, up-to-date "
+      "charts and publications, and keep a paper backup.");
+  GtkWidget *noaa = gtk_label_new (NULL);
+  GtkWidget *buttons = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
+  GtkWidget *cancel = gtk_button_new_with_label ("Cancel");
+  GtkWidget *agree = gtk_button_new_with_label ("Agree and Continue");
 
-  gtk_alert_dialog_set_detail (
-      dialog,
-      "They come from the NOAA Office of Coast Survey and are updated weekly on a "
-      "best-efforts basis. You are responsible for holding the current edition and "
-      "the latest updates. NOAA makes no warranty and assumes no liability for their "
-      "use. Lookout prepares them for display: what it draws is not the official ENC "
-      "and does not meet chart carriage regulations.");
-  gtk_alert_dialog_set_buttons (dialog, answers);
-  gtk_alert_dialog_set_cancel_button (dialog, 0);
-  gtk_alert_dialog_set_default_button (dialog, 1);
-  gtk_alert_dialog_choose (dialog, GTK_IS_WINDOW (root) ? GTK_WINDOW (root) : NULL, NULL,
-                           lk_first_run_terms_answered, self);
-  g_object_unref (dialog);
+  gtk_window_set_title (GTK_WINDOW (window), "NOAA ENC\xc2\xae charts");
+  gtk_window_set_default_size (GTK_WINDOW (window), 520, -1);
+  gtk_window_set_resizable (GTK_WINDOW (window), FALSE);
+  gtk_window_set_modal (GTK_WINDOW (window), TRUE);
+  gtk_window_set_destroy_with_parent (GTK_WINDOW (window), TRUE);
+  if (GTK_IS_WINDOW (root))
+    gtk_window_set_transient_for (GTK_WINDOW (window), GTK_WINDOW (root));
+  gtk_window_set_titlebar (GTK_WINDOW (window), gtk_header_bar_new ());
+  g_signal_connect (window, "close-request", G_CALLBACK (lk_first_run_terms_closed), self);
+
+  gtk_widget_add_css_class (title, "title-3");
+  gtk_label_set_xalign (GTK_LABEL (title), 0.0);
+
+  /* NOAA's own terms, in their words. They apply to their charts whoever
+   * prepared them. */
+  gtk_label_set_markup (
+      GTK_LABEL (noaa),
+      "NOAA ENC\xc2\xae charts come from the NOAA Office of Coast Survey and are updated "
+      "weekly on a best-efforts basis; you are responsible for holding the current "
+      "edition and the latest updates. NOAA makes no warranty and assumes no liability "
+      "for their use. See the <a href=\"https://www.charts.noaa.gov/ENCs/"
+      "ENC_Agreement.shtml\">NOAA ENC User Agreement</a>.");
+  gtk_label_set_wrap (GTK_LABEL (noaa), TRUE);
+  gtk_label_set_xalign (GTK_LABEL (noaa), 0.0);
+  gtk_label_set_max_width_chars (GTK_LABEL (noaa), 60);
+  gtk_widget_add_css_class (noaa, "caption");
+  gtk_widget_add_css_class (noaa, "dim-label");
+
+  gtk_widget_add_css_class (agree, "suggested-action");
+  g_signal_connect (agree, "clicked", G_CALLBACK (lk_first_run_terms_agreed), self);
+  g_signal_connect (cancel, "clicked", G_CALLBACK (lk_first_run_terms_cancelled), self);
+  gtk_widget_set_hexpand (cancel, TRUE);
+  gtk_widget_set_halign (cancel, GTK_ALIGN_END);
+  gtk_box_append (GTK_BOX (buttons), cancel);
+  gtk_box_append (GTK_BOX (buttons), agree);
+
+  gtk_widget_set_margin_start (box, 20);
+  gtk_widget_set_margin_end (box, 20);
+  gtk_widget_set_margin_top (box, 20);
+  gtk_widget_set_margin_bottom (box, 20);
+  gtk_box_append (GTK_BOX (box), title);
+  gtk_box_append (GTK_BOX (box), warning);
+  gtk_box_append (GTK_BOX (box), noaa);
+  gtk_box_append (GTK_BOX (box), buttons);
+  gtk_window_set_child (GTK_WINDOW (window), box);
+  gtk_window_set_default_widget (GTK_WINDOW (window), agree);
+
+  gtk_window_present (GTK_WINDOW (window));
 }
 
 static void
