@@ -23,8 +23,7 @@ namespace lkw
         /* The state as of the last Adopt that returned true. */
         lookout_noaa_state const &state() const { return state_; }
 
-        /* Adopt the responses, and read the state when it changed. True when
-         * it changed. */
+        /* True when the state changed and was read. */
         bool Adopt();
         /* Each of these is true once, for the moment it names. */
         /* The update check's catalog read ended. outdated() holds the count. */
@@ -35,11 +34,10 @@ namespace lkw
         /* The order being followed ended. state() holds how. */
         bool TakeEnd();
 
-        /* Order a download of `regions` into `dest`, or an update of the
-         * downloaded cells when `regions` is empty, and follow its run. */
+        /* An empty `regions` orders an update of the downloaded cells. */
         void Order(std::string const &regions, bool again, std::string const &dest);
-        /* lookout_noaa_apply, following the run it orders. An empty pick
-         * orders none. Returns how many directories left the library. */
+        /* An empty pick orders no run. Returns how many directories left
+         * the library. */
         uint32_t Apply(std::string const &picked, bool again, std::string const &dest);
         /* Repeat the last order into `dest`. With no catalog loaded this
          * reads the catalog first, and TakeRetry returns true when it ends. */

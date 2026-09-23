@@ -56,12 +56,9 @@ namespace lkw
         lookout_chart_sets *Model();
         /* The model if it is open, else NULL. Opens nothing. */
         lookout_chart_sets *Handle() const { return model_; }
-        /* Copy the list out of the model into Rows. */
         void Load();
         std::vector<ChartSetRow> const &Rows() const { return rows_; }
-        /* True while any installed set is still waiting for its scan. */
         bool Scanning() const;
-        /* Every chart the switched-on sets hold, as the core composes it. */
         std::vector<std::string> Compose();
         void Close();
 

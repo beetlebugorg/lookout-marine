@@ -31,9 +31,6 @@ namespace lkw::setup
     using lkw::Line;
     using lkw::Muted;
 
-    // The shape the other shells price a region in, so "1,238 charts,
-    // 226.5 MB". The settings pane totals a library the same way, so both
-    // read the model's copy.
     using lkw::SizeText;
     using lkw::Thousands;
 
@@ -50,7 +47,6 @@ namespace lkw::setup
     Border WarningPanel(std::wstring const &heading, std::wstring const &body);
     TextBlock LinkLine(std::wstring const &text, std::wstring const &url);
 
-    // The depth step's illustration, at the size the card gives it.
     inline constexpr double kSeabedW = 286;
     inline constexpr double kSeabedH = 210;
 
