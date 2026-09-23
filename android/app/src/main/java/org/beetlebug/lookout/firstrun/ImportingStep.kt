@@ -27,6 +27,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -56,20 +57,27 @@ fun ImportingStep(
     val downloading = noaa.phase == NoaaController.Phase.DOWNLOADING
     val baking = work?.running == true
 
-    // The counts as they last stood, not as they stand.
-    //
-    // Both services reset when their work ends: the transfer's counters go
-    // back to zero and the bake's last state carries no total and no bands.
-    // Read live, the page emptied itself at the very moment it finished, so
-    // it holds the last figures each of them reported.
+    // The last counts each service reported. Both reset when their work
+    // ends: the transfer's counters go back to zero and the bake's last state
+    // has no total and no bands. Read live, the page emptied itself the moment
+    // it finished.
     var lastFetch by remember { mutableStateOf(0 to 0) }
-    if (noaa.total > 0) lastFetch = noaa.done to noaa.total
+    LaunchedEffect(noaa.done, noaa.total) {
+        if (noaa.total > 0) lastFetch = noaa.done to noaa.total
+    }
     var lastWork by remember { mutableStateOf<ChartImport.State?>(null) }
-    if (work != null && work.total > 0) lastWork = work
-    val shown = if (work?.running == true) work else lastWork
+    LaunchedEffect(work) {
+        if (work != null && work.total > 0) lastWork = work
+    }
+    val fetch = if (noaa.total > 0) noaa.done to noaa.total else lastFetch
+    val shown = when {
+        work?.running == true -> work
+        work != null && work.total > 0 -> work
+        else -> lastWork
+    }
 
-    val fetched = lastFetch.first
-    val expected = if (lastFetch.second > 0) lastFetch.second else order?.charts ?: 0
+    val fetched = fetch.first
+    val expected = if (fetch.second > 0) fetch.second else order?.charts ?: 0
 
     Column(
         Modifier.fillMaxWidth().padding(stepInset).padding(top = 20.dp),
@@ -135,6 +143,12 @@ fun ImportingStep(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+
+        // Why an order ended with no charts to prepare. The core's error
+        // text is used when it has one.
+        if (flow.importEnded) {
+            StepWarning(body = noaa.error?.takeIf { it.isNotEmpty() } ?: "No charts arrived.")
+        }
 
         bandPanel(shown)
 

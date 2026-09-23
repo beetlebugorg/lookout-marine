@@ -148,7 +148,7 @@ fun SourceCard(
  * red: it qualifies the chart, it does not refuse anything.
  */
 @Composable
-fun StepWarning(lead: String, body: String, modifier: Modifier = Modifier) {
+fun StepWarning(body: String, modifier: Modifier = Modifier, lead: String = "") {
     val amber = Color(0xFFF0A202)
     Surface(
         modifier = modifier.fillMaxWidth(),
@@ -164,11 +164,7 @@ fun StepWarning(lead: String, body: String, modifier: Modifier = Modifier) {
             )
             Spacer(Modifier.width(10.dp))
             Text(
-                buildString {
-                    append(lead)
-                    append(' ')
-                    append(body)
-                },
+                if (lead.isEmpty()) body else "$lead $body",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface,
             )
