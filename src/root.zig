@@ -78,15 +78,7 @@ fn schemeName(s: Scheme) []const u8 {
 /// adds (shell/palette.zig) are looked up first.
 pub fn s52Color(token: []const u8, scheme: Scheme) ?[4]f32 {
     if (palette.color(token, schemeName(scheme))) |c| return c;
-    var ct: [*c]u8 = null;
-    var ct_len: usize = 0;
-    var err: cc.tile57_error = undefined;
-    if (cc.tile57_colortables_default(&ct, &ct_len, &err) != cc.TILE57_OK or ct == null) return null;
-    defer cc.tile57_free(ct);
-
-    const alloc = std.heap.c_allocator;
-    const parsed = std.json.parseFromSlice(std.json.Value, alloc, ct[0..ct_len], .{}) catch return null;
-    defer parsed.deinit();
+    const parsed = colorTables() orelse return null;
     const root = switch (parsed.value) {
         .object => |o| o,
         else => return null,
@@ -100,6 +92,32 @@ pub fn s52Color(token: []const u8, scheme: Scheme) ?[4]f32 {
         else => return null,
     };
     return rgbaFromHex(hex);
+}
+
+/// The colortables, parsed on the first call and kept for the life of the
+/// process. They are baked into tile57 and never change, and a shell reads a
+/// colour for every panel it paints.
+var color_tables: ?std.json.Parsed(std.json.Value) = null;
+var color_tables_read = false;
+var color_tables_mu: Lock = .{};
+
+fn colorTables() ?*const std.json.Parsed(std.json.Value) {
+    color_tables_mu.lock();
+    defer color_tables_mu.unlock();
+    if (!color_tables_read) {
+        color_tables_read = true;
+        var ct: [*c]u8 = null;
+        var ct_len: usize = 0;
+        var err: cc.tile57_error = undefined;
+        if (cc.tile57_colortables_default(&ct, &ct_len, &err) == cc.TILE57_OK and ct != null) {
+            defer cc.tile57_free(ct);
+            // alloc_always: the parse outlives the buffer tile57 lends.
+            color_tables = std.json.parseFromSlice(std.json.Value, std.heap.c_allocator, ct[0..ct_len], .{
+                .allocate = .alloc_always,
+            }) catch null;
+        }
+    }
+    return if (color_tables) |*p| p else null;
 }
 
 /// "#rrggbb" as RGBA in 0..1.
@@ -3918,6 +3936,16 @@ test {
     _ = bakejob;
     // Pictures of charts, which open a handle and so cannot be a root either.
     _ = pics;
+}
+
+test "an S-52 colour reads the same on every call, and an unknown token reads none" {
+    const first = s52Color("DEPDW", cc.TILE57_SCHEME_DAY) orelse return error.TestUnexpectedResult;
+    const again = s52Color("DEPDW", cc.TILE57_SCHEME_DAY) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(first, again);
+    try std.testing.expectEqual(@as(f32, 1), first[3]);
+    const night = s52Color("DEPDW", cc.TILE57_SCHEME_NIGHT) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!std.meta.eql(first, night));
+    try std.testing.expectEqual(@as(?[4]f32, null), s52Color("NOSUCHTOKEN", cc.TILE57_SCHEME_DAY));
 }
 
 test "camera roundtrip" {
