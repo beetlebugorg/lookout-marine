@@ -3,9 +3,11 @@ package org.beetlebug.lookout.firstrun
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import org.beetlebug.lookout.Lookout
 
 /**
- * Setup: what it is asking, and whether it runs at all.
+ * Setup as the views read it. The core holds the steps and whether setup runs
+ * (lookout_setup_*). This holds the words and forwards the mariner's actions.
  *
  * It runs over an app that has settled on having no chart to draw, on every
  * launch that finds one. Not once per device: a mariner with an empty library
@@ -15,9 +17,10 @@ import androidx.compose.runtime.setValue
  */
 class FirstRunModel {
 
-    /** Where the charts come from. The source step asks this once. */
+    /** Where the charts come from, in LOOKOUT_SETUP_FROM_* order. */
     enum class Source { NOAA, ONLINE, FILES }
 
+    /** In LOOKOUT_SETUP_STEP_* order. */
     enum class Step {
         WELCOME,
         SOURCE,
@@ -31,59 +34,89 @@ class FirstRunModel {
         DEPTHS,
     }
 
-    var step by mutableStateOf(Step.WELCOME)
-        private set
+    /** The source card picked on the source step. */
     var source by mutableStateOf(Source.NOAA)
-    /** True while setup is over the chart. */
-    var showing by mutableStateOf(false)
-        private set
-
-    /**
-     * True once a bake has been seen running. Without it an import that has yet
-     * to start reads the same as one that has finished, because both report no
-     * work.
-     */
-    var sawBake by mutableStateOf(false)
-
-    /** What the mariner asked NOAA for, kept from the moment they asked. The
-     *  service's counters are for the transfer; the page outlives it. */
-    var order by mutableStateOf<Order?>(null)
+    /** The regions of the NOAA order, named for the import step. */
+    var orderRegions by mutableStateOf("")
 
     data class Order(val regions: String, val charts: Int, val bytes: Long)
 
-    /**
-     * True once the mariner has put setup away for this run. Set Up Later is
-     * "not now", not an answer, so it holds only until the app is next started
-     * with nothing to draw.
-     */
-    private var putAway = false
+    /** What the app observes, as the slots of [Lookout.setupNote]. */
+    data class Facts(
+        val catalogReady: Boolean = false,
+        val picked: Boolean = false,
+        val onLink: Boolean = false,
+        val nothingToDraw: Boolean = false,
+        val hasCharts: Boolean = false,
+        val workRunning: Boolean = false,
+        val downloading: Boolean = false,
+        val chartOpen: Boolean = false,
+        val noaaOutcome: Int = 0,
+        val noaaRun: Long = 0,
+        val pickCharts: Int = 0,
+        val pickBytes: Long = 0,
+    ) {
+        fun slots(): LongArray = longArrayOf(
+            flag(catalogReady), flag(picked), flag(onLink), flag(nothingToDraw),
+            flag(hasCharts), flag(workRunning), flag(downloading), flag(chartOpen),
+            noaaOutcome.toLong(), noaaRun, pickCharts.toLong(), pickBytes,
+        )
 
-    /**
-     * Whether setup should come up. `nothingToDraw` is the app having settled
-     * on an empty library, and `linked` is a published style drawing in its
-     * place: somebody sailing on one has no empty library to fill.
-     */
-    fun shouldRun(nothingToDraw: Boolean, linked: Boolean): Boolean =
-        !putAway && !linked && nothingToDraw
+        private fun flag(b: Boolean) = if (b) 1L else 0L
+    }
+
+    /** The core's setup state machine (src/firstrun.zig). */
+    private val handle = Lookout.setupNew()
+    /** The slots of [Lookout.setupRead]. */
+    private var state by mutableStateOf(LongArray(STATE_SLOTS))
+
+    val step: Step get() = Step.entries.getOrElse(state[0].toInt()) { Step.WELCOME }
+    /** True while setup is over the chart. */
+    val showing: Boolean get() = state[1] != 0L
+    /** True when setup is down and has a reason to come up. */
+    val shouldBegin: Boolean get() = !showing && state[2] != 0L
+    val canGoBack: Boolean get() = state[3] != 0L
+    val primaryEnabled: Boolean get() = state[4] != 0L
+    /** Raised when the mariner continues from the source step with NOAA
+     *  picked. The regions come after they accept. */
+    val showingEncTerms: Boolean get() = state[5] != 0L
+    /** The NOAA order ended with no chart to continue to. */
+    val importEnded: Boolean get() = state[8] != 0L
+    /** Work ran on the import step. An import yet to start and one that has
+     *  finished both have no work running. */
+    val sawWork: Boolean get() = state[9] != 0L
+    /** The NOAA order as it was placed, or null for a dropped folder. */
+    val order: Order?
+        get() = if (state[7] != 0L) Order(orderRegions, state[10].toInt(), state[11]) else null
+
+    /** Hand the core what the app observes. */
+    fun note(facts: Facts) {
+        Lookout.setupNote(handle, facts.slots())
+        read()
+    }
+
+    private fun read() {
+        val out = LongArray(STATE_SLOTS)
+        Lookout.setupRead(handle, out)
+        state = out
+    }
+
+    private fun act(action: Int, arg: Int = 0): Int =
+        Lookout.setupAct(handle, action, arg).also { read() }
 
     fun begin() {
-        step = Step.WELCOME
-        showing = true
+        act(BEGIN, Step.WELCOME.ordinal)
     }
 
-    /** Whether Back applies. The first step offers Set Up Later instead, and
-     *  past the import the charts are already arriving. */
-    val canGoBack: Boolean get() = when (step) {
-        Step.SOURCE, Step.COVERAGE, Step.ONLINE_CHART -> true
-        else -> false
+    /** Accepted. On to picking water. */
+    fun agreeToEncTerms() {
+        act(AGREE)
     }
 
-    fun back() {
-        step = when (step) {
-            Step.SOURCE -> Step.WELCOME
-            Step.COVERAGE, Step.ONLINE_CHART -> Step.SOURCE
-            else -> step
-        }
+    /** Dismissed without accepting. The source step stands, so another source
+     *  is still open to them. */
+    fun declineEncTerms() {
+        act(DECLINE)
     }
 
     /**
@@ -91,47 +124,18 @@ class FirstRunModel {
      * once the flow has finished asking and the shell has work to do, such as
      * raising a file picker.
      */
-    /** Raised when the mariner continues from the source step with NOAA
-     *  picked. The regions come after they accept. */
-    var showingEncTerms by mutableStateOf(false)
+    fun advance(): Source? = Source.entries.getOrNull(act(ADVANCE, source.ordinal))
 
-    /** Accepted. On to picking water. */
-    fun agreeToEncTerms() {
-        showingEncTerms = false
-        step = Step.COVERAGE
-    }
-
-    /** Dismissed without accepting. The source step stands, so another source
-     *  is still open to them. */
-    fun declineEncTerms() {
-        showingEncTerms = false
-    }
-
-    fun advance(): Source? = when (step) {
-        Step.WELCOME -> { step = Step.SOURCE; null }
-        Step.SOURCE -> when (source) {
-            // NOAA's terms apply to NOAA's charts, so they are put where those
-            // charts are chosen. A mariner who picks an online chart or their
-            // own files downloads no ENC and is asked to accept none.
-            Source.NOAA -> { showingEncTerms = true; null }
-            Source.ONLINE -> { step = Step.ONLINE_CHART; null }
-            Source.FILES -> { finish(); Source.FILES }
-        }
-        Step.COVERAGE -> { step = Step.IMPORTING; Source.NOAA }
-        Step.ONLINE_CHART -> { step = Step.DEPTHS; Source.ONLINE }
-        Step.IMPORTING -> { step = Step.DEPTHS; null }
-        Step.DEPTHS -> { finish(); null }
+    fun back() {
+        act(BACK)
     }
 
     /**
-     * Set Up Later, and the end of a run that finished. Both put setup away for
-     * the rest of this launch. A run that finished leaves a chart behind it,
-     * and a chart is what keeps setup down after that.
+     * Set Up Later, and the end of a run that finished. Both put setup away
+     * for the rest of this launch until a library that held charts is emptied.
      */
     fun finish() {
-        putAway = true
-        showing = false
-        step = Step.WELCOME
+        act(LATER)
     }
 
     /** The page's own name, for the bar over it. */
@@ -151,5 +155,16 @@ class FirstRunModel {
         Step.ONLINE_CHART -> if (chartName != null) "Continue" else "Skip"
         Step.IMPORTING -> "Continue"
         Step.DEPTHS -> "Start Sailing"
+    }
+
+    private companion object {
+        const val STATE_SLOTS = 12
+        // LOOKOUT_SETUP_* actions.
+        const val BEGIN = 0
+        const val ADVANCE = 2
+        const val BACK = 3
+        const val AGREE = 4
+        const val DECLINE = 5
+        const val LATER = 6
     }
 }

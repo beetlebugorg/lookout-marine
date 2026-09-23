@@ -1045,6 +1045,19 @@ public final class Lookout implements AutoCloseable {
     public static int noaaRegionCoverage(long n, String regionId, double[] out) {
         return nNoaaSvcRegionCoverage(n, regionId, out);
     }
+
+    // ---- setup (lookout_setup_*) ---------------------------------------------
+
+    /** A setup state machine, down. 0 when it could not be allocated. */
+    public static long setupNew()                          { return nSetupNew(); }
+    public static void setupFree(long s)                   { nSetupFree(s); }
+    /** Replace the facts setup reads. The slots are nSetupNote's. */
+    public static void setupNote(long s, long[] facts)     { nSetupNote(s, facts); }
+    /** Apply a LOOKOUT_SETUP_* action. Returns the source to act on, or -1. */
+    public static int setupAct(long s, int action, int arg) { return nSetupAct(s, action, arg); }
+    /** Read the state into nSetupRead's slots. */
+    public static void setupRead(long s, long[] out)       { nSetupRead(s, out); }
+
     /** A live grant flip; a revoked call answers -1 to the running plugin. */
     public boolean pluginGrantSet(String id, String cap, boolean on) {
         return h != 0 && nPluginGrantSet(h, id, cap, on);
@@ -1089,6 +1102,11 @@ public final class Lookout implements AutoCloseable {
     private static native int nNoaaSvcApply(long n, String pickedIds, String destDir, boolean again);
     private static native boolean nNoaaSvcRegionState(long n, String regionId, long[] out);
     private static native int nNoaaSvcRegionCoverage(long n, String regionId, double[] out);
+    private static native long nSetupNew();
+    private static native void nSetupFree(long s);
+    private static native void nSetupNote(long s, long[] facts);
+    private static native int nSetupAct(long s, int action, int arg);
+    private static native void nSetupRead(long s, long[] out);
     private static native String[] nTables(long h);
     private static native String[] nTableRows(long h, String id, String key, String sortKey, boolean ascending);
     private static native boolean nPluginTableOpen(long h, String id, String key, boolean open);

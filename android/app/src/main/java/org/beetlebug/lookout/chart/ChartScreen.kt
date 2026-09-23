@@ -21,6 +21,7 @@ import org.beetlebug.lookout.pick.pickReportWidth
 import org.beetlebug.lookout.plugins.AlertBanner
 import org.beetlebug.lookout.plugins.PluginTableDialog
 import org.beetlebug.lookout.plugins.PluginInstallDialogs
+import org.beetlebug.lookout.firstrun.FirstRunModel
 import org.beetlebug.lookout.firstrun.FirstRunSetup
 import org.beetlebug.lookout.settings.SettingsSheet
 
@@ -385,10 +386,7 @@ fun ChartScreen(
             watching = 0L
             val kept = noaa.outcome == NoaaController.OUTCOME_FINISHED ||
                 (noaa.outcome == NoaaController.OUTCOME_CANCELLED && noaa.done > 0)
-            if (kept) {
-                controller.firstRun.sawBake = true
-                open = true
-            }
+            if (kept) open = true
         }
         if (open) charts.adoptNoaaPrepare()
     }
@@ -396,14 +394,25 @@ fun ChartScreen(
     // Setup, over the running chart. It comes up on any launch that settles on
     // nothing to draw, and a published style counts as something: somebody
     // sailing on one has no empty library to fill.
-    val nothingToDraw = charts.chartPaths.isEmpty() && !charts.scanning
-    val linked = controller.chartLinkController.activeChartLink != null
-    LaunchedEffect(nothingToDraw, linked) {
-        if (!controller.firstRun.showing &&
-            controller.firstRun.shouldRun(nothingToDraw, linked)
-        ) {
-            controller.firstRun.begin()
-        }
+    // The core decides from these facts whether it comes up and where it
+    // stands.
+    val setupFacts = FirstRunModel.Facts(
+        catalogReady = noaa.haveCatalog,
+        picked = noaa.picked.isNotEmpty(),
+        onLink = controller.chartLinkController.activeChartLink != null,
+        nothingToDraw = charts.chartPaths.isEmpty() && !charts.scanning,
+        hasCharts = charts.chartPaths.isNotEmpty(),
+        workRunning = charts.importer.state?.running == true || noaa.preparing,
+        downloading = noaa.phase == NoaaController.Phase.DOWNLOADING,
+        chartOpen = charts.chartPaths.isNotEmpty(),
+        noaaOutcome = noaa.outcome,
+        noaaRun = noaa.run,
+        pickCharts = if (noaa.cells > 0) noaa.cells else noaa.held,
+        pickBytes = if (noaa.cells > 0) noaa.bytes else noaa.heldBytes,
+    )
+    LaunchedEffect(setupFacts) {
+        controller.firstRun.note(setupFacts)
+        if (controller.firstRun.shouldBegin) controller.firstRun.begin()
     }
     if (controller.firstRun.showing) {
         FirstRunSetup(

@@ -41,24 +41,17 @@ fun FirstRunSetup(
 
     FirstRunFlow(
         flow = flow,
-        canContinue = canContinue(flow, noaa, charts, links.activeChartLink),
+        // The online step keeps Skip: continuing with no chart picked
+        // finishes setup over the basemap.
+        canContinue = flow.step == FirstRunModel.Step.ONLINE_CHART || flow.primaryEnabled,
         chartName = links.chartLinks.firstOrNull { it.url == links.activeChartLink }?.name,
         footnote = footnote(flow, noaa),
         onPrimary = {
-            // The order is kept from the moment it is made: the service's own
-            // counters are for the transfer, and the page outlives it.
-            val ordered = if (flow.step == FirstRunModel.Step.COVERAGE) {
-                FirstRunModel.Order(
-                    regions = noaa.regions.filter { noaa.picked.contains(it.id) }
-                        .joinToString(", ") { it.name },
-                    charts = if (noaa.cells > 0) noaa.cells else noaa.held,
-                    bytes = if (noaa.cells > 0) noaa.bytes else noaa.heldBytes,
-                )
-            } else null
             when (flow.advance()) {
                 FirstRunModel.Source.FILES -> onOpenCharts()
                 FirstRunModel.Source.NOAA -> {
-                    flow.order = ordered
+                    flow.orderRegions = noaa.regions.filter { noaa.picked.contains(it.id) }
+                        .joinToString(", ") { it.name }
                     charts.noaaDir.mkdirs()
                     noaa.download(charts.noaaDir.absolutePath, noaa.allInstalled)
                 }
@@ -85,22 +78,6 @@ fun FirstRunSetup(
             FirstRunModel.Step.DEPTHS -> DepthStep(controller.mariner)
         }
     }
-}
-
-/** Whether the step on screen has been answered. */
-private fun canContinue(
-    flow: FirstRunModel,
-    noaa: NoaaController,
-    charts: ChartsModel,
-    activeLink: String?,
-): Boolean = when (flow.step) {
-    FirstRunModel.Step.WELCOME, FirstRunModel.Step.SOURCE -> true
-    FirstRunModel.Step.COVERAGE -> noaa.haveCatalog && noaa.picked.isNotEmpty()
-    FirstRunModel.Step.ONLINE_CHART -> true
-    // The bake opens the library when it finishes, so there is nothing to
-    // continue to until a chart is drawing.
-    FirstRunModel.Step.IMPORTING -> flow.sawBake && charts.importer.state?.running == false
-    FirstRunModel.Step.DEPTHS -> true
 }
 
 /** The line beside the action: what the pick costs, or what to do next. */

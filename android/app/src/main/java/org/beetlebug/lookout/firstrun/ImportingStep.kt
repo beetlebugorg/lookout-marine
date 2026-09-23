@@ -95,7 +95,7 @@ fun ImportingStep(
         val fraction = when {
             downloading && expected > 0 -> fetched.toFloat() / expected * 0.35f
             baking && (shown?.total ?: 0) > 0 -> 0.35f + shown!!.done.toFloat() / shown.total * 0.65f
-            work?.running == false && flow.sawBake -> 1f
+            work?.running == false && flow.sawWork -> 1f
             else -> 0f
         }
         if (fraction > 0f) {
@@ -125,7 +125,7 @@ fun ImportingStep(
             "Importing charts",
             if ((shown?.total ?: 0) > 0) "${shown!!.done} of ${shown.total}" else "",
             running = baking,
-            done = flow.sawBake && work?.running == false,
+            done = flow.sawWork && work?.running == false,
         )
 
         Text(
