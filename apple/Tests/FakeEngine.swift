@@ -207,6 +207,13 @@ final class FakeEngine: RasterEngine, ChartLinkEngine, PluginEngine,
         return noaaDue
     }
 
+    /// What noaaUpdateCheck returns, and noaaSetUpdateCheck writes.
+    var noaaCadence: Int32 = 2
+
+    func noaaUpdateCheck() -> Int32 { noaaCadence }
+
+    func noaaSetUpdateCheck(_ cadence: Int32) { noaaCadence = cadence }
+
     func noaaCancel() { note("noaaCancel") }
 
     func noaaRegionCoverage(_ regionID: String) -> [GeoBox] {

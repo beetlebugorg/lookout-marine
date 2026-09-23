@@ -95,6 +95,9 @@ protocol NoaaEngine: AnyObject {
     func noaaUpdate(destination: String)
     /// True when an update check is due and has started, or still runs.
     func noaaUpdateDue() -> Bool
+    /// How often the update check runs, as LOOKOUT_NOAA_CHECK_*.
+    func noaaUpdateCheck() -> Int32
+    func noaaSetUpdateCheck(_ cadence: Int32)
     func noaaCancel()
     func noaaRegionCoverage(_ regionID: String) -> [GeoBox]
 }

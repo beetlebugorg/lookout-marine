@@ -111,6 +111,7 @@ final class NoaaModelTests: ShellTestCase {
         let (m, fake) = model()
         fake.noaaOutdatedCount = 721
         fake.noaaDue = true
+        fake.noaa.updateCheckedAt = Date()
 
         m.considerUpdateCheck()
 
@@ -118,21 +119,32 @@ final class NoaaModelTests: ShellTestCase {
         XCTAssertEqual(m.outdated, 721)
     }
 
-    /// The check waits on the catalog read, and counts when it ends.
-    func testACheckCountsWhenTheCatalogReadEnds() {
+    /// The check waits on the catalog read, and counts when the core records
+    /// it.
+    func testACheckCountsWhenTheCoreRecordsIt() {
         let (m, fake) = model()
         fake.noaaOutdatedCount = 721
         fake.noaaDue = true
-        fake.noaa.phase = .readingCatalog
+        fake.noaa.updateChecking = true
 
         m.considerUpdateCheck()
         XCTAssertTrue(m.checking)
         XCTAssertEqual(m.outdated, 0)
 
-        fake.noaa.phase = .ready
+        fake.noaa.updateChecking = false
+        fake.noaa.updateCheckedAt = Date()
         m.poll()
         XCTAssertFalse(m.checking)
         XCTAssertEqual(m.outdated, 721)
+    }
+
+    /// The cadence is the core's.
+    func testTheCadenceIsTheCores() {
+        let (m, fake) = model()
+        XCTAssertEqual(m.updateCheck, .daily)
+        m.updateCheck = .never
+        XCTAssertEqual(fake.noaaCadence, 0)
+        XCTAssertEqual(m.updateCheck, .never)
     }
 
     /// The count follows the library. An update that baked leaves the cells
@@ -142,6 +154,7 @@ final class NoaaModelTests: ShellTestCase {
         let (m, fake) = model()
         fake.noaaOutdatedCount = 721
         fake.noaaDue = true
+        fake.noaa.updateCheckedAt = Date()
         m.considerUpdateCheck()
         XCTAssertEqual(m.outdated, 721)
 

@@ -68,6 +68,10 @@ struct NoaaState: Equatable {
     var date = ""
     /// The last catalog read that succeeded, or nil for never.
     var checkedAt: Date?
+    /// True while an update check waits on its catalog read.
+    var updateChecking = false
+    /// The last update check recorded, or nil for never.
+    var updateCheckedAt: Date?
     var catalogCells: UInt32 = 0
     var total: UInt32 = 0
     var done: UInt32 = 0
@@ -162,7 +166,8 @@ final class NoaaModel {
 
     weak var engine: (any NoaaEngine)? {
         didSet {
-            guard engine != nil else { return }
+            guard let engine else { return }
+            updateCheck = UpdateCheck(rawValue: engine.noaaUpdateCheck()) ?? .daily
             poll()
         }
     }
@@ -235,7 +240,8 @@ final class NoaaModel {
         // Assigning an equal value still invalidates every view reading it.
         guard next != state else { return }
         let gained = next.haveCatalog && !state.haveCatalog
-        let reread = next.checkedAt != state.checkedAt
+        let recheck = next.updateCheckedAt != state.updateCheckedAt
+            || next.updateChecking != state.updateChecking
         state = next
         if gained {
             recost()
@@ -247,8 +253,7 @@ final class NoaaModel {
             catalogWaiters = []
             for w in waiting { w.resume() }
         }
-        finishCheck()
-        if reread { recount() }
+        if recheck { recount() }
         onChange?(endWatch())
     }
 
@@ -411,12 +416,13 @@ final class NoaaModel {
 
     // MARK: - Checking for reissued charts
 
-    /// How often to look. The wording an app uses for its own updates, because
-    /// this is the same question about the charts.
-    enum UpdateCheck: String, CaseIterable, Identifiable {
-        case never, startup, daily
+    /// How often to look, as LOOKOUT_NOAA_CHECK_*. The wording an app uses
+    /// for its own updates, because this is the same question about the
+    /// charts.
+    enum UpdateCheck: Int32, CaseIterable, Identifiable {
+        case never = 0, startup = 1, daily = 2
 
-        var id: String { rawValue }
+        var id: Int32 { rawValue }
         var label: String {
             switch self {
             case .never:   return "Never"
@@ -427,24 +433,16 @@ final class NoaaModel {
     }
 
     /// How many downloaded cells NOAA has reissued, as the last check counted
-    /// them. Zero before a check has run.
+    /// them. Zero before a check has been recorded.
     private(set) var outdated: UInt32 = 0
     /// True while a check reads the catalog.
-    private(set) var checking = false
-    /// True once a check has run, so the count follows the library after it.
-    private var checked = false
+    var checking: Bool { state.updateChecking }
 
-    private static let group = Store.Group.chartsets
-    private static let cadenceKey = "noaa-update-check"
-
-    var updateCheck: UpdateCheck {
-        get {
-            guard let raw = Store.shared.string(NoaaModel.group, NoaaModel.cadenceKey),
-                  let v = UpdateCheck(rawValue: raw) else { return .daily }
-            return v
-        }
-        set {
-            Store.shared.set(newValue.rawValue, NoaaModel.group, NoaaModel.cadenceKey)
+    /// The cadence the core keeps in the store, read when the engine attaches.
+    var updateCheck: UpdateCheck = .daily {
+        didSet {
+            guard updateCheck != oldValue else { return }
+            engine?.noaaSetUpdateCheck(updateCheck.rawValue)
         }
     }
 
@@ -454,24 +452,14 @@ final class NoaaModel {
     /// when the set list changes.
     func considerUpdateCheck() {
         guard let engine, engine.noaaUpdateDue() else { return }
-        checking = true
         pull()
-        finishCheck()
     }
 
-    /// End the check once its catalog read has ended, and count.
-    private func finishCheck() {
-        guard checking, state.phase != .readingCatalog else { return }
-        checking = false
-        checked = true
-        recount()
-    }
-
-    /// Count the reissued charts again. The core counts against the library
-    /// as it is now, so an update that has baked clears its charts from the
-    /// count.
+    /// Count the reissued charts again once a check has been recorded. The
+    /// core counts against the library as it is now, so an update that has
+    /// baked clears its charts from the count.
     func recount() {
-        guard checked, let engine else { return }
+        guard state.updateCheckedAt != nil, !state.updateChecking, let engine else { return }
         outdated = engine.noaaOutdated()
     }
 

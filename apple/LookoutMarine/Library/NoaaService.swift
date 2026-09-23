@@ -46,6 +46,9 @@ final class NoaaService: NoaaEngine {
         }
         s.checkedAt = raw.checked_at > 0
             ? Date(timeIntervalSince1970: TimeInterval(raw.checked_at)) : nil
+        s.updateChecking = raw.update_checking != 0
+        s.updateCheckedAt = raw.update_checked_at > 0
+            ? Date(timeIntervalSince1970: TimeInterval(raw.update_checked_at)) : nil
         s.catalogCells = raw.catalog_cells
         s.total = raw.total
         s.done = raw.done
@@ -136,5 +139,13 @@ final class NoaaService: NoaaEngine {
 
     func noaaUpdateDue() -> Bool {
         lookout_noaa_update_due(handle) != 0
+    }
+
+    func noaaUpdateCheck() -> Int32 {
+        lookout_noaa_update_check(handle)
+    }
+
+    func noaaSetUpdateCheck(_ cadence: Int32) {
+        lookout_noaa_set_update_check(handle, cadence)
     }
 }
