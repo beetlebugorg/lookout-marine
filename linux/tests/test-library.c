@@ -9,6 +9,7 @@
  */
 
 #include <glib/gstdio.h>
+#include <pthread.h>
 
 #include "library/bake.h"
 #include "library/scan.h"
@@ -452,6 +453,33 @@ test_only_the_downloads_directory_is_given_back (void)
   g_assert_true (g_file_test (mine, G_FILE_TEST_IS_DIR));
 }
 
+static gpointer
+lk_thread_nop (gpointer data)
+{
+  return data;
+}
+
+/* Threads with the stacks the core's plugin broker gives them start. glibc
+ * places static TLS inside each thread's stack, and this binary links the same
+ * core and tile57 archives as the app, so its TLS is the app's. */
+static void
+test_small_stack_threads_start (void)
+{
+  const size_t sizes[] = { 256 * 1024, 512 * 1024 };
+
+  for (guint i = 0; i < G_N_ELEMENTS (sizes); i++)
+    {
+      pthread_attr_t attr;
+      pthread_t thread;
+
+      pthread_attr_init (&attr);
+      pthread_attr_setstacksize (&attr, sizes[i]);
+      g_assert_cmpint (pthread_create (&thread, &attr, lk_thread_nop, NULL), ==, 0);
+      pthread_join (thread, NULL);
+      pthread_attr_destroy (&attr);
+    }
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -470,6 +498,7 @@ main (int argc, char *argv[])
   g_test_add_func ("/library/nothing-installed-opens-nothing",
                    test_nothing_installed_opens_nothing);
   g_test_add_func ("/library/env-open-wins", test_env_open_wins);
+  g_test_add_func ("/library/small-stack-threads-start", test_small_stack_threads_start);
   g_test_add_func ("/library/nothing-to-draw", test_nothing_to_draw);
   g_test_add_func ("/library/pictures-in-a-pick", test_pictures_in_a_pick);
   g_test_add_func ("/library/a-set-with-prepared-charts-is-derived",

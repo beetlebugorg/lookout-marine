@@ -4562,3 +4562,15 @@ test "a frame with the phase profile on stays within 256 KB of stack" {
     std.debug.print("frame stack: {d} KB\n", .{used / 1024});
     try std.testing.expect(used < 256 * 1024);
 }
+
+test "a thread with the plugin broker's 512 KB stack starts" {
+    // glibc places static TLS inside each thread's stack, and pthread_create
+    // returns EINVAL when the stack cannot hold it. The broker's resolver,
+    // HTTP and WebSocket threads have 512 KB. This test binary has tile57's
+    // TLS, as the app does, and the test runner's own 256 KB signal stack.
+    const Run = struct {
+        fn run() void {}
+    };
+    const th = try std.Thread.spawn(.{ .stack_size = 512 * 1024 }, Run.run, .{});
+    th.join();
+}
