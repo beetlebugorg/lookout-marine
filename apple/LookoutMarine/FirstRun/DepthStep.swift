@@ -4,56 +4,47 @@
 //  two S-52 numbers the engine draws with, the safety depth and the safety
 //  contour, and states what each one does to the chart.
 //
-//  The engine is always given metres, so feet convert on the way out.
+//  The core derives the numbers (lookout_depth_plan). The boat is held in
+//  metres, and the plan returns it in the unit on screen for display.
 
 import SwiftUI
 
 struct DepthStep: View {
     @ObservedObject var m: MarinerSettings
 
-    /// The boat, in the unit on screen. MarinerSettings keeps the numbers the
-    /// chart draws with, and these two are the question behind them.
-    ///
-    /// Held in the unit on screen so every number displays round. A metric
-    /// list converted into feet gave a 4.9 ft clearance and a 16.4 ft
-    /// contour.
-    @State private var draft = 5.5
-    @State private var clearance = 2.0
+    /// The boat, in metres. MarinerSettings keeps the numbers the chart
+    /// draws with, and these two are the question behind them. A draft of
+    /// zero is the core's starting keelboat.
+    @State private var draftM = 0.0
+    @State private var clearanceM = 0.0
     @State private var draftText = ""
     @State private var seeded = false
 
     private var feet: Bool { m.depthUnit == .feet }
     private var unit: String { feet ? "ft" : "m" }
 
-    /// The clearances offered, in the unit on screen. Round in both units.
-    private var clearances: [Double] { feet ? [1, 2, 3, 5] : [0.3, 0.6, 1, 1.5] }
-
-    /// The contours an S-57 survey draws, in the unit on screen. The safety
-    /// contour is the first of these at or past the safety depth, because the
-    /// chart shades on a contour the survey has.
-    private var ladder: [Double] {
-        feet
-            ? [6, 12, 18, 30, 60, 90, 120, 180, 240, 300]
-            : [2, 5, 10, 20, 30, 50, 75, 100]
+    /// The settings for the boat, and the boat in the unit on screen.
+    private var plan: lookout_depth_plan {
+        var p = lookout_depth_plan()
+        lookout_depth_plan(draftM, clearanceM, feet ? 1 : 0, &p)
+        return p
     }
 
-    /// Draft plus clearance, rounded up to a whole foot or metre. A chart
-    /// names its depths in whole numbers, and the fraction belongs to the
-    /// keel rather than to the water.
-    private var safetyDepth: Double { (draft + clearance).rounded(.up) }
-    private var safetyContour: Double {
-        ladder.first { $0 >= safetyDepth } ?? ladder.last!
+    private var draft: Double { plan.draft }
+    private var clearance: Double { plan.clearance }
+
+    /// The clearances offered, in the unit on screen.
+    private var clearances: [Double] {
+        let c = plan.clearances
+        return [c.0, c.1, c.2, c.3]
     }
 
-    /// The deep contour. The step does not ask for it, so it comes off the
-    /// same ladder as the safety contour and displays round.
-    private var deepContour: Double {
-        let want = safetyContour * 2
-        return ladder.first { $0 >= want } ?? ladder.last!
-    }
+    private var safetyDepth: Double { plan.safety_depth }
+    private var safetyContour: Double { plan.safety_contour }
+    private var deepContour: Double { plan.deep_contour }
 
-    /// A depth on screen converted to metres, for the engine.
-    private func metres(_ v: Double) -> Double { feet ? v / 3.28084 : v }
+    /// Set the draft from a value in the unit on screen.
+    private func setDraft(_ v: Double) { draftM = v * plan.metres_per_unit }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -144,7 +135,7 @@ struct DepthStep: View {
                 // Start Sailing reads the draft as typed. Parsing only on
                 // Return left the seeded draft in the engine.
                 .onChange(of: draftText) { _, now in
-                    if let v = Self.parseDraft(now, feet: feet), v != draft { draft = v }
+                    if let v = Self.parseDraft(now, feet: feet), v != draft { setDraft(v) }
                 }
                 .accessibilityIdentifier("draft")
             Text(unit)
@@ -152,10 +143,10 @@ struct DepthStep: View {
                 .foregroundStyle(Chrome.muted)
                 .padding(.horizontal, 8)
             Stepper("Draft") {
-                draft = min(30, draft + stepSize)
+                setDraft(min(30, draft + stepSize))
                 showDraft()
             } onDecrement: {
-                draft = max(stepSize, draft - stepSize)
+                setDraft(max(stepSize, draft - stepSize))
                 showDraft()
             }
             .labelsHidden()
@@ -170,7 +161,7 @@ struct DepthStep: View {
     private var clearancePills: some View {
         HStack(spacing: 8) {
             ForEach(clearances, id: \.self) { c in
-                Button { clearance = c } label: {
+                Button { clearanceM = c * plan.metres_per_unit } label: {
                     Text(measure(c))
                         .font(.system(size: 13.5, weight: clearance == c ? .semibold : .regular))
                         .monospacedDigit()
@@ -485,7 +476,7 @@ struct DepthStep: View {
             showDraft()
             return
         }
-        draft = v
+        setDraft(v)
         showDraft()
     }
 
@@ -496,37 +487,36 @@ struct DepthStep: View {
         return min(feet ? 100 : 30, v)
     }
 
-    /// Convert the boat on a change of unit, and snap the clearance to one of
-    /// the choices the new unit offers.
+    /// Convert the boat on a change of unit: the draft to the nearest half
+    /// unit, and the clearance to one of the choices the new unit offers.
     private func convert(to now: MarinerDepthUnit) {
-        let toFeet = now == .feet
-        let f = toFeet ? 3.28084 : 1 / 3.28084
-        draft = ((draft * f) * 2).rounded() / 2
-        let want = clearance * f
-        clearance = clearances.min { abs($0 - want) < abs($1 - want) } ?? clearances[1]
+        let p = plan
+        draftM = p.draft_rounded_m
+        clearanceM = p.clearance_m
         showDraft()
         apply()
     }
 
-    /// Start at a small keelboat. The stored safety depth is no help here.
-    /// It starts at the engine's 10 m, and a draft read back out of that
+    /// Start at the core's small keelboat. The stored safety depth is no help
+    /// here. It starts at the engine's 10 m, and a draft read back out of that
     /// gave 9.7 m.
     private func seed() {
         guard !seeded else { return }
         seeded = true
-        if !feet { draft = 1.7; clearance = 0.6 }
+        let p = plan
+        draftM = p.draft_m
+        clearanceM = p.clearance_m
         showDraft()
         apply()
     }
 
-    /// Write the numbers the engine draws with. The shallow contour follows
-    /// the safety depth, which makes the first shade the water the boat
-    /// cannot cross.
+    /// Write the numbers the engine draws with.
     private func apply() {
-        m.safetyDepth = metres(safetyDepth)
-        m.shallowContour = metres(safetyDepth)
-        m.safetyContour = metres(safetyContour)
-        m.deepContour = metres(deepContour)
+        let p = plan
+        m.safetyDepth = p.safety_depth_m
+        m.shallowContour = p.shallow_contour_m
+        m.safetyContour = p.safety_contour_m
+        m.deepContour = p.deep_contour_m
         m.fourShadeWater = true
     }
 
