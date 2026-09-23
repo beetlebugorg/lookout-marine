@@ -1,8 +1,8 @@
 /* ui/charts/preview.h: a picture of every chart on a list.
  *
  * The core draws each picture (lookout_chart_link_picture): the chart on
- * screen once it settles, one publisher tile for a raster style, and a render
- * on its second handle for any other style. Every chart is pictured at the
+ * screen once it settles, and one publisher tile for a raster style. Any
+ * other style has no picture. Every chart is pictured at the
  * point the mariner is looking at, so what differs between the cards is the
  * portrayal. A chart with no picture shows the one the app ships, if any.
  */

@@ -38,7 +38,7 @@ lk_chart_previews_get (LkChartPreviews *self, const char *url)
 }
 
 /* Ask the core for one picture, and keep it when it is ready. */
-static int
+static void
 lk_chart_previews_ask (LkChartPreviews *self, const char *url, int kind, double lon,
                        double lat, int width, int height)
 {
@@ -58,7 +58,6 @@ lk_chart_previews_ask (LkChartPreviews *self, const char *url, int kind, double 
     }
   else if (got == LOOKOUT_PICTURE_NONE)
     g_hash_table_remove (self->pictures, url);
-  return got;
 }
 
 void
@@ -77,12 +76,7 @@ lk_chart_previews_want (LkChartPreviews *self, const char *const *urls, int widt
     {
       const char *url = urls[i];
 
-      /* A link the core pictures from no tile is drawn on its second handle,
-       * unless the app ships a picture of it. */
-      if (lk_chart_previews_ask (self, url, LOOKOUT_PICTURE_TILE, lon, lat, width, height) ==
-              LOOKOUT_PICTURE_NONE &&
-          url[0] != '\0' && lk_chart_catalog_art (url) == NULL)
-        lk_chart_previews_ask (self, url, LOOKOUT_PICTURE_RENDER, lon, lat, width, height);
+      lk_chart_previews_ask (self, url, LOOKOUT_PICTURE_TILE, lon, lat, width, height);
     }
 }
 
