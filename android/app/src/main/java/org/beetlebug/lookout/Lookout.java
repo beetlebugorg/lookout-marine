@@ -379,6 +379,11 @@ public final class Lookout implements AutoCloseable {
     public static double[] depthPlan(double draftM, double clearanceM, boolean feet) {
         return nDepthPlan(draftM, clearanceM, feet);
     }
+    /** The depth step's picture for a boat (lookout_depth_preview). See
+     *  DepthPreview for the layout. */
+    public static double[] depthPreview(double draftM, double clearanceM, boolean feet) {
+        return nDepthPreview(draftM, clearanceM, feet);
+    }
 
     /** What to call the set a raster file belongs to. The engine's own rule,
      *  the one it names the sets it draws by, so grouping by anything else
@@ -507,6 +512,7 @@ public final class Lookout implements AutoCloseable {
     private static native double nParseScale(String text);
     private static native double nZoomDeltaForScale(double current, double wanted);
     private static native double[] nDepthPlan(double draftM, double clearanceM, boolean feet);
+    private static native double[] nDepthPreview(double draftM, double clearanceM, boolean feet);
     private static native String nRasterSetNameFor(String path);
     private static native String[] nMarinerKeys();
     private static native void nGetMariner(long h, double[] out);

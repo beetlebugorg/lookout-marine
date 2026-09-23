@@ -35,3 +35,31 @@ class DepthPlan private constructor(private val v: DoubleArray) {
             DepthPlan(Lookout.depthPlan(draftM, clearanceM, feet))
     }
 }
+
+/**
+ * The depth step's picture (lookout_depth_preview in lookout-shell.h). Every
+ * coordinate is in a unit square with y down. A line's point i is at
+ * x = i / 48.
+ */
+class DepthPreview private constructor(private val v: DoubleArray) {
+    /** One line's y values: [SHORE], [SAFETY_DEPTH], [SAFETY_CONTOUR] or
+     *  [DEEP_CONTOUR]. */
+    fun line(which: Int): DoubleArray = v.copyOfRange(which * POINTS, (which + 1) * POINTS)
+    fun spotX(i: Int) = v[SPOTS_AT + i]
+    fun spotY(i: Int) = v[SPOTS_AT + SPOTS + i]
+    fun sounding(i: Int) = v[SPOTS_AT + 2 * SPOTS + i].toInt()
+    fun bold(i: Int) = v[SPOTS_AT + 3 * SPOTS + i] != 0.0
+
+    companion object {
+        const val SHORE = 0
+        const val SAFETY_DEPTH = 1
+        const val SAFETY_CONTOUR = 2
+        const val DEEP_CONTOUR = 3
+        const val POINTS = 49
+        const val SPOTS = 12
+        private const val SPOTS_AT = 4 * POINTS
+
+        fun of(draftM: Double, clearanceM: Double, feet: Boolean) =
+            DepthPreview(Lookout.depthPreview(draftM, clearanceM, feet))
+    }
+}

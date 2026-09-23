@@ -2020,7 +2020,6 @@ export fn Java_org_beetlebug_lookout_Lookout_nRasterSetNameFor(env: [*c]j.JNIEnv
     return env_(env).NewStringUTF.?(env, &buf);
 }
 
-
 // ---- the format kit ---------------------------------------------------------
 //
 // The strings a mariner reads and the text a mariner types. None of it needs a
@@ -2134,6 +2133,40 @@ export fn Java_org_beetlebug_lookout_Lookout_nDepthPlan(env: [*c]j.JNIEnv, cls: 
     lookout_depth_plan(draft_m, clearance_m, if (feet != 0) 1 else 0, &plan);
     const arr = env_(env).NewDoubleArray.?(env, depth_plan_len) orelse return null;
     env_(env).SetDoubleArrayRegion.?(env, arr, 0, depth_plan_len, &plan);
+    return arr;
+}
+
+// lookout_depth_preview: four lines of 49 points, then twelve spots.
+const DepthPreview = extern struct {
+    y: [4][49]f64,
+    spot_x: [12]f64,
+    spot_y: [12]f64,
+    spot_sounding: [12]c_int,
+    spot_bold: [12]c_int,
+};
+extern fn lookout_depth_preview(plan: *const [depth_plan_len]f64, out: *DepthPreview) void;
+
+/// double[] nDepthPreview(double draftM, double clearanceM, boolean feet) --
+/// the depth step's picture for a boat. 244 doubles: the four lines' 49 y
+/// values each (shore, safety depth, safety contour, deep contour), then the
+/// twelve spots' x, their y, their soundings, and 1 or 0 for bold.
+export fn Java_org_beetlebug_lookout_Lookout_nDepthPreview(env: [*c]j.JNIEnv, cls: j.jclass, draft_m: j.jdouble, clearance_m: j.jdouble, feet: j.jboolean) j.jdoubleArray {
+    _ = cls;
+    var plan: [depth_plan_len]f64 = undefined;
+    lookout_depth_plan(draft_m, clearance_m, if (feet != 0) 1 else 0, &plan);
+    var v: DepthPreview = undefined;
+    lookout_depth_preview(&plan, &v);
+    var flat: [4 * 49 + 4 * 12]f64 = undefined;
+    for (0..4) |line| @memcpy(flat[line * 49 ..][0..49], &v.y[line]);
+    const spots = flat[4 * 49 ..];
+    for (0..12) |i| {
+        spots[i] = v.spot_x[i];
+        spots[12 + i] = v.spot_y[i];
+        spots[24 + i] = @floatFromInt(v.spot_sounding[i]);
+        spots[36 + i] = @floatFromInt(v.spot_bold[i]);
+    }
+    const arr = env_(env).NewDoubleArray.?(env, flat.len) orelse return null;
+    env_(env).SetDoubleArrayRegion.?(env, arr, 0, flat.len, &flat);
     return arr;
 }
 

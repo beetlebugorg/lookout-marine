@@ -37,8 +37,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -48,11 +48,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import kotlin.math.PI
 import kotlin.math.max
-import kotlin.math.min
-import kotlin.math.pow
-import kotlin.math.sin
 
 /**
  * The depth settings, asked as two questions about the boat.
@@ -163,7 +159,10 @@ fun DepthStep(m: MarinerState) {
         derived("Deep contour", measure(deepContour),
                 "Water deeper than this draws in the lightest shade. Twice the safety contour, up the same ladder the safety contour came off.")
 
-        seabed(safetyDepth, safetyContour, deepContour, ::measure)
+        seabed(
+            DepthPreview.of(draftM, clearanceM, feet), m.scheme.ordinal,
+            safetyDepth, safetyContour, deepContour, ::measure,
+        )
         StepWarning(
             lead = "Shading is not a depth sounder.",
             body = "Soundings are not corrected for tide, surge or squat, and a survey can be decades old. Keep your own margin.",
@@ -242,22 +241,24 @@ private fun derived(name: String, value: String, blurb: String) {
  */
 @Composable
 private fun seabed(
+    v: DepthPreview,
+    scheme: Int,
     safetyDepth: Double,
     safetyContour: Double,
     deepContour: Double,
     measure: (Double) -> String,
 ) {
-    val unsafe = Chrome.s52("DEPVS", 0) ?: Color(0xFF9BD3FF)
-    val shallow = Chrome.s52("DEPMS", 0) ?: Color(0xFFBFE3FF)
-    val medium = Chrome.s52("DEPMD", 0) ?: Color(0xFFDDF0FF)
-    val deep = Chrome.s52("DEPDW", 0) ?: Color(0xFFF2F9FF)
-    val land = Chrome.s52("LANDA", 0) ?: Color(0xFFD9CFA8)
+    fun token(name: String) = Chrome.s52(name, scheme) ?: Color.Transparent
+    val unsafe = token("DEPVS")
+    val shallow = token("DEPMS")
+    val medium = token("DEPMD")
+    val deep = token("DEPDW")
+    val land = token("LANDA")
+    val coastline = token("CSTLN")
+    val contour = token("DEPCN")
+    val sounding = token("SNDG1")
+    val shoalSounding = token("SNDG2")
 
-    // The soundings are the seabed and hold still; the shading is the
-    // mariner's and moves over them. Their depths are multiples of the safety
-    // contour, so a sounding keeps its place and its number while the mariner
-    // works and moves only when the contour steps to the next one the survey
-    // draws.
     val density = LocalDensity.current.density
     val paint = remember(density) {
         android.graphics.Paint().apply {
@@ -265,13 +266,6 @@ private fun seabed(
             textSize = 10.5f * density
             textAlign = android.graphics.Paint.Align.CENTER
         }
-    }
-
-    val floor = deepContour * 1.5
-    fun reach(d: Double): Float {
-        if (floor <= 0) return SHORE_AT
-        val f = (max(0.0, min(1.0, d / floor))).pow(1 / SLOPE_K)
-        return SHORE_AT + (1 - SHORE_AT) * f.toFloat()
     }
 
     Column {
@@ -282,29 +276,28 @@ private fun seabed(
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         ) {
             Canvas(Modifier.fillMaxSize()) {
-                drawPath(shoal(reach(deepContour)), medium)
-                drawPath(shoal(reach(safetyContour)), shallow)
-                drawPath(shoal(reach(safetyDepth)), unsafe)
+                drawPath(shoal(v.line(DepthPreview.DEEP_CONTOUR)), medium)
+                drawPath(shoal(v.line(DepthPreview.SAFETY_CONTOUR)), shallow)
+                drawPath(shoal(v.line(DepthPreview.SAFETY_DEPTH)), unsafe)
                 // The safety contour, drawn bold the way S-52 draws the
                 // contour the boat is measured against.
-                drawPath(shoal(reach(safetyContour)), Color.Black.copy(alpha = 0.45f),
+                drawPath(shoal(v.line(DepthPreview.SAFETY_CONTOUR)), contour,
                          style = Stroke(width = 2f))
-                drawPath(shoal(reach(deepContour)), Color.Black.copy(alpha = 0.18f),
+                drawPath(shoal(v.line(DepthPreview.DEEP_CONTOUR)), contour.copy(alpha = 0.6f),
                          style = Stroke(width = 1f))
-                drawPath(shoal(SHORE_AT), land)
-                drawPath(shoal(SHORE_AT), Color.Black.copy(alpha = 0.45f),
-                         style = Stroke(width = 1f))
-                for (spot in SPOTS) {
-                    val depth = safetyContour * spot.first
-                    val at = point(reach(depth), spot.second)
-                    val bold = depth <= safetyDepth
-                    paint.color = android.graphics.Color.argb(
-                        if (bold) 204 else 140, 0, 0, 0,
-                    )
+                drawPath(shoal(v.line(DepthPreview.SHORE)), land)
+                drawPath(shoal(v.line(DepthPreview.SHORE)), coastline, style = Stroke(width = 1f))
+                // Bold at or shallower than the safety depth. That is what the
+                // safety depth does to a chart.
+                for (i in 0 until DepthPreview.SPOTS) {
+                    val bold = v.bold(i)
+                    paint.color = (if (bold) shoalSounding else sounding).toArgb()
                     paint.isFakeBoldText = bold
                     drawContext.canvas.nativeCanvas.drawText(
-                        kotlin.math.ceil(depth).toInt().toString(),
-                        at.x, at.y + paint.textSize * 0.35f, paint,
+                        v.sounding(i).toString(),
+                        (v.spotX(i) * size.width).toFloat(),
+                        (v.spotY(i) * size.height).toFloat() + paint.textSize * 0.35f,
+                        paint,
                     )
                 }
             }
@@ -338,47 +331,17 @@ private fun key(color: Color, name: String, range: String, modifier: Modifier = 
     }
 }
 
-/**
- * One depth line across the panel, closed to the bottom.
- *
- * Every line is the same shape moved up by its depth, so each band keeps its
- * share of the panel from edge to edge. Scaling the curve by the depth instead
- * gathers them all into one corner.
- */
-private fun DrawScope.shoal(t: Float): Path {
+/** One depth line across the panel, closed to the bottom so it fills. */
+private fun DrawScope.shoal(ys: DoubleArray): Path {
     val p = Path()
     p.moveTo(0f, size.height)
-    for (i in 0..STEPS) {
-        val u = i.toFloat() / STEPS
-        val at = point(t, u)
-        if (i == 0) p.lineTo(at.x, at.y) else p.lineTo(at.x, at.y)
-    }
+    val last = (ys.size - 1).toFloat()
+    for (i in ys.indices) p.lineTo(i / last * size.width, (ys[i] * size.height).toFloat())
     p.lineTo(size.width, size.height)
     p.close()
     return p
 }
 
-/** A point on one depth line, `u` of the way across. The wave and the rise to
- *  the right are the same for every line, so the lines never cross and the
- *  bands never pinch. */
-private fun DrawScope.point(t: Float, u: Float): Offset {
-    val wave = 0.055f * sin(u * PI.toFloat() * 1.7f + 0.4f) + 0.045f * u
-    return Offset(u * size.width, size.height - size.height * t + size.height * wave)
-}
-
 private fun round1(v: Double) = kotlin.math.round(v * 10.0) / 10.0
 
 
-/** Each spot depth: how deep it is as a multiple of the safety contour, and
- *  how far along its line it stands. */
-private val SPOTS = listOf(
-    0.12 to 0.28f, 0.30 to 0.68f, 0.45 to 0.14f, 0.62 to 0.50f,
-    0.80 to 0.84f, 1.00 to 0.32f, 1.22 to 0.62f, 1.48 to 0.20f,
-    1.78 to 0.44f, 2.12 to 0.78f, 2.50 to 0.34f, 2.85 to 0.58f,
-)
-
-private const val SHORE_AT = 0.14f
-/** How steeply the slope falls away. Shallow water gets most of the panel,
- *  because that is where both contours fall. */
-private const val SLOPE_K = 2.07
-private const val STEPS = 48
