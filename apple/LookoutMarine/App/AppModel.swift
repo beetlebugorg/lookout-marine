@@ -82,6 +82,26 @@ final class AppModel {
         }
     }
 
+    /// Apply the picker's pick: the core deletes the water given back and
+    /// fetches what is missing, and what arrives is prepared as a download is.
+    /// `givesBack` is true when the pick unticks water that was held.
+    func applyNoaaPick(givesBack: Bool) {
+        guard let dest = NoaaModel.downloadDirectory else {
+            charts.openError = "Couldn't find a place to download charts to."
+            return
+        }
+        // An empty pick deletes the whole download. A stopped download's end
+        // must not add the folder back.
+        let whole = noaa.picked.isEmpty
+        if whole { noaaWatch = nil }
+        let before = noaa.state.run
+        let moved = noaa.apply(to: dest)
+        watchNoaaDownload(dest, after: before) { [weak self] in
+            self?.startNoaaDownload()
+        }
+        if givesBack { charts.noaaApplied(moved: moved, whole: whole) }
+    }
+
     /// Fetch the reissued editions of every installed cell, and prepare what
     /// lands.
     ///
@@ -113,6 +133,7 @@ final class AppModel {
 
     /// The NOAA state changed. End the watched download if it has ended.
     private func noaaChanged() {
+        charts.noteNoaaRemoval(noaa.state)
         guard let w = noaaWatch else { return }
         let st = noaa.state
         guard st.run == w.run, st.ended else { return }

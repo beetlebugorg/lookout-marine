@@ -142,8 +142,10 @@ struct NoaaPickerSheet: View {
         if let close { DispatchQueue.main.async { close() } } else { dismiss() }
     }
 
-    /// The regions being given back.
-    private var removing: [NoaaRegion] { noaa.removedRegions(from: held) }
+    /// The regions being given back: held when this opened, unticked since.
+    private var removing: [NoaaRegion] {
+        noaa.regions.filter { held.contains($0.id) && !noaa.picked.contains($0.id) }
+    }
     private var adding: Bool { noaa.cells > 0 }
 
     /// What Apply is about to do, in the mariner's words.
@@ -157,30 +159,17 @@ struct NoaaPickerSheet: View {
         return parts.isEmpty ? noaa.costLine : parts.joined(separator: " · ")
     }
 
-    /// Do both halves. The removal runs first, so a mariner swapping one region
-    /// for another does not hold both on the disk at once.
+    /// Do both halves in one core call. The removal runs first, so a mariner
+    /// swapping one region for another does not hold both on the disk at once.
     private func apply() {
-        let gone = removing
-        if !gone.isEmpty {
-            // An empty pick gives the whole download back. The cells to
-            // delete are named from the catalog, and a cell no picked district
-            // claims is in neither half of that sum. It stayed in a folder
-            // with no pick left to reach it.
-            if noaa.picked.isEmpty {
-                model.charts.removeAllNoaaWater()
-            } else {
-                model.charts.removeNoaaWater(named: noaa.cellsToRemove(unpicking: gone))
-            }
-            noaa.dropRecorded(gone.map(\.id))
-        }
-        if adding { model.startNoaaDownload() }
+        model.applyNoaaPick(givesBack: !removing.isEmpty)
         shut()
     }
 
     /// Tick what is already here, and remember it, so unticking reads as a
     /// removal.
     private func startFromInstalled() {
-        noaa.pickInstalled()
+        noaa.pickRecorded()
         held = noaa.picked
         seeded = true
     }
@@ -192,11 +181,12 @@ struct NoaaPickerSheet: View {
         return "Remove charts for \(gone.count) regions?"
     }
 
-    /// What the whole-download removal deletes, counted off the disk when the
-    /// question is asked. The catalog counts what a district names, and the
-    /// point of this removal is the cells it does not.
+    /// What the whole-download removal deletes: every chart in the
+    /// downloader's own set, as the core's scan counted it. The catalog counts
+    /// what a district names, and the point of this removal is the cells it
+    /// does not.
     private var wholeRemovalMessage: String {
-        let n = NoaaModel.downloadDirectory.map { ChartBake.noaaCellsHeld(at: $0).count } ?? 0
+        let n = model.charts.sets.first(where: \.managed)?.cells.count ?? 0
         return "Lookout deletes all \(n) charts it downloaded, and the folder they are in. Charts you added yourself stay where they are, and you can download this water again."
     }
 
@@ -263,7 +253,6 @@ struct NoaaPickerSheet: View {
         .onAppear {
             noaa.poll()
             noaa.reprice()
-            noaa.noteManaged(model.charts.managedCellNames)
             if !noaa.state.haveCatalog { noaa.refresh() } else { startFromInstalled() }
         }
         // The catalog is what prices a region, so what is held cannot be known

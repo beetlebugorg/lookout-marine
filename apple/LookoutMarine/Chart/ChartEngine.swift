@@ -70,7 +70,11 @@ protocol NoaaEngine: AnyObject {
     func noaaState() -> NoaaState
     func noaaCost(regionIDs: String) -> NoaaCost?
     func noaaDownload(regionIDs: String, destination: String, again: Bool)
-    func noaaRegionCells(regionIDs: String) -> [String]
+    /// Make the download hold the picked water: record the pick, delete what
+    /// it gave back, fetch what it lacks. Returns the directories taken out.
+    func noaaApply(regionIDs: String, destination: String, again: Bool) -> UInt32
+    /// One region as the core counts it. Nil before a catalog is read.
+    func noaaRegionState(_ regionID: String) -> NoaaRegionState?
     /// How many of the downloaded cells NOAA has reissued. 0 until a catalog
     /// has been read from the network.
     func noaaOutdated() -> UInt32

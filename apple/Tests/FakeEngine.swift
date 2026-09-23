@@ -168,8 +168,10 @@ final class FakeEngine: RasterEngine, ChartLinkEngine, PluginEngine,
     /// model prices the whole pick and each region on its own, so a test that
     /// wants both sets both keys.
     var noaaCosts: [String: NoaaCost] = [:]
-    /// The cells each region names, by single region id.
-    var noaaCells: [String: [String]] = [:]
+    /// What noaaRegionState returns, by region id.
+    var noaaRegions: [String: NoaaRegionState] = [:]
+    /// What noaaApply returns.
+    var noaaMoved: UInt32 = 0
     var noaaCoverage: [String: [GeoBox]] = [:]
     var noaaOutdatedCount: UInt32 = 0
     /// What noaaUpdateDue returns.
@@ -190,18 +192,12 @@ final class FakeEngine: RasterEngine, ChartLinkEngine, PluginEngine,
         note("noaaDownload(\(regionIDs), \(destination), again: \(again))")
     }
 
-    /// The core answers a comma-joined list with the cells of every region in
-    /// it, each name once. Regions overlap, so the join is what a test of the
-    /// spillover rule needs.
-    func noaaRegionCells(regionIDs: String) -> [String] {
-        var out: [String] = []
-        for id in regionIDs.split(separator: ",") {
-            for name in noaaCells[String(id)] ?? [] where !out.contains(name) {
-                out.append(name)
-            }
-        }
-        return out
+    func noaaApply(regionIDs: String, destination: String, again: Bool) -> UInt32 {
+        note("noaaApply(\(regionIDs), \(destination), again: \(again))")
+        return noaaMoved
     }
+
+    func noaaRegionState(_ regionID: String) -> NoaaRegionState? { noaaRegions[regionID] }
 
     func noaaOutdated() -> UInt32 {
         note("noaaOutdated")

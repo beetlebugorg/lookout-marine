@@ -36,6 +36,21 @@ struct NoaaCost {
     var heldBytes: UInt64 = 0
 }
 
+/// One region as the core counts it. See lookout_noaa_region_info.
+struct NoaaRegionState: Equatable {
+    /// The cells the region selects.
+    var cells: UInt32 = 0
+    /// Of those, the ones the downloader's own set draws now.
+    var held: UInt32 = 0
+    /// What the cells no set holds cost to fetch.
+    var bytes: UInt64 = 0
+    /// True when every cell the region selects is held.
+    var allHeld = false
+    /// True when the region is recorded as downloaded and held whole: the
+    /// water the picker ticks.
+    var recorded = false
+}
+
 /// What the core is doing with NOAA's charts.
 struct NoaaState: Equatable {
     enum Phase: UInt8 { case idle = 0, readingCatalog = 1, ready = 2, downloading = 3 }
@@ -64,6 +79,10 @@ struct NoaaState: Equatable {
     /// True when ordering again can clear the cause of a failed or refused
     /// download. See lookout_noaa_state.retry.
     var retry = false
+    /// True while the charts an apply took out of the library are deleted.
+    var removing = false
+    var removeDone: UInt32 = 0
+    var removeTotal: UInt32 = 0
 
     /// True once the download numbered `run` has stopped for any reason.
     var ended: Bool { outcome != .none && outcome != .running }
@@ -193,7 +212,7 @@ final class NoaaModel {
         state = next
         if gained {
             recost()
-            repriceRegions()
+            readRegionState()
             loadCoverage()
         }
         if state.phase != .readingCatalog, !catalogWaiters.isEmpty {
@@ -241,161 +260,32 @@ final class NoaaModel {
     /// app downloaded.
     func reprice() {
         recost()
-        repriceRegions()
+        readRegionState()
     }
 
     // MARK: - What water is held
 
-    /// What one region costs, and how much of it is already on the device.
-    struct RegionState: Equatable {
-        /// Cells the region covers that are missing.
-        var missing: UInt32 = 0
-        /// Cells the region covers that are installed.
-        var held: UInt32 = 0
-        /// What the missing ones cost to fetch.
-        var bytes: UInt64 = 0
+    /// Each region as the core counts it. Empty before a catalog is read.
+    private(set) var regionState: [String: NoaaRegionState] = [:]
 
-        var total: UInt32 { missing + held }
-        /// True when every cell this region covers is on the device.
-        var complete: Bool { missing == 0 && held > 0 }
-        /// True when part of it is here. A region NOAA files cells across
-        /// district lines for is often partly held before it is ever picked.
-        var partial: Bool { held > 0 && missing > 0 }
-    }
-
-    /// Each region, priced on its own. Empty before a catalog is read.
-    private(set) var regionState: [String: RegionState] = [:]
-    /// The cells the downloader's own set holds, by name.
-    private var managed: Set<String> = []
-
-    /// Name the cells the downloader's own set holds. The pills state what it
-    /// can remove, and a region is only removable where this app downloaded
-    /// it.
-    func noteManaged(_ names: [String]) {
-        managed = Set(names)
-        repriceRegions()
-    }
-
-    // MARK: - The water the mariner asked for
-
-    private static let regionsKey = "noaa-regions"
-    /// Set whenever the record is written. A record read back empty is then a
-    /// device that gave back all its water, and adoption stays off.
-    private static let regionsKeptKey = "noaa-regions-kept"
-
-    /// The regions the mariner downloaded, by id.
-    ///
-    /// The tick reads this rather than the cells on the device. NOAA files
-    /// cells across district lines, so a download of one region installs some
-    /// of its neighbour's, and coverage alone cannot state which water was
-    /// asked for: a region reads as held on its neighbour's spillover, and a
-    /// region removed still reads as held on what the neighbour left.
-    private(set) var recorded: Set<String> = Set(
-        Store.shared.strings(NoaaModel.group, NoaaModel.regionsKey))
-
-    /// True once this device has written a record. The list alone cannot say
-    /// it, because the core's setList clears a key given an empty list and
-    /// Store.strings returns [] for a key that was never set.
-    private(set) var hasRecord: Bool =
-        Store.shared.bool(NoaaModel.group, NoaaModel.regionsKeptKey) ?? false
-
-    private func saveRecorded() {
-        Store.shared.set(Array(recorded).sorted(), NoaaModel.group, NoaaModel.regionsKey)
-        hasRecord = true
-        Store.shared.set(true, NoaaModel.group, NoaaModel.regionsKeptKey)
-    }
-
-    /// Write down the water a download was asked for.
-    func recordPicked(_ ids: [String]) {
-        recorded.formUnion(ids)
-        saveRecorded()
-    }
-
-    /// Take the water a removal gave back out of the record.
-    func dropRecorded(_ ids: [String]) {
-        recorded.subtract(ids)
-        saveRecorded()
-    }
-
-    /// Reconcile the record with the device.
-    ///
-    /// A device that has never written a record adopts the regions held
-    /// whole, so a library downloaded before the record existed opens ticked.
-    /// After that the record rules: a region the device no longer holds whole
-    /// is dropped, which heals a library whose charts went by another route,
-    /// such as removing the chart set. An empty record then stays empty, so
-    /// giving back the last region does not tick it again.
-    func reconcileRecorded() {
-        guard state.haveCatalog else { return }
-        let whole = Set(regions.filter { regionState[$0.id]?.complete ?? false }.map(\.id))
-        if hasRecord {
-            recorded.formIntersection(whole)
-        } else {
-            recorded = whole
-        }
-        saveRecorded()
-    }
-
-    /// Price every region on its own.
-    ///
-    /// One cost call per region, which the core answers off the catalog it
-    /// already holds. Six calls, and the picker draws what a mariner holds
-    /// rather than only what a pick would cost.
-    private func repriceRegions() {
+    private func readRegionState() {
         guard let engine, state.haveCatalog else {
             regionState = [:]
             return
         }
-        var out: [String: RegionState] = [:]
-        for r in regions {
-            guard let c = engine.noaaCost(regionIDs: r.id) else { continue }
-            // held counts against the downloader's own set. The core counts
-            // every installed copy. That sizes a download correctly and
-            // oversizes what unticking removes.
-            let cells = engine.noaaRegionCells(regionIDs: r.id)
-            var here: UInt32 = 0
-            for name in cells where managed.contains(name.uppercased()) { here += 1 }
-            let total = UInt32(cells.count)
-            out[r.id] = RegionState(missing: total > here ? total - here : 0,
-                                    held: here,
-                                    bytes: c.bytes)
-        }
+        var out: [String: NoaaRegionState] = [:]
+        for r in regions { out[r.id] = engine.noaaRegionState(r.id) }
         regionState = out
     }
 
-    /// Pick the regions whose water is already on the device.
+    /// Pick the water the mariner downloaded and still holds.
     ///
     /// The picker states what a mariner HOLDS. Opening it with everything
     /// unticked said they held nothing, and ticking a region they had already
     /// downloaded read as a second download of the same water.
-    func pickInstalled() {
-        reconcileRecorded()
-        picked = recorded
+    func pickRecorded() {
+        picked = Set(regions.filter { regionState[$0.id]?.recorded ?? false }.map(\.id))
         recost()
-    }
-
-    /// The regions that were complete when the picker opened and have since
-    /// been unticked: the water to remove.
-    func removedRegions(from held: Set<String>) -> [NoaaRegion] {
-        regions.filter { held.contains($0.id) && !picked.contains($0.id) }
-    }
-
-    /// The cells to delete when these regions are unticked.
-    ///
-    /// Every cell the unpicked regions name, minus every cell a region still
-    /// picked names. NOAA files a cell under one district that covers another's
-    /// water, so deleting an unpicked region's whole list removes charts from under
-    /// water the mariner is keeping.
-    func cellsToRemove(unpicking gone: [NoaaRegion]) -> Set<String> {
-        guard let engine, !gone.isEmpty else { return [] }
-        let ids = gone.map(\.id).joined(separator: ",")
-        var out = Set(engine.noaaRegionCells(regionIDs: ids).map { $0.uppercased() })
-        if !picked.isEmpty {
-            for keep in engine.noaaRegionCells(regionIDs: pickedIDs) {
-                out.remove(keep.uppercased())
-            }
-        }
-        return out
     }
 
     /// True when every cell the pick names is already on the device. The
@@ -412,12 +302,21 @@ final class NoaaModel {
         return s
     }
 
-    /// Download the picked regions into `destination`.
+    /// Download the picked regions into `destination`. The core adds them to
+    /// its record.
     func download(to destination: String, again: Bool = false) {
         guard !picked.isEmpty else { return }
-        recordPicked(regions.filter { picked.contains($0.id) }.map(\.id))
         engine?.noaaDownload(regionIDs: pickedIDs, destination: destination, again: again)
         pull()
+    }
+
+    /// Make the download at `destination` hold the pick. Returns how many
+    /// directories the core took out of the library.
+    func apply(to destination: String) -> UInt32 {
+        let moved = engine?.noaaApply(regionIDs: pickedIDs, destination: destination,
+                                      again: false) ?? 0
+        pull()
+        return moved
     }
 
     func cancel() {

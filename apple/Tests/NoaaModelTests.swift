@@ -1,9 +1,9 @@
-//  NoaaModelTests.swift — the catalog line, the region record, and what a
-//  removal deletes.
+//  NoaaModelTests.swift: the catalog line, the ticks the picker opens with,
+//  and the pick handed to the core.
 //
-//  These run against FakeEngine, so the catalog, what a region costs and the
-//  cells it names are whatever the test sets. The region table comes from the
-//  core, so the ids here are the real ones.
+//  These run against FakeEngine, so the catalog, what a region costs and what
+//  the core counts of it are whatever the test sets. The region table comes
+//  from the core, so the ids here are the real ones.
 
 import XCTest
 @testable import LookoutMarine
@@ -15,18 +15,14 @@ final class NoaaModelTests: ShellTestCase {
     /// chart view owns the controller.
     private var engine = FakeEngine()
 
-    /// A model reading a loaded catalog, with d1 and d5 priced.
-    ///
-    /// Only priced regions reach regionState, so the other seven stay out of
-    /// the way of what each test asserts.
-    private func model(cells: [String: [String]]) -> (NoaaModel, FakeEngine) {
+    /// A model reading a loaded catalog, with the regions the core counts.
+    private func model(regions: [String: NoaaRegionState] = [:]) -> (NoaaModel, FakeEngine) {
         engine = FakeEngine()
         engine.noaa.phase = .ready
         engine.noaa.haveCatalog = true
         engine.noaa.catalogCells = 7318
         engine.noaa.date = "20260915"
-        engine.noaaCells = cells
-        for id in cells.keys { engine.noaaCosts[id] = NoaaCost() }
+        engine.noaaRegions = regions
         let m = NoaaModel()
         m.engine = engine
         m.poll()
@@ -79,93 +75,40 @@ final class NoaaModelTests: ShellTestCase {
         XCTAssertEqual(NoaaState().catalogLine, .blank)
     }
 
-    // MARK: The region record
+    // MARK: The ticks the picker opens with
 
-    /// A library downloaded before the record existed opens ticked.
-    func testADeviceWithNoRecordAdoptsTheWaterItHolds() {
-        let (m, _) = model(cells: ["d1": ["US1NE01", "US2NE02"],
-                                   "d5": ["US1MA01", "US2MA02"]])
-        m.noteManaged(["US1NE01", "US2NE02"])
-        XCTAssertFalse(m.hasRecord)
+    /// The core ticks what it recorded and still holds whole. A region held
+    /// whole that the record leaves out stays unticked.
+    func testThePickerOpensOnTheWaterTheCoreRecorded() {
+        let (m, _) = model(regions: [
+            "d1": NoaaRegionState(cells: 2, held: 2, allHeld: true, recorded: true),
+            "d5": NoaaRegionState(cells: 2, held: 2, allHeld: true, recorded: false),
+        ])
 
-        m.pickInstalled()
+        m.pickRecorded()
 
         XCTAssertEqual(m.picked, ["d1"])
-    }
-
-    /// Giving back the last region leaves a record that is empty and written.
-    /// Read back as a device that never recorded, it ticks the water straight
-    /// back, because the cells are still on the disk.
-    func testAnEmptyRecordThatWasWrittenStaysEmpty() {
-        let held = ["US1NE01", "US2NE02"]
-        let (first, _) = model(cells: ["d1": held])
-        first.noteManaged(held)
-        first.recordPicked(["d1"])
-        first.dropRecorded(["d1"])
-        XCTAssertTrue(first.recorded.isEmpty)
-
-        // A relaunch: a second model reads the record off the same store.
-        let next = NoaaModel()
-        next.engine = engine
-        next.poll()
-        next.noteManaged(held)
-        XCTAssertTrue(next.hasRecord)
-
-        next.pickInstalled()
-
-        XCTAssertEqual(next.picked, [])
-    }
-
-    /// A region the device no longer holds whole goes out of the record, which
-    /// heals a library whose charts went by another route.
-    func testARegionNoLongerHeldWholeIsDropped() {
-        let (m, _) = model(cells: ["d1": ["US1NE01", "US2NE02"]])
-        m.noteManaged(["US1NE01", "US2NE02"])
-        m.recordPicked(["d1"])
-
-        // The charts went, so the region is no longer complete.
-        m.noteManaged([])
-        m.pickInstalled()
-
-        XCTAssertEqual(m.picked, [])
-        XCTAssertTrue(m.recorded.isEmpty)
+        XCTAssertEqual(m.regionState["d5"]?.allHeld, true)
     }
 
     /// The Mac window builds a new picker, and seeds it again, each time it
-    /// opens. A tick abandoned with Cancel is dropped, and a region downloaded
-    /// since the last open is ticked.
-    func testASecondSeedReadsTheLibraryAsItIsNow() {
-        let (m, _) = model(cells: ["d1": ["US1NE01"], "d5": ["US1MA01"]])
-        m.noteManaged(["US1NE01"])
-        m.recordPicked(["d1"])
-        m.pickInstalled()
+    /// opens. A tick abandoned with Cancel is dropped.
+    func testASecondSeedDropsAnAbandonedTick() {
+        let (m, _) = model(regions: [
+            "d1": NoaaRegionState(cells: 1, held: 1, allHeld: true, recorded: true),
+        ])
+        m.pickRecorded()
         m.toggle("d5")
         XCTAssertEqual(m.picked, ["d1", "d5"])
 
-        // Cancelled, and opened again.
-        m.pickInstalled()
+        m.pickRecorded()
         XCTAssertEqual(m.picked, ["d1"])
-
-        // A download of d5 finishes, and the picker opens again.
-        m.recordPicked(["d5"])
-        m.noteManaged(["US1NE01", "US1MA01"])
-        m.pickInstalled()
-        XCTAssertEqual(m.picked, ["d1", "d5"])
-    }
-
-    func testTheRecordSurvivesARelaunch() {
-        let (m, _) = model(cells: ["d1": ["US1NE01"]])
-        m.recordPicked(["d1", "d5"])
-
-        let next = NoaaModel()
-        XCTAssertEqual(next.recorded, ["d1", "d5"])
-        XCTAssertTrue(next.hasRecord)
     }
 
     // MARK: Reissued charts
 
     func testACheckCountsWhatTheCatalogReissued() {
-        let (m, fake) = model(cells: ["d1": ["US1NE01"]])
+        let (m, fake) = model()
         fake.noaaOutdatedCount = 721
         fake.noaaDue = true
 
@@ -177,7 +120,7 @@ final class NoaaModelTests: ShellTestCase {
 
     /// The check waits on the catalog read, and counts when it ends.
     func testACheckCountsWhenTheCatalogReadEnds() {
-        let (m, fake) = model(cells: ["d1": ["US1NE01"]])
+        let (m, fake) = model()
         fake.noaaOutdatedCount = 721
         fake.noaaDue = true
         fake.noaa.phase = .readingCatalog
@@ -196,7 +139,7 @@ final class NoaaModelTests: ShellTestCase {
     /// at the editions the catalog holds, and the line on the charts page
     /// goes with the count.
     func testACountAfterAnUpdateClears() {
-        let (m, fake) = model(cells: ["d1": ["US1NE01"]])
+        let (m, fake) = model()
         fake.noaaOutdatedCount = 721
         fake.noaaDue = true
         m.considerUpdateCheck()
@@ -211,7 +154,7 @@ final class NoaaModelTests: ShellTestCase {
 
     /// A check the core does not find due leaves the count alone.
     func testACheckThatIsNotDueDoesNotCount() {
-        let (m, fake) = model(cells: ["d1": ["US1NE01"]])
+        let (m, fake) = model()
         fake.noaaOutdatedCount = 721
 
         m.considerUpdateCheck()
@@ -221,35 +164,21 @@ final class NoaaModelTests: ShellTestCase {
         XCTAssertFalse(fake.calls.contains("noaaOutdated"))
     }
 
-    // MARK: What a removal deletes
+    // MARK: Apply
 
-    /// NOAA files a cell under one district that covers another's water. The
-    /// cells to delete are the unpicked regions' minus every cell a region
-    /// still picked names, or unticking one region deletes charts under water
-    /// the mariner is keeping.
-    func testASharedCellSurvivesUntickingItsNeighbour() {
-        let (m, _) = model(cells: ["d1": ["US1NE01", "US5SHARED"],
-                                   "d5": ["US1MA01", "US5SHARED"]])
-        m.picked = ["d5"]
+    /// Apply hands the whole pick to the core in one call, an empty one
+    /// included, and returns what the core took out.
+    func testApplyHandsThePickToTheCore() {
+        let (m, fake) = model()
+        fake.noaaMoved = 4
+        m.picked = ["d5", "d1"]
 
-        let gone = m.regions.filter { $0.id == "d1" }
-        XCTAssertEqual(m.cellsToRemove(unpicking: gone), ["US1NE01"])
-    }
+        XCTAssertEqual(m.apply(to: "/charts/NOAA"), 4)
 
-    func testUntickingTheLastRegionRemovesAllItsCells() {
-        let (m, _) = model(cells: ["d1": ["US1NE01", "US5SHARED"],
-                                   "d5": ["US1MA01", "US5SHARED"]])
         m.picked = []
-
-        let gone = m.regions.filter { $0.id == "d1" }
-        XCTAssertEqual(m.cellsToRemove(unpicking: gone), ["US1NE01", "US5SHARED"])
-    }
-
-    func testRemovedRegionsAreTheOnesUnticked() {
-        let (m, _) = model(cells: ["d1": ["US1NE01"], "d5": ["US1MA01"]])
-        m.picked = ["d5"]
-
-        XCTAssertEqual(m.removedRegions(from: ["d1", "d5"]).map(\.id), ["d1"])
-        XCTAssertEqual(m.removedRegions(from: ["d5"]).map(\.id), [])
+        _ = m.apply(to: "/charts/NOAA")
+        XCTAssertEqual(fake.calls.filter { $0.hasPrefix("noaaApply") },
+                       ["noaaApply(d1,d5, /charts/NOAA, again: false)",
+                        "noaaApply(, /charts/NOAA, again: false)"])
     }
 }

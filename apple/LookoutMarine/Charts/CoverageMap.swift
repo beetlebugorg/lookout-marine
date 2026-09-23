@@ -196,7 +196,7 @@ struct NoaaRegionPills: View {
     let enabled: Bool
     /// How much of each region is on the device. A pill for water already held
     /// says so, because the tick then means "keep this" rather than "fetch it".
-    var state: [String: NoaaModel.RegionState] = [:]
+    var state: [String: NoaaRegionState] = [:]
     let toggle: (String) -> Void
 
     var body: some View {
@@ -245,14 +245,14 @@ struct NoaaRegionPills: View {
     /// lines, so downloading one region installs some of its neighbour's, and
     /// a count of those read as a transfer that had stopped part way.
     private func badge(_ r: NoaaRegion) -> String? {
-        guard let st = state[r.id], st.complete else { return nil }
+        guard let st = state[r.id], st.allHeld else { return nil }
         return "installed"
     }
 
     private func label(_ r: NoaaRegion) -> String {
         guard let st = state[r.id] else { return "\(r.name). \(r.blurb)" }
-        if st.complete { return "\(r.name). \(r.blurb). All \(st.held) charts installed." }
-        return "\(r.name). \(r.blurb). \(st.total) charts to download."
+        if st.allHeld { return "\(r.name). \(r.blurb). All \(st.held) charts installed." }
+        return "\(r.name). \(r.blurb). \(st.cells) charts to download."
     }
 
     #if os(macOS)

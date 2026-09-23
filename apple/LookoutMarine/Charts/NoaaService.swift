@@ -58,6 +58,9 @@ final class NoaaService: NoaaEngine {
         s.outcome = NoaaState.Outcome(rawValue: raw.outcome) ?? .none
         s.run = raw.run
         s.retry = raw.retry != 0
+        s.removing = raw.removing != 0
+        s.removeDone = raw.remove_done
+        s.removeTotal = raw.remove_total
         return s
     }
 
@@ -83,18 +86,20 @@ final class NoaaService: NoaaEngine {
         }
     }
 
-    /// The dataset names of every cell covering these regions.
-    func noaaRegionCells(regionIDs: String) -> [String] {
-        guard !regionIDs.isEmpty else { return [] }
-        return regionIDs.withCString { ids -> [String] in
-            let n = lookout_noaa_region_cells(handle, ids, nil, 0)
-            guard n > 0 else { return [] }
-            var raw = [UnsafePointer<CChar>?](repeating: nil, count: n)
-            let got = raw.withUnsafeMutableBufferPointer {
-                lookout_noaa_region_cells(handle, ids, $0.baseAddress, n)
+    func noaaApply(regionIDs: String, destination: String, again: Bool) -> UInt32 {
+        regionIDs.withCString { ids in
+            destination.withCString { dest in
+                lookout_noaa_apply(handle, ids, dest, again ? 1 : 0)
             }
-            return raw.prefix(min(got, n)).compactMap { $0.map { String(cString: $0) } }
         }
+    }
+
+    func noaaRegionState(_ regionID: String) -> NoaaRegionState? {
+        var raw = lookout_noaa_region_info()
+        guard regionID.withCString({ lookout_noaa_region_state(handle, $0, &raw) }) != 0
+        else { return nil }
+        return NoaaRegionState(cells: raw.cells, held: raw.held, bytes: raw.bytes,
+                               allHeld: raw.all_held != 0, recorded: raw.recorded != 0)
     }
 
     /// The boxes of one region's coarse cells, as the catalog states them.

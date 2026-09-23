@@ -124,28 +124,6 @@ final class ChartsModel {
 
     // MARK: The installed sets
 
-    /// The dataset names the NOAA downloader's own set holds.
-    ///
-    /// The picker states what it can add and what it can remove, and it can
-    /// only remove what it downloaded. The cells the core counts as held
-    /// come from every set, switched off ones and archives that merely list
-    /// their cells, so a region reads as installed on the strength of a folder
-    /// the downloader never wrote, and unticking it then deletes no file.
-    var managedCellNames: [String] {
-        guard let dest = NoaaModel.downloadDirectory else { return [] }
-        var seen = Set<String>()
-        for set in sets where set.path == dest {
-            // A cell that still needs preparing draws no chart. The core
-            // hides a .000 behind the chart baked from it, so this stays quiet
-            // until a bake fails, and then the raw cells read as water the
-            // mariner holds.
-            for cell in set.cells where !cell.isRaster && !cell.needsPrepare {
-                seen.insert(cell.stem.uppercased())
-            }
-        }
-        return Array(seen)
-    }
-
     /// The installed folders of charts, in the order added. A set on this list has
     /// been looked through and holds charts, so it always opens.
     var sets: [ChartSet] = [] {
@@ -188,6 +166,8 @@ final class ChartsModel {
     private var bakeSource: String?
     /// The charts of a removed set being deleted, while that is happening.
     var removing: BakeProgress?
+    /// When the core started deleting the charts a NOAA pick gave back.
+    private var noaaRemovalStart: Date?
     /// The set the mariner asked to remove, held while they are asked whether
     /// they meant it. Only a set Lookout prepared charts for: taking a folder
     /// of the mariner's own files off the list deletes nothing, so it needs no
@@ -865,53 +845,33 @@ final class ChartsModel {
         requestOpen(openPaths)
     }
 
-    /// Delete these cells from the NOAA download, and the charts prepared from
-    /// them.
-    ///
-    /// For a mariner who unticks water in the downloader. Only the managed set
-    /// is touched: a folder of their own holding the same cell is theirs, and
-    /// removing water they chose not to download is not a reason to delete it.
-    ///
-    /// Each cell is a directory of its own, both where it was unpacked and
-    /// where it was prepared, and the directory holds the text and pictures the
-    /// chart references. Deleting the chart file alone leaves those behind.
-    func removeNoaaWater(named names: Set<String>) {
-        guard !names.isEmpty, let dest = NoaaModel.downloadDirectory else { return }
-        // The rename is synchronous, so the charts are out of the library
-        // before this returns and the rescan below reads what is left. The
-        // delete behind it reports through `removing`, which the charts page
-        // draws under the set.
-        let moved = ChartBake.deleteNoaaCells(names, from: dest) { [weak self] p in
-            self?.removing = p.name.isEmpty ? nil : p
+    /// Follow the core's delete of the charts a NOAA pick gave back. The
+    /// charts are out of the library already, and `removing` draws the disk
+    /// work that frees the space.
+    func noteNoaaRemoval(_ st: NoaaState) {
+        if st.removing {
+            if noaaRemovalStart == nil { noaaRemovalStart = Date() }
+            let name = NoaaModel.downloadDirectory.map { ($0 as NSString).lastPathComponent }
+            removing = BakeProgress(kind: .removing, done: Int(st.removeDone),
+                                    total: Int(st.removeTotal), name: name ?? "NOAA",
+                                    elapsed: Date().timeIntervalSince(noaaRemovalStart ?? Date()))
+        } else if noaaRemovalStart != nil {
+            noaaRemovalStart = nil
+            removing = nil
         }
-        guard moved > 0 else {
-            openError = "Lookout found no downloaded charts for that water."
-            return
-        }
-        ChartSetStore.rescan(dest)
-        // The set stays on the list with the water that is left.
-        requestOpen(openPaths)
     }
 
-    /// Give the whole NOAA download back.
+    /// Read the library again after a NOAA pick took charts out of it.
     ///
-    /// An empty pick removes everything the downloader holds, read off the
-    /// disk. removeNoaaWater names cells from the catalog, so it leaves a cell
-    /// filed under a district the record does not hold and a cell NOAA has
-    /// delisted. Those stayed in the folder with no pick left to reach them.
-    func removeAllNoaaWater() {
-        guard let dest = NoaaModel.downloadDirectory else { return }
-        let gone = ChartBake.deleteNoaaDownload(from: dest) { [weak self] p in
-            self?.removing = p.name.isEmpty ? nil : p
-        }
-        guard gone > 0 else {
-            openError = "Lookout found no downloaded charts to remove."
+    /// `moved` is the directories the core took out. A pick that gave water
+    /// back and moved none found no download to delete from.
+    func noaaApplied(moved: UInt32, whole: Bool) {
+        guard moved > 0 else {
+            openError = whole ? "Lookout found no downloaded charts to remove."
+                : "Lookout found no downloaded charts for that water."
             return
         }
-        // The folder is gone, so the row goes with it rather than waiting for
-        // a scan of a directory that is no longer there.
-        sets.removeAll { $0.path == dest }
-        ChartSetStore.remove(dest)
+        pullChartSets()
         syncRasterFromSets()
         requestOpen(openPaths)
     }
