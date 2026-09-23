@@ -1,8 +1,6 @@
 /* model/first-run.c: setup's state. See model/first-run.h. */
 #include "model/first-run.h"
 
-#include <string.h>
-
 struct _LkFirstRun {
   GObject parent_instance;
 
@@ -63,14 +61,30 @@ lk_first_run_opening_step (void)
 
 /* ---- where the flow is --------------------------------------------------- */
 
-/* Read the core's state, and emit ::changed when it moved. */
+/* TRUE when every field of the two states is equal. A byte compare of the
+ * structs is wrong: the padding between the uint8_t fields and order_charts is
+ * not a field, and a Debug build of the core writes it with no fixed value. */
+static gboolean
+lk_setup_state_equal (const lookout_setup_state *a, const lookout_setup_state *b)
+{
+  return a->step == b->step && a->showing == b->showing && a->should_run == b->should_run &&
+         a->can_go_back == b->can_go_back && a->primary_enabled == b->primary_enabled &&
+         a->terms_showing == b->terms_showing && a->picker_only == b->picker_only &&
+         a->ordered == b->ordered && a->import_ended == b->import_ended &&
+         a->saw_work == b->saw_work && a->order_charts == b->order_charts &&
+         a->order_bytes == b->order_bytes;
+}
+
+/* Read the core's state, and emit ::changed when a field moved. The flow
+ * rebuilds the step on ::changed, so a false change destroys the step's
+ * widgets under whoever holds them. */
 static void
 lk_first_run_read (LkFirstRun *self)
 {
   lookout_setup_state was = self->state;
 
   lookout_setup_read (self->core, &self->state);
-  if (memcmp (&was, &self->state, sizeof was) != 0)
+  if (!lk_setup_state_equal (&was, &self->state))
     g_signal_emit (self, signals[SIGNAL_CHANGED], 0);
 }
 

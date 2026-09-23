@@ -230,6 +230,30 @@ test_setup_returns_when_the_library_empties (void)
   g_assert_true (lk_first_run_should_run (run));
 }
 
+static void
+count_changes (LkFirstRun *run, gpointer user_data)
+{
+  (*(guint *) user_data)++;
+}
+
+/* The same facts noted again do not raise ::changed. The flow rebuilds the step
+ * on ::changed, and a false change destroyed the step's widgets under whoever
+ * held them. */
+static void
+test_the_same_facts_emit_no_change (void)
+{
+  g_autoptr (LkFirstRun) run = lk_first_run_new ();
+  lookout_setup_facts facts = { .nothing_to_draw = 1 };
+  guint changes = 0;
+
+  lk_first_run_note (run, &facts);
+  lk_first_run_begin (run);
+  g_signal_connect (run, "changed", G_CALLBACK (count_changes), &changes);
+  for (int i = 0; i < 20; i++)
+    lk_first_run_note (run, &facts);
+  g_assert_cmpuint (changes, ==, 0);
+}
+
 /* The page fill stands while there is no chart handle. A chart of no charts
  * draws the basemap, and setup floats over that, so the fill goes.
  *
@@ -370,6 +394,8 @@ main (int argc, char *argv[])
   g_test_add_func ("/window/setup-steps", test_setup_steps);
   g_test_add_func ("/window/setup-returns-when-the-library-empties",
                    test_setup_returns_when_the_library_empties);
+  g_test_add_func ("/window/the-same-facts-emit-no-change",
+                   test_the_same_facts_emit_no_change);
   g_test_add_func ("/window/page-follows-nothing-to-draw", test_page_follows_nothing_to_draw);
   g_test_add_func ("/window/close-pick-clears-report", test_close_pick_clears_report);
   g_test_add_func ("/window/scheme-action-follows", test_scheme_action_follows);
