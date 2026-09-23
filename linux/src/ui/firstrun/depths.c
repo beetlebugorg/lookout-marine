@@ -108,7 +108,6 @@ lk_depth_entry_changed (GtkEntry *entry, gpointer user_data)
   LkDepthStep *step = user_data;
   const char *text = gtk_editable_get_text (GTK_EDITABLE (entry));
   double value = g_ascii_strtod (text, NULL);
-  double cap = lk_depth_feet (step) ? 100 : 30;
   double metres_per_unit = lk_depth_feet (step) ? LOOKOUT_METRES_PER_FOOT : 1.0;
 
   /* An empty field is a number half typed. The step holds the last draft it
@@ -116,7 +115,10 @@ lk_depth_entry_changed (GtkEntry *entry, gpointer user_data)
   if (step->busy || value <= 0)
     return;
 
-  step->draft_m = MIN (value, cap) * metres_per_unit;
+  /* The plan holds the draft between one step and the most the step
+   * accepts. */
+  step->draft_m = value * metres_per_unit;
+  step->draft_m = lk_depth_plan (step).draft_m;
   lk_depth_apply (step);
   lk_depth_rebuild (step);
 }
