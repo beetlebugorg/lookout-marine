@@ -289,16 +289,7 @@ lk_noaa_wake (void *user)
 }
 
 static void
-lk_noaa_respond (gpointer user_data, uint64_t req_id, const void *bytes, gsize len,
-                 int status)
-{
-  LkNoaa *self = user_data;
-
-  lookout_noaa_http_respond_chunk (self->service, req_id, bytes, len, status, 1);
-}
-
-static void
-lk_noaa_respond_chunk (gpointer user_data, uint64_t req_id, const void *bytes,
+lk_noaa_respond (gpointer user_data, uint64_t req_id, const void *bytes,
                        gsize len, int status, gboolean done)
 {
   LkNoaa *self = user_data;
@@ -698,7 +689,6 @@ lk_noaa_new (lookout_store *store, lookout_chart_sets *sets)
 
   self->service = lookout_noaa_open (store, sets);
   self->fetcher = lk_fetcher_new (lk_noaa_respond, self);
-  lk_fetcher_set_chunk_respond (self->fetcher, lk_noaa_respond_chunk);
   lookout_noaa_set_http_provider (self->service, lk_noaa_http_get,
                                       lk_noaa_http_cancel, lk_noaa_wake, self);
   return self;

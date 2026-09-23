@@ -1016,18 +1016,19 @@ lk_chart_controller_set_http_provider (LkChartController *self,
 
 void
 lk_chart_controller_http_respond (LkChartController *self, guint64 req_id,
-                                  const void *bytes, gsize len, int status)
+                                  const void *bytes, gsize len, int status,
+                                  gboolean done)
 {
   /* From soup completion callbacks, which may outlive the handle they were
    * started for: a NULL handle swallows the answer, and the core ignores a
    * request id it no longer knows. */
   if (!LK_IS_CHART_CONTROLLER (self) || self->handle == NULL)
     return;
-  lookout_http_respond (self->handle, req_id, bytes, len, status);
-  /* An answer is adopted at the top of a frame, and the tick stands down when
-   * nothing is moving, so a resolve landing with no gesture behind it needs
-   * someone to ask for the next frame. */
-  lk_chart_controller_kick (self);
+  lookout_http_respond_chunk (self->handle, req_id, bytes, len, status, done ? 1 : 0);
+  /* The core adopts a response at the top of a frame, and the tick stops when
+   * the chart is still. The kick on the last piece schedules that frame. */
+  if (done)
+    lk_chart_controller_kick (self);
 }
 
 void

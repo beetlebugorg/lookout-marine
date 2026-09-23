@@ -172,7 +172,8 @@ test_settle_runs_out_of_patience (void)
  * still runs. It used to read the fetcher's table and session after the free,
  * which is where a gallery row that went while a style resolved crashed. */
 static void
-answered (gpointer user_data, uint64_t req_id, const void *bytes, gsize len, int status)
+answered (gpointer user_data, uint64_t req_id, const void *bytes, gsize len, int status,
+          gboolean done)
 {
   (*(guint *) user_data)++;
 }
@@ -224,6 +225,7 @@ test_a_freed_fetcher_leaves_its_completions_safe (void)
 
 static guint chunk_pieces;
 static gsize chunk_bytes;
+static int chunk_status;
 static gboolean chunk_done;
 
 static void
@@ -232,26 +234,19 @@ chunked (gpointer user_data, uint64_t req_id, const void *bytes, gsize len, int 
 {
   chunk_pieces++;
   chunk_bytes += len;
+  chunk_status = status;
   if (done)
     chunk_done = TRUE;
 }
 
-/* A body delivered in pieces arrives in order and ends with done.
- *
- * A district bundle runs to a couple of hundred megabytes, and the whole-body
- * read needs that much again for the copy the core makes. A file:// read
- * stays whole, so this states what the owner is handed rather than how the
- * pieces are cut.
- */
+/* A file:// read arrives as one piece with done set. */
 static void
-test_a_chunked_fetch_ends_with_done (void)
+test_a_file_read_is_one_piece (void)
 {
-  guint answers = 0;
-  LkFetcher *fetcher = lk_fetcher_new (answered, &answers);
+  LkFetcher *fetcher = lk_fetcher_new (chunked, NULL);
   g_autofree char *path = g_build_filename (g_get_tmp_dir (), "lk-fetch-chunk.json", NULL);
   g_autofree char *url = g_strconcat ("file://", path, NULL);
 
-  lk_fetcher_set_chunk_respond (fetcher, chunked);
   g_assert_true (g_file_set_contents (path, "{\"a\":1}", -1, NULL));
 
   chunk_pieces = 0;
@@ -260,12 +255,33 @@ test_a_chunked_fetch_ends_with_done (void)
   lk_fetcher_http_get (fetcher, 7, url, 1);
   spin (200);
 
-  /* A local read answers whole, through the plain responder. */
-  g_assert_cmpuint (answers, ==, 1);
-  g_assert_cmpuint (chunk_pieces, ==, 0);
+  g_assert_cmpuint (chunk_pieces, ==, 1);
+  g_assert_cmpuint (chunk_bytes, ==, 7);
+  g_assert_cmpint (chunk_status, ==, 200);
+  g_assert_true (chunk_done);
 
   lk_fetcher_free (fetcher);
   g_remove (path);
+}
+
+/* A refused file read is one piece with status 0, no bytes and done set. */
+static void
+test_a_refused_read_fails_in_one_piece (void)
+{
+  LkFetcher *fetcher = lk_fetcher_new (chunked, NULL);
+
+  chunk_pieces = 0;
+  chunk_bytes = 0;
+  chunk_status = -1;
+  chunk_done = FALSE;
+  lk_fetcher_http_get (fetcher, 8, "file:///etc/hostname", 0);
+
+  g_assert_cmpuint (chunk_pieces, ==, 1);
+  g_assert_cmpuint (chunk_bytes, ==, 0);
+  g_assert_cmpint (chunk_status, ==, 0);
+  g_assert_true (chunk_done);
+
+  lk_fetcher_free (fetcher);
 }
 
 /* A fetch answered while the fetcher lives reaches the owner. */
@@ -300,8 +316,9 @@ main (int argc, char *argv[])
   g_test_add_func ("/preview/a-freed-fetcher-leaves-its-completions-safe",
                    test_a_freed_fetcher_leaves_its_completions_safe);
   g_test_add_func ("/preview/a-live-fetcher-answers", test_a_live_fetcher_answers);
-  g_test_add_func ("/preview/a-chunked-fetch-ends-with-done",
-                   test_a_chunked_fetch_ends_with_done);
+  g_test_add_func ("/preview/a-file-read-is-one-piece", test_a_file_read_is_one_piece);
+  g_test_add_func ("/preview/a-refused-read-fails-in-one-piece",
+                   test_a_refused_read_fails_in_one_piece);
   g_test_add_func ("/preview/tile-numbers", test_tile_numbers);
   g_test_add_func ("/preview/cache-key", test_cache_key);
   g_test_add_func ("/preview/zoom-in-the-key", test_zoom_in_the_key);

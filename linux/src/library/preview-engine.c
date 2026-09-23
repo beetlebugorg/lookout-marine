@@ -65,7 +65,7 @@ lk_preview_settle_step (LkPreviewSettle *state, gboolean idle, gboolean building
 
 static void
 lk_preview_engine_respond (gpointer user_data, uint64_t req_id, const void *bytes,
-                           gsize len, int status)
+                           gsize len, int status, gboolean done)
 {
   LkPreviewEngine *self = user_data;
 
@@ -73,7 +73,7 @@ lk_preview_engine_respond (gpointer user_data, uint64_t req_id, const void *byte
    * has nowhere to go. */
   if (self->handle == NULL)
     return;
-  lookout_http_respond (self->handle, req_id, bytes, len, status);
+  lookout_http_respond_chunk (self->handle, req_id, bytes, len, status, done ? 1 : 0);
 }
 
 /* Open the engine, once, and keep it for the rest of the pictures. */

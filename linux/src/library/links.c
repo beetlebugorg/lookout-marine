@@ -62,12 +62,13 @@ G_DEFINE_FINAL_TYPE (LkChartLinks, lk_chart_links, G_TYPE_OBJECT)
  * answer then has nowhere to go, and lookout already released the slot. */
 static void
 lk_links_respond (gpointer user_data, uint64_t req_id, const void *bytes, gsize len,
-                  int status)
+                  int status, gboolean done)
 {
   LkChartLinks *self = user_data;
 
   if (self->controller != NULL)
-    lk_chart_controller_http_respond (self->controller, req_id, bytes, len, status);
+    lk_chart_controller_http_respond (self->controller, req_id, bytes, len, status,
+                                      done);
 }
 
 /* ---- the read ------------------------------------------------------------ */

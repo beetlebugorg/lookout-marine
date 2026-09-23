@@ -21,9 +21,8 @@ struct _LkFetcher {
   gboolean     dead;
   gint         refs;
 
-  LkFetcherRespond      respond;
-  LkFetcherRespondChunk chunk;
-  gpointer              respond_data;
+  LkFetcherRespond respond;
+  gpointer         respond_data;
 };
 
 /* One read of a streamed body. Large enough that a 200 MB bundle is a few
@@ -35,8 +34,7 @@ typedef struct {
   SoupMessage  *msg; /* to read the status in the completion; NULL for a file */
   GCancellable *cancel;
   uint64_t      id;
-  /* The streamed read: the body arrives piece by piece and never sits whole
-   * in memory. */
+  /* The body, read piece by piece. It never sits whole in memory. */
   GInputStream *stream;
   guint         status;
 } LkFetch;
@@ -70,70 +68,11 @@ lk_fetcher_forget (LkFetch *fetch)
     g_hash_table_remove (self->in_flight, &fetch->id);
 }
 
-/* Every answer funnels through here. `status` is the final HTTP status, or 0
- * for a transport failure; only 2xx carries a body lookout reads. */
-static void
-lk_fetcher_answer (LkFetcher *self, uint64_t id, GBytes *bytes, guint status)
-{
-  gsize       length = 0;
-  const void *data = bytes != NULL ? g_bytes_get_data (bytes, &length) : NULL;
-
-  if (self->in_flight != NULL)
-    g_hash_table_remove (self->in_flight, &id);
-  if (self->respond != NULL)
-    self->respond (self->respond_data, id, data, length, (int) status);
-}
-
-/* The answer one fetch carries. A dead fetcher answers none: the handle that
- * asked has gone, and so has the session the status is read from. */
-static void
-lk_fetch_answer (LkFetch *fetch, GBytes *bytes, guint status)
-{
-  LkFetcher *self = fetch->fetcher;
-
-  if (self->dead)
-    return;
-  lk_fetcher_forget (fetch);
-  if (self->respond != NULL)
-    {
-      gsize       length = 0;
-      const void *data = bytes != NULL ? g_bytes_get_data (bytes, &length) : NULL;
-
-      self->respond (self->respond_data, fetch->id, data, length, (int) status);
-    }
-}
-
-static void
-lk_fetcher_fetch_done (GObject *source_object, GAsyncResult *result, gpointer user_data)
-{
-  LkFetch *fetch = user_data;
-  g_autoptr (GError) error = NULL;
-  g_autoptr (GBytes) bytes =
-      soup_session_send_and_read_finish (SOUP_SESSION (source_object), result, &error);
-
-  if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
-    {
-      /* lookout gave up on this one and has already released its slot. */
-      if (!fetch->fetcher->dead)
-        lk_fetcher_forget (fetch);
-    }
-  else
-    {
-      guint status = fetch->fetcher->dead ? 0 : soup_message_get_status (fetch->msg);
-
-      if (error != NULL)
-        status = 0;
-      lk_fetch_answer (fetch, bytes, status);
-    }
-  lk_fetch_free (fetch);
-}
-
-/* ---- a body read in pieces ----------------------------------------------- */
-
 static void lk_fetcher_read_piece (LkFetch *fetch);
 
 /* Hand one piece to the owner. The last piece carries `done`, and a request
- * that failed reports its status with no bytes. */
+ * that failed reports its status with no bytes. A dead fetcher hands over
+ * none: the handle that made the request has gone. */
 static void
 lk_fetch_piece (LkFetch *fetch, GBytes *bytes, gboolean done)
 {
@@ -141,7 +80,7 @@ lk_fetch_piece (LkFetch *fetch, GBytes *bytes, gboolean done)
   gsize       len = 0;
   const void *data = bytes != NULL ? g_bytes_get_data (bytes, &len) : NULL;
 
-  if (self->dead || self->chunk == NULL)
+  if (self->dead || self->respond == NULL)
     return;
   /* A piece queued before the cancel goes. A reopen cancels every fetch and
    * issues ids from 1 again, so this piece reaches the new handle's request
@@ -150,7 +89,7 @@ lk_fetch_piece (LkFetch *fetch, GBytes *bytes, gboolean done)
     return;
   if (done)
     lk_fetcher_forget (fetch);
-  self->chunk (self->respond_data, fetch->id, data, len, (int) fetch->status, done);
+  self->respond (self->respond_data, fetch->id, data, len, (int) fetch->status, done);
 }
 
 static void
@@ -245,18 +184,21 @@ lk_fetcher_read_done (GObject *source_object, GAsyncResult *result, gpointer use
     {
       if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
         {
-          /* As in lk_fetcher_fetch_done: a reopen cancelled this, and the id
-           * lands on the NEW handle's request of the same number. */
+          /* A reopen cancelled this. The id now belongs to the new
+           * handle's request of the same number. */
           if (!fetch->fetcher->dead)
             lk_fetcher_forget (fetch);
         }
       else
-        lk_fetch_answer (fetch, NULL, 0);
+        lk_fetch_piece (fetch, NULL, TRUE);
     }
   else
     {
       g_autoptr (GBytes) bytes = g_bytes_new_take (text, length);
-      lk_fetch_answer (fetch, bytes, 200);
+
+      /* A local file is a style the mariner wrote. It goes over in one piece. */
+      fetch->status = 200;
+      lk_fetch_piece (fetch, bytes, TRUE);
     }
   lk_fetch_free (fetch);
 }
@@ -287,7 +229,7 @@ lk_fetcher_http_get (void *user, uint64_t req_id, const char *url, int allow_fil
   if (self == NULL || !self->live || url == NULL)
     {
       if (self != NULL && self->respond != NULL)
-        self->respond (self->respond_data, req_id, NULL, 0, 0);
+        self->respond (self->respond_data, req_id, NULL, 0, 0, TRUE);
       return;
     }
 
@@ -312,7 +254,7 @@ lk_fetcher_http_get (void *user, uint64_t req_id, const char *url, int allow_fil
        * this read arbitrary local files as its "TileJSON". */
       if (!allow_file)
         {
-          lk_fetcher_answer (self, req_id, NULL, 0);
+          lk_fetch_piece (fetch, NULL, TRUE);
           lk_fetch_free (fetch);
           return;
         }
@@ -324,29 +266,15 @@ lk_fetcher_http_get (void *user, uint64_t req_id, const char *url, int allow_fil
   msg = soup_message_new (SOUP_METHOD_GET, url);
   if (msg == NULL)
     {
-      lk_fetcher_answer (self, req_id, NULL, 0);
+      lk_fetch_piece (fetch, NULL, TRUE);
       lk_fetch_free (fetch);
       return;
     }
   soup_message_headers_append (soup_message_get_request_headers (msg),
                                "Referer", LK_REFERER);
   fetch->msg = msg;
-  /* In pieces where the owner reads them that way: a district bundle runs to
-   * a couple of hundred megabytes, and the whole-body call needs it twice
-   * over. */
-  if (self->chunk != NULL)
-    soup_session_send_async (self->session, msg, G_PRIORITY_DEFAULT, cancel,
-                             lk_fetcher_send_done, fetch);
-  else
-    soup_session_send_and_read_async (self->session, msg, G_PRIORITY_DEFAULT, cancel,
-                                      lk_fetcher_fetch_done, fetch);
-}
-
-void
-lk_fetcher_set_chunk_respond (LkFetcher *self, LkFetcherRespondChunk chunk)
-{
-  g_return_if_fail (self != NULL);
-  self->chunk = chunk;
+  soup_session_send_async (self->session, msg, G_PRIORITY_DEFAULT, cancel,
+                           lk_fetcher_send_done, fetch);
 }
 
 void
