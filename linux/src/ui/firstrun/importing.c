@@ -285,9 +285,11 @@ lk_first_run_importing_sync (GtkWidget *step)
   if (self->from_noaa)
     {
       char size[LOOKOUT_BYTES_MAX];
+      char count[LOOKOUT_COUNT_MAX];
 
       lookout_fmt_bytes (bytes, size, sizeof size);
-      subtitle = g_strdup_printf ("NOAA · %u charts · %s", ordered, size);
+      lookout_fmt_count (ordered, count, sizeof count);
+      subtitle = g_strdup_printf ("NOAA · %s charts · %s", count, size);
     }
   else if (work != NULL && work->total > 0)
     subtitle = g_strdup_printf ("%d charts", work->total);
