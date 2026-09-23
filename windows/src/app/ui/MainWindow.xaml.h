@@ -323,14 +323,9 @@ namespace winrt::LookoutMarine::implementation
         bool ChartSetsScanning() const;
         void CloseChartSets();
         std::vector<std::string> ChartSetOpenPaths();
-        /* The cells the sets hold, by dataset name. `managed_only` answers
-         * for the downloader's own set, which is what the picker's ticks
-         * come from; the whole list is what a price skips. */
-        std::set<std::string> ChartSetCells(bool managed_only);
-        /* The cells the library holds, read off the disk: the safe source
-         * while a scan is in flight, because the core frees the arena its
-         * file list points into when a scan lands on its own worker. */
-        std::set<std::string> LibraryCellsOnDisk();
+        /* The cells the downloader's own set holds, by dataset name. The
+         * picker's ticks come from this. */
+        std::set<std::string> ManagedCells();
         /* What an interrupted removal left beside the library. Swept once a
          * session, off the UI thread. */
         void SweepRemovedCharts();
@@ -466,13 +461,6 @@ namespace winrt::LookoutMarine::implementation
         fire_and_forget FirstRunShowEncTerms();
         // The two services, read on a timer and handed to the model, which
         // decides what survives their resetting.
-        // Hand the core the cells this device holds, so a cost and a download
-        // leave them out.
-        void FirstRunNoaaHave();
-        /* Whether the core has this device's cells. Fed once a run: the
-         * step build asked every time, and the answer comes from a
-         * recursive read of the library when a scan is in flight. */
-        bool noaa_have_known{ false };
         /* Price each region on its own, into noaa_region_hold. The pick's own
          * total is what a download costs; these are what the device already
          * holds, which the pills state. One cost call per region, answered off

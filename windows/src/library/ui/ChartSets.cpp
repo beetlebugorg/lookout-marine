@@ -364,71 +364,25 @@ namespace winrt::LookoutMarine::implementation
         }).detach();
     }
 
-    // The cells the library holds, read off the disk.
-    //
-    // The safe source while a scan is in flight. The core hands out its file
-    // list as pointers into an arena, and a scan LANDING on its own worker
-    // frees that arena (Sets.land: files_arena.deinit and reads.reset), so a
-    // read racing a landing walks freed memory. Every chart this shell
-    // prepared is under the library directory.
-    std::set<std::string> MainWindow::LibraryCellsOnDisk()
-    {
-        std::set<std::string> out;
-        std::error_code ec;
-        std::filesystem::path root(lkw::ChartLibraryDir());
-        if (!std::filesystem::is_directory(root, ec))
-            return out;
-        for (auto it = std::filesystem::recursive_directory_iterator(root, ec);
-             !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec))
-        {
-            std::error_code one;
-            if (!it->is_regular_file(one))
-                continue;
-            auto ext = it->path().extension().string();
-            for (auto &ch : ext)
-                ch = (char)tolower((unsigned char)ch);
-            if (ext != ".pmtiles")
-                continue;
-            std::string stem = it->path().stem().string();
-            for (auto &ch : stem)
-                ch = (char)toupper((unsigned char)ch);
-            if (!stem.empty())
-                out.insert(stem);
-        }
-        return out;
-    }
-
-    // The cells a set holds, by dataset name.
-    //
-    // `managed_only` answers for the downloader's own set: the folder NOAA
-    // charts are prepared into. That is what the picker's ticks come from. The
-    // whole list, every set, is what a PRICE skips: a cell the mariner already
-    // holds in a folder of their own is a cell a download has no reason to
-    // fetch again.
+    // The cells the downloader's own set holds, by dataset name: the folder
+    // NOAA charts are downloaded into. The picker's ticks come from this.
     //
     // A prepared chart stands in for the cell it was made from here, so this
     // reads one entry per cell whether or not the source .000 is still beside
     // it (lookout_chart_set_files).
-    //
-    // While a scan is in flight this reads the disk instead. See
-    // LibraryCellsOnDisk for why.
-    std::set<std::string> MainWindow::ChartSetCells(bool managed_only)
+    std::set<std::string> MainWindow::ManagedCells()
     {
         std::set<std::string> out;
         lookout_chart_sets *model = ChartSetsModel();
         if (model == nullptr)
             return out;
-        if (ChartSetsScanning())
-            return LibraryCellsOnDisk();
         for (auto const &row : chart_sets)
         {
-            if (managed_only && !row.managed)
+            if (!row.managed)
                 continue;
             size_t files = 0;
             auto found = lookout_chart_set_files(model, row.path.c_str(), &files);
-            if (found == nullptr)
-                continue;
-            for (size_t f = 0; f < files; ++f)
+            for (size_t f = 0; found != nullptr && f < files; ++f)
             {
                 if (found[f] == nullptr || found[f]->kind != LOOKOUT_FILE_BAKED)
                     continue;
@@ -439,10 +393,6 @@ namespace winrt::LookoutMarine::implementation
                     out.insert(name);
             }
         }
-        // A library with charts on it and nothing to report means the model has
-        // yet to read them.
-        if (out.empty())
-            return LibraryCellsOnDisk();
         return out;
     }
 

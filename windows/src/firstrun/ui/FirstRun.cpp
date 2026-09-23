@@ -440,7 +440,6 @@ namespace winrt::LookoutMarine::implementation
     {
         CloseSettings();
         noaa_handed_over = false;
-        noaa_have_known = false; // the library may have changed since
         // The last run's import state. A second download in one launch read
         // the first run's bands, and its bake never started.
         noaa_scan_bands.clear();
@@ -474,7 +473,6 @@ namespace winrt::LookoutMarine::implementation
 
     void MainWindow::FirstRunBegin()
     {
-        noaa_have_known = false;
         first_run.Begin();
         FirstRunRender();
     }
@@ -993,10 +991,7 @@ namespace winrt::LookoutMarine::implementation
         for (auto const &one : NoaaRegionNames(gone))
             water += (water.empty() ? L"" : L", ") + one;
         auto const took = RemoveNoaaCells(NoaaCellsToRemove(gone), winrt::to_string(water));
-        noaa_have_known = false; // those cells are gone from the library
-        // The library has changed, so what a price leaves out has changed with
-        // it. Both halves read this.
-        FirstRunNoaaHave();
+        // The ticks follow the cells that are left.
         FirstRunRepriceRegions();
         noaa_held_at_open = noaa_region_id; // the removal is done, not pending
 
@@ -1186,65 +1181,6 @@ namespace winrt::LookoutMarine::implementation
         }
     }
 
-    // Tell the core which cells this device already holds, so a cost leaves
-    // them out and a download skips them. Without it a mariner picking a second
-    // region fetches every cell of it again, including the ones they downloaded
-    // last time, which is load on NOAA that the district bundles exist to
-    // remove.
-    //
-    // By name, without the extension, which is the stem of each prepared chart.
-    void MainWindow::FirstRunNoaaHave()
-    {
-        // Once per run of the picker, and again when the library changes.
-        // This was called from the step build, so every pill click and every
-        // catalog change walked the prepared library again, on the UI
-        // thread, through a recursive read of a folder per chart.
-        if (noaa_have_known)
-            return;
-        noaa_have_known = true;
-        // Every set, not only the downloader's: a cell the mariner already
-        // holds in a folder of their own is a cell a download has no reason to
-        // fetch again. The model is asked first, because a prepared chart
-        // stands in for the cell it was made from and an archive lists its
-        // cells without unpacking one.
-        std::vector<std::string> names;
-        for (auto const &cell : ChartSetCells(false))
-            names.push_back(cell);
-
-        // Before the first scan lands the model has no files to report, and a
-        // picker opened in that moment would price water already here. The
-        // library on disk answers until it does.
-        if (names.empty())
-        {
-            std::error_code ec;
-            std::filesystem::path root(BakeOutputDir());
-            if (std::filesystem::is_directory(root, ec))
-                for (auto it = std::filesystem::recursive_directory_iterator(root, ec);
-                     !ec && it != std::filesystem::recursive_directory_iterator();
-                     it.increment(ec))
-                {
-                    if (!it->is_regular_file(ec))
-                        continue;
-                    auto ext = it->path().extension().string();
-                    for (auto &c : ext)
-                        c = (char)tolower((unsigned char)c);
-                    if (ext == ".pmtiles")
-                        names.push_back(it->path().stem().string());
-                }
-        }
-
-        if (names.empty())
-        {
-            lookout_noaa_have(noaa, nullptr, 0);
-            return;
-        }
-        std::vector<char const *> cps;
-        cps.reserve(names.size());
-        for (auto const &n : names)
-            cps.push_back(n.c_str());
-        lookout_noaa_have(noaa, cps.data(), cps.size());
-    }
-
     // Price every region on its own.
     //
     // The pick as a whole is priced where it is stated, and that total is
@@ -1267,7 +1203,7 @@ namespace winrt::LookoutMarine::implementation
         // list their cells without unpacking one, so a mariner holding
         // All_ENCs.zip read every region as installed, unticking one asked to
         // delete cells no download ever wrote, and Apply had nothing to do.
-        std::set<std::string> const mine = ChartSetCells(true);
+        std::set<std::string> const mine = ManagedCells();
         for (size_t i = 0; i < n; ++i)
         {
             size_t const want = lookout_noaa_region_cells(noaa, regions[i].id,
@@ -1529,9 +1465,6 @@ namespace winrt::LookoutMarine::implementation
             body.Children().Append(Muted(L"The region list is not available."));
             return;
         }
-
-        // Before any price: the cost call leaves out what this device holds.
-        FirstRunNoaaHave();
 
         lookout_noaa_state const &st = noaa_state;
 
