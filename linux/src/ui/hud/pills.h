@@ -1,4 +1,4 @@
-/* ui/hud/pills.h — the progress pills that float at the top centre.
+/* ui/hud/pills.h: the progress pills that float at the top centre.
  *
  * Two indicators share that place and never both show: the tessellation
  * indicator while the chart fills in, and the bake pill while charts import.

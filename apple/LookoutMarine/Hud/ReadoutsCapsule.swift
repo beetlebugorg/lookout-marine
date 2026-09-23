@@ -64,13 +64,10 @@ struct ReadoutsCapsule: View {
         RoundedRectangle(cornerRadius: Chrome.capsule / 2, style: .continuous)
     }
 
-    /// The position, and the zoom beside it. The second line when there is one.
+    /// The position. The second line when there is one.
     private var positionLine: some View {
         HStack(spacing: 10) {
             PositionReadout(model: model, compact: compact)
-            separator
-            Text(String(format: "z%.1f", model.readouts.zoomLevel))
-                .foregroundStyle(Chrome.muted)
         }
         .font(.system(size: compact ? 12 : 14).monospacedDigit())
         .lineLimit(1)
@@ -90,7 +87,8 @@ struct ReadoutsCapsule: View {
                 .accessibilityIdentifier("band")
             separator
             Button(action: onScaleTap) {
-                Text(CoordFormat.scale(model.readouts.scaleDenominator))
+                Text(compact ? CoordFormat.scaleCompact(model.readouts.scaleDenominator)
+                             : CoordFormat.scale(model.readouts.scaleDenominator))
                     .fontWeight(.semibold)
                     .foregroundStyle(Chrome.accent)
                     .padding(.horizontal, 5)
@@ -101,10 +99,12 @@ struct ReadoutsCapsule: View {
             .accessibilityLabel("Scale \(CoordFormat.scale(model.readouts.scaleDenominator)). Zoom to a scale.")
             .accessibilityIdentifier("scale-readout")
             .chromeHitRegion("scale-readout")
+            // The zoom stays on this line at either width, so the second line
+            // holds the position alone and the two lines are closer in width.
+            separator
+            Text(String(format: "z%.1f", model.readouts.zoomLevel))
+                .foregroundStyle(Chrome.muted)
             if withPosition {
-                separator
-                Text(String(format: "z%.1f", model.readouts.zoomLevel))
-                    .foregroundStyle(Chrome.muted)
                 separator
                 PositionReadout(model: model, compact: compact)
             }

@@ -1,4 +1,4 @@
-/* engine/controller.h — the single owner of the `lookout*` handle.
+/* engine/controller.h: the single owner of the `lookout*` handle.
  *
  * Every lookout_* call funnels through here, on the main thread only (the
  * engine wants one thread, GTK wants the main one). Drives the on-demand render
@@ -29,7 +29,9 @@ void lk_chart_controller_set_model (LkChartController *self, LkAppModel *model);
 /* ---- lifecycle ---------------------------------------------------------- */
 
 /* Open baked charts into `view`, composing multiple into one library.
- * Recreates the handle if one exists. `paths` is a NULL-terminated strv. */
+ * Recreates the handle if one exists. `paths` is a NULL-terminated strv.
+ *
+ * An EMPTY `paths` opens a chart of no charts, which draws the basemap. */
 gboolean lk_chart_controller_open (LkChartController *self,
                                    const char *const *paths,
                                    GtkWidget         *view);
@@ -42,7 +44,17 @@ void lk_chart_controller_attach_view (LkChartController *self, GtkWidget *view);
 
 void     lk_chart_controller_close    (LkChartController *self);
 gboolean lk_chart_controller_is_open  (LkChartController *self);
+
+/* TRUE when the open handle holds the store. The engine saves the mariner
+ * settings and the pose through it. A chart of no charts holds none, so its
+ * owner writes those settings itself. */
+gboolean lk_chart_controller_has_store (LkChartController *self);
 const char *lk_chart_controller_chart_path (LkChartController *self);
+
+/* How many vector charts the open library holds. 0 for a chart opened with
+ * none, which draws the basemap. Pictures are counted separately: a library of
+ * raster charts alone also answers 0 here and still draws. */
+guint lk_chart_controller_charts_count (LkChartController *self);
 
 /* ---- view --------------------------------------------------------------- */
 
@@ -57,6 +69,7 @@ void         lk_chart_controller_set_scale (LkChartController *self, int scale);
 
 void lk_chart_controller_pan (LkChartController *self, double dx, double dy);
 void lk_chart_controller_zoom_at (LkChartController *self, double dzoom, double x, double y);
+void lk_chart_controller_zoom_about (LkChartController *self, double dzoom, double x, double y);
 void lk_chart_controller_zoom_centered (LkChartController *self, double dzoom);
 void lk_chart_controller_rotate_drag (LkChartController *self,
                                       double x0, double y0, double x1, double y1);
@@ -146,10 +159,11 @@ void lk_chart_controller_set_http_provider (LkChartController *self,
                                             lookout_http_cancel cancel,
                                             gpointer user);
 
-/* Answer one ask: `status` is the final HTTP status, or 0 for a transport
- * failure. Safe after the handle closed — the answer is dropped. */
+/* One piece of a response, as lookout_http_respond_chunk states it. Safe
+ * after the handle closed, and the piece is dropped. */
 void lk_chart_controller_http_respond (LkChartController *self, guint64 req_id,
-                                       const void *bytes, gsize len, int status);
+                                       const void *bytes, gsize len, int status,
+                                       gboolean done);
 
 /* The chart-link management surface, straight through to lookout. */
 void  lk_chart_controller_chart_link_add (LkChartController *self, const char *link);
@@ -162,6 +176,24 @@ void  lk_chart_controller_chart_links_import (LkChartController *self, const cha
  * polls clears the flag. */
 lookout_links *lk_chart_controller_chart_links_read (LkChartController *self);
 
+/* ---- pictures of charts -------------------------------------------------- */
+
+/* A picture of one chart link at a point, `width` by `height` device pixels,
+ * into `dst` (RGBA8, premultiplied, width * height * 4 bytes). A
+ * LOOKOUT_PICTURE_ value, and NONE with no chart open. See
+ * lookout_chart_link_picture. */
+int lk_chart_controller_chart_link_picture (LkChartController *self, const char *url,
+                                            int kind, double lon, double lat, double zoom,
+                                            int width, int height, guint8 *dst);
+
+/* Drop the pictures still being drawn. */
+void lk_chart_controller_chart_link_pictures_cancel (LkChartController *self);
+
+/* Where the camera is looking, for a picture of every chart at one point.
+ * FALSE with no chart open. */
+gboolean lk_chart_controller_view_centre (LkChartController *self,
+                                          double *out_lon, double *out_lat);
+
 /* ---- wasm plugins -------------------------------------------------------- */
 
 /* TRUE while a plugin layer is running. Own ship, AIS, NMEA 0183, Signal K and
@@ -171,7 +203,7 @@ gboolean lk_chart_controller_plugins_active (LkChartController *self);
 
 /* Every loaded plugin with its settings schema and the values in force, as
  * lookout_plugins_read documents. NULL when no plugin layer is up, which is NOT
- * the same as a layer holding no plugins (that answers a read with no rows) — a
+ * the same as a layer holding no plugins (that answers a read with no rows), a
  * caller with a registry already on screen must keep it rather than empty the
  * window. Transfer full; free it with lookout_plugins_free. */
 lookout_plugins *lk_chart_controller_plugins_read (LkChartController *self);

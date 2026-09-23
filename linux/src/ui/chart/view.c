@@ -5,7 +5,7 @@
 #include "ui/hud/hud.h"
 #include "util/json.h"
 
-/* S-52 NODATA, day scheme — what lookout's first frame clears to. */
+/* S-52 NODATA, day scheme: what lookout's first frame clears to. */
 static const GdkRGBA LK_NODATA_COLOR = { 0.576f, 0.682f, 0.733f, 1.0f };
 
 /* A press travelling no further than this is a tap (identify), not a throw. */
@@ -165,18 +165,31 @@ lk_chart_view_do_auto_open (gpointer user_data)
   if (!lk_chart_controller_is_open (self->controller))
     {
       g_auto (GStrv) paths = lk_app_model_initial_chart_paths (self->model);
+      g_autofree char *source = NULL;
+
       if (paths != NULL && g_strv_length (paths) > 0)
         {
           lk_chart_controller_open (self->controller, (const char *const *) paths, GTK_WIDGET (self));
+          lk_app_model_set_opening (self->model, FALSE, FALSE);
+          return G_SOURCE_REMOVE;
         }
-      else
+
+      /* Nothing here draws yet. It may still be charts: an exchange set as
+         an agency publishes it is raw cells, which bake first. */
+      source = lk_app_model_initial_source (self->model);
+      if (source != NULL)
         {
-          /* Nothing here draws yet. It may still be charts: an exchange set as
-             an agency publishes it is raw cells, which bake first. */
-          g_autofree char *source = lk_app_model_initial_source (self->model);
-          if (source != NULL)
-            lk_app_model_open_chart_directory (self->model, source);
+          lk_app_model_open_chart_directory (self->model, source);
+          lk_app_model_set_opening (self->model, FALSE, FALSE);
+          return G_SOURCE_REMOVE;
         }
+
+      /* An empty library still opens a chart of no charts, so the basemap
+         draws under setup. The window was a flat fill until something else
+         wanted a handle, which on a fresh install was the import. */
+      static const char *const none[] = { NULL };
+
+      lk_chart_controller_open (self->controller, none, GTK_WIDGET (self));
     }
 
   lk_app_model_set_opening (self->model, FALSE, FALSE);
@@ -206,8 +219,21 @@ lk_chart_view_maybe_auto_open (LkChartView *self)
      cells, which the open below scans and bakes. Only a path with neither
      stops here. */
   g_autofree char *source = lk_app_model_initial_source (self->model);
-  if ((paths == NULL || g_strv_length (paths) == 0) && source == NULL)
-    return;
+
+  /* The library is read on the core's own thread, and a set that thread has
+     not reached yet composes to nothing. A big library takes longer to read
+     than the window takes to lay out, so opening here would draw a short chart
+     or none at all. Wait: lk_chart_view_sets_changed brings this back when the
+     scan lands. An environment source is a path, not a library, and waits for
+     nothing. */
+  if (source == NULL && lk_app_model_library_scanning (self->model))
+    {
+      /* The loader stands over the wait rather than blank water. The count is
+         not known until the read lands, so it says "the chart", not a number. */
+      lk_app_model_set_opening_cells (self->model, 0);
+      lk_app_model_set_opening (self->model, TRUE, lookout_atlas_cache_ready () == 0);
+      return;
+    }
 
   self->did_auto_open = TRUE;
   /* Loader up before the synchronous open; the flag marks a first-ever run,
@@ -215,6 +241,18 @@ lk_chart_view_maybe_auto_open (LkChartView *self)
   lk_app_model_set_opening_cells (self->model, paths != NULL ? g_strv_length (paths) : 0);
   lk_app_model_set_opening (self->model, TRUE, lookout_atlas_cache_ready () == 0);
   self->auto_open_id = g_idle_add (lk_chart_view_do_auto_open, self);
+}
+
+/* A background scan landed, so the library composes to more than it did. The
+ * chart is opened once, and only while nothing is open: a scan landing must
+ * not reopen a chart the mariner is already sailing on. */
+static void
+lk_chart_view_sets_changed (LkAppModel *model, gpointer user_data)
+{
+  LkChartView *self = user_data;
+
+  if (!self->did_auto_open)
+    lk_chart_view_maybe_auto_open (self);
 }
 
 /* ---- widget lifecycle --------------------------------------------------- */
@@ -230,7 +268,7 @@ lk_chart_view_realize (GtkWidget *widget)
   GdkSurface *parent = native != NULL ? gtk_native_get_surface (native) : NULL;
   if (parent == NULL)
     {
-      g_warning ("chart view realized with no GdkSurface — no chart will render");
+      g_warning ("chart view realized with no GdkSurface, no chart will render");
       return;
     }
 
@@ -385,8 +423,8 @@ lk_chart_view_sample_velocity (LkChartView *self, double dx, double dy)
 /* A plain click or tap on the chart. It pins an overlay symbol's bubble and
  * does nothing else.
  *
- * IT DOES NOT PICK. A stray click while panning used to throw a pick report
- * the mariner never asked for, and the plain click belongs to the chart. What
+ * IT DOES NOT PICK. The plain click belongs to the chart, and a stray click
+ * while panning throws no pick report the mariner did not ask for. What
  * is at a point is asked for by name, from the menu a secondary click or a
  * held finger raises there. The reference shell follows the same rule
  * (ChartView.swift, tapChart).
@@ -607,7 +645,7 @@ lk_chart_view_open_menu (LkChartView *self, double x, double y)
 
 /* A click gesture's current event came from a touchscreen. Touch is handled by
    the legacy controller and the zoom and rotate gestures, so the click handlers
-   stand off it — the same test the scroll handler makes. */
+   stand off it, the same test the scroll handler makes. */
 static gboolean
 lk_chart_view_gesture_is_touch (GtkGesture *gesture)
 {
@@ -1016,7 +1054,7 @@ lk_chart_view_zoom_changed (GtkGestureZoom *gesture, double scale, gpointer user
       cx = gtk_widget_get_width (GTK_WIDGET (self)) / 2.0;
       cy = gtk_widget_get_height (GTK_WIDGET (self)) / 2.0;
     }
-  lk_chart_controller_zoom_at (self->controller, dz, cx, cy);
+  lk_chart_controller_zoom_about (self->controller, dz, cx, cy);
 }
 
 static void
@@ -1116,7 +1154,7 @@ lk_chart_view_class_init (LkChartViewClass *klass)
 }
 
 /* The hover tip over a plugin's symbol: a vessel's name, course and speed,
- * formatted from the JSON lookout_overlay_at documents — title bold, then a
+ * formatted from the JSON lookout_overlay_at documents, title bold, then a
  * dim key beside each value. FALSE (no tip) over open water. GTK owns the
  * dwell and the re-query on movement, so the engine is asked only when a tip
  * could actually show. */
@@ -1234,10 +1272,14 @@ lk_chart_view_new (LkAppModel *model)
   self->model = model;
   self->controller = lk_app_model_get_controller (model);
   /* A camera move retires the chrome. The pick report clears through the model,
-     and the chart menu closes here — a keyboard zoom or a follow move must not
+     and the chart menu closes here, a keyboard zoom or a follow move must not
      leave it standing over water it no longer points at. */
   g_signal_connect_object (model, "chrome-retired",
                            G_CALLBACK (lk_chart_view_chrome_retired), self, 0);
+  /* The auto-open below holds off while the library is still being read. This
+     is what tells it to look again. */
+  g_signal_connect_object (model, "chart-sets-changed",
+                           G_CALLBACK (lk_chart_view_sets_changed), self, 0);
   return GTK_WIDGET (self);
 }
 

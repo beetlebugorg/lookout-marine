@@ -70,11 +70,8 @@ object ChartBake {
      * a rename that landed leaves a directory nothing will ever look at again.
      */
     fun sweepTrash(ctx: Context) {
-        for (root in listOf(chartsRoot(ctx), rasterRoot(ctx))) {
-            val left = root.listFiles()?.filter { Lookout.bakeIsTrash(it.name) } ?: continue
-            if (left.isEmpty()) continue
-            Thread { left.forEach { it.deleteRecursively() } }.start()
-        }
+        val roots = listOf(chartsRoot(ctx), rasterRoot(ctx)).map { it.absolutePath }
+        Thread { roots.forEach { Lookout.bakeSweep(it) } }.start()
     }
 
     private const val TAG = "lookout"

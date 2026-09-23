@@ -16,11 +16,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -34,6 +36,28 @@ import kotlin.math.roundToInt
  * scale bar at the bottom left, and the readouts at the bottom centre.
  */
 object Chrome {
+    /**
+     * One colour out of the engine's own palette, by S-52 token, in a chart
+     * scheme (0 day, 1 dusk, 2 night). Null when the token is not in it. A
+     * legend drawn from it and the chart cannot drift apart.
+     */
+    fun s52(token: String, scheme: Int): Color? {
+        val rgba = FloatArray(4)
+        if (!Lookout.s52Color(token, scheme, rgba)) return null
+        return Color(rgba[0], rgba[1], rgba[2], rgba[3])
+    }
+
+    /**
+     * A palette token in the scheme the chrome shows: the day palette when the
+     * chrome is light, dusk when it is dark. Transparent when the token is not
+     * in the palette.
+     */
+    @Composable
+    fun s52(token: String): Color {
+        val dark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
+        return remember(token, dark) { s52(token, if (dark) 1 else 0) ?: Color.Transparent }
+    }
+
     /** Bubble diameter. */
     val bubble = 48.dp
 

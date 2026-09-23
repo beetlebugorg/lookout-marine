@@ -1,4 +1,4 @@
-/* lk_store — see lk_store.h. */
+/* lk_store: see lk_store.h. */
 #include "lk_store.h"
 
 #include <windows.h>

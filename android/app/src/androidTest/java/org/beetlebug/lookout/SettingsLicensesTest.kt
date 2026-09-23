@@ -2,6 +2,7 @@ package org.beetlebug.lookout
 
 import org.beetlebug.lookout.charts.ChartLinkController
 import org.beetlebug.lookout.charts.RasterCharts
+import org.beetlebug.lookout.charts.NoaaController
 import org.beetlebug.lookout.charts.RasterController
 import org.beetlebug.lookout.engine.EngineAccess
 import org.beetlebug.lookout.plugins.PluginSettingsController
@@ -63,11 +64,12 @@ class SettingsLicensesTest {
                 val access = EngineAccess()
                 SettingsSheet(
                     m = MarinerState(),
-                    charts = ChartsModel(ctx, null),
+                    charts = ChartsModel(ctx),
                     plugins = PluginSettingsController(ctx, access) {},
                     tables = TableController(access) { _, _ -> },
                     links = ChartLinkController(ctx, access),
                     raster = RasterController(access, RasterCharts(ctx)),
+                    noaa = NoaaController(access),
                     onRequestAccess = {},
                     onDismiss = {},
                     initialSection = "advanced",

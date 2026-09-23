@@ -71,6 +71,26 @@ pub fn decide(in: Inputs) Step {
     return .{ .verdict = .idle, .ticks_since_change = ticks };
 }
 
+/// How soon to ask again while a picture of a chart is pending: the second
+/// handle's tick rate.
+pub const picture_ms: c_int = 100;
+
+/// The step with pending pictures taken into account. A pending picture needs
+/// ticks, so a loop about to stop waits `picture_ms` instead, and a slower
+/// wait is shortened to it. With none pending the step is unchanged.
+pub fn withPictures(step: Step, pending: bool) Step {
+    if (!pending) return step;
+    return switch (step.verdict) {
+        .render => step,
+        .wait => if (step.wait_ms <= picture_ms) step else .{
+            .verdict = .wait,
+            .wait_ms = picture_ms,
+            .ticks_since_change = step.ticks_since_change,
+        },
+        .idle => .{ .verdict = .wait, .wait_ms = picture_ms, .ticks_since_change = step.ticks_since_change },
+    };
+}
+
 // ---- tests ---------------------------------------------------------------------
 
 const t = std.testing;
@@ -147,4 +167,22 @@ test "the verdict values are the ones the header states" {
     try t.expectEqual(@as(c_int, 0), @intFromEnum(Verdict.render));
     try t.expectEqual(@as(c_int, 1), @intFromEnum(Verdict.wait));
     try t.expectEqual(@as(c_int, 2), @intFromEnum(Verdict.idle));
+}
+
+test "a pending picture keeps the loop ticking, and with none the step is unchanged" {
+    const stop = Step{ .verdict = .idle, .ticks_since_change = 3 };
+    try t.expectEqual(stop, withPictures(stop, false));
+    const woken = withPictures(stop, true);
+    try t.expectEqual(Verdict.wait, woken.verdict);
+    try t.expectEqual(picture_ms, woken.wait_ms);
+    try t.expectEqual(@as(u32, 3), woken.ticks_since_change);
+
+    const poll = Step{ .verdict = .wait, .wait_ms = poll_ms };
+    try t.expectEqual(picture_ms, withPictures(poll, true).wait_ms);
+    try t.expectEqual(poll_ms, withPictures(poll, false).wait_ms);
+
+    const now = Step{ .verdict = .wait, .wait_ms = 0 };
+    try t.expectEqual(now, withPictures(now, true));
+    const frame = Step{ .verdict = .render };
+    try t.expectEqual(frame, withPictures(frame, true));
 }

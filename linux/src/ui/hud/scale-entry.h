@@ -1,4 +1,4 @@
-/* ui/hud/scale-entry.h — the scale entry the readouts capsule opens.
+/* ui/hud/scale-entry.h: the scale entry the readouts capsule opens.
  *
  * Type a scale or pick a navigational purpose band, and the view zooms to it.
  * The twin of ScaleEntryPanel (macOS, iOS) and ScaleEntryDialog (Android).

@@ -1,4 +1,4 @@
-/* test-import.c — the one-time read of a settings.ini a mariner already has.
+/* test-import.c: the one-time read of a settings.ini a mariner already has.
  *
  * Builds before the core owned the settings file wrote a GKeyFile beside where
  * settings.json goes now. Everything in it has to arrive in the store under the

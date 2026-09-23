@@ -15,6 +15,7 @@ const owned = @import("owned");
 pub const str = owned.str;
 pub const strs = owned.strs;
 pub const published = owned.published;
+pub const fill = owned.fill;
 
 /// Where a plugin was loaded from.
 pub const Origin = enum(c_int) { bundled = 0, installed = 1, developer = 2 };

@@ -1,4 +1,4 @@
-/* ui/dev-hooks.c — the LOOKOUT_* hooks the screenshot script drives.
+/* ui/dev-hooks.c: the LOOKOUT_* hooks the screenshot script drives.
  *
  * Each one names a change to make once the window is up, optionally after a
  * delay, so a recording stages a change mid-take without a hand on the mouse.
@@ -7,7 +7,7 @@
  */
 #include "ui/dev-hooks.h"
 
-#include "library/links.h"
+#include "model/links.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -85,7 +85,7 @@ lk_dev_hook_show (gpointer data)
   return G_SOURCE_REMOVE;
 }
 
-/* "value[@seconds]": fire now, or that long after launch — which is how a
+/* "value[@seconds]": fire now, or that long after launch, which is how a
  * recording stages a change mid-take, and how table: waits for the plugins a
  * chart open loads. */
 static void
@@ -152,7 +152,7 @@ lk_stress_free (gpointer data)
 
 /* One step of the cycle. Eight directions so the camera never settles into one
  * axis, two magnitudes so it crosses tile boundaries at different rates, and a
- * zoom often enough to keep the tile set turning over — which is what a pan
+ * zoom often enough to keep the tile set turning over, which is what a pan
  * around a chart actually costs the renderer. */
 static gboolean
 lk_stress_step (gpointer data)

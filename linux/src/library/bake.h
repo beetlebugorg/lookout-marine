@@ -18,14 +18,46 @@
 #define LK_CHART_BAKE_H
 
 #include "library/scan.h"
+#include "library/sets.h"
 
-#include <glib.h>
+#include <glib-object.h>
+
+/* One usage band in a bake, and how far the bake has reached into it.
+ *
+ * lookout_bake_order runs the bake COARSE BAND FIRST, so the done count says
+ * which band is being worked and how much of it is left. A mariner who stops
+ * part way keeps charts that cover the whole passage. */
+typedef struct {
+  int   band;  /* 1 to 6, or 0 for a cell whose name states no band */
+  guint total; /* charts of this band the bake will prepare */
+  guint done;  /* how many of them it has prepared */
+} LkBakeBand;
+
+/* Split a done count across the bands, in the order the bake works them: the
+ * first band takes as many as it holds, then the next. Writes each band's
+ * `done`.
+ *
+ * This is the whole of what the order buys: one counter from the core, and a
+ * mariner who can see that the coarse charts are already in. */
+void lk_bake_bands_advance (LkBakeBand *bands, guint n, guint done);
+
+/* Which work a report is about. One struct carries both, so the pill and the
+ * panel cannot call a removal an import. */
+typedef enum {
+  LK_BAKE_IMPORT,
+  LK_BAKE_REMOVE,
+} LkBakeKind;
 
 typedef struct {
+  LkBakeKind  kind;
   int         done;
   int         total;
   const char *name;   /* the set being worked on; borrowed for the call */
   double      elapsed; /* seconds since the work started */
+  /* The bands the bake holds, in the order it works them. Borrowed for the
+   * call; empty when nothing in the set states a band. */
+  const LkBakeBand *bands;
+  guint             n_bands;
 } LkBakeProgress;
 
 /* The fraction done, 0 when nothing is known yet. */
@@ -49,14 +81,21 @@ typedef struct _LkChartBake LkChartBake;
 typedef void (*LkBakeProgressFunc) (const LkBakeProgress *progress, gpointer user_data);
 typedef void (*LkBakeDoneFunc) (const char *out_dir, guint baked, gpointer user_data);
 
-/* Bake everything in `set` that needs preparing, out of `source`. NULL when
- * there is nothing to do or the output directory cannot be made. The set is
- * borrowed for the length of the call only. */
+/* Bake everything that needs preparing out of `source`. NULL when there is
+ * none or the output directory cannot be made.
+ *
+ * The list comes from `sets`, which reads it off the core's own scan and
+ * includes a cell whose prepared chart is older than it. The folder is on
+ * that list and read by that scan before this is called. */
 LkChartBake *lk_chart_bake_start (const char        *source,
-                                  const LkChartSet  *set,
+                                  LkChartSets       *sets,
                                   LkBakeProgressFunc on_progress,
                                   LkBakeDoneFunc     on_done,
                                   gpointer           user_data);
+
+/* The core's job behind this bake, for lk_chart_sets_note_bake. Borrowed, and
+ * valid until lk_chart_bake_destroy. */
+const lookout_bake *lk_chart_bake_job (LkChartBake *bake);
 
 /* Ask the bake to stop. tile57 stops at the next chart boundary, so this lands
  * within roughly one chart's bake time, not instantly. */
@@ -80,10 +119,23 @@ char *lk_chart_bake_prepared_dir (const char *source);
 
 /* Delete charts this app prepared. Refuses any path it did not make, so a
  * mariner's own folder can never be deleted by removing a set. */
-gboolean lk_chart_bake_delete_derived (const char *path);
-
-/* Throw away what a previous run renamed but did not finish deleting. Without
- * this, quitting mid-delete leaves gigabytes that nothing will mention again. */
-void lk_chart_bake_sweep_trash (void);
+/* Delete the charts Lookout prepared, saying where it has got to.
+ *
+ * `name` is the set the mariner removed, for the report to name. `on_progress`
+ * runs ON THE MAIN THREAD as chart directories go, and once more with an empty
+ * name when the removal is over. That last report is what takes the panel
+ * down. Both may be NULL for a delete nobody is watching.
+ *
+ * The count is the mariner's own unit: the bake writes a directory per chart,
+ * so one gone is one chart gone, and the panel counts the same things coming
+ * out that it counted going in.
+ *
+ * `owner` is what the report is written into, and it is REFFED for the life
+ * of the removal. A removal runs for seconds behind the app, and the window
+ * that asked for it can go first. It reaches the callback as its user data. */
+gboolean lk_chart_bake_delete_derived (const char        *path,
+                                       const char        *name,
+                                       LkBakeProgressFunc on_progress,
+                                       GObject           *owner);
 
 #endif /* LK_CHART_BAKE_H */

@@ -1,0 +1,315 @@
+/* test-coverage.c: the NOAA coverage picker.
+ *
+ * The map, the pills and the catalog line all drive one selection and all read
+ * it back off the service. With no catalog the picker has nothing to price a
+ * pick against, so the controls stand down and say so: that state is the one a
+ * mariner meets first, and the one this suite can reach without a network.
+ *
+ * The geometry a click asks is a pure function, and it is checked against the
+ * regions' own extents.
+ */
+
+#include "lk-test.h"
+
+#include "model/app-model.h"
+#include "ui/charts/coverage-map.h"
+#include "ui/charts/noaa-window.h"
+
+static LkAppModel *model;
+static LkNoaa     *noaa;
+static GtkWidget  *window;
+
+/* Every widget under test lives in one window, so a visibility check means
+ * what it means in the app. */
+static GtkWidget *
+hosted (GtkWidget *child)
+{
+  gtk_window_set_child (GTK_WINDOW (window), child);
+  lk_test_drain ();
+  return child;
+}
+
+static gboolean
+match_drawing_area (GtkWidget *widget, gconstpointer data)
+{
+  return GTK_IS_DRAWING_AREA (widget);
+}
+
+static guint
+count (GtkWidget *root, LkTestMatch match)
+{
+  guint n = match (root, NULL) ? 1 : 0;
+
+  for (GtkWidget *child = gtk_widget_get_first_child (root);
+       child != NULL;
+       child = gtk_widget_get_next_sibling (child))
+    n += count (child, match);
+  return n;
+}
+
+static gboolean
+match_toggle (GtkWidget *widget, gconstpointer data)
+{
+  return GTK_IS_TOGGLE_BUTTON (widget);
+}
+
+/* Three panels: the lower 48, and Alaska and Hawaii inset. One view cannot
+ * hold all three. */
+static void
+test_map_has_three_panels (void)
+{
+  GtkWidget *map = hosted (lk_coverage_map_new (noaa, model));
+
+  g_assert_nonnull (map);
+  g_assert_cmpuint (count (map, match_drawing_area), ==, 3);
+  /* Each inset is named, so neither reads as an island off Oregon. */
+  g_assert_nonnull (lk_test_find_label (map, "Alaska"));
+  g_assert_nonnull (lk_test_find_label (map, "Hawaii"));
+}
+
+/* One pill per region, under the region's own name, and every one of them
+ * stood down until a catalog can price the pick. */
+static void
+test_pills_follow_the_model (void)
+{
+  GtkWidget *pills = hosted (lk_noaa_region_pills_new (noaa));
+  guint n = 0;
+  const LkNoaaRegion *regions = lk_noaa_regions (noaa, &n);
+
+  g_assert_cmpuint (count (pills, match_toggle), ==, n);
+
+  for (guint i = 0; i < n; i++)
+    {
+      GtkWidget *pill = lk_test_find_button (pills, regions[i].name);
+
+      g_assert_nonnull (pill);
+      /* No catalog: nothing to pick against. */
+      g_assert_false (gtk_widget_get_sensitive (pill));
+      g_assert_false (gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (pill)));
+    }
+
+  /* A pick made anywhere shows on the pill. The map and the pills are two
+   * views of one selection, so neither may hold state of its own. */
+  GtkWidget *first = lk_test_find_button (pills, regions[0].name);
+  lk_noaa_toggle (noaa, regions[0].id);
+  lk_test_drain ();
+  g_assert_true (gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (first)));
+  g_assert_true (gtk_widget_has_css_class (first, "suggested-action"));
+
+  lk_noaa_toggle (noaa, regions[0].id);
+  lk_test_drain ();
+  g_assert_false (gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (first)));
+  g_assert_false (gtk_widget_has_css_class (first, "suggested-action"));
+}
+
+/* The catalog line says nothing until there is something to say. An empty
+ * sentence over an empty map is chrome with no content. */
+static void
+test_catalog_line_quiet_when_idle (void)
+{
+  GtkWidget *line = hosted (lk_noaa_catalog_line_new (noaa));
+  GtkWidget *again = lk_test_find_button (line, "Try Again");
+
+  g_assert_nonnull (again);
+  g_assert_false (lk_test_shown (line, window));
+  g_assert_false (gtk_widget_get_visible (again));
+}
+
+/* What a click asks: the point against a region's own boxes, projected into
+ * the panel. The lower-48 window and district 5, whose extent is the
+ * Chesapeake and the New Jersey coast. */
+static void
+test_region_hit (void)
+{
+  const LkMapWindow window48 = { .west = -132, .east = -64, .south = 20, .north = 52 };
+  const LkNoaaRegion *d5 = lk_noaa_region (noaa, "d5");
+  LkNoaaBox box;
+  double x = 0, y = 0;
+
+  g_assert_nonnull (d5);
+  box = (LkNoaaBox) { d5->west, d5->south, d5->east, d5->north };
+
+  /* The middle of the region's own water is a hit. */
+  lk_map_window_point (&window48, (d5->west + d5->east) / 2, (d5->south + d5->north) / 2,
+                       680, 320, &x, &y);
+  g_assert_true (lk_region_box_hit (&box, 1, &window48, 680, 320, x, y));
+
+  /* Each corner, which is where a box's tolerance matters. */
+  lk_map_window_point (&window48, d5->west, d5->north, 680, 320, &x, &y);
+  g_assert_true (lk_region_box_hit (&box, 1, &window48, 680, 320, x, y));
+
+  /* Open water off California is not district 5. */
+  lk_map_window_point (&window48, -126, 36, 680, 320, &x, &y);
+  g_assert_false (lk_region_box_hit (&box, 1, &window48, 680, 320, x, y));
+
+  /* Nor is a point north of it. */
+  lk_map_window_point (&window48, (d5->west + d5->east) / 2, 48, 680, 320, &x, &y);
+  g_assert_false (lk_region_box_hit (&box, 1, &window48, 680, 320, x, y));
+
+  /* No boxes is no hit, however the caller asks. */
+  g_assert_false (lk_region_box_hit (NULL, 0, &window48, 680, 320, 10, 10));
+  g_assert_false (lk_region_box_hit (&box, 0, &window48, 680, 320, x, y));
+}
+
+/* The click gesture on a panel. GTK4 offers no way to synthesize a press, so
+ * the gesture is driven where the panel wired it. */
+static GtkGesture *
+click_gesture_of (GtkWidget *area)
+{
+  g_autoptr (GListModel) controllers = gtk_widget_observe_controllers (area);
+  guint n = g_list_model_get_n_items (controllers);
+
+  for (guint i = 0; i < n; i++)
+    {
+      g_autoptr (GtkEventController) c = g_list_model_get_item (controllers, i);
+
+      if (GTK_IS_GESTURE_CLICK (c))
+        return GTK_GESTURE (g_steal_pointer (&c));
+    }
+  return NULL;
+}
+
+/* A click with no catalog changes nothing. The map draws the regions' rough
+ * extents until the catalog lands, and a pick made against those would be
+ * priced against water the catalog has not described yet. */
+static void
+test_click_needs_a_catalog (void)
+{
+  GtkWidget *map = hosted (lk_coverage_map_new (noaa, model));
+  GtkWidget *area = lk_test_find (map, match_drawing_area, NULL);
+  const LkNoaaRegion *d5 = lk_noaa_region (noaa, "d5");
+  const LkMapWindow window48 = { .west = -132, .east = -64, .south = 20, .north = 52 };
+  double x = 0, y = 0;
+
+  g_assert_nonnull (area);
+  g_assert_nonnull (d5);
+  g_assert_cmpuint (lk_noaa_picked_count (noaa), ==, 0);
+
+  g_autoptr (GtkGesture) click = click_gesture_of (area);
+  g_assert_nonnull (click);
+
+  /* Squarely on district 5's own water. */
+  lk_map_window_point (&window48, (d5->west + d5->east) / 2, (d5->south + d5->north) / 2,
+                       gtk_widget_get_width (area), gtk_widget_get_height (area), &x, &y);
+  g_signal_emit_by_name (click, "pressed", 1, x, y);
+  lk_test_drain ();
+
+  g_assert_cmpuint (lk_noaa_picked_count (noaa), ==, 0);
+}
+
+/* The window the picker opens in, found by its title. It is not a child of
+ * anything this suite holds, so the toplevel list is what answers. */
+static GtkWidget *
+picker_window (void)
+{
+  GListModel *tops = gtk_window_get_toplevels ();
+  guint n = g_list_model_get_n_items (tops);
+
+  for (guint i = 0; i < n; i++)
+    {
+      g_autoptr (GtkWindow) top = g_list_model_get_item (tops, i);
+
+      if (g_strcmp0 (gtk_window_get_title (top), "NOAA Charts") == 0)
+        return GTK_WIDGET (top);
+    }
+  return NULL;
+}
+
+/* The picker opens in a window of its own, at the width the map was drawn for,
+ * and Download waits for a catalog and a pick. */
+static void
+test_picker_window (void)
+{
+  GtkWidget *picker;
+  GtkWidget *download;
+  int width = 0, height = 0;
+
+  g_assert_null (picker_window ());
+
+  lk_noaa_window_present (GTK_WINDOW (window), model);
+  lk_test_drain ();
+
+  picker = picker_window ();
+  g_assert_nonnull (picker);
+  gtk_window_get_default_size (GTK_WINDOW (picker), &width, &height);
+  g_assert_cmpint (width, >=, 1040);
+  g_assert_cmpint (height, >=, 760);
+
+  /* Three map panels (the lower 48, Alaska, Hawaii) and the key's two
+   * swatches, which say what the fills on them mean. */
+  g_assert_cmpuint (count (picker, match_drawing_area), ==, 5);
+  g_assert_nonnull (lk_test_find_label (picker, "Already downloaded"));
+  g_assert_nonnull (lk_test_find_label (picker, "Picked to download"));
+  g_assert_nonnull (lk_test_find_button (picker, "Cancel"));
+  download = lk_test_find_button (picker, "Download");
+  g_assert_nonnull (download);
+
+  /* No catalog and no pick: nothing to download. */
+  g_assert_false (gtk_widget_get_sensitive (download));
+
+  /* A pick alone is not enough. The catalog is what prices it, and a download
+   * with no price is a download a mariner did not agree to. */
+  lk_noaa_toggle (noaa, "d5");
+  lk_test_drain ();
+  g_assert_false (gtk_widget_get_sensitive (download));
+  lk_noaa_clear_picks (noaa);
+
+  /* A second ask raises the window that is up rather than stacking another. */
+  lk_noaa_window_present (GTK_WINDOW (window), model);
+  lk_test_drain ();
+  g_assert_true (picker_window () == picker);
+
+  gtk_window_destroy (GTK_WINDOW (picker));
+  lk_test_drain ();
+  g_assert_null (picker_window ());
+}
+
+/* Cancel undoes the pick.
+ *
+ * The pick lives on the model, which outlives the picker window. A mariner who
+ * ticks water, thinks better of it and presses Cancel comes back to a picker
+ * that reads their abandoned pick as water they hold: the seed takes the pick
+ * as its baseline, so the region opens ticked and the button opens dead. */
+static void
+test_cancel_undoes_the_pick (void)
+{
+  GtkWidget *picker;
+
+  lk_noaa_window_present (GTK_WINDOW (window), model);
+  lk_test_drain ();
+  picker = picker_window ();
+  g_assert_nonnull (picker);
+
+  lk_noaa_toggle (noaa, "d5");
+  lk_test_drain ();
+  g_assert_cmpuint (lk_noaa_picked_count (noaa), ==, 1);
+
+  g_signal_emit_by_name (lk_test_find_button (picker, "Cancel"), "clicked");
+  lk_test_drain ();
+  g_assert_null (picker_window ());
+
+  g_assert_cmpuint (lk_noaa_picked_count (noaa), ==, 0);
+}
+
+int
+main (int argc, char *argv[])
+{
+  lk_test_gtk_init (&argc, &argv);
+
+  model = lk_app_model_new ();
+  noaa = lk_app_model_get_noaa (model);
+  window = gtk_window_new ();
+  gtk_window_set_default_size (GTK_WINDOW (window), 900, 700);
+  gtk_window_present (GTK_WINDOW (window));
+  lk_test_drain ();
+
+  g_test_add_func ("/coverage/map-has-three-panels", test_map_has_three_panels);
+  g_test_add_func ("/coverage/pills-follow-the-model", test_pills_follow_the_model);
+  g_test_add_func ("/coverage/catalog-line-quiet", test_catalog_line_quiet_when_idle);
+  g_test_add_func ("/coverage/region-hit", test_region_hit);
+  g_test_add_func ("/coverage/click-needs-a-catalog", test_click_needs_a_catalog);
+  g_test_add_func ("/coverage/picker-window", test_picker_window);
+  g_test_add_func ("/coverage/cancel-undoes-the-pick", test_cancel_undoes_the_pick);
+
+  return g_test_run ();
+}

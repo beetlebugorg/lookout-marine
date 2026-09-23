@@ -68,7 +68,7 @@ typedef struct {
   gboolean    live;
 
   /* The status line moves on its own while the window is open, so it is re-read
-   * on a poll and kept as a COPY — everything else here borrows from the
+   * on a poll and kept as a COPY, everything else here borrows from the
    * registry, which a poll does not replace. */
   char   *status;
   LkJson *status_tree;
@@ -82,8 +82,8 @@ typedef struct {
   GHashTable *values; /* the field key -> double, boxed */
   GHashTable *rows;   /* the list key -> GPtrArray of LkRow* */
 
-  /* The config JSON as last pushed, so an apply skips a plugin whose settings
-   * did not move: one edit used to re-push and re-save every plugin. */
+  /* The config JSON as last pushed. An apply skips a plugin whose settings
+   * did not move, so one edit pushes and saves that plugin alone. */
   char *last_json;
 } LkPluginState;
 
@@ -730,7 +730,7 @@ lk_append_cell (GString *out, const LkCell *cell)
     }
 }
 
-/* `{"cpa_limit":926,"cpa_alarm":true,"connections":[…]}` — the object the core
+/* `{"cpa_limit":926,"cpa_alarm":true,"connections":[…]}`, the object the core
  * takes: a toggle as a JSON bool, which is the only shape it accepts for one,
  * and a list as its whole array of rows, each carrying the id the shell
  * assigned it. */
@@ -834,7 +834,7 @@ void
 lk_plugins_apply_saved (LkChartController *controller)
 {
   /* LOOKOUT_CLEAN: a demonstration launch. The mariner's saved plugin state
-   * stays on disk and stays out of the frame — no connection is dialed, no
+   * stays on disk and stays out of the frame, no connection is dialed, no
    * private host or vessel name lands in a recording. */
   if (g_getenv ("LOOKOUT_CLEAN") != NULL)
     return;

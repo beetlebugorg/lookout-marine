@@ -5,7 +5,7 @@
 // sentences come from the core (lookout_plugin_inspect), so every shell shows
 // the same words; a reinstall calls out exactly what changed. The file router
 // sends a folder or an archive to the chart import, asks the plugins about
-// anything else (lookout_open_file), and falls back to opening a chart — the
+// anything else (lookout_open_file), and falls back to opening a chart: the
 // shell matches extensions only to find the consent sheet for a .lkplug and
 // to tell an archive from a file, the same routing the Mac shell does.
 #include "pch.h"
@@ -212,8 +212,8 @@ namespace winrt::LookoutMarine::implementation
             OpenDroppedPath(winrt::to_string(item.Path()));
     }
 
-    // Every file that arrives from outside — a drop today, an association
-    // tomorrow — takes one path: consent for a plugin package, the plugins'
+    // Every file that arrives from outside: a drop today, an association
+    // tomorrow: takes one path: consent for a plugin package, the plugins'
     // own file types next, a chart last. The shell never guesses beyond the
     // consent sheet.
     void MainWindow::OpenDroppedPath(std::string const &path)

@@ -2,7 +2,7 @@
 // that drive the app with nobody clicking.
 //
 // These are how a capture is made reproducible on any machine, and how the
-// paths a mariner reaches by hand get exercised where nobody can click — an
+// paths a mariner reaches by hand get exercised where nobody can click: an
 // import, a chart set added and then removed while its own charts are still
 // baking, a pick at a fixed point of the view.
 //
@@ -27,6 +27,10 @@ namespace winrt::LookoutMarine::implementation
     // Run once, from chart/ui/Open.cpp, after the first chart is up.
     void MainWindow::ApplyDevHooks()
     {
+        // Once a launch. Both callers run on every open.
+        if (dev_hooks_done)
+            return;
+        dev_hooks_done = true;
         // $LOOKOUT_WINDOW="1400x900": the client size in logical points,
         // so a screenshot frame is the same on any machine (the
         // reference's hook).
@@ -63,11 +67,11 @@ namespace winrt::LookoutMarine::implementation
         }
 
         // Dev hooks: LOOKOUT_ADD=PATH adds that folder as a chart set
-        // once the window is up — the Add Charts… panel without the
+        // once the window is up: the Add Charts… panel without the
         // panel; raw cells bake, so it also drives the bake pill.
         // LOOKOUT_REMOVE=PATH takes one off, as the Charts list does;
         // "PATH@8" waits eight seconds first, which is the only way to
-        // run the case that matters — a set removed while its own charts
+        // run the case that matters: a set removed while its own charts
         // are still baking (the reference's hooks, delay for delay).
         {
             char add[1024];
@@ -101,6 +105,39 @@ namespace winrt::LookoutMarine::implementation
                     RemoveChartSet(spec);
                 });
                 timer.Start();
+            }
+        }
+
+        // $LOOKOUT_FIRSTRUN=<step> opens one setup step over the chart:
+        // welcome, source, coverage, online, importing or depths. Every step
+        // but the first two is otherwise reachable only by walking a download
+        // through, which leaves the later pages with no way to be captured or
+        // looked at on a machine that already holds charts.
+        {
+            char step[32];
+            DWORD step_n = GetEnvironmentVariableA("LOOKOUT_FIRSTRUN", step, sizeof step);
+            if (step_n > 0 && step_n < sizeof step)
+            {
+                std::string want = step;
+                auto at = lkw::FirstRunStep::Welcome;
+                bool known = true;
+                if (want == "welcome")        at = lkw::FirstRunStep::Welcome;
+                else if (want == "source")    at = lkw::FirstRunStep::Source;
+                else if (want == "coverage")  at = lkw::FirstRunStep::Coverage;
+                else if (want == "online")    at = lkw::FirstRunStep::OnlineChart;
+                else if (want == "importing") at = lkw::FirstRunStep::Importing;
+                else if (want == "depths")    at = lkw::FirstRunStep::Depths;
+                else
+                {
+                    known = false;
+                    fprintf(stderr, "shell: ignoring LOOKOUT_FIRSTRUN '%s'\n", step);
+                }
+                if (known)
+                {
+                    first_run.Restart();
+                    SetupAct(LOOKOUT_SETUP_BEGIN_PICKER, static_cast<int>(at));
+                    FirstRunRender();
+                }
             }
         }
 

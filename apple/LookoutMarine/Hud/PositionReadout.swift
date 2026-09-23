@@ -77,8 +77,12 @@ struct PositionReadout: View {
         .fixedSize(horizontal: true, vertical: false)
     }
 
+    /// Two decimals of minutes on a phone, three where the row has the width
+    /// for them.
     private var coordString: String {
-        CoordFormat.ownShip(lat: model.readouts.shipLat, lon: model.readouts.shipLon)
+        guard let lat = model.readouts.shipLat, let lon = model.readouts.shipLon else { return "" }
+        return compact ? CoordFormat.positionCompact(lat: lat, lon: lon)
+                       : CoordFormat.ownShip(lat: lat, lon: lon)
     }
 
     /// The state as one stable word, for assistive technology and the UI

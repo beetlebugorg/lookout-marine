@@ -2,6 +2,7 @@
 #include "ui/window-private.h"
 #include "ui/dev-hooks.h"
 #include "ui/open-dialogs.h"
+#include "ui/firstrun/flow.h"
 #include "ui/startup-view.h"
 
 #include "ui/chrome/about.h"
@@ -409,7 +410,7 @@ static const GActionEntry lk_window_actions[] = {
  * wear too.
  *
  * The items are the Mac's, in the Mac's order, saying the Mac's words
- * (apple/LookoutMarine/Commands.swift).
+ * (apple/LookoutMarine/App/Commands.swift).
  *
  * The list is BUILT FRESH on every press, because most of it names things that
  * come and go: the charts opened lately, the raster sets covering THIS view,
@@ -425,7 +426,7 @@ lk_window_build_chart_menu (LkWindow *self)
   g_menu_append (scheme, "Night", "win.set-scheme(2)");
   g_menu_append (scheme, "Cycle", "win.cycle-scheme");
   /* "Color Scheme" in the menu, the reference's American spelling, while the
-     settings header keeps "Colour scheme" — each mirrors macOS as it is. */
+     settings header keeps "Colour scheme", each mirrors macOS as it is. */
   g_menu_append_submenu (chart, "Color Scheme", G_MENU_MODEL (scheme));
 
   /* Charts: a toggle per set, disabled when the library is empty. Each set gets
@@ -603,6 +604,8 @@ lk_group_number (guint value)
   return g_string_free (grouped, FALSE);
 }
 
+static void lk_window_update_overlays (LkWindow *self);
+
 static void
 lk_window_chart_sets_changed (LkAppModel *model, gpointer user_data)
 {
@@ -610,18 +613,31 @@ lk_window_chart_sets_changed (LkAppModel *model, gpointer user_data)
 
   if (gtk_widget_in_destruction (self->window))
     return;
-  lk_window_refresh_switched_off (self);
+  /* A set switched off, a set added, or a scan landing all change whether
+   * anything is drawn, and the page answers to that rather than to has-chart. */
+  lk_window_update_overlays (self);
+}
+
+static void lk_window_update_overlays (LkWindow *self);
+
+/* The setup card raised or put away. */
+static void
+lk_window_setup_changed (GObject *page, GParamSpec *pspec, gpointer user_data)
+{
+  lk_window_update_overlays (user_data);
 }
 
 static void
 lk_window_update_overlays (LkWindow *self)
 {
   gboolean loading = lk_app_model_get_show_startup_loader (self->model);
-  gboolean has_chart = lk_app_model_get_has_chart (self->model);
   gboolean baking = lk_app_model_get_baking (self->model);
+  /* A chart of no charts is OPEN, so has-chart says yes over the basemap. What
+   * the chrome answers to is whether anything is DRAWN. */
+  gboolean drawing = !lk_app_model_get_nothing_to_draw (self->model);
 
   /* Without a chart these commands have nothing to act on, so their bubbles
-   * and menu items grey out — as the reference's do. Search stays: the go-to
+   * and menu items grey out, as the reference's do. Search stays: the go-to
    * works from an empty view. */
   static const char *chart_actions[] = {
     "zoom-in", "zoom-out", "zoom-fit", "north-up", "follow",
@@ -633,12 +649,35 @@ lk_window_update_overlays (LkWindow *self)
       GAction *action = g_action_map_lookup_action (G_ACTION_MAP (self->window),
                                                     chart_actions[i]);
       if (action != NULL)
-        g_simple_action_set_enabled (G_SIMPLE_ACTION (action), has_chart);
+        g_simple_action_set_enabled (G_SIMPLE_ACTION (action), drawing);
     }
 
-  /* One rule for the whole page: any state with no chart on screen is a page,
-     not a chart with something floating over it. */
-  gtk_widget_set_visible (self->page, !has_chart);
+  /* The fill stands where there is no chart handle at all. A chart of no
+     charts draws the basemap, and setup floats over that behind a scrim: the
+     card is pale and so is the coastline under it. */
+  gboolean has_chart = lk_app_model_get_has_chart (self->model);
+
+  /* Sets installed and every one switched off: the mariner needs the switch
+   * they turned off, not setup. */
+  gboolean switched_off = lk_app_model_all_sets_off (self->model);
+  gboolean settled = !loading && !drawing && !baking;
+
+  /* Setup, over the running chart. Considered whenever the answer can have
+   * changed rather than once at launch: nothing-to-draw is false for the
+   * first moment of every launch while the scan reads the library.
+   *
+   * BEFORE THE FILL IS READ. Raising setup here and reading the card's state
+   * above it left the fill a pass behind. */
+  if (settled && !switched_off)
+    lk_first_run_consider (self->first_run);
+
+  gboolean setup_up = lk_first_run_page_showing (self->first_run);
+
+  gtk_widget_set_visible (self->page, (!drawing && !has_chart) || setup_up);
+  if (setup_up && has_chart)
+    gtk_widget_add_css_class (self->page, "lk-scrim");
+  else
+    gtk_widget_remove_css_class (self->page, "lk-scrim");
 
   gboolean loader_up = loading && !baking;
   gtk_widget_set_visible (self->loader, loader_up);
@@ -648,24 +687,13 @@ lk_window_update_overlays (LkWindow *self)
     self->loader_pulse_id = g_timeout_add (120, lk_window_loader_pulse, self);
   else if (!loader_up)
     g_clear_handle_id (&self->loader_pulse_id, g_source_remove);
-  /* Nothing is open DURING a bake either, but "No chart open" beside a card
-     offering to open one is the wrong thing to say while the app is already
-     busy preparing the charts the mariner just picked. The import pill is the
-     status; this stays out of its way until there is a decision to make. */
-  gtk_widget_set_visible (self->empty_state, !loading && !has_chart && !baking);
   /* No chart, no readouts: a capsule reading 1:— over an empty view is chrome
    * with nothing to report. */
-  gtk_widget_set_visible (self->capsule, has_chart);
+  gtk_widget_set_visible (self->capsule, drawing);
   /* The scale bar also hides itself when the denominator is not positive (see
      lk_scale_bar_update), so this is the coarse gate and that is the fine one.
      They agree: no chart means no denominator. */
-  gtk_widget_set_visible (self->scale_bar, has_chart);
-
-  /* A hidden empty state drops its inline error with it: the sentence
-   * belonged to the press that raised it. */
-  if (loading || has_chart || baking)
-    gtk_widget_set_visible (g_object_get_data (G_OBJECT (self->empty_state), "lk-error"),
-                            FALSE);
+  gtk_widget_set_visible (self->scale_bar, drawing);
 
   if (loading && !baking)
     {
@@ -897,30 +925,52 @@ lk_window_raster_changed (LkAppModel *model, gpointer user_data)
       g_simple_action_set_enabled (G_SIMPLE_ACTION (action),
                                    lk_app_model_get_raster_count (model) > 0);
     }
+
+  /* A picture is a chart. Installing the first one takes the page down even
+   * with no ENC, and forgetting the last one brings it back. */
+  lk_window_update_overlays (self);
+}
+
+/* Button 0 is Retry. */
+static void
+lk_window_open_error_chosen (GObject *source, GAsyncResult *result, gpointer user_data)
+{
+  g_autoptr (LkAppModel) model = user_data;
+
+  if (gtk_alert_dialog_choose_finish (GTK_ALERT_DIALOG (source), result, NULL) == 0)
+    lk_app_model_retry_noaa (model);
 }
 
 static void
 lk_window_show_open_error (LkWindow *self)
 {
   g_autofree char *message = NULL;
+  gboolean retry = FALSE;
+  gboolean noaa;
 
   g_object_get (self->model, "open-error", &message, NULL);
   if (message == NULL)
     return;
+  noaa = lk_app_model_noaa_alert (self->model, &retry);
 
-  if (gtk_widget_get_visible (self->empty_state))
-    {
-      /* The mariner pressed the button on the first-run page; the sentence
-       * belongs there, not in an alert floating over an empty window. */
-      GtkWidget *error = g_object_get_data (G_OBJECT (self->empty_state), "lk-error");
-      gtk_label_set_text (GTK_LABEL (error), message);
-      gtk_widget_set_visible (error, TRUE);
-    }
-  else
+  /* Setup shows the end of its download in the Preparing step. */
+  if (!noaa || !lk_first_run_page_showing (self->first_run))
     {
       GtkAlertDialog *dialog = gtk_alert_dialog_new ("Couldn't open chart");
       gtk_alert_dialog_set_detail (dialog, message);
-      gtk_alert_dialog_show (dialog, GTK_WINDOW (self->window));
+      if (retry)
+        {
+          static const char *const buttons[] = { "Retry", "OK", NULL };
+
+          gtk_alert_dialog_set_buttons (dialog, buttons);
+          gtk_alert_dialog_set_cancel_button (dialog, 1);
+          gtk_alert_dialog_set_default_button (dialog, 0);
+          gtk_alert_dialog_choose (dialog, GTK_WINDOW (self->window), NULL,
+                                   lk_window_open_error_chosen,
+                                   g_object_ref (self->model));
+        }
+      else
+        gtk_alert_dialog_show (dialog, GTK_WINDOW (self->window));
       g_object_unref (dialog);
     }
 
@@ -935,8 +985,8 @@ lk_window_show_open_error (LkWindow *self)
  * whatever the desktop preferred. */
 /* The chrome pins two colours as FILLS: the accent (#0a5bb5) carries white text
  * on a bubble, and the theme's error red carries a light panel. Used as TEXT on
- * a dark chrome they measure about 1.5:1 against it, which is not readable —
- * the scale readout, the fix pill and a connection's "unreachable" line all sat
+ * a dark chrome they measure about 1.5:1 against it, which is not readable.
+ * The scale readout, the fix pill and a connection's "unreachable" line all sat
  * at that. Neither colour flips with the theme, so a dark scheme swaps in the
  * light pair those same roles use on a dark desktop.
  *
@@ -1032,7 +1082,7 @@ lk_window_apply_scheme (LkWindow *self)
 
   /* The menu radio tracks the chart's scheme. A cycle (Ctrl+L) or a load
      changes the scheme without touching the action, so push the state back
-     here — the same way raster-select follows the active set. */
+     here, the same way raster-select follows the active set. */
   GAction *action = g_action_map_lookup_action (G_ACTION_MAP (self->window),
                                                 "set-scheme");
   if (action != NULL)
@@ -1067,7 +1117,7 @@ lk_window_notify (GObject *object, GParamSpec *pspec, gpointer user_data)
 
 /* The titlebar carries the chart's name and the window controls, and nothing
  * else. Every control that acts on the chart is a bubble over the chart, where
- * the SwiftUI, WinUI and Compose shells put it — so no control stands in two
+ * the SwiftUI, WinUI and Compose shells put it, so no control stands in two
  * places, and the chart gets the whole window. */
 static GtkWidget *
 lk_window_build_header (void)
@@ -1111,14 +1161,14 @@ lk_window_new (GtkApplication *app, LkAppModel *model)
 
   self->chart_view = lk_chart_view_new (model);
   self->loader = lk_window_build_loader ();
-  self->empty_state = lk_window_build_empty_state ();
+  self->first_run = lk_first_run_page_new (model);
 
   self->overlay = gtk_overlay_new ();
   gtk_overlay_set_child (GTK_OVERLAY (self->overlay), self->chart_view);
   gtk_widget_set_vexpand (self->overlay, TRUE);
 
   /* The chart is a subsurface below a transparent hole in the window, so the
-   * chrome composites over it — the layout every shell uses: north at the top
+   * chrome composites over it, the layout every shell uses: north at the top
    * right, zoom at the bottom right, the distance bar at the bottom left, the
    * readouts at the bottom centre, the build indicator at the top centre. */
 
@@ -1204,7 +1254,9 @@ lk_window_new (GtkApplication *app, LkAppModel *model)
 
   /* The loader and the empty state stand over all of it. */
   gtk_overlay_add_overlay (GTK_OVERLAY (self->overlay), self->loader);
-  gtk_overlay_add_overlay (GTK_OVERLAY (self->overlay), self->empty_state);
+  /* Setup stands over all of it, including the first-run page: it IS the
+   * first-run page when there is a decision to make. */
+  gtk_overlay_add_overlay (GTK_OVERLAY (self->overlay), self->first_run);
 
   gtk_box_append (GTK_BOX (root), self->overlay);
   gtk_window_set_child (GTK_WINDOW (self->window), root);
@@ -1233,11 +1285,15 @@ lk_window_new (GtkApplication *app, LkAppModel *model)
   lk_tether (model, g_signal_connect (model, "chart-sets-changed",
                                       G_CALLBACK (lk_window_chart_sets_changed), self), self->window);
 
+  /* Setup going away is the flow's own move, and the fill and the scrim stand
+   * on it. Set Up Later left both up until an unrelated event redrew them. */
+  g_signal_connect (self->first_run, "notify::visible",
+                    G_CALLBACK (lk_window_setup_changed), self);
+
   g_object_get (gtk_widget_get_settings (self->window),
                 "gtk-application-prefer-dark-theme", &self->desktop_prefers_dark, NULL);
 
   lk_window_update_overlays (self);
-  lk_window_refresh_switched_off (self);
   lk_window_raster_changed (model, self);
   lk_window_apply_scheme (self);
   lk_window_apply_dev_hooks (self);

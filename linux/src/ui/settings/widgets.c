@@ -1,4 +1,4 @@
-/* ui/settings/widgets.c — the pieces every settings page is built from.
+/* ui/settings/widgets.c: the pieces every settings page is built from.
  *
  * A page is a column of sections; a section is a title over a column of rows;
  * a row is a label and one control. The bindings below carry a pointer to the
@@ -17,7 +17,7 @@ lk_binding_free (gpointer data, GClosure *closure)
 GtkWidget *
 lk_section_titled (GtkWidget *page, const char *title, GtkWidget **out_title)
 {
-  GtkWidget *box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 6);
+  GtkWidget *box = gtk_box_new (GTK_ORIENTATION_VERTICAL, LK_GAP_HEADING);
 
   if (title != NULL)
     {
@@ -29,7 +29,9 @@ lk_section_titled (GtkWidget *page, const char *title, GtkWidget **out_title)
         *out_title = label;
     }
 
-  gtk_widget_set_margin_top (box, 6);
+  /* Clear of the section above, title and all. A heading that sits as close to
+   * the last footer as its own rows sit to it reads as another row. */
+  gtk_widget_set_margin_top (box, LK_GAP_SECTION);
   gtk_box_append (GTK_BOX (page), box);
   return box;
 }
@@ -41,16 +43,39 @@ lk_section (GtkWidget *page, const char *title)
 }
 
 GtkWidget *
+lk_group (GtkWidget *section, int spacing)
+{
+  GtkWidget *box = gtk_box_new (GTK_ORIENTATION_VERTICAL, spacing);
+
+  gtk_widget_add_css_class (box, "lk-settings-group");
+  gtk_box_append (GTK_BOX (section), box);
+  return box;
+}
+
+GtkWidget *
 lk_footer (GtkWidget *section, const char *text)
 {
-  GtkWidget *label = gtk_label_new (text);
+  GtkWidget *label = lk_caption (text);
 
-  gtk_widget_add_css_class (label, "dim-label");
-  gtk_widget_add_css_class (label, "caption");
   gtk_label_set_wrap (GTK_LABEL (label), TRUE);
-  gtk_label_set_xalign (GTK_LABEL (label), 0.0);
-  gtk_widget_set_margin_bottom (label, 4);
+  /* Clear of the shelf or the last row above it. A note that runs straight on
+   * from the edge over it reads as part of that, and not as a note on the
+   * whole section. */
+  gtk_widget_set_margin_top (label, LK_GAP_FOOTER);
+  gtk_widget_set_margin_bottom (label, 0);
   gtk_box_append (GTK_BOX (section), label);
+  return label;
+}
+
+GtkWidget *
+lk_note (GtkWidget *section, const char *text)
+{
+  GtkWidget *label = lk_footer (section, text);
+
+  /* The section already spaces its children. This one leans on the control
+   * above and holds the next one off, so it is read with what it explains. */
+  gtk_widget_set_margin_top (label, 0);
+  gtk_widget_set_margin_bottom (label, LK_GAP_HEADING);
   return label;
 }
 
@@ -78,7 +103,7 @@ lk_row (GtkWidget *section, const char *title, GtkWidget *control)
 GtkWidget *
 lk_page_new (LkSettings *settings, const char *id, const char *title, const char *icon_name)
 {
-  GtkWidget *page = gtk_box_new (GTK_ORIENTATION_VERTICAL, 10);
+  GtkWidget *page = gtk_box_new (GTK_ORIENTATION_VERTICAL, LK_GAP_PAGE);
   GtkWidget *scroller = gtk_scrolled_window_new ();
 
   gtk_widget_set_margin_start (page, 16);
@@ -144,6 +169,8 @@ typedef struct {
   LkSettings *settings;
   int        *field;      /* for plain int-backed enums */
   void      (*apply) (LkSettings *settings, int value);
+  /* TRUE when the choice edits the mariner. */
+  gboolean    mariner;
 } LkChoiceBinding;
 
 static void
@@ -162,7 +189,28 @@ lk_choice_changed (GtkDropDown *dropdown, GParamSpec *pspec, gpointer user_data)
   else
     return;
 
-  lk_mariner_touch (binding->settings->mariner);
+  /* A row that saves elsewhere, such as the NOAA update cadence, has no
+   * mariner edit to apply. */
+  if (binding->mariner)
+    lk_mariner_touch (binding->settings->mariner);
+}
+
+GtkWidget *
+lk_choice_row_plain (GtkWidget         *section,
+                     LkSettings        *settings,
+                     const char        *title,
+                     const char *const *options,
+                     int                selected,
+                     void             (*apply) (LkSettings *, int))
+{
+  GtkWidget *dropdown = lk_choice_row (section, settings, title, options, selected, NULL,
+                                       apply);
+  LkChoiceBinding *binding =
+      g_object_get_data (G_OBJECT (dropdown), "lk-choice-binding");
+
+  if (binding != NULL)
+    binding->mariner = FALSE;
+  return dropdown;
 }
 
 GtkWidget *
@@ -180,11 +228,13 @@ lk_choice_row (GtkWidget          *section,
   binding->settings = settings;
   binding->field = field;
   binding->apply = apply;
+  binding->mariner = TRUE;
 
   gtk_drop_down_set_selected (GTK_DROP_DOWN (dropdown), selected);
   gtk_widget_set_valign (dropdown, GTK_ALIGN_CENTER);
   g_signal_connect_data (dropdown, "notify::selected", G_CALLBACK (lk_choice_changed),
                          binding, lk_binding_free, 0);
+  g_object_set_data (G_OBJECT (dropdown), "lk-choice-binding", binding);
   lk_row (section, title, dropdown);
   return dropdown;
 }
@@ -231,7 +281,8 @@ lk_size_row (GtkWidget *section, LkSettings *settings, const char *title, double
 
 /* A section header with a right-aligned shortcut hint, as the reference's has. */
 GtkWidget *
-lk_section_hinted (GtkWidget *page, const char *title, const char *hint)
+lk_section_hinted (GtkWidget *page, const char *title, const char *hint,
+                   GtkWidget **out_hint)
 {
   GtkWidget *box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 6);
   GtkWidget *header = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
@@ -248,6 +299,8 @@ lk_section_hinted (GtkWidget *page, const char *title, const char *hint)
   gtk_box_append (GTK_BOX (box), header);
   gtk_widget_set_margin_top (box, 6);
   gtk_box_append (GTK_BOX (page), box);
+  if (out_hint != NULL)
+    *out_hint = tip;
   return box;
 }
 

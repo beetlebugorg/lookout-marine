@@ -12,7 +12,7 @@
 /* ---- readout formatting ------------------------------------------------- */
 
 /* Append the digits of `plain` to `out` with a comma every three from the
- * right: "13267" becomes "13,267". The separator is a comma on every shell — a
+ * right: "13267" becomes "13,267". The separator is a comma on every shell, a
  * chart scale and a chart count both read the same way whatever the locale
  * sorts numbers by. */
 void
@@ -84,7 +84,7 @@ lk_hud_update_coord (LkHudCapsule *capsule)
   gtk_label_set_text (GTK_LABEL (capsule->fix_label), pill[state].text);
   gtk_widget_set_tooltip_text (capsule->fix_pill, pill[state].tooltip);
   /* Only Configure GPS is a control: it opens the settings at Connections.
-   * GPS and NO GPS are readouts, as on the reference shell — can_target off,
+   * GPS and NO GPS are readouts, as on the reference shell, can_target off,
    * not insensitive, so the state tints never grey out. */
   if (state == LK_FIX_NONE)
     gtk_actionable_set_detailed_action_name (GTK_ACTIONABLE (capsule->fix_pill),
@@ -313,7 +313,7 @@ lk_hud_capsule_new (LkAppModel *model)
 
   /* The capsule and, beneath it, the credit a linked chart's sources ask
    * for. The column is what the window places; both parts sit at the bottom
-   * centre — as the WinUI pill and the Compose surface do — and the chart
+   * centre, as the WinUI pill and the Compose surface do, and the chart
    * keeps everything around them. */
   GtkWidget *column = gtk_box_new (GTK_ORIENTATION_VERTICAL, 4);
   gtk_widget_set_halign (column, GTK_ALIGN_CENTER);
@@ -343,7 +343,7 @@ lk_hud_capsule_new (LkAppModel *model)
  *
  * The COLOUR reports the raster chart, not the ENC: the accent while the
  * picture is drawn, amber while one is here and off. Hiding the ENC above it
- * does not change the colour, because the picture is still drawn — the "ENC
+ * does not change the colour, because the picture is still drawn, the "ENC
  * OFF" text carries that, and a warning colour there would say the picture was
  * off when it is the only thing on the screen. */
 typedef struct {

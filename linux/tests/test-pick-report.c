@@ -1,4 +1,4 @@
-/* test-pick-report.c — the pick report card, as a widget.
+/* test-pick-report.c: the pick report card, as a widget.
  *
  * The report is built from the model's current pick, so the suite sets a pick
  * and reads the card a mariner reads: the object column for a multi-object

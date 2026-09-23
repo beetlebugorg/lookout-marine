@@ -1,4 +1,4 @@
-/* ui/chrome/licenses.h — the licenses screen.
+/* ui/chrome/licenses.h: the licenses screen.
  *
  * The core bakes vendor/licenses/licenses.json into the binary and reads it
  * back filtered to one shell (lookout_licenses_read), so this needs no

@@ -1,4 +1,4 @@
-/* lk_paths — chart path discovery for the shell. */
+/* lk_paths: chart path discovery for the shell. */
 #pragma once
 
 #include <string>
@@ -22,19 +22,24 @@ namespace lkw
 
     /* The set's display name from the charts themselves: the hydrographic
      * office whose S-57 producer code opens every cell name (US* -> "NOAA"),
-     * or "" when the cells disagree or the office is not one we can name — a
+     * or "" when the cells disagree or the office is not one we can name. A
      * wrong agency on a chart set is worse than a dull one. Mirrors
      * ChartSet.agency in the macOS shell. */
     std::string AgencyForCells(std::vector<std::string> const &cells);
 
     /* Where an import writes the charts it bakes:
-     * %LOCALAPPDATA%\lookout-marine\Charts. LOCAL rather than roaming — a baked
-     * NOAA library is gigabytes, which has no business following a profile onto
-     * another machine. Created on first use. */
+     * %LOCALAPPDATA%\lookout-marine\Charts. LOCAL rather than roaming, since a
+     * baked NOAA library is gigabytes and has no business following a profile
+     * onto another machine. Created on first use. */
     std::string ChartLibraryDir();
 
+    /* Where NOAA downloads unpack: %LOCALAPPDATA%\lookout-marine\Downloads.
+     * This folder is the downloader's managed chart set, and its charts are
+     * prepared into ChartLibraryDir. Not created here. */
+    std::string NoaaDownloadDir();
+
     /* Where baked BSB/KAP sheets land: %LOCALAPPDATA%\lookout-marine\Rasters.
-     * Separate from ChartLibraryDir on purpose — the vector open globs that
+     * Separate from ChartLibraryDir on purpose: the vector open globs that
      * directory for .pmtiles, and a picture archive it swallowed would join
      * the composed chart library. Created on first use. */
     std::string RasterLibraryDir();

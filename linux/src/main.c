@@ -1,4 +1,4 @@
-/* main.c — the GtkApplication entry point.
+/* main.c: the GtkApplication entry point.
  *
  * One window and one LkAppModel for the life of the app. Accelerators mirror
  * the macOS menu bar, Ctrl for Command.
@@ -43,6 +43,10 @@ static const char *LK_CSS =
      * (Chrome.panel, #F8F8F8) and its loader carries it too. Opaque: the chart
      * window is transparent, so anything less shows the desktop through it. */
     ".lk-page { background: @theme_bg_color; }"
+    /* Setup stands over the basemap now, and a pale card on a pale coastline
+     * loses its edges. The scrim puts the map back a step, so the card reads
+     * as raised over it. */
+    ".lk-page.lk-scrim { background: alpha(#0b1a2b, 0.45); }"
     /* The readouts, as a capsule at the bottom centre. */
     ".lk-capsule {"
     "  background: alpha(@theme_bg_color, 0.94);"
@@ -107,7 +111,7 @@ static const char *LK_CSS =
     "  padding: 5px 12px;"
     "  box-shadow: 0 1px 4px alpha(black, 0.18);"
     "}"
-    /* A floating panel: the pick report. It is opaque — the chart showing
+    /* A floating panel: the pick report. It is opaque, the chart showing
      * through a table of numbers makes both hard to read. */
     ".lk-panel {"
     "  background: @theme_base_color;"
@@ -307,7 +311,7 @@ static const char *LK_CSS =
     ".lk-raster-pill.lk-off > button:hover { background: alpha(@warning_color, 0.42); }"
     ".lk-raster-bar { opacity: 0.5; }"
     /* Night. The dark-theme flip (ui/window.c, lk_window_apply_scheme) does
-     * most of the work — every chrome fill above rides @theme_bg_color — and
+     * most of the work, every chrome fill above rides @theme_bg_color, and
      * this class quiets the surfaces further, so the brightest thing on deck
      * is the chart, never the readouts floating over it. The fix pill keeps
      * its state tints: they are the readout. */
@@ -320,6 +324,162 @@ static const char *LK_CSS =
     ".lk-night .lk-capsule .dim-label { color: #7f8894; }"
     /* The NOT FOR NAVIGATION block of the first-run page: amber, bordered,
      * set apart from everything about getting started. */
+    /* ---- the chart gallery ------------------------------------------------
+     *
+     * One tile per chart, in a row. A tile is a card: the picture at the top
+     * bleeds to its edges, so the button keeps no padding of its own and the
+     * corners clip what is drawn into them. */
+    ".lk-chart-tile {"
+    "  padding: 0;"
+    "  background: @theme_base_color;"
+    "  border: 1px solid alpha(@borders, 0.7);"
+    "  border-radius: 11px;"
+    "  box-shadow: none;"
+    "}"
+    ".lk-chart-tile:hover { background: mix(@theme_base_color, @theme_fg_color, 0.04); }"
+    /* The chart being drawn. Two points of accent, so the row says which one
+     * is on at a glance and not by reading. */
+    ".lk-chart-tile-active {"
+    "  border: 2px solid @accent_color;"
+    "  background: alpha(@accent_color, 0.05);"
+    "}"
+    ".lk-chart-art { border-bottom: 1px solid alpha(@borders, 0.5); }"
+    ".lk-chart-art-empty { background: alpha(@theme_fg_color, 0.06); }"
+    ".lk-chart-badge {"
+    "  color: @accent_fg_color;"
+    "  background: @accent_color;"
+    "  border-radius: 5px;"
+    "  padding: 2px 6px;"
+    "  font-size: 80%;"
+    "  font-weight: bold;"
+    "}"
+    ".lk-chart-more > button {"
+    "  min-height: 22px;"
+    "  min-width: 22px;"
+    "  padding: 0;"
+    "  border-radius: 999px;"
+    "  background: alpha(@theme_base_color, 0.92);"
+    "  border: 1px solid alpha(@borders, 0.6);"
+    "}"
+    /* The way in to adding one. Dashed, because it holds no chart. */
+    ".lk-add-tile {"
+    "  background: alpha(@theme_fg_color, 0.02);"
+    "  border: 1.5px dashed alpha(@borders, 0.9);"
+    "  border-radius: 11px;"
+    "  box-shadow: none;"
+    "}"
+    /* ---- setup -------------------------------------------------------------
+     *
+     * A card raised over the running chart. The picture on the welcome step
+     * bleeds to the top edge, so the card clips to its own corners. */
+    ".lk-first-run-card {"
+    "  background: @theme_base_color;"
+    "  border: 1px solid alpha(@borders, 0.8);"
+    "  border-radius: 12px;"
+    "  box-shadow: 0 6px 24px alpha(black, 0.30);"
+    "}"
+    ".lk-first-run-footer {"
+    "  padding: 14px 24px;"
+    "  border-top: 1px solid alpha(@borders, 0.6);"
+    "}"
+    /* The welcome step's own footer: the action under the prose, and the way
+     * out under it. No rule above it, because there is no bar. */
+    ".lk-first-run-choice {"
+    "  padding: 4px 24px 30px 24px;"
+    "}"
+    /* A pick-one card. The chosen one takes the accent, so the row says which
+     * it is at a glance and not by reading. */
+    ".lk-step-card {"
+    "  padding: 21px 17px;"
+    "  background: @theme_base_color;"
+    "  border: 1px solid alpha(@borders, 0.7);"
+    "  border-radius: 12px;"
+    "  box-shadow: none;"
+    "}"
+    ".lk-step-card:hover { background: mix(@theme_base_color, @theme_fg_color, 0.04); }"
+    ".lk-step-card-picked {"
+    "  border: 2px solid @accent_color;"
+    "  background: alpha(@accent_color, 0.05);"
+    "}"
+    /* The icon tile at the top of a card. */
+    ".lk-card-tile {"
+    "  padding: 16px;"
+    "  background: alpha(@accent_color, 0.10);"
+    "  border-radius: 14px;"
+    "}"
+    /* A publisher's warning. Amber, and shaped differently from an ordinary
+     * note, so it separates from the page at a glance. */
+    ".lk-step-warning {"
+    "  padding: 13px 14px;"
+    "  background: alpha(#e5a50a, 0.12);"
+    "  border-radius: 9px;"
+    "}"
+    ".lk-amber { color: #b5820a; }"
+    /* One derived number on the depth step, with a rule above it. */
+    /* ---- the settings groups ----------------------------------------------
+     *
+     * A section's rows sit on a shaded rounded shelf, with the heading outside
+     * it and above. The reference's Form groups the same way, and it is what
+     * makes a page read as a handful of groups rather than one long column.
+     * The shelf carries the air, so the rows inside it need less of their own. */
+    ".lk-settings-group {"
+    "  background: alpha(@theme_fg_color, 0.04);"
+    "  border-radius: 12px;"
+    "  padding: 14px 16px;"
+    "}"
+    ".lk-settings-group separator { background: alpha(@borders, 0.55); }"
+    /* A NOAA region whose every chart is already on the device. The pill
+     * has a tick as well, so the state does not rest on colour alone. */
+    ".lk-region-held {"
+    "  background: alpha(#1b8554, 0.16);"
+    "  box-shadow: inset 0 0 0 1px alpha(#1b8554, 0.55);"
+    "}"
+    /* What KIND of chart a row holds. A picture and a survey sit in the same
+     * list and switch on the same way, so the row says which it is where the
+     * mariner is reading it. It used to be filed under a heading of its own,
+     * which made the list two lists again. */
+    ".lk-type-pill {"
+    "  background: alpha(@theme_fg_color, 0.10);"
+    "  border-radius: 5px;"
+    "  padding: 1px 6px;"
+    "  font-size: 76%;"
+    "  font-weight: bold;"
+    "}"
+    /* A set the NOAA downloader owns. The mark says where the charts came
+     * from and, by saying it, where they are added and removed. A mariner
+     * otherwise reads the download as a folder they picked and looks for it
+     * on the disk. */
+    ".lk-managed-pill {"
+    "  color: @accent_color;"
+    "  background: alpha(@accent_color, 0.14);"
+    "  border-radius: 999px;"
+    "  padding: 1px 7px;"
+    "  font-size: 76%;"
+    "  font-weight: 500;"
+    "}"
+    /* The band panel on the import step: a shelf of its own, so the bands
+     * read as one list rather than as more of the page. */
+    ".lk-band-panel {"
+    "  padding: 13px 16px;"
+    "  background: alpha(@theme_fg_color, 0.03);"
+    "  border: 1px solid alpha(@borders, 0.7);"
+    "  border-radius: 12px;"
+    "}"
+    /* The water the depth answers make: one panel, with the key under it. */
+    ".lk-water {"
+    "  background: @theme_base_color;"
+    "  border: 1px solid alpha(@borders, 0.7);"
+    "  border-radius: 12px;"
+    "}"
+    ".lk-water-panel { border-bottom: 1px solid alpha(@borders, 0.6); }"
+    ".lk-water-key {"
+    "  padding: 11px 12px;"
+    "  border-left: 1px solid alpha(@borders, 0.5);"
+    "}"
+    ".lk-depth-row {"
+    "  padding: 11px 0;"
+    "  border-top: 1px solid alpha(@borders, 0.5);"
+    "}"
     ".lk-not-nav {"
     "  background: alpha(#f59e0b, 0.14);"
     "  border: 1px solid alpha(#f59e0b, 0.55);"
@@ -387,6 +547,13 @@ lk_app_startup (GtkApplication *app, gpointer user_data)
     gtk_application_set_accels_for_action (app, accels[i].action, accels[i].accels);
 }
 
+static gpointer
+lk_sweep_trash (gpointer data)
+{
+  lookout_bake_sweep (lk_chart_bake_root ());
+  return NULL;
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -399,11 +566,10 @@ main (int argc, char *argv[])
   gtk_window_set_default_icon_name (LK_APP_ID);
 
   /* Throw away what a previous run renamed but did not finish deleting.
-     Without this, quitting mid-delete leaves gigabytes on the disk that
-     nothing will ever mention again. */
-  lk_chart_bake_sweep_trash ();
+     lookout_bake_sweep blocks, so it runs on a thread of its own. */
+  g_thread_unref (g_thread_new ("lk-sweep", lk_sweep_trash, NULL));
 
-  /* One instance is the rule — a dock click focuses the chart already
+  /* One instance is the rule, a dock click focuses the chart already
    * sailing. LOOKOUT_MULTI is the development escape hatch every shell keeps:
    * a second live window for side-by-side comparison and recording. */
   GApplicationFlags flags = G_APPLICATION_DEFAULT_FLAGS;

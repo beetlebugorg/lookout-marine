@@ -7,7 +7,7 @@
  * reference instead: when the widget finalizes, the handler is disconnected
  * and its closure notify (if any) frees the struct at the right moment.
  *
- * This does not silence the teardown emission — a notify fired WHILE the
+ * This does not silence the teardown emission, a notify fired WHILE the
  * widget tree is coming down still reaches the handler, because weak
  * references run after GtkWidget's own dispose. Handlers that touch children
  * must also guard with gtk_widget_in_destruction on their root.

@@ -1,6 +1,6 @@
 //  OpenPanel.swift — the "Open Chart…" file pickers.
 //
-//  macOS: an NSOpenPanel shared by the File menu and the empty-state button so
+//  macOS: an NSOpenPanel shared by the File menu and setup's Files source, so
 //  there's one code path. We deliberately DON'T restrict allowedContentTypes to
 //  a dynamic .pmtiles UTI — that greys out the user's charts if the type isn't
 //  registered. Instead we accept any file or folder and let the engine validate.
@@ -35,7 +35,7 @@ extension AppModel {
         guard panel.runModal() == .OK, let url = panel.url else { return }
         var isDir: ObjCBool = false
         FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
-        if isDir.boolValue { charts.openChartDirectory(url.path) } else { openFileOrChart(url.path) }
+        if isDir.boolValue { charts.addChartSet(url.path) } else { openFileOrChart(url.path) }
     }
 
     /// Present the Add Raster Charts panel. Multiple selection and folders both, because
@@ -115,7 +115,7 @@ extension AppModel {
             return
         }
         if controller?.openFileForPlugins(path) == true { return }
-        charts.openChart(path)
+        charts.addChartSet(path)
     }
 
     /// Every file extension the loaded plugins read, for the open panel's
@@ -168,12 +168,12 @@ extension AppModel {
             if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }
             try fm.copyItem(at: url, to: dest)
         } catch {
-            charts.openError = "Couldn't import the chart:\n\(error.localizedDescription)"
+            chartOpen.openError = "Couldn't import the chart:\n\(error.localizedDescription)"
             return
         }
         var isDir: ObjCBool = false
         fm.fileExists(atPath: dest.path, isDirectory: &isDir)
-        if isDir.boolValue { charts.openChartDirectory(dest.path) } else { openFileOrChart(dest.path) }
+        if isDir.boolValue { charts.addChartSet(dest.path) } else { openFileOrChart(dest.path) }
     }
 
     /// A plugin package the mariner picked in the Files app.
@@ -244,7 +244,7 @@ extension AppModel {
         }
 
         if !failed.isEmpty {
-            charts.openError = failed.count == 1
+            chartOpen.openError = failed.count == 1
                 ? "Couldn't copy \(failed[0]) into the app."
                 : "Couldn't copy \(failed.count) raster charts into the app."
         }

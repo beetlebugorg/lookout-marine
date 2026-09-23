@@ -1,4 +1,4 @@
-/* lk_json — see lk_json.h. */
+/* lk_json: see lk_json.h. */
 #include "lk_json.h"
 
 #include <algorithm>

@@ -31,11 +31,24 @@ extension Store {
         }
 
         // The mariner settings, which were another. Every key keeps its name.
+        //
+        // NSNumber before Bool, and a boolean told apart by its CFTypeID. Every
+        // number in a plist bridges to NSNumber, and `as? Bool` succeeds on all
+        // of them, so the whole mariner arrived as "true" and "false". The
+        // engine reads its numbers with parseFloat, which failed on those, and
+        // the tri-state soundings key then fell back to 0: spot soundings off
+        // on every launch, with the settings pane reading Always on.
         if let d = defaults.dictionary(forKey: "mariner.v1") {
             for (k, v) in d {
-                if let s = v as? String { set(s, Store.Group.mariner, k) }
-                else if let b = v as? Bool { set(b, Store.Group.mariner, k) }
-                else if let n = v as? NSNumber { set(n.doubleValue, Store.Group.mariner, k) }
+                if let s = v as? String {
+                    set(s, Store.Group.mariner, k)
+                } else if let n = v as? NSNumber {
+                    if CFGetTypeID(n) == CFBooleanGetTypeID() {
+                        set(n.boolValue, Store.Group.mariner, k)
+                    } else {
+                        set(n.doubleValue, Store.Group.mariner, k)
+                    }
+                }
             }
         }
 

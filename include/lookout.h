@@ -141,7 +141,14 @@ void lookout_set_pixel_density(lookout *h, float density);
 void lookout_pan(lookout *h, float dx_px, float dy_px);
 void lookout_zoom_at(lookout *h, double dzoom, float x_px, float y_px);
 void lookout_pan_logical(lookout *h, float dx_pt, float dy_pt);
+/* Zoom by `dzoom` about a point, eased: the camera reaches the new zoom about
+ * 85 ms later. For a wheel click or a keyboard step, so a discrete input draws
+ * as a continuous move. */
 void lookout_zoom_at_logical(lookout *h, double dzoom, float x_pt, float y_pt);
+/* The same zoom with no ease, for a gesture that states the zoom continuously,
+ * such as a pinch. The chart holds the point under the fingers and follows
+ * them frame for frame. Clears an ease already running. */
+void lookout_zoom_about_logical(lookout *h, double dzoom, float x_pt, float y_pt);
 void lookout_screen_to_geo(lookout *h, float x_px, float y_px, double *lon, double *lat);
 void lookout_geo_to_screen(lookout *h, double lon, double lat, float *x_px, float *y_px);
 
@@ -333,6 +340,21 @@ int lookout_font_covers(const uint8_t *bytes, size_t len, uint32_t codepoint);
  * Swedish needs a face for ONE of them: without this a shell looks up the
  * first, finds a Latin face it did not need, and leaves the syllabics blank. */
 int lookout_label_font_covers(uint32_t codepoint);
+
+/* ---- S-52 colours ------------------------------------------------------ */
+
+/* One colour from the palette the engine draws with, by S-52 token (DEPVS,
+ * DEPMS, DEPMD, DEPDW, LANDA, ...) and scheme (tile57_scheme: 0 day, 1 dusk,
+ * 2 night), as RGBA in 0..1. Returns 1 and fills `out` when the token is in
+ * the table, else 0.
+ *
+ * The core adds BAND1 to BAND6, a ramp for the six usage bands from overview
+ * to berthing. In the day scheme BAND2 to BAND5 equal DEPDW, DEPMD, DEPMS and
+ * DEPVS. Dusk and night have a ramp of their own, dimmest at BAND1.
+ *
+ * For a shell drawing its own chart legend. Reading the engine's own table
+ * keeps a legend and the chart from drifting apart. */
+int lookout_s52_color(const char *token, uint32_t scheme, float out[4]);
 
 /* ---- build + render ---------------------------------------------------- */
 int lookout_build(lookout *h);                 /* force (re)tessellation */

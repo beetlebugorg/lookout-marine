@@ -10,8 +10,9 @@ import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.io.File
 
 /**
@@ -41,10 +42,11 @@ data class Library(val dir: File, val cells: List<String>) {
  *
  * [chartPaths] is what [LookoutView] opens, and it falls back — the union,
  * then anything pushed into the app's own external files dir (no permission
- * needed, see the adb recipe in [LookoutActivity]), then the cell bundled in
- * the APK — so the app always has something to draw.
+ * needed, see the adb recipe in [LookoutActivity]). No chart ships in the APK,
+ * so an empty list is a real answer: the engine opens on the basemap and setup
+ * runs over it.
  */
-class ChartsModel(private val appContext: Context, private val bundled: String?) {
+class ChartsModel(private val appContext: Context) {
 
     /** The installed sets, in the order added. Re-read when the core's
      *  background scan lands. */
@@ -70,8 +72,19 @@ class ChartsModel(private val appContext: Context, private val bundled: String?)
     var storageAccess by mutableStateOf(false)
         private set
 
-    /** The import pipeline: scan, bake what is raw, open the result. */
+    /** The bake of one set, from the core's list of what it has to prepare. */
     val importer = ChartImport(appContext)
+
+    /** Where the wait for a set's scan after a bake runs. The screen that
+     *  started the bake may be gone by then. */
+    private val work = MainScope()
+
+    /**
+     * Where NOAA's downloads land. The app's own external files dir, which
+     * needs no permission, and one directory for the lot: the core writes
+     * every cell there and prepares the directory as one set.
+     */
+    val noaaDir: File get() = File(appContext.getExternalFilesDir(null), "NOAA")
 
     /** Volume roots a folder browser starts from (computed once). */
     val roots: List<File> by lazy { storageRoots(appContext) }
@@ -80,6 +93,7 @@ class ChartsModel(private val appContext: Context, private val bundled: String?)
         refreshAccess()
         ChartBake.sweepTrash(appContext)
         ChartSets.open(ChartBake.chartsRoot(appContext).absolutePath)
+        NoaaService.open()
         pullSets()
         seedFromTheChosenLibrary()
     }
@@ -121,7 +135,7 @@ class ChartsModel(private val appContext: Context, private val bundled: String?)
         get() {
             val want = composed.takeIf { it.isNotEmpty() }
                 ?: pushed
-                ?: return bundled?.let { arrayOf(it) } ?: emptyArray()
+                ?: return emptyArray()
             // Held, not rebuilt. This is read from composition, and a real
             // library is seven thousand cells: returning a fresh Array on
             // every read copied all of them each time the loader recomposed.
@@ -148,35 +162,110 @@ class ChartsModel(private val appContext: Context, private val bundled: String?)
                 return if (on.size == 1) "${on[0].title} ($cells)" else "${on.size} sets ($cells)"
             }
             pushed?.let { return "pushed (${cells(it.size)})" }
-            return "bundled demo cell"
+            // Nothing installed. No chart ships in the app, so this is the
+            // basemap with setup over it rather than a demo cell.
+            return "no charts installed"
         }
 
     /**
-     * Put [dir] on the list. Rejects a folder the core found no charts in
-     * (surfaced via [lastEmptyPick]) rather than listing a set that opens
-     * nothing, since the usual mistake is picking the ENC source tree.
+     * Put [dir] on the core's list and wait for the core to scan it. Then
+     * prepare what the core lists for it, or open it when the list is empty.
+     *
+     * A folder the core found no charts in leaves the list again, surfaced
+     * via [lastEmptyPick], since the usual mistake is picking the wrong
+     * folder. False then.
      */
     suspend fun add(dir: File): Boolean {
+        val path = dir.absolutePath
         scanning = true
         try {
-            // Off the main thread: a full ENC library is thousands of files.
-            val found = withContext(Dispatchers.IO) {
-                ChartScanRead.read(dir.absolutePath, zip = isArchive(dir))
-            }
-            val charts = found?.files.orEmpty().count { it.kind != ChartScanRead.OTHER }
-            if (charts == 0) {
-                lastEmptyPick = dir.absolutePath
-                Log.w(TAG, "no charts under $dir")
+            val joined = ChartSets.add(path)
+            if (!joined && !ChartSets.rescan(path)) return false
+            if (!awaitScan(path)) return false
+            pullSets()
+            if (importer.start(path) { afterBake(path) }) return true
+            if (ChartSets.files(path).isEmpty()) {
+                if (joined) ChartSets.remove(path)
+                pullSets()
+                lastEmptyPick = path
+                Log.w(TAG, "no charts under $path")
                 return false
             }
-            ChartSets.add(dir.absolutePath)
             lastEmptyPick = null
-            pullSets()
-            Log.i(TAG, "set added: ${dir.absolutePath} ($charts charts)")
+            installPictures(path)
+            Log.i(TAG, "set added: $path")
             return true
         } finally {
             scanning = false
         }
+    }
+
+    /** The bake of [path] has stopped and the core is reading the set again.
+     *  Open what it prepared once that read is done. */
+    private fun afterBake(path: String) {
+        scanning = true
+        work.launch {
+            try {
+                awaitScan(path)
+                pullSets()
+                installPictures(path)
+            } finally {
+                scanning = false
+            }
+        }
+    }
+
+    /**
+     * Wait for the core's scan of [path]. The frame loop also polls for a scan
+     * landing, but an idle chart draws no frames. False when the set left the
+     * list meanwhile.
+     */
+    private suspend fun awaitScan(path: String): Boolean {
+        while (true) {
+            val row = ChartSets.all().firstOrNull { it.path == path } ?: return false
+            if (row.scanned) return true
+            delay(SCAN_POLL_MS)
+        }
+    }
+
+    /** True while the core prepares a NOAA download. */
+    private var noaaPreparing = false
+
+    /** What the NOAA set is called, as its row names it. */
+    private val noaaName: String get() = sets.firstOrNull { it.managed }?.title ?: noaaDir.name
+
+    /**
+     * Show the core's prepare of a NOAA download through [importer], so the
+     * Charts pane and setup draw its bar and bands. True when a prepare has
+     * just ended.
+     */
+    fun noteNoaaPrepare(n: NoaaController): Boolean {
+        if (n.preparing) {
+            noaaPreparing = true
+            // The core bakes coarse band first, and State.bandProgress walks
+            // the count down the bands in that order.
+            val bands = n.bandTotal.withIndex().filter { it.value > 0 }
+                .map { ChartImport.Band(it.index + 1, bandName(it.index + 1), it.value) }
+            val s = ChartImport.State(noaaName, n.prepared, n.toPrepare, running = true,
+                                      failed = false, bands = bands)
+            importer.showCorePrepare(s) { n.cancel() }
+            return false
+        }
+        if (!noaaPreparing) return false
+        noaaPreparing = false
+        return true
+    }
+
+    /** The core's prepare has ended and it has read the set again. Reading
+     *  the sets moves [generation], which reopens the chart with what the
+     *  prepare made. */
+    fun adoptNoaaPrepare() {
+        importer.showCorePrepare(ChartImport.State(noaaName, 0, 0, running = false, failed = false)) {}
+        pullSets()
+    }
+
+    private fun installPictures(path: String) {
+        picturesOf(path).takeIf { it.isNotEmpty() }?.let { onPictures?.invoke(it, emptyList()) }
     }
 
     /** The switch. A set switched off stays installed and leaves the chart. */
@@ -190,27 +279,47 @@ class ChartsModel(private val appContext: Context, private val bundled: String?)
      * not make.
      */
     fun remove(path: String) {
+        // Read before the set goes: the index is what knows which pictures
+        // came in with it.
+        val pictures = picturesOf(path)
         if (!ChartSets.remove(path)) return
         ChartBake.deletePrepared(appContext, File(path))
         pullSets()
+        if (pictures.isNotEmpty()) onPictures?.invoke(emptyList(), pictures)
     }
+
+    /**
+     * Install the pictures a set carries, and take them out again with it.
+     *
+     * A picture and a survey are different kinds of chart, but they arrive in
+     * the same folders, so adding a folder installs both. One direction only:
+     * the raster model knows nothing about sets. Set by the Activity, which is
+     * where both models are to hand.
+     */
+    var onPictures: ((add: List<String>, remove: List<String>) -> Unit)? = null
+
+    /** The picture files a set holds that draw now, as the index reports
+     *  them. An entry inside a .zip has a relative path and is left out. */
+    private fun picturesOf(path: String): List<String> =
+        ChartSets.files(path)
+            .filter { it.kind == ChartScanRead.RASTER && it.path.startsWith("/") }
+            .map { it.path }
 
     /**
      * Re-read the list and the union. Called after every change the shell made,
      * and from the frame loop when the core's background scan lands.
      */
     fun pullSets() {
-        sets = ChartSets.all()
+        // The downloader's set leads, because it is the set the mariner adds
+        // to and removes from in another dialog. The core lists sets in the
+        // order they were added.
+        sets = ChartSets.all().sortedByDescending { it.managed }
         composed = ChartSets.compose()
         generation++
     }
 
     /** True when the core's background scan has landed since the last look. */
     fun scanLanded(): Boolean = ChartSets.changed()
-
-    /** One .zip is a set, as a chart agency publishes them. */
-    private fun isArchive(dir: File): Boolean =
-        dir.isFile && dir.name.endsWith(".zip", ignoreCase = true)
 
     /**
      * Charts pushed into the app's own external files dir, or null if none.
@@ -229,6 +338,7 @@ class ChartsModel(private val appContext: Context, private val bundled: String?)
         const val KEY_SELECTED = "library"
         /** Push target under the app's external files dir. */
         const val PUSH_DIR = "charts"
+        const val SCAN_POLL_MS = 100L
     }
 }
 

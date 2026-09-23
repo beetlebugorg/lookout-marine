@@ -1,0 +1,347 @@
+package org.beetlebug.lookout.firstrun
+
+import org.beetlebug.lookout.Lookout
+import org.beetlebug.lookout.hud.Chrome
+import org.beetlebug.lookout.settings.DepthUnit
+import org.beetlebug.lookout.settings.MarinerState
+
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import kotlin.math.max
+
+/**
+ * The depth settings, asked as two questions about the boat.
+ *
+ * The step asks for a draft and a clearance under the keel. It derives the two
+ * S-52 numbers the engine draws with, the safety depth and the safety contour,
+ * and states what each one does to the chart.
+ *
+ * The core derives the numbers (lookout_depth_plan). The boat is held in
+ * metres, and the plan returns it in the unit on screen for display.
+ */
+@Composable
+fun DepthStep(m: MarinerState) {
+    val feet = m.depthUnit == DepthUnit.FEET
+
+    // The boat, in metres. MarinerState keeps the numbers the chart draws
+    // with; these two are the question behind them. The core's starting
+    // keelboat seeds them.
+    var draftM by remember { mutableStateOf(DepthPlan.of(0.0, 0.0, feet).draftM) }
+    var clearanceM by remember { mutableStateOf(DepthPlan.of(0.0, 0.0, feet).clearanceM) }
+
+    val plan = DepthPlan.of(draftM, clearanceM, feet)
+    val draft = plan.draft
+    val clearance = plan.clearance
+    val clearances = plan.clearances
+    val safetyDepth = plan.safetyDepth
+    val safetyContour = plan.safetyContour
+    val deepContour = plan.deepContour
+
+    // A depth in the unit on screen, with its unit.
+    fun measure(v: Double) = Lookout.fmtDepth(v * plan.metresPerUnit, feet, false)
+
+    // Every change goes to the engine, so the chart behind the page is already
+    // drawn the mariner's way when the page closes.
+    LaunchedEffect(safetyDepth, safetyContour, deepContour, feet) {
+        m.safetyDepth = plan.safetyDepthM
+        m.safetyContour = plan.safetyContourM
+        m.deepContour = plan.deepContourM
+        m.shallowContour = plan.shallowContourM
+    }
+
+    Column(
+        Modifier.fillMaxWidth().padding(stepInset).padding(top = 20.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        StepHeading(
+            title = "How deep does your boat sit?",
+            blurb = "Lookout shades water your boat cannot cross. It needs one number to do that, and everything else follows from it.",
+        )
+
+        numberRow("Draft", draft, measure(draft), step = plan.draftStep) {
+            draftM = DepthPlan.of(it * plan.metresPerUnit, clearanceM, feet).draftM
+        }
+        Text(
+            "Deepest point of the hull below the waterline, keel included.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Units", style = MaterialTheme.typography.bodyMedium)
+            Spacer(Modifier.width(12.dp))
+            SingleChoiceSegmentedButtonRow {
+                listOf(DepthUnit.METERS, DepthUnit.FEET).forEachIndexed { i, u ->
+                    SegmentedButton(
+                        selected = m.depthUnit == u,
+                        onClick = {
+                            if (m.depthUnit == u) return@SegmentedButton
+                            // The boat does not change when the unit does. The
+                            // draft rounds to the nearest half unit and the
+                            // clearance snaps to one the new unit offers.
+                            val next = DepthPlan.of(draftM, clearanceM, u == DepthUnit.FEET)
+                            draftM = next.draftRoundedM
+                            clearanceM = next.clearanceM
+                            m.depthUnit = u
+                        },
+                        shape = SegmentedButtonDefaults.itemShape(i, 2),
+                    ) { Text(if (u == DepthUnit.FEET) "Feet" else "Meters") }
+                }
+            }
+        }
+
+        Text(
+            "Clearance under the keel",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            for (c in clearances) {
+                FilterChip(
+                    selected = clearance == c,
+                    onClick = { clearanceM = c * plan.metresPerUnit },
+                    label = { Text(measure(c)) },
+                )
+            }
+        }
+        Text(
+            "How much water you want left under the keel at the shallowest point of a passage.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        HorizontalDivider()
+        derived("Safety depth", measure(safetyDepth),
+                "Soundings at or shallower than this print bold. It does not shade water.")
+        derived("Safety contour", measure(safetyContour),
+                "Water shallower than this shades as unsafe. Rounded up to a contour the survey draws, so ${measure(safetyDepth)} reads as ${measure(safetyContour)}.")
+        derived("Deep contour", measure(deepContour),
+                "Water deeper than this draws in the lightest shade. Twice the safety contour, up the same ladder the safety contour came off.")
+
+        seabed(
+            DepthPreview.of(draftM, clearanceM, feet), m.scheme.ordinal,
+            safetyDepth, safetyContour, deepContour, ::measure,
+        )
+        StepWarning(
+            lead = "Shading is not a depth sounder.",
+            body = "Soundings are not corrected for tide, surge or squat, and a survey can be decades old. Keep your own margin.",
+        )
+    }
+}
+
+/** A number with a step either side of it. */
+@Composable
+private fun numberRow(
+    label: String,
+    value: Double,
+    text: String,
+    step: Double,
+    onChange: (Double) -> Unit,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(label, style = MaterialTheme.typography.bodyMedium)
+        Spacer(Modifier.weight(1f))
+        Surface(
+            shape = RoundedCornerShape(10.dp),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
+            color = MaterialTheme.colorScheme.surface,
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                stepper("−") { onChange(max(step, round1(value - step))) }
+                Text(
+                    text,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.width(86.dp).semantics {
+                        contentDescription = "depth-draft"
+                    },
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                )
+                stepper("+") { onChange(round1(value + step)) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun stepper(glyph: String, onClick: () -> Unit) {
+    androidx.compose.material3.TextButton(onClick = onClick) {
+        Text(glyph, style = MaterialTheme.typography.titleMedium)
+    }
+}
+
+/** One number the step worked out, and what it does to the chart. */
+@Composable
+private fun derived(name: String, value: String, blurb: String) {
+    Column {
+        Row {
+            Text(name, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+            Text(
+                value,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+        Text(
+            blurb,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/**
+ * The four shades, over a slope that runs from the shore out to deep water.
+ *
+ * The soundings are the seabed and hold still; the shading is the mariner's
+ * and moves over them. Measured in contours rather than metres because the
+ * answers span a dinghy and a ship: a fixed 40 m slope puts a 5 ft contour in
+ * the first pixel of the panel and a 30 ft one halfway up it.
+ */
+@Composable
+private fun seabed(
+    v: DepthPreview,
+    scheme: Int,
+    safetyDepth: Double,
+    safetyContour: Double,
+    deepContour: Double,
+    measure: (Double) -> String,
+) {
+    fun token(name: String) = Chrome.s52(name, scheme) ?: Color.Transparent
+    val unsafe = token("DEPVS")
+    val shallow = token("DEPMS")
+    val medium = token("DEPMD")
+    val deep = token("DEPDW")
+    val land = token("LANDA")
+    val coastline = token("CSTLN")
+    val contour = token("DEPCN")
+    val sounding = token("SNDG1")
+    val shoalSounding = token("SNDG2")
+
+    val density = LocalDensity.current.density
+    val paint = remember(density) {
+        android.graphics.Paint().apply {
+            isAntiAlias = true
+            textSize = 10.5f * density
+            textAlign = android.graphics.Paint.Align.CENTER
+        }
+    }
+
+    Column {
+        Surface(
+            Modifier.fillMaxWidth().aspectRatio(1.8f),
+            shape = RoundedCornerShape(10.dp),
+            color = deep,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        ) {
+            Canvas(Modifier.fillMaxSize()) {
+                drawPath(shoal(v.line(DepthPreview.DEEP_CONTOUR)), medium)
+                drawPath(shoal(v.line(DepthPreview.SAFETY_CONTOUR)), shallow)
+                drawPath(shoal(v.line(DepthPreview.SAFETY_DEPTH)), unsafe)
+                // The safety contour, drawn bold the way S-52 draws the
+                // contour the boat is measured against.
+                drawPath(shoal(v.line(DepthPreview.SAFETY_CONTOUR)), contour,
+                         style = Stroke(width = 2f))
+                drawPath(shoal(v.line(DepthPreview.DEEP_CONTOUR)), contour.copy(alpha = 0.6f),
+                         style = Stroke(width = 1f))
+                drawPath(shoal(v.line(DepthPreview.SHORE)), land)
+                drawPath(shoal(v.line(DepthPreview.SHORE)), coastline, style = Stroke(width = 1f))
+                // Bold at or shallower than the safety depth. That is what the
+                // safety depth does to a chart.
+                for (i in 0 until DepthPreview.SPOTS) {
+                    val bold = v.bold(i)
+                    paint.color = (if (bold) shoalSounding else sounding).toArgb()
+                    paint.isFakeBoldText = bold
+                    drawContext.canvas.nativeCanvas.drawText(
+                        v.sounding(i).toString(),
+                        (v.spotX(i) * size.width).toFloat(),
+                        (v.spotY(i) * size.height).toFloat() + paint.textSize * 0.35f,
+                        paint,
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            key(unsafe, "Unsafe", "0 – ${measure(safetyDepth)}", Modifier.weight(1f))
+            key(shallow, "Shallow", "${measure(safetyDepth)} – ${measure(safetyContour)}", Modifier.weight(1f))
+            key(medium, "Medium", "${measure(safetyContour)} – ${measure(deepContour)}", Modifier.weight(1f))
+            key(deep, "Deep", "${measure(deepContour)} +", Modifier.weight(1f))
+        }
+    }
+}
+
+@Composable
+private fun key(color: Color, name: String, range: String, modifier: Modifier = Modifier) {
+    Column(modifier) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.size(11.dp).background(color, RoundedCornerShape(3.dp)),
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(name, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+        }
+        Text(
+            range,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+        )
+    }
+}
+
+/** One depth line across the panel, closed to the bottom so it fills. */
+private fun DrawScope.shoal(ys: DoubleArray): Path {
+    val p = Path()
+    p.moveTo(0f, size.height)
+    val last = (ys.size - 1).toFloat()
+    for (i in ys.indices) p.lineTo(i / last * size.width, (ys[i] * size.height).toFloat())
+    p.lineTo(size.width, size.height)
+    p.close()
+    return p
+}
+
+private fun round1(v: Double) = kotlin.math.round(v * 10.0) / 10.0
+
+

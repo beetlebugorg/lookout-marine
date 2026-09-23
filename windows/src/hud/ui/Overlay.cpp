@@ -111,7 +111,7 @@ namespace winrt::LookoutMarine::implementation
     }
 
     // Re-read the pinned object every readout tick: the target moves, its
-    // values change, and one day it ages out — the bubble follows all three.
+    // values change, and one day it ages out: the bubble follows all three.
     void MainWindow::UpdateOverlayBubble()
     {
         if (overlay_pin_id.empty())
@@ -181,7 +181,7 @@ namespace winrt::LookoutMarine::implementation
     // ---- the position source ------------------------------------------------
 
     // GPS while a plugin publishes a fix, NO GPS when the fix is lost, and
-    // Configure GPS when nothing publishes one. The reported fix or nothing —
+    // Configure GPS when nothing publishes one. The reported fix or nothing:
     // never the map centre, never a dead-reckoned number.
     void MainWindow::UpdateGpsPill()
     {
@@ -225,7 +225,7 @@ namespace winrt::LookoutMarine::implementation
 
     // The north bubble is the follow lock: unlocked it snaps north-up and arms
     // follow; following, it toggles north-up and course-up. Panning is the way
-    // out — the core cancels follow on a pan, and this poll notices.
+    // out: the core cancels follow on a pan, and this poll notices.
     void MainWindow::CycleFollowLock()
     {
         int follow = lk_controller_follow_active(controller);

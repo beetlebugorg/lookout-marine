@@ -1,4 +1,5 @@
-/* lookout-shell.h - the shell kit: the license manifest and the format kit.
+/* lookout-shell.h - the shell kit: the license manifest, the format kit and
+ * the coverage coastline.
  * Included from lookout.h. */
 #ifndef LOOKOUT_SHELL_H
 #define LOOKOUT_SHELL_H
@@ -262,6 +263,10 @@ void lookout_frame_kick(lookout *h);
 #define LOOKOUT_COORD_MAX    32
 #define LOOKOUT_POSITION_MAX 72
 #define LOOKOUT_SCALE_MAX    32
+#define LOOKOUT_COUNT_MAX    32
+#define LOOKOUT_BYTES_MAX    32
+#define LOOKOUT_DURATION_MAX 48
+#define LOOKOUT_DEPTH_MAX    32
 
 /* Degrees and decimal minutes with a hemisphere: "38°58.578'N". A longitude
  * (is_lat = 0) has three degree digits, so a pair keeps its column width.
@@ -276,10 +281,60 @@ size_t lookout_fmt_position(double lat, double lon, char *out, size_t cap);
  * writes "1:—". */
 size_t lookout_fmt_scale(double denominator, char *out, size_t cap);
 
+/* The display scale at the width a phone has for it: from 1,000,000 up, in
+ * millions to three significant figures ("1:4.80M", "1:12.3M", "1:123M").
+ * Below that, the same string as lookout_fmt_scale. */
+size_t lookout_fmt_scale_compact(double denominator, char *out, size_t cap);
+
+/* A full position at two decimals of minutes, about two metres:
+ * "38°58.58'N 076°28.92'W". For a readout row with no room for the third. */
+size_t lookout_fmt_position_compact(double lat, double lon, char *out, size_t cap);
+
+/* A count with a comma between each group of three: "7,214". The separator is
+ * a comma on every shell, independent of locale. */
+size_t lookout_fmt_count(uint64_t n, char *out, size_t cap);
+
+/* A size, a thousand to the megabyte as NOAA states a download. Below a
+ * gigabyte, megabytes to a tenth ("226.5 MB", "12 MB"). From there, gigabytes
+ * to a hundredth ("1.23 GB", "10 GB"). Trailing zeros are dropped. */
+size_t lookout_fmt_bytes(uint64_t bytes, char *out, size_t cap);
+
+/* How a time is said: a countdown on a running job, or an estimate before one
+ * starts. */
+enum {
+    LOOKOUT_DURATION_LEFT  = 0, /* "under a minute left", "about 3 min left",
+                                   "about 1.5 h left" */
+    LOOKOUT_DURATION_ABOUT = 1  /* "under a minute", "about a minute",
+                                   "about 3 minutes", "about 1.5 hours" */
+};
+
+/* About how long `seconds` is, in one of the styles above: to the minute under
+ * an hour, to a tenth of an hour past it. Returns 0 for a time that is negative
+ * or not finite. */
+size_t lookout_fmt_duration(double seconds, int style, char *out, size_t cap);
+
+/* The unit for lookout_fmt_depth. LOOKOUT_DEPTH_BARE may be or-ed in to leave
+ * the unit off, for a field that shows its unit beside it. */
+enum {
+    LOOKOUT_DEPTH_METRES = 0,
+    LOOKOUT_DEPTH_FEET   = 1,
+    LOOKOUT_DEPTH_BARE   = 2
+};
+
+/* A depth given in metres, shown in `unit` to a tenth, with a whole number
+ * shown whole: "5 m", "1.8 m", "12 ft". Returns 0 for a depth that is not
+ * finite. */
+size_t lookout_fmt_depth(double v_m, int unit, char *out, size_t cap);
+
 /* The S-52 navigational purpose band for a display scale: "Berthing",
  * "Harbor", "Approach", "Coastal", "General", "Overview", or "—" below 1:0.001.
  * Static storage, valid for the life of the process. */
 const char *lookout_band_name(double denominator);
+
+/* The name of an S-57 usage band, 1 to 6: "Overview", "General", "Coastal",
+ * "Approach", "Harbor", "Berthing", or "Unknown" for any other number. Static
+ * storage, valid for the life of the process. */
+const char *lookout_usage_band_name(int band);
 
 /* Parse a position the mariner typed: a decimal pair ("38.98, -76.48") or
  * degrees with hemispheres ("38°58.8'N 076°29.0'W", "38 58 30 N, 76 29 W").
@@ -303,6 +358,132 @@ int lookout_parse_scale(const char *text, double *out_denominator);
  * denominator is zero or less. */
 double lookout_zoom_delta_for_scale(double current_denominator,
                                     double wanted_denominator);
+
+/* ---- the depth plan ----------------------------------------------------
+ *
+ * The four depth settings, derived from the boat: its draft and the clearance
+ * the mariner wants under the keel. Depths cross in metres. `feet` picks the
+ * unit on screen, which decides the contour ladder, the clearances offered and
+ * what the step displays. None of it needs a handle. */
+
+#define LOOKOUT_METRES_PER_FOOT 0.3048
+
+/* A struct tag with no typedef, because the call has the same name, the way
+ * `struct stat` and stat() do. */
+struct lookout_depth_plan {
+    /* The boat the plan was made for, in metres. The clearance is snapped to
+     * the nearest one the unit offers. A draft of zero or less stands for the
+     * starting keelboat: 1.7 m with 0.6 m, or 5.5 ft with 2 ft. */
+    double draft_m;
+    double clearance_m;
+    /* The draft rounded to the nearest half unit. A change of unit writes this
+     * back as the draft. */
+    double draft_rounded_m;
+
+    /* The settings, in metres. The safety depth is draft plus clearance,
+     * rounded up to a whole unit. The shallow contour equals it. The safety
+     * contour is the first rung of the ladder at or past it, and the deep
+     * contour the first rung at or past twice the safety contour. Both stop at
+     * the last rung. */
+    double safety_depth_m;
+    double shallow_contour_m;
+    double safety_contour_m;
+    double deep_contour_m;
+
+    /* What the step displays, in the unit on screen. */
+    double draft;
+    double clearance;
+    double safety_depth;
+    double safety_contour;
+    double deep_contour;
+    double clearances[4];    /* the clearances offered, smallest first */
+    double metres_per_unit;  /* 1, or LOOKOUT_METRES_PER_FOOT */
+    /* One press of the draft stepper, and the deepest draft the step accepts:
+     * 0.5 and 100 ft, or 0.1 and 30 m. The plan's draft is held between one
+     * step and the most. */
+    double draft_step;
+    double draft_max;
+};
+
+/* Fill `out` for a boat. `feet` is 1 for feet, 0 for metres. A NULL `out` is
+ * ignored. */
+void lookout_depth_plan(double draft_m, double clearance_m, int feet,
+                        struct lookout_depth_plan *out);
+
+/* The depth step's picture: a seabed falling away from a shore, with four
+ * lines across it and twelve soundings on it. The soundings are multiples of
+ * the safety contour, so each keeps its place and its number until the contour
+ * steps to the next rung, and the shading moves over them.
+ *
+ * Every coordinate is in a unit square with y down, to scale by the panel's
+ * size. A line's point i is at x = i / 48. Fill each band as the shape from the
+ * bottom left, along its line, to the bottom right: the deep contour's band
+ * first, then the safety contour's, then the safety depth's, then the shore's
+ * as land. */
+#define LOOKOUT_DEPTH_PREVIEW_POINTS 49
+#define LOOKOUT_DEPTH_PREVIEW_SPOTS 12
+
+enum {
+    LOOKOUT_DEPTH_LINE_SHORE = 0,
+    LOOKOUT_DEPTH_LINE_SAFETY_DEPTH = 1,
+    LOOKOUT_DEPTH_LINE_SAFETY_CONTOUR = 2,
+    LOOKOUT_DEPTH_LINE_DEEP_CONTOUR = 3,
+};
+
+struct lookout_depth_preview {
+    double y[4][LOOKOUT_DEPTH_PREVIEW_POINTS];
+    double spot_x[LOOKOUT_DEPTH_PREVIEW_SPOTS];
+    double spot_y[LOOKOUT_DEPTH_PREVIEW_SPOTS];
+    /* In the unit on screen, rounded up to a whole number. */
+    int spot_sounding[LOOKOUT_DEPTH_PREVIEW_SPOTS];
+    /* 1 at or shallower than the safety depth, which the chart draws bold. */
+    int spot_bold[LOOKOUT_DEPTH_PREVIEW_SPOTS];
+};
+
+/* Fill `out` for `plan`. A NULL either is ignored. */
+void lookout_depth_preview(const struct lookout_depth_plan *plan,
+                           struct lookout_depth_preview *out);
+
+/* ---- the coverage coastline --------------------------------------------
+ *
+ * The coastline a NOAA region picker draws under the regions, baked into the
+ * core from the GSHHG data the basemap is baked from. It covers the waters
+ * the picker shows, simplified to 0.02 degrees.
+ *
+ * A window is a lon/lat box in degrees, w to e and s to n, drawn in Mercator
+ * into a px_w by px_h rectangle with its origin at the top left. Longitude
+ * maps straight through, with no wrap. */
+
+/* GSHHG levels. A lake is its own ring, filled over the land it sits in. */
+#define LOOKOUT_COAST_LAND 1
+#define LOOKOUT_COAST_LAKE 2
+
+/* Width over height of the window drawn in Mercator, for sizing the
+ * rectangle. 1 for an empty window. */
+double lookout_map_aspect(double w, double e, double s, double n);
+
+/* Project `count` points into the window's rectangle. `lonlat` holds
+ * longitude and latitude pairs, and `xy` receives x and y pairs. */
+void lookout_map_project(double w, double e, double s, double n,
+                         double px_w, double px_h,
+                         const double *lonlat, float *xy, size_t count);
+
+/* The rings of one level that reach into the window, projected into its
+ * rectangle. Returns the number of points. `xy` has room for `cap` points,
+ * as x and y pairs. `ends[i]` is the index one past ring i's last point, so
+ * the last ring ends at the returned count. Every ring has at least four
+ * points, so `ends` needs at most a quarter as many entries as there are
+ * points. The call writes only when both buffers hold the whole result: a
+ * call with cap 0 returns the size to allocate. The buffers are the
+ * caller's.
+ *
+ * A ring's last point repeats its first. Fill the land rings as one path, then the lake rings
+ * as another. A ring that crosses the antimeridian is left out, because
+ * drawn straight through it spans the map. */
+size_t lookout_coastline_rings(int level, double w, double e, double s,
+                               double n, double px_w, double px_h,
+                               float *xy, size_t cap,
+                               uint32_t *ends, size_t ends_cap);
 
 #ifdef __cplusplus
 }

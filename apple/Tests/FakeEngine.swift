@@ -9,11 +9,12 @@
 //  a change (the raster election, say), the test sets what comes back.
 
 import Foundation
+import SwiftUI
 @testable import LookoutMarine
 
 @MainActor
 final class FakeEngine: RasterEngine, ChartLinkEngine, PluginEngine,
-                        ChartOpenEngine, ReadoutEngine, OverlayEngine {
+                        ChartOpenEngine, ReadoutEngine, OverlayEngine, NoaaEngine {
 
     // MARK: What it was asked
     var calls: [String] = []
@@ -85,6 +86,18 @@ final class FakeEngine: RasterEngine, ChartLinkEngine, PluginEngine,
     func importChartLinks(_ json: String) { note("importChartLinks") }
     func chartLinksSnapshot() -> ChartLinkSnapshot? { links }
 
+    /// The pictures. A test sets what the core returns for each link's url,
+    /// and an absent entry stands for a chart with no picture.
+    var pictures: [String: ChartPicture] = [:]
+    var viewCentre: (lon: Double, lat: Double)? = (lon: -76.0, lat: 39.0)
+    func chartLinkPicture(_ url: String, kind: ChartPictureKind, lon: Double, lat: Double,
+                          zoom: Double, width: Int, height: Int) -> ChartPicture {
+        note("chartLinkPicture(\(url))")
+        return pictures[url] ?? .none
+    }
+    func cancelChartLinkPictures() { note("cancelChartLinkPictures") }
+    func viewCenter() -> (lon: Double, lat: Double)? { viewCentre }
+
     // MARK: Plugins
     var specs: [PluginTableSpec] = []
     var alerts: (seq: Int, alerts: [PluginAlert])?
@@ -102,7 +115,7 @@ final class FakeEngine: RasterEngine, ChartLinkEngine, PluginEngine,
 
     // MARK: Opening
     var reopenSucceeds = true
-    func reopen(charts: [String]) -> Bool {
+    func reopen(charts: [String], requestID: Int) -> Bool {
         note("reopen(\(charts.count))")
         return reopenSucceeds
     }
@@ -137,4 +150,78 @@ final class FakeEngine: RasterEngine, ChartLinkEngine, PluginEngine,
         return true
     }
     func removeMarker(_ id: UInt64) -> Bool { removed.append(id); return true }
+
+    // MARK: NOAA
+
+    /// What noaaState returns: the phase, the catalog and the error the picker
+    /// reads. A test sets the two that matter to it.
+    var noaa = NoaaState()
+    /// What noaaRefresh returns. A device with no network answers false.
+    var noaaRefreshes = true
+    /// What a pick costs, keyed by the region id list as it was asked. The
+    /// model prices the whole pick and each region on its own, so a test that
+    /// wants both sets both keys.
+    var noaaCosts: [String: NoaaCost] = [:]
+    /// What noaaRegionState returns, by region id.
+    var noaaRegions: [String: NoaaRegionState] = [:]
+    /// What noaaApply returns.
+    var noaaMoved: UInt32 = 0
+    var noaaCoverage: [String: [GeoBox]] = [:]
+    var noaaOutdatedCount: UInt32 = 0
+    /// What noaaUpdateDue returns.
+    var noaaDue = false
+
+    @discardableResult func noaaRefresh() -> Bool {
+        note("noaaRefresh")
+        return noaaRefreshes
+    }
+
+    /// The fake tracks no changes, so every read goes through.
+    func noaaChanged() -> Bool { true }
+    func noaaState() -> NoaaState { noaa }
+
+    func noaaCost(regionIDs: String) -> NoaaCost? { noaaCosts[regionIDs] }
+
+    func noaaDownload(regionIDs: String, destination: String, again: Bool) {
+        note("noaaDownload(\(regionIDs), \(destination), again: \(again))")
+    }
+
+    func noaaApply(regionIDs: String, destination: String, again: Bool) -> UInt32 {
+        note("noaaApply(\(regionIDs), \(destination), again: \(again))")
+        return noaaMoved
+    }
+
+    func noaaRegionState(_ regionID: String) -> NoaaRegionState? { noaaRegions[regionID] }
+
+    /// What noaaGivesBack returns.
+    var noaaGiven: [String] = []
+
+    func noaaGivesBack(regionIDs: String) -> [String] { noaaGiven }
+
+    func noaaOutdated() -> UInt32 {
+        note("noaaOutdated")
+        return noaaOutdatedCount
+    }
+
+    func noaaUpdate(destination: String) {
+        note("noaaUpdate(\(destination))")
+    }
+
+    func noaaUpdateDue() -> Bool {
+        note("noaaUpdateDue")
+        return noaaDue
+    }
+
+    /// What noaaUpdateCheck returns, and noaaSetUpdateCheck writes.
+    var noaaCadence: Int32 = 2
+
+    func noaaUpdateCheck() -> Int32 { noaaCadence }
+
+    func noaaSetUpdateCheck(_ cadence: Int32) { noaaCadence = cadence }
+
+    func noaaCancel() { note("noaaCancel") }
+
+    func noaaRegionCoverage(_ regionID: String) -> [GeoBox] {
+        noaaCoverage[regionID] ?? []
+    }
 }

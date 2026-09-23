@@ -294,10 +294,17 @@ pub fn jsonString(alloc: std.mem.Allocator, out: *std.ArrayList(u8), s: []const 
     try out.append(alloc, '"');
 }
 
+/// Set by a test to keep a chart handle out of the mariner's own directory.
+/// Read only in a test build.
+pub var test_support_dir: ?[]const u8 = null;
+
 /// The per-user directory the marks live in: beside the plugin install root,
 /// because both are the mariner's own state and neither belongs to a chart.
 /// Null on a platform that names no place in the environment.
 pub fn supportDirAlloc(alloc: std.mem.Allocator) ?[]u8 {
+    if (builtin.is_test) {
+        if (test_support_dir) |d| return alloc.dupe(u8, d) catch null;
+    }
     switch (builtin.os.tag) {
         .windows => {
             const appdata = std.mem.span(std.c.getenv("APPDATA") orelse return null);

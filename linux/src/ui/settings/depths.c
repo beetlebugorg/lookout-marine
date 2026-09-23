@@ -1,4 +1,4 @@
-/* ui/settings/depths.c — the Depths page.
+/* ui/settings/depths.c: the Depths page.
  *
  * Four contours, the unit they are read in, and how many shades of water the
  * chart draws between them. The engine always takes metres; feet is a labelling

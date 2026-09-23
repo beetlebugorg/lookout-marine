@@ -1,0 +1,765 @@
+//  ChartLibrary.swift: the installed charts.
+//
+//  Which paths open at launch, the sets the mariner added, the bake that turns
+//  raw cells into charts this app can draw, and removal. A folder joins the
+//  list only after the core has looked through it and found charts, so a set
+//  on the list always opens. ChartOpen holds the open itself.
+
+import Foundation
+
+@MainActor
+@Observable
+final class ChartLibrary {
+    var showStartupLoader: Bool {
+        if chartOpen.isOpening || (chartOpen.hasChart && !chartOpen.firstBuildDone) { return true }
+        // Charts are installed and none is drawing yet, because the scan is
+        // still reading them or an open is on its way. The loader fills that
+        // gap. An import has a panel of its own with the more specific report
+        // of the same wait, so this defers to it.
+        //
+        // A library that has been read and holds no drawable chart is a
+        // finished wait. The loader used to stay up over one, and the
+        // first-run page never appeared.
+        return !chartOpen.hasChart && !nothingToDraw && chartWork == nil
+    }
+
+    /// True once the app has established that it has no chart to draw and no
+    /// work running that will produce one: no scan, no bake, no open under
+    /// way, and no switched-on set holding a drawable chart.
+    ///
+    /// The first-run page reads this rather than `hasChart`. `hasChart` is
+    /// also false for the second between launch and the scan result, while a
+    /// set is being read, and while an import runs.
+    ///
+    /// A set can be installed, read and switched on and still hold no chart
+    /// this app opens, such as a folder whose import failed. The earlier test
+    /// asked only whether a set was installed, so the loader stayed up over
+    /// such a library and the first-run page never appeared.
+    var nothingToDraw: Bool {
+        (!chartOpen.hasChart || chartOpen.chartIsEmpty)
+            && !chartOpen.isOpening && chartOpen.openRequest == nil
+            && !scanning && bake == nil && noaaPrepare == nil
+            && raster.paths.isEmpty
+            && !sets.contains { $0.on && $0.hasSomethingToDraw }
+    }
+
+    // MARK: The installed sets
+
+    /// The installed folders of charts, in the order added. A set on this list has
+    /// been looked through and holds charts, so it always opens.
+    var sets: [ChartSet] = [] {
+        didSet { onSetsChanged?() }
+    }
+    /// Called whenever the set list changes. AppModel records the library
+    /// for setup here, because every list with charts in it passes through
+    /// this property.
+    var onSetsChanged: (() -> Void)?
+    /// True while a folder is being looked through. The full NOAA library takes
+    /// about 3 seconds.
+    var scanning = false {
+        didSet { if !scanning { runQueuedPick() } }
+    }
+    /// A folder picked while other chart work was running.
+    ///
+    /// addChartSet used to refuse such a pick and report it on the empty
+    /// page. A NOAA download that arrived during the launch scan hit that
+    /// refusal, and setup never shows that page, so it waited for an import
+    /// that had been dropped.
+    private var queuedPick: String?
+    /// True while the scan running was asked for by the mariner.
+    var scanRequested = false
+    /// The folder being looked through, for the first-run text.
+    var scanningName = ""
+    /// The last folder that held no charts, for the panel to say so.
+    var emptyPick: String?
+    /// True while the launch scan is being watched for. See
+    /// `watchLibraryUntilOpen`.
+    private var watchingLibrary = false
+    /// A picked set that is on the core's list, waiting for the core's scan of
+    /// it. The scan lists what to prepare.
+    private var pendingPick: String?
+
+    /// The bake running now, if any. The HUD pill watches this.
+    var bake: BakeProgress?
+    /// The core's prepare of a NOAA download, as the NOAA state counts it.
+    var noaaPrepare: BakeProgress?
+    private var noaaPrepareStart: Date?
+    /// Stops the core's prepare. AppModel sets it to the NOAA service's
+    /// cancel.
+    var cancelNoaaPrepare: (() -> Void)?
+    private var bakeJob: ChartBakeJob?
+    /// The folder or archive the running bake is preparing, so that removing
+    /// that set can stop it and disown what it produces.
+    private var bakeSource: String?
+    /// The charts of a removed set being deleted, while that is happening.
+    var removing: BakeProgress?
+    /// When the core started deleting the charts a NOAA pick gave back.
+    private var noaaRemovalStart: Date?
+    /// The set the mariner asked to remove, held while they are asked whether
+    /// they meant it. Only a set Lookout prepared charts for: taking a folder
+    /// of the mariner's own files off the list deletes nothing, so it needs no
+    /// question.
+    var pendingRemoval: ChartSet?
+
+    /// The pictures a set carries are installed as raster charts, so adding
+    /// and removing a set writes there too. One direction only: the raster
+    /// model knows nothing about sets.
+    private let raster: RasterModel
+    /// The open these sets feed. A change to the list reopens the chart.
+    let chartOpen: ChartOpen
+
+    init(raster: RasterModel, chartOpen: ChartOpen) {
+        self.raster = raster
+        self.chartOpen = chartOpen
+    }
+
+    // MARK: - Opening charts
+
+    /// Paths to open on first appearance: $LOOKOUT_OPEN (a chart or a folder of
+    /// cells, for the CLI and the screenshot protocol), else (iOS) everything
+    /// in Documents, else the sets that are switched on, else the demo default.
+    func initialChartPaths() -> [String] {
+        if let p = ProcessInfo.processInfo.environment["LOOKOUT_OPEN"] {
+            let cells = cellPaths(for: p)
+            if !cells.isEmpty { return cells }
+        }
+        #if os(iOS)
+        // On iOS, Documents IS the chart library (Files.app / Finder-sharing
+        // drops and importer copies all land there): compose ALL of it at
+        // launch. This must beat the saved sets, which are at most a subset of
+        // Documents; launching into one would silently hide the rest of the
+        // library (a device that imported a 7k-cell folder would reopen as
+        // exactly one cell).
+        if let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
+            let dropped = chartPaths(inDirectory: docs.path)
+            if !dropped.isEmpty { return dropped }
+        }
+        #endif
+        // The cheap walk, not the scan. Launch must not wait on tile57 opening
+        // every archive (3 seconds over the full NOAA library); the engine
+        // skips a chart it cannot read anyway. The verified scan runs behind
+        // this and fills the Charts panel.
+        let off = ChartSetStore.savedOff()
+        var installed: [String] = []
+        // The installed pictures are NOT charts to compose. This walk cannot tell
+        // a raster archive from a vector one without opening it, so it takes
+        // the answer the last scan already worked out: anything installed as a
+        // raster stays out. Opening one as a vector chart composes nonsense.
+        var seen = Set(Store.shared.strings(RasterModel.group, RasterModel.pathsKey))
+        for dir in ChartSetStore.savedPaths() where !off.contains(dir) {
+            var candidates: [String] = []
+            // What a bake prepared from this set is what draws. The set itself
+            // may still be raw cells, or an archive.
+            if let prepared = ChartBake.preparedDirectory(for: dir),
+               FileManager.default.fileExists(atPath: prepared) {
+                candidates += chartPaths(inDirectory: prepared)
+            }
+            // An archive is never a chart. Its charts come out of it first,
+            // and handing the .zip to the engine composes nothing.
+            if !ChartScan.isArchive(dir) { candidates += cellPaths(for: dir) }
+            for p in candidates where !seen.contains(p) {
+                seen.insert(p)
+                installed.append(p)
+            }
+        }
+        if !installed.isEmpty { return installed.sorted() }
+        if let def = Self.defaultChartPath { return [def] }
+        return []
+    }
+
+    /// An open target as its concrete cell list: a folder of cells expands to
+    /// every baked cell under it, a chart file is itself, a dangling path is
+    /// empty (callers fall through to their next candidate).
+    private func cellPaths(for target: String) -> [String] {
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: target, isDirectory: &isDir) else { return [] }
+        return isDir.boolValue ? chartPaths(inDirectory: target) : [target]
+    }
+
+    /// All baked cells under a directory, sorted (the compose library set).
+    func chartPaths(inDirectory dir: String) -> [String] {
+        guard let en = FileManager.default.enumerator(atPath: dir) else { return [] }
+        var paths: [String] = []
+        for case let rel as String in en where rel.hasSuffix(".pmtiles") {
+            paths.append((dir as NSString).appendingPathComponent(rel))
+        }
+        return paths.sorted()
+    }
+
+    /// The Zig demo's built-in default, if it happens to exist on this machine.
+    static var defaultChartPath: String? {
+        let p = (NSHomeDirectory() as NSString)
+            .appendingPathComponent(".cache/chartplotter/NOAA/tiles/d5/US5MD1MC.pmtiles")
+        return FileManager.default.fileExists(atPath: p) ? p : nil
+    }
+
+    // MARK: - The installed sets
+
+    /// Every chart the switched-on sets hold, ready to hand to the engine.
+    /// The core's rule: the union, sorted and deduplicated, because two sets
+    /// may overlap and the same cell twice would be composed twice.
+    var openPaths: [String] { ChartSetStore.compose() }
+
+    /// Take the core's list. It loads the saved paths at open and scans each
+    /// folder on a worker of its own, so this reads what it has; `pullChartSets`
+    /// reads it again when a scan lands.
+    func loadChartSets(completion: (() -> Void)? = nil) {
+        guard !ChartSetStore.savedPaths().isEmpty else {
+            completion?()
+            return
+        }
+        scanning = true
+        pullChartSets()
+        watchLibraryUntilOpen()
+        completion?()
+    }
+
+    /// Watch for the launch scan landing, while no chart is open.
+    ///
+    /// A scan result is the core's only unprompted change, and `pushReadouts`
+    /// polls for it off the frame loop, which starts with the first chart.
+    /// With no chart open there was no poll, so a set that became openable
+    /// after launch went unnoticed. The launch walk does not look inside an
+    /// archive, and the output of an import has not been read back yet, so
+    /// both of those cases left the first-run page up over an installed
+    /// library until the mariner picked the folder again.
+    ///
+    /// This stops on the first chart, and stops when every folder has been
+    /// read, so it holds no clock open on a battery.
+    ///
+    /// A pick waiting on the core's scan keeps this running with a chart
+    /// open too, so the pick does not depend on the frame loop's poll.
+    private func watchLibraryUntilOpen() {
+        guard !watchingLibrary, !chartOpen.hasChart || chartOpen.chartIsEmpty || pendingPick != nil, scanning
+        else { return }
+        watchingLibrary = true
+        tickLibraryWatch()
+    }
+
+    private func tickLibraryWatch() {
+        guard watchingLibrary else { return }
+        if ChartSetStore.changed() { pullChartSets() }
+        // A chart holding cells is up, or every folder has been read. Either
+        // way there is nothing further to poll for.
+        //
+        // A chart of NO cells keeps this running. The frame loop polls the
+        // same flag once per frame, and an empty chart over a picture goes
+        // idle, so the scan result stays unread until this timer reads it.
+        guard !chartOpen.hasChart || chartOpen.chartIsEmpty || pendingPick != nil, scanning else {
+            watchingLibrary = false
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            self?.tickLibraryWatch()
+        }
+    }
+
+    /// The core's list, as the settings page draws it. Called at launch and
+    /// from the readout tick whenever a background scan lands.
+    func pullChartSets() {
+        let rows = ChartSetStore.all()
+        scanning = rows.contains { !$0.scanned }
+        sets = rows.compactMap { row -> ChartSet? in
+            // A folder still being read stays on the list with nothing in it
+            // yet. One that was read and held no charts is not a chart folder.
+            let files = ChartSetStore.files(of: row.path)
+            guard !row.scanned || !files.isEmpty else { return nil }
+            let prepared = ChartBake.preparedDirectory(for: row.path)
+            return ChartSet(
+                path: row.path,
+                producer: row.producer.isEmpty ? nil : row.producer,
+                preparedPath: FileManager.default.fileExists(atPath: prepared ?? "")
+                    ? prepared : nil,
+                cells: files.filter { !$0.isRaster },
+                rasters: files.filter(\.isRaster),
+                on: row.on,
+                managed: row.managed,
+                toPrepareCount: row.toPrepare,
+                refused: row.refused,
+                coreTitle: row.title,
+                charts: row.charts,
+                pictures: row.pictures,
+                unprepared: row.unprepared,
+                bandCount: row.bandCount,
+                heldBack: row.heldBack)
+        }
+        // The downloader's set draws first. It is the set the mariner adds
+        // and removes in another window, so the row leading the list is where
+        // they look for it. The core returns rows in the order they were
+        // added, and a download made after two folders otherwise draws third.
+        let managedFirst = sets.filter(\.managed) + sets.filter { !$0.managed }
+        if managedFirst.map(\.path) != sets.map(\.path) { sets = managedFirst }
+        // adopt syncs the pictures and opens the chart itself.
+        if finishPick(rows) { return }
+        syncRasterFromSets()
+        // The launch walk cannot see a library of pictures: it looks for
+        // cells, and finds none. Open what the scan found once it knows, or a
+        // mariner carrying only imagery gets the first-run page every time
+        // with their charts sitting on the list.
+        if !chartOpen.hasChart, !openPaths.isEmpty || !raster.paths.isEmpty {
+            chartOpen.requestOpen(openPaths)
+        } else if chartOpen.chartIsEmpty, !chartOpen.isOpening, !openPaths.isEmpty,
+                  chartOpen.openRequest?.paths != openPaths {
+            // The chart that opened holds no cells. pullChartSets runs at
+            // launch before the background scan finishes, so compose is empty,
+            // and a picture in the library passes that empty open through
+            // requestOpen's guard rather than closing the chart. hasChart is
+            // then true, and the survey the scan finds never reaches the
+            // engine: the picture draws alone with no ENC over it.
+            //
+            // The request is compared rather than tested for nil. requestOpen
+            // clears it only when the engine serves it, and at launch there is
+            // no engine yet: the chart view reads the request when it is built
+            // and leaves it set, so an empty open holds one for good.
+            chartOpen.requestOpen(openPaths)
+        }
+    }
+
+    /// Prepare or adopt the picked set once the core has scanned it. True when
+    /// the set was adopted, which opens the chart.
+    private func finishPick(_ rows: [CoreChartSet]) -> Bool {
+        guard let pick = pendingPick else { return false }
+        guard let row = rows.first(where: { $0.path == pick }) else {
+            // Removed while it was being read.
+            pendingPick = nil
+            return false
+        }
+        guard row.scanned else { return false }
+        pendingPick = nil
+        if beginBake(pick) { return false }
+        guard let set = sets.first(where: { $0.path == pick }) else {
+            emptyPick = "\((pick as NSString).lastPathComponent) holds no charts Lookout can read."
+            return false
+        }
+        adopt(set, register: false)
+        return true
+    }
+
+    /// Look through `path` and put it on the list. A folder with no charts in
+    /// it never joins the list, which is what kept dead entries out of reach
+    /// of the mariner in the first place.
+    func addChartSet(_ path: String) {
+        // One at a time. A second bake started while the first runs gets its
+        // own job, and then Cancel stops only the one the pill happens to
+        // hold: the mariner presses stop and the machine keeps working.
+        guard bake == nil, noaaPrepare == nil, !scanning else {
+            // Queue the pick. It runs once the work in front of it ends. The
+            // scan at launch has no name to report: it reads everything saved,
+            // and not one folder the mariner just picked.
+            queuedPick = path
+            let busy = bake?.name ?? noaaPrepare?.name ?? scanningName
+            emptyPick = busy.isEmpty
+                ? "Still looking through the charts already installed. Yours starts next."
+                : "Still working on \(busy). Yours starts next."
+            return
+        }
+        scanning = true
+        scanRequested = true
+        scanningName = (path as NSString).lastPathComponent
+        emptyPick = nil
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            var found = ChartScan.scan(path)
+            var spare: [String] = []
+            // A folder whose charts are inside an archive holds charts. An
+            // agency publishes one .zip and it goes in a folder with other
+            // files. A double click on the archive in the open panel also
+            // arrives here as the folder, because the panel returns the
+            // enclosing directory for a double-clicked item. Both cases used
+            // to report that the folder holds no charts.
+            if found?.cells.isEmpty ?? true, found?.rasters.isEmpty ?? true {
+                spare = ChartScan.archivesHoldingCharts(in: path)
+                if spare.count == 1 { found = ChartScan.scan(spare[0]) }
+            }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                // A folder of pictures is a chart folder. There is one list
+                // and one way in, so the test is whether the folder holds
+                // anything Lookout can draw, of either kind.
+                guard let set = found, !set.cells.isEmpty || !set.rasters.isEmpty else {
+                    self.scanning = false
+                    let name = (path as NSString).lastPathComponent
+                    // Each archive is a chart set of its own, so with several
+                    // in the folder the mariner picks.
+                    self.emptyPick = spare.count > 1
+                        ? "\(name) holds \(spare.count) chart archives. Open the one you want."
+                        : "\(name) holds no charts Lookout can read."
+                    return
+                }
+                self.scanningName = (set.path as NSString).lastPathComponent
+                // The set goes on the core's list, and the core's scan of it
+                // lists what to prepare. pullChartSets prepares that list, or
+                // adopts the set when it is empty.
+                guard ChartSetStore.add(set.path) || ChartSetStore.rescan(set.path) else {
+                    self.scanning = false
+                    self.emptyPick = "Could not add \(self.scanningName) to the chart list."
+                    return
+                }
+                self.pendingPick = set.path
+                self.watchLibraryUntilOpen()
+            }
+        }
+    }
+
+    /// Run a pick that arrived while something else was working.
+    ///
+    /// Dispatched to the next turn of the runloop. This runs inside the
+    /// didSet of `scanning`, and addChartSet sets that flag again.
+    private func runQueuedPick() {
+        guard queuedPick != nil else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.bake == nil, self.noaaPrepare == nil, !self.scanning,
+                  let next = self.queuedPick else { return }
+            self.queuedPick = nil
+            self.emptyPick = nil
+            self.addChartSet(next)
+        }
+    }
+
+    /// Put a set on the list.
+    ///
+    /// `reopen` is false when the charts are already drawing. A bake hands
+    /// each batch to the open library as it finishes, so by the end there is
+    /// nothing left to open: reopening would tear down a chart that is
+    /// already correct and show the startup loader over it for a moment.
+    ///
+    /// `register` is false for a set the core has just scanned, which needs
+    /// no second scan.
+    private func adopt(_ set: ChartSet, reopen: Bool = true, register: Bool = true) {
+        sets.removeAll { $0.path == set.path }
+        sets.append(set)
+        // add queues a scan for a new path. A set already on the list needs a
+        // rescan instead: the bake has written charts into its prepared
+        // directory, and the core composes no openable path until it reads
+        // them.
+        let rereading = register
+            && !ChartSetStore.add(set.path) && ChartSetStore.rescan(set.path)
+        let heldBefore = Set(raster.paths)
+        syncRasterFromSets()
+        if reopen {
+            // Both what the core composed and what this scan found. The core
+            // has not read the prepared charts yet, and a rescan of a large
+            // library holds the loader on screen for seconds.
+            var paths = openPaths
+            var seen = Set(paths)
+            for p in set.openablePaths where seen.insert(p).inserted { paths.append(p) }
+            // A set of PICTURES adds no cell to map. The chart already open
+            // holds every cell this composes, and the engine takes a picture
+            // into a live handle, so reopening remapped the whole library to
+            // add one .mbtiles: the startup loader came up over a chart that
+            // was already drawing and every cell was read again.
+            if chartOpen.hasChart, !chartOpen.isOpening, set.openablePaths.isEmpty {
+                raster.attach(raster.paths.filter { !heldBefore.contains($0) })
+            } else {
+                chartOpen.requestOpen(paths.sorted())
+            }
+        }
+        // The rescan runs on a worker. With no chart open there is no frame
+        // loop polling for the result.
+        if rereading {
+            scanning = true
+            watchLibraryUntilOpen()
+        }
+    }
+
+    /// The pictures the switched-on sets carry, installed as the raster charts.
+    ///
+    /// A set is a folder of charts, and a folder can hold both kinds. The
+    /// mariner adds it once and switches it on once; which of its files are
+    /// the survey and which are photographs is the app's problem, not theirs.
+    private func syncRasterFromSets() {
+        var seen = Set<String>()
+        var wanted: [String] = []
+        for set in sets where set.on {
+            for p in set.rasterPaths where !seen.contains(p) {
+                seen.insert(p)
+                wanted.append(p)
+            }
+        }
+        // Anything the mariner added before sets existed stays installed.
+        for p in raster.paths where !seen.contains(p) && !ChartBake.isDerived(p) {
+            let inAnySet = sets.contains { $0.rasterPaths.contains(p) }
+            if !inAnySet {
+                seen.insert(p)
+                wanted.append(p)
+            }
+        }
+        guard wanted != raster.paths else { return }
+        raster.paths = wanted
+        Store.shared.set(raster.paths, RasterModel.group, RasterModel.pathsKey)
+    }
+
+    /// Any chart work running now: a scan or a bake. The pill, the first-run
+    /// panel and the Charts settings all read this one value, so the work
+    /// appears wherever the mariner is looking.
+    /// How many charts the last bake refused. Read by the setup panel, which
+    /// outlives the bake.
+    var lastBakeRefused = 0
+
+    var chartWork: BakeProgress? {
+        if let b = bake { return b }
+        if let p = noaaPrepare { return p }
+        // Freeing the disk after a set is removed. It is not the mariner's
+        // work and they are not waiting on it, but it is the app doing
+        // something to their charts, so it says so.
+        if let r = removing { return r }
+        // Only work the mariner started. The scan at launch is bookkeeping for
+        // the Charts panel and finishes on its own; showing it puts "Finding
+        // charts" over the window on every single launch, before a chart the
+        // app already knows how to open.
+        if scanning && scanRequested { return BakeProgress(kind: .finding, name: scanningName) }
+        return nil
+    }
+
+    /// Prepare what the core lists for the set at `sourceDir` into the app's
+    /// own chart directory, then add the result as the set. The mariner keeps
+    /// sailing while this runs. It is a pill in the HUD.
+    ///
+    /// False when the core's list is empty. No bake starts then.
+    @discardableResult
+    private func beginBake(_ sourceDir: String) -> Bool {
+        guard let row = ChartSetStore.all().first(where: { $0.path == sourceDir }) else {
+            return false
+        }
+        let cells = ChartSetStore.toPrepare(of: sourceDir)
+        guard !cells.isEmpty else { return false }
+        let job = ChartBakeJob()
+        bakeJob = job
+        bakeSource = sourceDir
+        let total = cells.count
+        // By the agency that made them, as the row names the set.
+        let title = sets.first(where: { $0.path == sourceDir })?.title ?? row.title
+        // The bake runs coarse band first, so the panel reads its band list in
+        // that order (lookout_bake_order, include/lookout-library.h).
+        let bands: [BandTotal] = row.bandTodo.enumerated().compactMap { i, n in
+            n == 0 ? nil : BandTotal(band: i + 1, name: TextFormat.usageBand(i + 1), total: n)
+        }
+        bake = BakeProgress(done: 0, total: total, name: title, bands: bands)
+        job.onProgress = { [weak self, weak job] p in
+            // Only the job this model still owns may speak for it. A removed
+            // set cancels its bake, but tile57 stops at the next chart
+            // boundary and goes on reporting until it does — and each report
+            // put the import panel back over the removal.
+            guard let self, let job, self.bakeJob === job else { return }
+            // The count moves on tile57's thread once per cell. Keep the total
+            // from the scan when tile57 has not counted yet, so the bar never
+            // starts at an unknown length.
+            var shown = p
+            if shown.total == 0 { shown.total = total }
+            // And keep the name chosen here. The job knows the folder it was
+            // given; who made the charts in it is the scan's answer, and every
+            // progress tick would otherwise put the folder name back.
+            shown.name = title
+            // The band list comes from the scan, and the job reports none.
+            shown.bands = bands
+            // The core counts what landed once every phase has run, so the
+            // last report is the only one that can name a refusal. Kept here
+            // because the bake is gone by the time anything reads it.
+            if shown.refused > 0 { self.lastBakeRefused = shown.refused }
+            self.bake = shown
+        }
+        ChartBake.run(sourceDir: sourceDir, cells: cells, job: job) { [weak self] outDir in
+            guard let self else { return }
+            self.bakeJob = nil
+            // The set was taken off the list while its charts were baking. What
+            // came out is already being deleted, so there is nothing to read
+            // back and nothing to put on the list — and reading it back is how
+            // a removed set used to reappear.
+            guard self.bakeSource == sourceDir else {
+                self.bakeSource = nil
+                self.bake = nil
+                return
+            }
+            self.bakeSource = nil
+            // The panel stays up across the last read of the folder. Clearing
+            // it here drops the window back to the first-run page for as long
+            // as that takes, and then the chart arrives: the mariner watches
+            // their work apparently undone.
+            self.scanning = true
+            self.scanRequested = true
+            self.bake = nil
+            // The output directory is not read here. The set is the folder the
+            // mariner picked, and it is rescanned below; nil only says the bake
+            // failed.
+            guard outDir != nil else {
+                self.scanning = false
+                self.emptyPick = "Could not bake \((sourceDir as NSString).lastPathComponent)."
+                ChartSetStore.rescan(sourceDir)
+                return
+            }
+            // Read the folder again, not the output directory. The set is the
+            // folder the mariner picked; what was prepared is part of it, and
+            // so is everything that needed no preparing.
+            DispatchQueue.global(qos: .userInitiated).async {
+                let whole = ChartScan.scan(sourceDir)
+                DispatchQueue.main.async {
+                    self.scanning = false
+                    self.scanRequested = false
+                    guard let whole, !whole.cells.isEmpty || !whole.rasters.isEmpty else {
+                        self.emptyPick = "Nothing could be prepared from \((sourceDir as NSString).lastPathComponent)."
+                        ChartSetStore.rescan(sourceDir)
+                        return
+                    }
+                    self.adopt(whole)
+                }
+            }
+        }
+        return true
+    }
+
+    /// Stop the bake. What has already been baked is kept and opened. The
+    /// core records the stop, so the set does not resume on its own.
+    func cancelBake() {
+        if noaaPrepare != nil { cancelNoaaPrepare?() }
+        if let bakeSource { ChartSetStore.noteCancel(bakeSource) }
+        bakeJob?.cancel()
+    }
+
+    /// Switch a set on or off. It stays installed either way. The library is
+    /// composed at open, so this reopens with the new set of charts.
+    func setChartSetOn(_ path: String, _ on: Bool) {
+        guard let i = sets.firstIndex(where: { $0.path == path }) else { return }
+        sets[i].on = on
+        ChartSetStore.setOff(path, !on)
+        syncRasterFromSets()
+        chartOpen.requestOpen(openPaths)
+    }
+
+    /// About how long re-importing a set would take, from what it holds. The
+    /// mariner is deciding whether to throw away work, so the size of that
+    /// work is the fact they need.
+    func rebuildEstimate(_ set: ChartSet) -> String {
+        let n = max(set.cells.count + set.rasters.count, 1)
+        // Measured on this machine over a mixed Chesapeake set: about a fifth
+        // of a second a chart with every core working.
+        let seconds = Double(n) * 0.2
+        return TextFormat.about(seconds)
+    }
+
+    /// Take a set off the list.
+    ///
+    /// Charts this app prepared are deleted with it: they were made from the
+    /// mariner's cells and can be made again, and a 3 GB library left behind
+    /// by a set the mariner removed is the app hoarding on their disk. A
+    /// folder of the mariner's OWN charts is only taken off the list.
+    func removeChartSet(_ path: String) {
+        let gone = sets.first { $0.path == path }
+        // A set removed while it was still baking never reached the list, so
+        // there is no scanned preparedPath to read — and the charts already
+        // written would be left on the disk for good. Where its charts would
+        // be is knowable from the path alone; deleting is a no-op when it
+        // holds nothing.
+        let prepared = gone?.preparedPath ?? ChartBake.preparedDirectory(for: path)
+        // The pictures the set carried go with it. syncRasterFromSets keeps a
+        // picture that belongs to no set — that is how the ones added before
+        // sets existed stay installed — and the moment this set is removed, that
+        // describes every picture it carried. Without this, removing every set
+        // leaves "No charts" in the list and a chart still on screen.
+        let carried = Set(gone?.rasters.map(\.path) ?? [])
+        // Baking charts for a set that is going away is work on files about to
+        // be deleted, and while it ran the panel went on saying "Importing" over
+        // the removal. Stop it, and disown what it has already produced: the
+        // delete below takes that with the rest.
+        if bakeSource == path {
+            ChartSetStore.noteCancel(path)
+            bakeJob?.cancel()
+            bakeJob = nil
+            bake = nil
+            bakeSource = nil
+        }
+        sets.removeAll { $0.path == path }
+        ChartSetStore.remove(path)
+        if !carried.isEmpty {
+            let kept = raster.paths.filter { !carried.contains($0) }
+            if kept != raster.paths {
+                raster.paths = kept
+                Store.shared.set(raster.paths, RasterModel.group, RasterModel.pathsKey)
+            }
+        }
+        syncRasterFromSets()
+        if let prepared {
+            let name = gone?.title ?? (path as NSString).lastPathComponent
+            ChartBake.deleteDerived(prepared) { [weak self] p in
+                guard let self else { return }
+                // A removal that is over reports one last time with no name;
+                // that is what takes the panel away.
+                self.removing = p.name.isEmpty ? nil : BakeProgress(
+                    kind: .removing, done: p.done, total: p.total, name: name, elapsed: p.elapsed)
+            }
+        }
+        chartOpen.requestOpen(openPaths)
+    }
+
+    /// Follow the core's delete of the charts a NOAA pick gave back. The
+    /// charts are out of the library already, and `removing` draws the disk
+    /// work that frees the space.
+    func noteNoaaRemoval(_ st: NoaaState) {
+        if st.removing {
+            if noaaRemovalStart == nil { noaaRemovalStart = Date() }
+            let name = NoaaModel.downloadDirectory.map { ($0 as NSString).lastPathComponent }
+            removing = BakeProgress(kind: .removing, done: Int(st.removeDone),
+                                    total: Int(st.removeTotal), name: name ?? "NOAA",
+                                    elapsed: Date().timeIntervalSince(noaaRemovalStart ?? Date()))
+        } else if noaaRemovalStart != nil {
+            noaaRemovalStart = nil
+            removing = nil
+        }
+    }
+
+    /// Follow the core's prepare of a NOAA download. chartWork returns it as
+    /// it returns a bake, so the pill, the Charts pane and setup draw
+    /// the same bars and bands. True when a prepare has just ended.
+    func noteNoaaPrepare(_ st: NoaaState) -> Bool {
+        guard st.preparing else {
+            guard noaaPrepare != nil else { return false }
+            noaaPrepare = nil
+            noaaPrepareStart = nil
+            return true
+        }
+        if noaaPrepareStart == nil { noaaPrepareStart = Date() }
+        // The bake runs coarse band first (lookout_bake_order), and
+        // BakeProgress.bandProgress walks the count down the bands in that
+        // order.
+        let bands: [BandTotal] = st.bandTotal.enumerated().compactMap { i, n in
+            n == 0 ? nil : BandTotal(band: i + 1, name: TextFormat.usageBand(i + 1), total: Int(n))
+        }
+        // By the agency that made them, as the row names the set.
+        let name = sets.first(where: \.managed)?.title
+            ?? NoaaModel.downloadDirectory.map { ($0 as NSString).lastPathComponent } ?? "NOAA"
+        // No count yet reads as finding charts, as the scan before a bake did.
+        noaaPrepare = BakeProgress(
+            kind: st.toPrepare > 0 ? .importing : .finding,
+            done: Int(st.prepared), total: Int(st.toPrepare), name: name,
+            elapsed: Date().timeIntervalSince(noaaPrepareStart ?? Date()),
+            bands: bands)
+        return false
+    }
+
+    /// Open what the core prepared from a NOAA download. The core has read
+    /// the set again by the time its prepare ends.
+    func adoptNoaaPrepare() {
+        pullChartSets()
+        if let row = sets.first(where: \.managed), row.refused > 0 { lastBakeRefused = row.refused }
+        // pullChartSets opens a library that had no chart. One that was
+        // drawing is opened again with the new charts in it.
+        if chartOpen.hasChart, !chartOpen.chartIsEmpty, !chartOpen.isOpening {
+            chartOpen.requestOpen(openPaths)
+        }
+        runQueuedPick()
+    }
+
+    /// Read the library again after a NOAA pick took charts out of it.
+    ///
+    /// `moved` is the directories the core took out. A pick that gave water
+    /// back and moved none found no download to delete from.
+    func noaaApplied(moved: UInt32, whole: Bool) {
+        guard moved > 0 else {
+            chartOpen.openError = whole ? "Lookout found no downloaded charts to remove."
+                : "Lookout found no downloaded charts for that water."
+            return
+        }
+        pullChartSets()
+        syncRasterFromSets()
+        chartOpen.requestOpen(openPaths)
+    }
+
+}

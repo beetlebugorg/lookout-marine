@@ -1,7 +1,7 @@
 // Plugin tables: the AIS Targets list and whatever else a plugin declares.
 //
 // A declaration names a menu ("Vessels"), a title, typed columns and a default
-// sort; the rows arrive already ordered by the core, band first — an alarmed
+// sort; the rows arrive already ordered by the core, band first: an alarmed
 // vessel holds the top line whatever column the mariner sorted by. The shell's
 // jobs are the window, the mariner's units (the plugin sends SI), and the
 // open/closed mark that tells the plugin somebody is looking.
@@ -75,7 +75,7 @@ namespace lkw
          * what Return activates. */
         int selected{ -1 };
         /* Per built row: the position a reveal centres on (when the row
-         * carries one) and the flag that tints it — kept so a selection
+         * carries one) and the flag that tints it: kept so a selection
          * change restyles in place and Return activates without re-reading
          * the core. */
         std::vector<std::array<double, 2>> row_at;
@@ -103,7 +103,7 @@ namespace lkw
     }
 
     /* Repaint row backgrounds in place: the selection moved, nothing else
-     * did. Rows sit at even children — a hairline rule follows each. */
+     * did. Rows sit at even children: a hairline rule follows each. */
     static void RestyleRows(VesselTableWin *t)
     {
         auto kids = t->rows.Children();
@@ -294,7 +294,7 @@ namespace winrt::LookoutMarine::implementation
 {
     // Reveal a table row's vessel on the chart: follow comes off first, or
     // the camera snaps straight back to own ship. The symbol lands at the
-    // view centre and its bubble pins there — a reveal SHOWS the vessel, not
+    // view centre and its bubble pins there: a reveal SHOWS the vessel, not
     // merely the water it is in (the reference's reveal).
     void MainWindow::RevealOnChart(double lon, double lat)
     {
@@ -422,7 +422,7 @@ namespace winrt::LookoutMarine::implementation
 
         // The keyboard mirrors the mouse: Return opens the selected row the
         // way a double-click does, the arrows move the selection.
-        // Accelerators, not KeyDown — a panel of plain rows holds no focus
+        // Accelerators, not KeyDown: a panel of plain rows holds no focus
         // for key events to route through.
         {
             Input::KeyboardAccelerator enter;
@@ -478,8 +478,8 @@ namespace winrt::LookoutMarine::implementation
     }
 
     // The screenshot protocol's LOOKOUT_SHOW=table[:key[:sort[:asc|desc
-    // [:activate]]]]: open one declared table — the first when no key is
-    // named — sorted as a mariner would by clicking a heading, and
+    // [:activate]]]]: open one declared table, the first when no key is
+    // named: sorted as a mariner would by clicking a heading, and
     // optionally with the top row opened the way a double-click does, so
     // the locate-on-chart path can be photographed.
     void MainWindow::ShowTableHook(std::string const &spec)
@@ -527,7 +527,7 @@ namespace winrt::LookoutMarine::implementation
         }
         // The plugin builds no rows until somebody is looking, so the top
         // row can only be opened after the first batch lands. Looked up
-        // again at fire time — a window closed inside the wait must not be
+        // again at fire time: a window closed inside the wait must not be
         // reached through a stale pointer.
         Microsoft::UI::Xaml::DispatcherTimer timer;
         timer.Interval(std::chrono::milliseconds(1000));
@@ -575,7 +575,7 @@ namespace winrt::LookoutMarine::implementation
     // The tables belong to the chart handle: a close or re-open retires them.
     void MainWindow::CloseVesselWindows()
     {
-        // Close() re-enters the Closed handler, which erases from the map —
+        // Close() re-enters the Closed handler, which erases from the map:
         // walk a copy.
         auto copy = lkw::g_tables;
         for (auto &[k, t] : copy)
