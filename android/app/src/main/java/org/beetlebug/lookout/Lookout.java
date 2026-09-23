@@ -839,8 +839,9 @@ public final class Lookout implements AutoCloseable {
 
     /** What a removal renames to before deleting behind itself. */
     public static String bakeTrashPrefix()        { return nBakeTrashPrefix(); }
-    /** The test a launch sweep uses. */
-    public static boolean bakeIsTrash(String name) { return nBakeIsTrash(name); }
+    /** Delete what removals left under root. Blocks while it deletes, so
+     *  call it off the main thread. Returns how many directories went. */
+    public static int bakeSweep(String root)       { return nBakeSweep(root); }
 
     // ---- portrayal quick toggles -------------------------------------------
 
@@ -870,7 +871,7 @@ public final class Lookout implements AutoCloseable {
     private static native String nBakePreparedName(String source);
     private static native boolean nBakeIsDerived(String root, String path);
     private static native String nBakeTrashPrefix();
-    private static native boolean nBakeIsTrash(String name);
+    private static native int nBakeSweep(String root);
     private static native void nToggleText(long h);
     private static native void nToggleSoundings(long h);
     private static native void nToggleOtherCategory(long h);
@@ -1029,6 +1030,18 @@ public final class Lookout implements AutoCloseable {
     public static void noaaDownload(long n, String regionIds, String destDir, boolean again) {
         nNoaaSvcDownload(n, regionIds, destDir, again);
     }
+    /** Make the download at destDir hold the picked water: record the pick,
+     *  delete the cells it gave back, fetch what it lacks. Returns how many
+     *  directories left the library. */
+    public static int noaaApply(long n, String pickedIds, String destDir, boolean again) {
+        return nNoaaSvcApply(n, pickedIds, destDir, again);
+    }
+    /** out[0] cells, [1] held by the managed set, [2] bytes to fetch the
+     *  missing ones, [3] bytes to fetch the held ones again, [4] 1 when all
+     *  held, [5] 1 when recorded. False before a catalog is read. */
+    public static boolean noaaRegionState(long n, String regionId, long[] out) {
+        return nNoaaSvcRegionState(n, regionId, out);
+    }
     /** The boxes of a region's coverage, flattened as west, south, east,
      *  north. Returns how many boxes there are, which may be more than `out`
      *  held. */
@@ -1076,6 +1089,8 @@ public final class Lookout implements AutoCloseable {
     private static native void nNoaaSvcCancel(long n);
     private static native boolean nNoaaSvcCost(long n, String regionIds, long[] out);
     private static native void nNoaaSvcDownload(long n, String regionIds, String destDir, boolean again);
+    private static native int nNoaaSvcApply(long n, String pickedIds, String destDir, boolean again);
+    private static native boolean nNoaaSvcRegionState(long n, String regionId, long[] out);
     private static native int nNoaaSvcRegionCoverage(long n, String regionId, double[] out);
     private static native String[] nTables(long h);
     private static native String[] nTableRows(long h, String id, String key, String sortKey, boolean ascending);

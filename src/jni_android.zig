@@ -2056,6 +2056,15 @@ const lookout_noaa_region = extern struct {
 
 const lookout_noaa_box = extern struct { west: f64, south: f64, east: f64, north: f64 };
 
+const lookout_noaa_region_info = extern struct {
+    cells: u32,
+    held: u32,
+    bytes: u64,
+    held_bytes: u64,
+    all_held: u8,
+    recorded: u8,
+};
+
 const lookout_noaa_state = extern struct {
     phase: u8,
     have_catalog: u8,
@@ -3656,7 +3665,7 @@ export fn Java_org_beetlebug_lookout_Lookout_nChartSetsNoteBake(env: [*c]j.JNIEn
 extern fn lookout_bake_prepared_name(source: ?[*:0]const u8, out: [*]u8, cap: usize) usize;
 extern fn lookout_bake_is_derived(root: ?[*:0]const u8, path: ?[*:0]const u8) c_int;
 extern fn lookout_bake_trash_prefix() [*:0]const u8;
-extern fn lookout_bake_is_trash(name: ?[*:0]const u8) c_int;
+extern fn lookout_bake_sweep(root: ?[*:0]const u8) usize;
 
 /// String nBakePreparedName(String source) -- the directory name `source` is
 /// prepared into, under the shell's charts root. An archive names it without
@@ -3691,12 +3700,13 @@ export fn Java_org_beetlebug_lookout_Lookout_nBakeTrashPrefix(env: [*c]j.JNIEnv,
     return env_(env).NewStringUTF.?(env, lookout_bake_trash_prefix());
 }
 
-/// boolean nBakeIsTrash(String name) -- the test a launch sweep uses.
-export fn Java_org_beetlebug_lookout_Lookout_nBakeIsTrash(env: [*c]j.JNIEnv, cls: j.jclass, name: j.jstring) j.jboolean {
+/// int nBakeSweep(String root) -- delete what removals left under `root`.
+/// Blocks while it deletes.
+export fn Java_org_beetlebug_lookout_Lookout_nBakeSweep(env: [*c]j.JNIEnv, cls: j.jclass, root: j.jstring) j.jint {
     _ = cls;
-    const n = Borrowed.get(env, name) orelse return 0;
-    defer n.release(env);
-    return if (lookout_bake_is_trash(n.ptr()) != 0) 1 else 0;
+    const r = Borrowed.get(env, root) orelse return 0;
+    defer r.release(env);
+    return @intCast(@min(lookout_bake_sweep(r.ptr()), std.math.maxInt(j.jint)));
 }
 
 // ---- the NOAA service handle -------------------------------------------------
@@ -3724,6 +3734,8 @@ extern fn lookout_noaa_refresh(n: ?*c_noaa) void;
 extern fn lookout_noaa_cost(n: ?*c_noaa, region_ids: [*:0]const u8, out_cells: ?*u32, out_bytes: ?*u64, out_held: ?*u32, out_held_bytes: ?*u64) c_int;
 extern fn lookout_noaa_region_coverage(n: ?*c_noaa, region_id: [*:0]const u8, out: ?[*]lookout_noaa_box, cap: usize) usize;
 extern fn lookout_noaa_download(n: ?*c_noaa, region_ids: [*:0]const u8, dest_dir: [*:0]const u8, again: c_int) void;
+extern fn lookout_noaa_apply(n: ?*c_noaa, picked_ids: [*:0]const u8, dest_dir: [*:0]const u8, again: c_int) u32;
+extern fn lookout_noaa_region_state(n: ?*c_noaa, region_id: [*:0]const u8, out: *lookout_noaa_region_info) c_int;
 extern fn lookout_noaa_cancel(n: ?*c_noaa) void;
 
 fn noaaOf(n: j.jlong) ?*c_noaa {
@@ -3980,6 +3992,39 @@ export fn Java_org_beetlebug_lookout_Lookout_nNoaaSvcDownload(env: [*c]j.JNIEnv,
     const cd = env_(env).GetStringUTFChars.?(env, dest, null) orelse return;
     defer env_(env).ReleaseStringUTFChars.?(env, dest, cd);
     lookout_noaa_download(noaaOf(n), @ptrCast(ci), @ptrCast(cd), if (again != 0) 1 else 0);
+}
+
+/// int nNoaaSvcApply(long n, String pickedIds, String destDir, boolean again)
+/// -- make the download hold the pick. Returns the directories taken out.
+export fn Java_org_beetlebug_lookout_Lookout_nNoaaSvcApply(env: [*c]j.JNIEnv, cls: j.jclass, n: j.jlong, ids: j.jstring, dest: j.jstring, again: j.jboolean) j.jint {
+    _ = cls;
+    if (ids == null or dest == null) return 0;
+    const ci = env_(env).GetStringUTFChars.?(env, ids, null) orelse return 0;
+    defer env_(env).ReleaseStringUTFChars.?(env, ids, ci);
+    const cd = env_(env).GetStringUTFChars.?(env, dest, null) orelse return 0;
+    defer env_(env).ReleaseStringUTFChars.?(env, dest, cd);
+    const moved = lookout_noaa_apply(noaaOf(n), @ptrCast(ci), @ptrCast(cd), if (again != 0) 1 else 0);
+    return @intCast(@min(moved, std.math.maxInt(j.jint)));
+}
+
+/// boolean nNoaaSvcRegionState(long n, String regionId, long[] out) -- [0]
+/// cells, [1] held, [2] bytes, [3] held bytes, [4] all held, [5] recorded.
+export fn Java_org_beetlebug_lookout_Lookout_nNoaaSvcRegionState(env: [*c]j.JNIEnv, cls: j.jclass, n: j.jlong, region: j.jstring, out: j.jlongArray) j.jboolean {
+    _ = cls;
+    if (region == null) return 0;
+    const c = env_(env).GetStringUTFChars.?(env, region, null) orelse return 0;
+    defer env_(env).ReleaseStringUTFChars.?(env, region, c);
+    var st: lookout_noaa_region_info = std.mem.zeroes(lookout_noaa_region_info);
+    const ok = lookout_noaa_region_state(noaaOf(n), @ptrCast(c), &st) != 0;
+    if (out != null and env_(env).GetArrayLength.?(env, out) >= 6) {
+        var buf: [6]j.jlong = .{
+            @intCast(st.cells),    @intCast(st.held),
+            @bitCast(st.bytes),    @bitCast(st.held_bytes),
+            @intCast(st.all_held), @intCast(st.recorded),
+        };
+        env_(env).SetLongArrayRegion.?(env, out, 0, 6, &buf);
+    }
+    return if (ok) 1 else 0;
 }
 
 /// int nNoaaSvcRegionCoverage(long n, String regionId, double[] out) -- the
