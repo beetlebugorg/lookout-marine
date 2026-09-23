@@ -131,14 +131,15 @@ namespace lkw
 
     void DepthChoice::Plan() { lookout_depth_plan(draft_m_, clearance_m_, feet_ ? 1 : 0, &plan_); }
 
-    // One step of the draft field: half a foot, or a tenth of a metre, up to
-    // 100 ft or 30 m.
+    // One step of the draft field. The plan holds the draft between one step
+    // and the most the step accepts. Zero is the core's starting boat, so the
+    // step stops at one press above it.
     void DepthChoice::Step(int by)
     {
-        double const step = feet_ ? 0.5 : 0.1;
-        double const most = feet_ ? 100.0 : 30.0;
-        draft_m_ = std::max(step, std::min(most, plan_.draft + step * by)) * plan_.metres_per_unit;
+        double const step = plan_.draft_step;
+        draft_m_ = std::max(step, plan_.draft + step * by) * plan_.metres_per_unit;
         Plan();
+        draft_m_ = plan_.draft_m;
     }
 
     bool DepthChoice::ReadDraft(std::wstring const &text)
@@ -148,8 +149,9 @@ namespace lkw
             double const v = std::stod(text);
             if (v <= 0)
                 return false;
-            draft_m_ = std::min(feet_ ? 100.0 : 30.0, v) * plan_.metres_per_unit;
+            draft_m_ = v * plan_.metres_per_unit;
             Plan();
+            draft_m_ = plan_.draft_m;
             return true;
         }
         catch (std::exception const &)
