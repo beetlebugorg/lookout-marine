@@ -627,7 +627,7 @@ namespace winrt::LookoutMarine::implementation
 
         // The NOAA service, open for the life of the window with its own
         // fetcher (library/ui/ChartLinks.cpp). noaa_state is the state as of
-        // the last lookout_noaa_svc_changed that returned 1.
+        // the last lookout_noaa_changed that returned 1.
         lookout_noaa *noaa{ nullptr };
         lookout_noaa_state noaa_state{};
         std::atomic<bool> noaa_wake_posted{ false };

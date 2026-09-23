@@ -448,7 +448,7 @@ namespace winrt::LookoutMarine::implementation
         noaa_region_id.clear();
         noaa_picked_seeded = false;
         noaa_held_at_open.clear();
-        lookout_noaa_svc_refresh(noaa);
+        lookout_noaa_refresh(noaa);
         first_run.BeginAt(lkw::FirstRunStep::Coverage);
         FirstRunRender();
     }
@@ -646,7 +646,7 @@ namespace winrt::LookoutMarine::implementation
             // the mariner is watching.
             uint32_t cells = 0;
             uint64_t bytes = 0;
-            lookout_noaa_svc_cost(noaa, noaa_region_id.c_str(), &cells, &bytes,
+            lookout_noaa_cost(noaa, noaa_region_id.c_str(), &cells, &bytes,
                                     nullptr, nullptr);
 
             lkw::FirstRunOrder order;
@@ -691,12 +691,12 @@ namespace winrt::LookoutMarine::implementation
     // ---- the NOAA service and the setup clock ------------------------------
 
     // The service queued a response, or the readout tick came round. Read its
-    // state only when lookout_noaa_svc_changed returns 1.
+    // state only when lookout_noaa_changed returns 1.
     void MainWindow::NoaaChanged()
     {
-        if (noaa == nullptr || !lookout_noaa_svc_changed(noaa))
+        if (noaa == nullptr || !lookout_noaa_changed(noaa))
             return;
-        lookout_noaa_svc_poll(noaa, &noaa_state);
+        lookout_noaa_poll(noaa, &noaa_state);
         lookout_noaa_state const &st = noaa_state;
 
         // Retry of an order refused with no catalog, once the catalog read it
@@ -757,7 +757,7 @@ namespace winrt::LookoutMarine::implementation
         noaa_watch_again = again;
         noaa_retry_waiting = false;
         noaa_watch_run = noaa_state.run + 1;
-        lookout_noaa_svc_download(noaa, regions.c_str(), dest.c_str(), again ? 1 : 0);
+        lookout_noaa_download(noaa, regions.c_str(), dest.c_str(), again ? 1 : 0);
         NoaaChanged();
     }
 
@@ -780,7 +780,7 @@ namespace winrt::LookoutMarine::implementation
         else
         {
             noaa_retry_waiting = true;
-            lookout_noaa_svc_refresh(noaa);
+            lookout_noaa_refresh(noaa);
         }
     }
 
@@ -884,7 +884,7 @@ namespace winrt::LookoutMarine::implementation
             return false;
         uint32_t cells = 0, held = 0;
         uint64_t bytes = 0, held_bytes = 0;
-        if (!lookout_noaa_svc_cost(noaa, noaa_region_id.c_str(), &cells, &bytes, &held,
+        if (!lookout_noaa_cost(noaa, noaa_region_id.c_str(), &cells, &bytes, &held,
                                      &held_bytes))
             return false;
         return cells == 0 && held > 0;
@@ -930,12 +930,12 @@ namespace winrt::LookoutMarine::implementation
             std::vector<std::string> names;
             if (ids.empty())
                 return names;
-            size_t const n = lookout_noaa_svc_region_cells(noaa, ids.c_str(), nullptr, 0);
+            size_t const n = lookout_noaa_region_cells(noaa, ids.c_str(), nullptr, 0);
             if (n == 0)
                 return names;
             std::vector<char const *> buf(n, nullptr);
             size_t const got =
-                lookout_noaa_svc_region_cells(noaa, ids.c_str(), buf.data(), buf.size());
+                lookout_noaa_region_cells(noaa, ids.c_str(), buf.data(), buf.size());
             for (size_t i = 0; i < got && i < buf.size(); ++i)
                 if (buf[i] != nullptr)
                 {
@@ -1002,7 +1002,7 @@ namespace winrt::LookoutMarine::implementation
 
         uint32_t cells = 0;
         if (!noaa_region_id.empty())
-            lookout_noaa_svc_cost(noaa, noaa_region_id.c_str(), &cells, nullptr, nullptr,
+            lookout_noaa_cost(noaa, noaa_region_id.c_str(), &cells, nullptr, nullptr,
                                     nullptr);
         if (cells > 0)
         {
@@ -1235,14 +1235,14 @@ namespace winrt::LookoutMarine::implementation
 
         if (names.empty())
         {
-            lookout_noaa_svc_have(noaa, nullptr, 0);
+            lookout_noaa_have(noaa, nullptr, 0);
             return;
         }
         std::vector<char const *> cps;
         cps.reserve(names.size());
         for (auto const &n : names)
             cps.push_back(n.c_str());
-        lookout_noaa_svc_have(noaa, cps.data(), cps.size());
+        lookout_noaa_have(noaa, cps.data(), cps.size());
     }
 
     // Price every region on its own.
@@ -1270,12 +1270,12 @@ namespace winrt::LookoutMarine::implementation
         std::set<std::string> const mine = ChartSetCells(true);
         for (size_t i = 0; i < n; ++i)
         {
-            size_t const want = lookout_noaa_svc_region_cells(noaa, regions[i].id,
+            size_t const want = lookout_noaa_region_cells(noaa, regions[i].id,
                                                                 nullptr, 0);
             if (want == 0)
                 continue;
             std::vector<char const *> buf(want, nullptr);
-            size_t const got = lookout_noaa_svc_region_cells(noaa, regions[i].id,
+            size_t const got = lookout_noaa_region_cells(noaa, regions[i].id,
                                                                buf.data(), buf.size());
             uint32_t held = 0, missing = 0;
             for (size_t c = 0; c < got && c < buf.size(); ++c)
@@ -1384,11 +1384,11 @@ namespace winrt::LookoutMarine::implementation
             // The catalog's boxes, or the region's rough extent until the
             // catalog is in. What downloads is the catalog's either way.
             std::vector<lookout_noaa_box> boxes;
-            size_t const have = lookout_noaa_svc_region_coverage(noaa, r.id, nullptr, 0);
+            size_t const have = lookout_noaa_region_coverage(noaa, r.id, nullptr, 0);
             if (have > 0)
             {
                 boxes.resize(have);
-                lookout_noaa_svc_region_coverage(noaa, r.id, boxes.data(), have);
+                lookout_noaa_region_coverage(noaa, r.id, boxes.data(), have);
             }
             else
             {
@@ -1544,7 +1544,7 @@ namespace winrt::LookoutMarine::implementation
         if (!st.have_catalog && st.phase != 1 && !noaa_catalog_asked)
         {
             noaa_catalog_asked = true;
-            lookout_noaa_svc_refresh(noaa);
+            lookout_noaa_refresh(noaa);
         }
         if (st.have_catalog)
             noaa_catalog_asked = false; // a later failure may ask again
@@ -1615,7 +1615,7 @@ namespace winrt::LookoutMarine::implementation
                 again.Content(box_value(L"Try Again"));
                 again.Click([this](auto &&, auto &&) {
                     noaa_catalog_asked = true;
-                    lookout_noaa_svc_refresh(noaa);
+                    lookout_noaa_refresh(noaa);
                     FirstRunRender();
                 });
                 failed.Children().Append(again);
@@ -1775,7 +1775,7 @@ namespace winrt::LookoutMarine::implementation
             stop.Content(box_value(L"Stop"));
             stop.HorizontalAlignment(HorizontalAlignment::Left);
             stop.Click([this](auto &&, auto &&) {
-                lookout_noaa_svc_cancel(noaa);
+                lookout_noaa_cancel(noaa);
                 if (bake_job)
                 {
                     // The mariner stopped it. The core skips this set on resume until a
@@ -1890,7 +1890,7 @@ namespace winrt::LookoutMarine::implementation
                 // holds: charts to fetch, water to give back, or neither.
                 uint32_t cells = 0;
                 if (!noaa_region_id.empty())
-                    lookout_noaa_svc_cost(noaa, noaa_region_id.c_str(), &cells, nullptr,
+                    lookout_noaa_cost(noaa, noaa_region_id.c_str(), &cells, nullptr,
                                             nullptr, nullptr);
                 FirstRunPrimaryBtn().IsEnabled(
                     lkw::ApplyEnabled(have_catalog, cells, removing.size()));
@@ -1925,7 +1925,7 @@ namespace winrt::LookoutMarine::implementation
             f.credit = std::wstring{ ScaleBarCredit().Text() };
             f.removing = NoaaRegionNames(removing);
             if (first_run.step() == lkw::FirstRunStep::Coverage && !noaa_region_id.empty())
-                lookout_noaa_svc_cost(noaa, noaa_region_id.c_str(), &f.cells,
+                lookout_noaa_cost(noaa, noaa_region_id.c_str(), &f.cells,
                                         &f.bytes, &f.held, &f.held_bytes);
             std::wstring const note = first_run.Footnote(f);
             FirstRunFootnote().Text(winrt::hstring{ note });

@@ -2024,7 +2024,7 @@ namespace winrt::LookoutMarine::implementation
                 Controls::Button stop;
                 stop.Content(winrt::box_value(L"Cancel"));
                 stop.Click([this](auto &&, auto &&) {
-                    lookout_noaa_svc_cancel(noaa);
+                    lookout_noaa_cancel(noaa);
                     BuildSettingsPage();
                 });
                 Controls::Grid::SetColumn(stop, 1);

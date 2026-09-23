@@ -27,17 +27,17 @@ final class NoaaService: NoaaEngine {
     @discardableResult
     func noaaRefresh() -> Bool {
         guard let handle else { return false }
-        lookout_noaa_svc_refresh(handle)
+        lookout_noaa_refresh(handle)
         return true
     }
 
     func noaaChanged() -> Bool {
-        lookout_noaa_svc_changed(handle) != 0
+        lookout_noaa_changed(handle) != 0
     }
 
     func noaaState() -> NoaaState {
         var raw = lookout_noaa_state()
-        lookout_noaa_svc_poll(handle, &raw)
+        lookout_noaa_poll(handle, &raw)
         var s = NoaaState()
         s.phase = NoaaState.Phase(rawValue: raw.phase) ?? .idle
         s.haveCatalog = raw.have_catalog != 0
@@ -67,7 +67,7 @@ final class NoaaService: NoaaEngine {
         var held: UInt32 = 0
         var heldBytes: UInt64 = 0
         let ok = regionIDs.withCString {
-            lookout_noaa_svc_cost(handle, $0, &cells, &bytes, &held, &heldBytes)
+            lookout_noaa_cost(handle, $0, &cells, &bytes, &held, &heldBytes)
         }
         return ok != 0 ? NoaaCost(cells: cells, bytes: bytes,
                                   held: held, heldBytes: heldBytes) : nil
@@ -78,7 +78,7 @@ final class NoaaService: NoaaEngine {
     func noaaDownload(regionIDs: String, destination: String, again: Bool) {
         regionIDs.withCString { ids in
             destination.withCString { dest in
-                lookout_noaa_svc_download(handle, ids, dest, again ? 1 : 0)
+                lookout_noaa_download(handle, ids, dest, again ? 1 : 0)
             }
         }
     }
@@ -87,11 +87,11 @@ final class NoaaService: NoaaEngine {
     func noaaRegionCells(regionIDs: String) -> [String] {
         guard !regionIDs.isEmpty else { return [] }
         return regionIDs.withCString { ids -> [String] in
-            let n = lookout_noaa_svc_region_cells(handle, ids, nil, 0)
+            let n = lookout_noaa_region_cells(handle, ids, nil, 0)
             guard n > 0 else { return [] }
             var raw = [UnsafePointer<CChar>?](repeating: nil, count: n)
             let got = raw.withUnsafeMutableBufferPointer {
-                lookout_noaa_svc_region_cells(handle, ids, $0.baseAddress, n)
+                lookout_noaa_region_cells(handle, ids, $0.baseAddress, n)
             }
             return raw.prefix(min(got, n)).compactMap { $0.map { String(cString: $0) } }
         }
@@ -100,11 +100,11 @@ final class NoaaService: NoaaEngine {
     /// The boxes of one region's coarse cells, as the catalog states them.
     func noaaRegionCoverage(_ regionID: String) -> [GeoBox] {
         regionID.withCString { id -> [GeoBox] in
-            let n = lookout_noaa_svc_region_coverage(handle, id, nil, 0)
+            let n = lookout_noaa_region_coverage(handle, id, nil, 0)
             guard n > 0 else { return [] }
             var raw = [lookout_noaa_box](repeating: .init(), count: n)
             let got = raw.withUnsafeMutableBufferPointer {
-                lookout_noaa_svc_region_coverage(handle, id, $0.baseAddress, n)
+                lookout_noaa_region_coverage(handle, id, $0.baseAddress, n)
             }
             return raw.prefix(min(got, n)).map {
                 GeoBox(west: $0.west, south: $0.south, east: $0.east, north: $0.north)
@@ -113,18 +113,18 @@ final class NoaaService: NoaaEngine {
     }
 
     func noaaCancel() {
-        lookout_noaa_svc_cancel(handle)
+        lookout_noaa_cancel(handle)
     }
 
     func noaaOutdated() -> UInt32 {
-        lookout_noaa_svc_outdated(handle)
+        lookout_noaa_outdated(handle)
     }
 
     func noaaUpdate(destination: String) {
-        destination.withCString { lookout_noaa_svc_update(handle, $0) }
+        destination.withCString { lookout_noaa_update(handle, $0) }
     }
 
     func noaaUpdateDue() -> Bool {
-        lookout_noaa_svc_update_due(handle) != 0
+        lookout_noaa_update_due(handle) != 0
     }
 }

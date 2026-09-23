@@ -3713,15 +3713,15 @@ const NoaaWakeFn = *const fn (user: ?*anyopaque) callconv(.c) void;
 
 extern fn lookout_noaa_open(store: ?*c_store, sets: ?*c_sets) ?*c_noaa;
 extern fn lookout_noaa_close(n: ?*c_noaa) void;
-extern fn lookout_noaa_svc_set_http_provider(n: ?*c_noaa, get: ?HttpGetFn, cancel: ?HttpCancelFn, wake: ?NoaaWakeFn, user: ?*anyopaque) void;
-extern fn lookout_noaa_svc_http_respond_chunk(n: ?*c_noaa, req_id: u64, bytes: ?*const anyopaque, len: usize, status: c_int, done: c_int) void;
-extern fn lookout_noaa_svc_changed(n: ?*c_noaa) c_int;
-extern fn lookout_noaa_svc_poll(n: ?*c_noaa, out: *lookout_noaa_state) void;
-extern fn lookout_noaa_svc_refresh(n: ?*c_noaa) void;
-extern fn lookout_noaa_svc_cost(n: ?*c_noaa, region_ids: [*:0]const u8, out_cells: ?*u32, out_bytes: ?*u64, out_held: ?*u32, out_held_bytes: ?*u64) c_int;
-extern fn lookout_noaa_svc_region_coverage(n: ?*c_noaa, region_id: [*:0]const u8, out: ?[*]lookout_noaa_box, cap: usize) usize;
-extern fn lookout_noaa_svc_download(n: ?*c_noaa, region_ids: [*:0]const u8, dest_dir: [*:0]const u8, again: c_int) void;
-extern fn lookout_noaa_svc_cancel(n: ?*c_noaa) void;
+extern fn lookout_noaa_set_http_provider(n: ?*c_noaa, get: ?HttpGetFn, cancel: ?HttpCancelFn, wake: ?NoaaWakeFn, user: ?*anyopaque) void;
+extern fn lookout_noaa_http_respond_chunk(n: ?*c_noaa, req_id: u64, bytes: ?*const anyopaque, len: usize, status: c_int, done: c_int) void;
+extern fn lookout_noaa_changed(n: ?*c_noaa) c_int;
+extern fn lookout_noaa_poll(n: ?*c_noaa, out: *lookout_noaa_state) void;
+extern fn lookout_noaa_refresh(n: ?*c_noaa) void;
+extern fn lookout_noaa_cost(n: ?*c_noaa, region_ids: [*:0]const u8, out_cells: ?*u32, out_bytes: ?*u64, out_held: ?*u32, out_held_bytes: ?*u64) c_int;
+extern fn lookout_noaa_region_coverage(n: ?*c_noaa, region_id: [*:0]const u8, out: ?[*]lookout_noaa_box, cap: usize) usize;
+extern fn lookout_noaa_download(n: ?*c_noaa, region_ids: [*:0]const u8, dest_dir: [*:0]const u8, again: c_int) void;
+extern fn lookout_noaa_cancel(n: ?*c_noaa) void;
 
 fn noaaOf(n: j.jlong) ?*c_noaa {
     if (n == 0) return null;
@@ -3745,7 +3745,7 @@ fn noaaGetCb(user: ?*anyopaque, req_id: u64, url: [*:0]const u8, allow_file: c_i
     if (len >= MAX_URL or noaa_ask_count >= noaa_asks.len) {
         _ = std.c.pthread_mutex_unlock(&noaa_mu);
         // Answered, so the id does not hold one of the core's slots.
-        lookout_noaa_svc_http_respond_chunk(@ptrCast(user), req_id, null, 0, 0, 1);
+        lookout_noaa_http_respond_chunk(@ptrCast(user), req_id, null, 0, 0, 1);
         return;
     }
     const ask = &noaa_asks[noaa_ask_count];
@@ -3800,7 +3800,7 @@ export fn Java_org_beetlebug_lookout_Lookout_nNoaaFetch(env: [*c]j.JNIEnv, cls: 
     _ = cls;
     const x = noaaOf(n) orelse return;
     if (on == 0) {
-        lookout_noaa_svc_set_http_provider(x, null, null, null, null);
+        lookout_noaa_set_http_provider(x, null, null, null, null);
         _ = std.c.pthread_mutex_lock(&noaa_mu);
         noaa_ask_count = 0;
         noaa_cancel_count = 0;
@@ -3813,7 +3813,7 @@ export fn Java_org_beetlebug_lookout_Lookout_nNoaaFetch(env: [*c]j.JNIEnv, cls: 
     _ = std.c.pthread_mutex_lock(&noaa_mu);
     noaa_stopping = false;
     _ = std.c.pthread_mutex_unlock(&noaa_mu);
-    lookout_noaa_svc_set_http_provider(x, noaaGetCb, noaaCancelCb, noaaWakeCb, x);
+    lookout_noaa_set_http_provider(x, noaaGetCb, noaaCancelCb, noaaWakeCb, x);
 }
 
 /// int nNoaaFetchWait(long[] ids, int[] allow, String[] urls, long[] cancelled,
@@ -3884,21 +3884,21 @@ export fn Java_org_beetlebug_lookout_Lookout_nNoaaRespondChunk(env: [*c]j.JNIEnv
     const req: u64 = @bitCast(id);
     const fin: c_int = if (done != 0) 1 else 0;
     if (buf == null) {
-        lookout_noaa_svc_http_respond_chunk(x, req, null, 0, status, fin);
+        lookout_noaa_http_respond_chunk(x, req, null, 0, status, fin);
         return;
     }
     var have: usize = @intCast(env_(env).GetArrayLength.?(env, buf));
     if (len >= 0) have = @min(have, @as(usize, @intCast(len)));
     if (have == 0) {
-        lookout_noaa_svc_http_respond_chunk(x, req, null, 0, status, fin);
+        lookout_noaa_http_respond_chunk(x, req, null, 0, status, fin);
         return;
     }
     const p = env_(env).GetByteArrayElements.?(env, buf, null) orelse {
-        lookout_noaa_svc_http_respond_chunk(x, req, null, 0, 0, 1);
+        lookout_noaa_http_respond_chunk(x, req, null, 0, 0, 1);
         return;
     };
     defer env_(env).ReleaseByteArrayElements.?(env, buf, p, j.JNI_ABORT);
-    lookout_noaa_svc_http_respond_chunk(x, req, p, have, status, fin);
+    lookout_noaa_http_respond_chunk(x, req, p, have, status, fin);
 }
 
 /// boolean nNoaaSvcChanged(long n) -- adopt what arrived, and return whether
@@ -3906,7 +3906,7 @@ export fn Java_org_beetlebug_lookout_Lookout_nNoaaRespondChunk(env: [*c]j.JNIEnv
 export fn Java_org_beetlebug_lookout_Lookout_nNoaaSvcChanged(env: [*c]j.JNIEnv, cls: j.jclass, n: j.jlong) j.jboolean {
     _ = env;
     _ = cls;
-    return if (lookout_noaa_svc_changed(noaaOf(n)) != 0) 1 else 0;
+    return if (lookout_noaa_changed(noaaOf(n)) != 0) 1 else 0;
 }
 
 /// boolean nNoaaSvcPoll(long n, long[] out) -- the slots of nNoaaPoll, then
@@ -3914,7 +3914,7 @@ export fn Java_org_beetlebug_lookout_Lookout_nNoaaSvcChanged(env: [*c]j.JNIEnv, 
 export fn Java_org_beetlebug_lookout_Lookout_nNoaaSvcPoll(env: [*c]j.JNIEnv, cls: j.jclass, n: j.jlong, out: j.jlongArray) j.jboolean {
     _ = cls;
     var st: lookout_noaa_state = std.mem.zeroes(lookout_noaa_state);
-    lookout_noaa_svc_poll(noaaOf(n), &st);
+    lookout_noaa_poll(noaaOf(n), &st);
     if (out != null and env_(env).GetArrayLength.?(env, out) >= 10) {
         var buf: [10]j.jlong = .{
             @intCast(st.phase),         st.checked_at,
@@ -3933,7 +3933,7 @@ export fn Java_org_beetlebug_lookout_Lookout_nNoaaSvcPoll(env: [*c]j.JNIEnv, cls
 export fn Java_org_beetlebug_lookout_Lookout_nNoaaSvcText(env: [*c]j.JNIEnv, cls: j.jclass, n: j.jlong) j.jobjectArray {
     _ = cls;
     var st: lookout_noaa_state = std.mem.zeroes(lookout_noaa_state);
-    lookout_noaa_svc_poll(noaaOf(n), &st);
+    lookout_noaa_poll(noaaOf(n), &st);
     const items = [_]?[*:0]const u8{ @ptrCast(&st.date), @ptrCast(&st.err) };
     return jstrArray(env, &items);
 }
@@ -3941,13 +3941,13 @@ export fn Java_org_beetlebug_lookout_Lookout_nNoaaSvcText(env: [*c]j.JNIEnv, cls
 export fn Java_org_beetlebug_lookout_Lookout_nNoaaSvcRefresh(env: [*c]j.JNIEnv, cls: j.jclass, n: j.jlong) void {
     _ = env;
     _ = cls;
-    lookout_noaa_svc_refresh(noaaOf(n));
+    lookout_noaa_refresh(noaaOf(n));
 }
 
 export fn Java_org_beetlebug_lookout_Lookout_nNoaaSvcCancel(env: [*c]j.JNIEnv, cls: j.jclass, n: j.jlong) void {
     _ = env;
     _ = cls;
-    lookout_noaa_svc_cancel(noaaOf(n));
+    lookout_noaa_cancel(noaaOf(n));
 }
 
 /// boolean nNoaaSvcCost(long n, String regionIds, long[] out) -- the slots of
@@ -3961,7 +3961,7 @@ export fn Java_org_beetlebug_lookout_Lookout_nNoaaSvcCost(env: [*c]j.JNIEnv, cls
     var bytes: u64 = 0;
     var held: u32 = 0;
     var held_bytes: u64 = 0;
-    const ok = lookout_noaa_svc_cost(noaaOf(n), @ptrCast(c), &cells, &bytes, &held, &held_bytes);
+    const ok = lookout_noaa_cost(noaaOf(n), @ptrCast(c), &cells, &bytes, &held, &held_bytes);
     if (out != null and env_(env).GetArrayLength.?(env, out) >= 4) {
         var buf: [4]j.jlong = .{ @intCast(cells), @bitCast(bytes), @intCast(held), @bitCast(held_bytes) };
         env_(env).SetLongArrayRegion.?(env, out, 0, 4, &buf);
@@ -3976,7 +3976,7 @@ export fn Java_org_beetlebug_lookout_Lookout_nNoaaSvcDownload(env: [*c]j.JNIEnv,
     defer env_(env).ReleaseStringUTFChars.?(env, ids, ci);
     const cd = env_(env).GetStringUTFChars.?(env, dest, null) orelse return;
     defer env_(env).ReleaseStringUTFChars.?(env, dest, cd);
-    lookout_noaa_svc_download(noaaOf(n), @ptrCast(ci), @ptrCast(cd), if (again != 0) 1 else 0);
+    lookout_noaa_download(noaaOf(n), @ptrCast(ci), @ptrCast(cd), if (again != 0) 1 else 0);
 }
 
 /// int nNoaaSvcRegionCoverage(long n, String regionId, double[] out) -- the
@@ -3988,10 +3988,10 @@ export fn Java_org_beetlebug_lookout_Lookout_nNoaaSvcRegionCoverage(env: [*c]j.J
     const c = env_(env).GetStringUTFChars.?(env, region, null) orelse return 0;
     defer env_(env).ReleaseStringUTFChars.?(env, region, c);
     const cap: usize = if (out == null) 0 else @as(usize, @intCast(env_(env).GetArrayLength.?(env, out))) / 4;
-    if (cap == 0) return @intCast(lookout_noaa_svc_region_coverage(x, @ptrCast(c), null, 0));
+    if (cap == 0) return @intCast(lookout_noaa_region_coverage(x, @ptrCast(c), null, 0));
     const boxes = gpa.alloc(lookout_noaa_box, cap) catch return 0;
     defer gpa.free(boxes);
-    const have = lookout_noaa_svc_region_coverage(x, @ptrCast(c), boxes.ptr, cap);
+    const have = lookout_noaa_region_coverage(x, @ptrCast(c), boxes.ptr, cap);
     const wrote = @min(have, cap);
     const flat = gpa.alloc(j.jdouble, wrote * 4) catch return @intCast(have);
     defer gpa.free(flat);

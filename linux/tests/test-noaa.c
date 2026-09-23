@@ -219,7 +219,7 @@ test_switch_during_download (void)
   LkFakeFetch fake = { 0 };
   lookout_noaa_state now;
 
-  lookout_noaa_svc_set_http_provider (service, lk_fake_get, lk_fake_cancel, NULL, &fake);
+  lookout_noaa_set_http_provider (service, lk_fake_get, lk_fake_cancel, NULL, &fake);
   lk_noaa_refresh (noaa);
   g_assert_true (lk_noaa_state (noaa)->have_catalog);
 
@@ -242,8 +242,8 @@ test_switch_during_download (void)
     }
   g_assert_true (switched);
 
-  lookout_noaa_svc_changed (service);
-  lookout_noaa_svc_poll (service, &now);
+  lookout_noaa_changed (service);
+  lookout_noaa_poll (service, &now);
   g_assert_cmpint (now.phase, ==, LOOKOUT_NOAA_DOWNLOADING);
   g_assert_cmpint (now.outcome, ==, LOOKOUT_NOAA_RUNNING);
   g_assert_cmpuint (fake.cancels, ==, cancels);
@@ -265,11 +265,11 @@ test_a_hopeless_refusal_raises_no_alert (void)
   LkFakeFetch fake = { 0 };
 
   lk_fixture_cache_catalog ();
-  lookout_noaa_svc_set_http_provider (service, lk_fake_get, lk_fake_cancel, NULL, &fake);
+  lookout_noaa_set_http_provider (service, lk_fake_get, lk_fake_cancel, NULL, &fake);
   lk_noaa_refresh (noaa);
   g_assert_true (lk_noaa_state (noaa)->have_catalog);
   g_assert_cmpint (g_remove (cached), ==, 0);
-  lookout_noaa_svc_set_http_provider (service, NULL, NULL, NULL, NULL);
+  lookout_noaa_set_http_provider (service, NULL, NULL, NULL, NULL);
   lk_noaa_toggle (noaa, "d5");
   lk_app_model_start_noaa_download (model, FALSE);
   g_assert_cmpint (lk_noaa_state (noaa)->outcome, ==, LOOKOUT_NOAA_REFUSED);
@@ -292,7 +292,7 @@ test_retry_reads_the_catalog_and_orders_again (void)
   LkFakeFetch fake = { 0 };
   gboolean retry = FALSE;
 
-  lookout_noaa_svc_set_http_provider (lk_noaa_service (noaa), lk_fake_get, lk_fake_cancel,
+  lookout_noaa_set_http_provider (lk_noaa_service (noaa), lk_fake_get, lk_fake_cancel,
                                       NULL, &fake);
   lk_noaa_toggle (noaa, "d5");
   lk_app_model_start_noaa_download (model, FALSE);

@@ -37,7 +37,7 @@ final class ChartLinkFetch: @unchecked Sendable {
             let d: Int32 = done ? 1 : 0
             switch self {
             case .chart(let h): lookout_http_respond_chunk(h, id, bytes, count, status, d)
-            case .noaa(let n): lookout_noaa_svc_http_respond_chunk(n, id, bytes, count, status, d)
+            case .noaa(let n): lookout_noaa_http_respond_chunk(n, id, bytes, count, status, d)
             }
         }
     }
@@ -120,7 +120,7 @@ final class ChartLinkFetch: @unchecked Sendable {
         switch t {
         case .chart(let h): lookout_set_http_provider(h, chartLinkGet, chartLinkCancel, me)
         case .noaa(let n):
-            lookout_noaa_svc_set_http_provider(n, chartLinkGet, chartLinkCancel, noaaWake, me)
+            lookout_noaa_set_http_provider(n, chartLinkGet, chartLinkCancel, noaaWake, me)
         }
     }
 
@@ -154,7 +154,7 @@ final class ChartLinkFetch: @unchecked Sendable {
         wakeLock.unlock()
         switch t {
         case .chart(let h): lookout_set_http_provider(h, nil, nil, nil)
-        case .noaa(let n): lookout_noaa_svc_set_http_provider(n, nil, nil, nil, nil)
+        case .noaa(let n): lookout_noaa_set_http_provider(n, nil, nil, nil, nil)
         case nil: break
         }
         for (_, task) in tasks { task.cancel() }

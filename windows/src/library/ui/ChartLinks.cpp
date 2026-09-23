@@ -488,7 +488,7 @@ namespace winrt::LookoutMarine::implementation
         auto *self = static_cast<MainWindow *>(user);
         QueueGet(g_noaa_pool, req_id, url, allow_file,
                  [self, req_id](void const *bytes, size_t len, int status, int done) {
-                     lookout_noaa_svc_http_respond_chunk(self->noaa, req_id, bytes, len, status,
+                     lookout_noaa_http_respond_chunk(self->noaa, req_id, bytes, len, status,
                                                          done);
                  });
     }
@@ -524,7 +524,7 @@ namespace winrt::LookoutMarine::implementation
             return;
         noaa_queue = DispatcherQueue();
         g_noaa_pool.Start(4);
-        lookout_noaa_svc_set_http_provider(noaa, &MainWindow::NoaaGetThunk,
+        lookout_noaa_set_http_provider(noaa, &MainWindow::NoaaGetThunk,
                                            &MainWindow::NoaaCancelThunk,
                                            &MainWindow::NoaaWakeThunk, this);
     }
@@ -536,8 +536,8 @@ namespace winrt::LookoutMarine::implementation
         if (noaa == nullptr)
             return;
         for (uint64_t id : g_noaa_pool.Stop())
-            lookout_noaa_svc_http_respond_chunk(noaa, id, nullptr, 0, 0, 1);
-        lookout_noaa_svc_set_http_provider(noaa, nullptr, nullptr, nullptr, nullptr);
+            lookout_noaa_http_respond_chunk(noaa, id, nullptr, 0, 0, 1);
+        lookout_noaa_set_http_provider(noaa, nullptr, nullptr, nullptr, nullptr);
         lookout_noaa_close(noaa);
         noaa = nullptr;
     }

@@ -202,12 +202,12 @@ lk_noaa_load_coverage (LkNoaa *self)
     {
       const char *id = self->regions[i].id;
       /* Ask once for the count, then once for the boxes. */
-      gsize n = lookout_noaa_svc_region_coverage (self->service, id, NULL, 0);
+      gsize n = lookout_noaa_region_coverage (self->service, id, NULL, 0);
       if (n == 0)
         continue;
 
       g_autofree lookout_noaa_box *raw = g_new0 (lookout_noaa_box, n);
-      gsize got = lookout_noaa_svc_region_coverage (self->service, id, raw, n);
+      gsize got = lookout_noaa_region_coverage (self->service, id, raw, n);
       GArray *boxes = g_array_sized_new (FALSE, FALSE, sizeof (LkNoaaBox), MIN (got, n));
 
       for (gsize b = 0; b < MIN (got, n); b++)
@@ -246,9 +246,9 @@ lk_noaa_sync (LkNoaa *self)
   g_return_if_fail (LK_IS_NOAA (self));
 
   had_catalog = self->state.have_catalog;
-  if (self->service == NULL || !lookout_noaa_svc_changed (self->service))
+  if (self->service == NULL || !lookout_noaa_changed (self->service))
     return;
-  lookout_noaa_svc_poll (self->service, &self->state);
+  lookout_noaa_poll (self->service, &self->state);
   if (self->state.have_catalog && !had_catalog)
     {
       lk_noaa_recost_regions (self);
@@ -300,7 +300,7 @@ lk_noaa_respond (gpointer user_data, uint64_t req_id, const void *bytes, gsize l
 {
   LkNoaa *self = user_data;
 
-  lookout_noaa_svc_http_respond_chunk (self->service, req_id, bytes, len, status, 1);
+  lookout_noaa_http_respond_chunk (self->service, req_id, bytes, len, status, 1);
 }
 
 static void
@@ -310,7 +310,7 @@ lk_noaa_respond_chunk (gpointer user_data, uint64_t req_id, const void *bytes,
   LkNoaa *self = user_data;
   gint64 now = g_get_monotonic_time ();
 
-  lookout_noaa_svc_http_respond_chunk (self->service, req_id, bytes, len, status,
+  lookout_noaa_http_respond_chunk (self->service, req_id, bytes, len, status,
                                        done ? 1 : 0);
   if (done || now - self->progress_us < LK_NOAA_PROGRESS_MS * 1000)
     return;
@@ -325,7 +325,7 @@ lk_noaa_refresh (LkNoaa *self)
 {
   g_return_if_fail (LK_IS_NOAA (self));
 
-  lookout_noaa_svc_refresh (self->service);
+  lookout_noaa_refresh (self->service);
   lk_noaa_sync (self);
 }
 
@@ -419,7 +419,7 @@ lk_noaa_recost (LkNoaa *self)
     return;
 
   ids = lk_noaa_picked_ids (self);
-  lookout_noaa_svc_cost (self->service, ids, &self->cells, &self->bytes, &self->held,
+  lookout_noaa_cost (self->service, ids, &self->cells, &self->bytes, &self->held,
                         &self->held_bytes);
 }
 
@@ -463,12 +463,12 @@ lk_noaa_region_cells (LkNoaa *self, const char *region_ids)
 
   if (region_ids == NULL || region_ids[0] == '\0')
     return g_new0 (char *, 1);
-  n = lookout_noaa_svc_region_cells (self->service, region_ids, NULL, 0);
+  n = lookout_noaa_region_cells (self->service, region_ids, NULL, 0);
   if (n == 0)
     return g_new0 (char *, 1);
 
   g_autofree const char **raw = g_new0 (const char *, n);
-  n = lookout_noaa_svc_region_cells (self->service, region_ids, raw, n);
+  n = lookout_noaa_region_cells (self->service, region_ids, raw, n);
   out = g_new0 (char *, n + 1);
   for (size_t i = 0; i < n; i++)
     out[i] = g_strdup (raw[i]);
@@ -488,7 +488,7 @@ lk_noaa_note_installed (LkNoaa *self, const char *const *names)
 {
   g_return_if_fail (LK_IS_NOAA (self));
 
-  lookout_noaa_svc_have (self->service, names,
+  lookout_noaa_have (self->service, names,
                          names != NULL ? g_strv_length ((char **) names) : 0);
   lk_noaa_recost_regions (self);
   lk_noaa_recost (self);
@@ -618,7 +618,7 @@ lk_noaa_download (LkNoaa *self, const char *region_ids, const char *dest_dir,
     return;
 
   lk_noaa_note_downloaded (region_ids);
-  lookout_noaa_svc_download (self->service, region_ids, dest_dir, again ? 1 : 0);
+  lookout_noaa_download (self->service, region_ids, dest_dir, again ? 1 : 0);
   lk_noaa_sync (self);
 }
 
@@ -627,7 +627,7 @@ lk_noaa_cancel (LkNoaa *self)
 {
   g_return_if_fail (LK_IS_NOAA (self));
 
-  lookout_noaa_svc_cancel (self->service);
+  lookout_noaa_cancel (self->service);
   lk_noaa_sync (self);
 }
 
@@ -646,7 +646,7 @@ lk_noaa_outdated (LkNoaa *self, const LkNoaaInstalled *have, guint n)
       raw[i].edition = have[i].edition;
       raw[i].update = have[i].update;
     }
-  return lookout_noaa_svc_outdated (self->service, raw, n);
+  return lookout_noaa_outdated (self->service, raw, n);
 }
 
 void
@@ -665,7 +665,7 @@ lk_noaa_update (LkNoaa *self, const LkNoaaInstalled *have, guint n, const char *
       raw[i].edition = have[i].edition;
       raw[i].update = have[i].update;
     }
-  lookout_noaa_svc_update (self->service, raw, n, dest_dir);
+  lookout_noaa_update (self->service, raw, n, dest_dir);
   lk_noaa_sync (self);
 }
 
@@ -730,7 +730,7 @@ lk_noaa_new (lookout_store *store, lookout_chart_sets *sets)
   self->service = lookout_noaa_open (store, sets);
   self->fetcher = lk_fetcher_new (lk_noaa_respond, self);
   lk_fetcher_set_chunk_respond (self->fetcher, lk_noaa_respond_chunk);
-  lookout_noaa_svc_set_http_provider (self->service, lk_noaa_http_get,
+  lookout_noaa_set_http_provider (self->service, lk_noaa_http_get,
                                       lk_noaa_http_cancel, lk_noaa_wake, self);
   return self;
 }

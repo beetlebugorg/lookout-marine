@@ -320,8 +320,8 @@ test_a_failed_download_can_go_back (void)
 
   /* Clearing the fetcher ends a catalog read that an earlier step started. */
   lk_fixture_cache_catalog ();
-  lookout_noaa_svc_set_http_provider (service, NULL, NULL, NULL, NULL);
-  lookout_noaa_svc_set_http_provider (service, lk_fake_get, lk_fake_cancel, NULL, &fake);
+  lookout_noaa_set_http_provider (service, NULL, NULL, NULL, NULL);
+  lookout_noaa_set_http_provider (service, lk_fake_get, lk_fake_cancel, NULL, &fake);
   lk_noaa_refresh (noaa);
   lk_noaa_toggle (noaa, "d5");
   lk_app_model_start_noaa_download (model, FALSE);
@@ -329,7 +329,7 @@ test_a_failed_download_can_go_back (void)
   g_assert_cmpint (lk_noaa_state (noaa)->outcome, ==, LOOKOUT_NOAA_RUNNING);
   g_assert_false (lk_first_run_import_stalled (&flow));
 
-  lookout_noaa_svc_http_respond_chunk (service, fake.last, NULL, 0, 0, 1);
+  lookout_noaa_http_respond_chunk (service, fake.last, NULL, 0, 0, 1);
   lk_noaa_sync (noaa);
   g_assert_cmpint (lk_noaa_state (noaa)->outcome, ==, LOOKOUT_NOAA_FAILED);
 
@@ -337,7 +337,7 @@ test_a_failed_download_can_go_back (void)
   lk_first_run_back (run);
   g_assert_cmpint (lk_first_run_step (run), ==, LK_FIRST_RUN_COVERAGE);
 
-  lookout_noaa_svc_set_http_provider (service, NULL, NULL, NULL, NULL);
+  lookout_noaa_set_http_provider (service, NULL, NULL, NULL, NULL);
   g_assert_cmpint (g_remove (cached), ==, 0);
 }
 

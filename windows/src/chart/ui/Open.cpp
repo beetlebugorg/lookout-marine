@@ -304,7 +304,7 @@ namespace winrt::LookoutMarine::implementation
             // The chart link fetcher, before the online step resolves a style,
             // and the NOAA catalog the coverage step prices regions from.
             ChartLinksAttach();
-            lookout_noaa_svc_refresh(noaa);
+            lookout_noaa_refresh(noaa);
             StartRenderThread();
         }
         // Either way the loader comes down: there is no chart coming, and a

@@ -71,13 +71,13 @@ export fn lookout_noaa_close(n: ?*lookout_noaa) void {
     gpa.destroy(x);
 }
 
-export fn lookout_noaa_svc_set_http_provider(n: ?*lookout_noaa, get: ?clinks.HttpGetFn, cancel: ?clinks.HttpCancelFn, wake: ?noaajob.WakeFn, user: ?*anyopaque) void {
+export fn lookout_noaa_set_http_provider(n: ?*lookout_noaa, get: ?clinks.HttpGetFn, cancel: ?clinks.HttpCancelFn, wake: ?noaajob.WakeFn, user: ?*anyopaque) void {
     const x = n orelse return;
     x.setProvider(get, cancel, wake, user);
 }
 
 /// Answer one GET a piece at a time, from any thread. See lookout-library.h.
-export fn lookout_noaa_svc_http_respond_chunk(n: ?*lookout_noaa, req_id: u64, bytes: ?[*]const u8, len: usize, status: c_int, done: c_int) void {
+export fn lookout_noaa_http_respond_chunk(n: ?*lookout_noaa, req_id: u64, bytes: ?[*]const u8, len: usize, status: c_int, done: c_int) void {
     const x = n orelse return;
     const slice: []const u8 = if (bytes != null and len != 0) bytes.?[0..len] else &.{};
     if (slice.len == 0 and done == 0) return;
@@ -86,12 +86,12 @@ export fn lookout_noaa_svc_http_respond_chunk(n: ?*lookout_noaa, req_id: u64, by
 
 /// Adopt what arrived, and say whether the state changed. See
 /// lookout-library.h.
-export fn lookout_noaa_svc_changed(n: ?*lookout_noaa) c_int {
+export fn lookout_noaa_changed(n: ?*lookout_noaa) c_int {
     const x = n orelse return 0;
     return @intFromBool(x.changed());
 }
 
-export fn lookout_noaa_svc_poll(n: ?*lookout_noaa, out: ?*lookout_noaa_state) void {
+export fn lookout_noaa_poll(n: ?*lookout_noaa, out: ?*lookout_noaa_state) void {
     const o = out orelse return;
     const x = n orelse {
         o.* = .{};
@@ -100,11 +100,11 @@ export fn lookout_noaa_svc_poll(n: ?*lookout_noaa, out: ?*lookout_noaa_state) vo
     o.* = x.poll();
 }
 
-export fn lookout_noaa_svc_refresh(n: ?*lookout_noaa) void {
+export fn lookout_noaa_refresh(n: ?*lookout_noaa) void {
     if (n) |x| x.refresh();
 }
 
-export fn lookout_noaa_svc_cost(n: ?*lookout_noaa, region_ids: ?[*:0]const u8, out_cells: ?*u32, out_bytes: ?*u64, out_held: ?*u32, out_held_bytes: ?*u64) c_int {
+export fn lookout_noaa_cost(n: ?*lookout_noaa, region_ids: ?[*:0]const u8, out_cells: ?*u32, out_bytes: ?*u64, out_held: ?*u32, out_held_bytes: ?*u64) c_int {
     const x = n orelse {
         // cost() zeroes the outputs; with no handle there is none to call.
         if (out_cells) |c| c.* = 0;
@@ -116,36 +116,36 @@ export fn lookout_noaa_svc_cost(n: ?*lookout_noaa, region_ids: ?[*:0]const u8, o
     return cost(x, region_ids, out_cells, out_bytes, out_held, out_held_bytes);
 }
 
-export fn lookout_noaa_svc_region_cells(n: ?*lookout_noaa, region_ids: ?[*:0]const u8, out: ?[*][*:0]const u8, cap: usize) usize {
+export fn lookout_noaa_region_cells(n: ?*lookout_noaa, region_ids: ?[*:0]const u8, out: ?[*][*:0]const u8, cap: usize) usize {
     const x = n orelse return 0;
     return regionCells(x, region_ids, out, cap);
 }
 
-export fn lookout_noaa_svc_region_coverage(n: ?*lookout_noaa, region_id: ?[*:0]const u8, out: ?[*]lookout_noaa_box, cap: usize) usize {
+export fn lookout_noaa_region_coverage(n: ?*lookout_noaa, region_id: ?[*:0]const u8, out: ?[*]lookout_noaa_box, cap: usize) usize {
     const x = n orelse return 0;
     return regionCoverage(x, region_id, out, cap);
 }
 
-export fn lookout_noaa_svc_download(n: ?*lookout_noaa, region_ids: ?[*:0]const u8, dest_dir: ?[*:0]const u8, again: c_int) void {
+export fn lookout_noaa_download(n: ?*lookout_noaa, region_ids: ?[*:0]const u8, dest_dir: ?[*:0]const u8, again: c_int) void {
     if (n) |x| download(x, region_ids, dest_dir, again);
 }
 
-export fn lookout_noaa_svc_outdated(n: ?*lookout_noaa) u32 {
+export fn lookout_noaa_outdated(n: ?*lookout_noaa) u32 {
     const x = n orelse return 0;
     return x.outdated();
 }
 
-export fn lookout_noaa_svc_update(n: ?*lookout_noaa, dest_dir: ?[*:0]const u8) void {
+export fn lookout_noaa_update(n: ?*lookout_noaa, dest_dir: ?[*:0]const u8) void {
     const x = n orelse return;
     const dest = dest_dir orelse return;
     x.update(std.mem.span(dest));
 }
 
-export fn lookout_noaa_svc_update_due(n: ?*lookout_noaa) c_int {
+export fn lookout_noaa_update_due(n: ?*lookout_noaa) c_int {
     const x = n orelse return 0;
     return @intFromBool(x.updateDue(@divFloor(clock.wallMs(), 1000)));
 }
 
-export fn lookout_noaa_svc_cancel(n: ?*lookout_noaa) void {
+export fn lookout_noaa_cancel(n: ?*lookout_noaa) void {
     if (n) |x| x.cancel();
 }

@@ -75,11 +75,11 @@ guint    lk_noaa_picked_count (LkNoaa *self);
 char    *lk_noaa_picked_ids (LkNoaa *self);
 
 /* The core's state, borrowed. Never NULL. It is read again, and ::changed
- * emitted, when lookout_noaa_svc_changed returns 1: after each order, on the
+ * emitted, when lookout_noaa_changed returns 1: after each order, on the
  * service's wake, and as the pieces of a transfer arrive. */
 const lookout_noaa_state *lk_noaa_state (LkNoaa *self);
 
-/* Read the state when lookout_noaa_svc_changed returns 1, and emit ::changed.
+/* Read the state when lookout_noaa_changed returns 1, and emit ::changed.
  * The wake calls this. A test that installs its own fetcher calls it too. */
 void lk_noaa_sync (LkNoaa *self);
 
