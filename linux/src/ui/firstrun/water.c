@@ -243,15 +243,15 @@ lk_water_key_cell (const char *token, int scheme, double fallback[3], const char
 
 /* ---- the panel ----------------------------------------------------------- */
 
+/* A depth in the unit on screen, with the unit on it. */
 static char *
 lk_water_measure (double value, gboolean feet)
 {
-  double rounded = round (value * 10) / 10;
-  const char *unit = feet ? "ft" : "m";
+  char text[LOOKOUT_DEPTH_MAX];
 
-  if (rounded == round (rounded))
-    return g_strdup_printf ("%d %s", (int) rounded, unit);
-  return g_strdup_printf ("%.1f %s", rounded, unit);
+  lookout_fmt_depth (value * (feet ? LOOKOUT_METRES_PER_FOOT : 1.0),
+                     feet ? LOOKOUT_DEPTH_FEET : LOOKOUT_DEPTH_METRES, text, sizeof text);
+  return g_strdup (text);
 }
 
 void

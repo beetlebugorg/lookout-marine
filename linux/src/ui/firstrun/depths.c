@@ -5,104 +5,25 @@
  * S-52 numbers the engine draws with, the safety depth and the safety contour,
  * and states what each one does to the chart.
  *
- * The engine is always given metres, so feet convert on the way out.
+ * The core derives every number from the draft and the clearance
+ * (lookout_depth_plan). The engine is always given metres.
  */
-#include "ui/firstrun/depths.h"
-
+#include "ui/firstrun/private.h"
 #include "ui/firstrun/water.h"
 
 #include <math.h>
-
-#define LK_FEET_PER_METRE 3.28084
 
 /* The left column, in the reference's proportion: the boat beside the water
  * rather than above it. */
 #define LK_DEPTH_COLUMN 334
 
-/* The contours an S-57 survey draws. The safety contour is the first of these
- * at or past the safety depth, because the chart shades on a contour the
- * survey HAS. */
-static const double lk_ladder_metres[] = { 2, 5, 10, 20, 30, 50, 75, 100 };
-static const double lk_ladder_feet[] = { 6, 12, 18, 30, 60, 90, 120, 180, 240, 300 };
-
-/* The clearances offered. Round in both units. */
-static const double lk_clearances_metres[] = { 0.3, 0.6, 1, 1.5 };
-static const double lk_clearances_feet[] = { 1, 2, 3, 5 };
-
-const double *
-lk_depth_ladder (gboolean feet, guint *out_n)
-{
-  if (out_n != NULL)
-    *out_n = feet ? G_N_ELEMENTS (lk_ladder_feet) : G_N_ELEMENTS (lk_ladder_metres);
-  return feet ? lk_ladder_feet : lk_ladder_metres;
-}
-
-const double *
-lk_depth_clearances (gboolean feet, guint *out_n)
-{
-  if (out_n != NULL)
-    *out_n = feet ? G_N_ELEMENTS (lk_clearances_feet)
-                  : G_N_ELEMENTS (lk_clearances_metres);
-  return feet ? lk_clearances_feet : lk_clearances_metres;
-}
-
-double
-lk_depth_safety (double draft, double clearance)
-{
-  /* Rounded up to a whole foot or metre. A chart names its depths in whole
-   * numbers, and the fraction belongs to the keel rather than to the water. */
-  return ceil (draft + clearance);
-}
-
-double
-lk_depth_contour (double safety, gboolean feet)
-{
-  guint n = 0;
-  const double *ladder = lk_depth_ladder (feet, &n);
-
-  for (guint i = 0; i < n; i++)
-    if (ladder[i] >= safety)
-      return ladder[i];
-  return ladder[n - 1];
-}
-
-double
-lk_depth_deep_contour (double contour, gboolean feet)
-{
-  guint n = 0;
-  const double *ladder = lk_depth_ladder (feet, &n);
-  double want = contour * 2;
-
-  /* Twice the safety contour, up the same ladder, so it displays round. */
-  for (guint i = 0; i < n; i++)
-    if (ladder[i] >= want)
-      return ladder[i];
-  return ladder[n - 1];
-}
-
-double
-lk_depth_nearest_clearance (double want, gboolean feet)
-{
-  guint n = 0;
-  const double *all = lk_depth_clearances (feet, &n);
-  double best = all[0];
-
-  for (guint i = 1; i < n; i++)
-    if (fabs (all[i] - want) < fabs (best - want))
-      best = all[i];
-  return best;
-}
-
 /* ---- the step ------------------------------------------------------------ */
 
-/* The boat, in the unit on screen.
- *
- * Held in the unit on screen so every number displays round: a metric list
- * converted into feet gave a 4.9 ft clearance and a 16.4 ft contour. */
+/* The boat, in metres. The plan states it in the unit on screen. */
 typedef struct {
   LkFirstRunFlow *flow;
-  double          draft;
-  double          clearance;
+  double          draft_m;
+  double          clearance_m;
 
   GtkWidget *entry;
   GtkWidget *metres;   /* the two unit toggles, one group */
@@ -129,36 +50,38 @@ lk_depth_feet (LkDepthStep *step)
   return lk_mariner_raw (step->flow->mariner)->depth_unit == 1;
 }
 
-/* A depth on screen, with its unit on it. */
-static char *
-lk_depth_measure (LkDepthStep *step, double value)
+static struct lookout_depth_plan
+lk_depth_plan (LkDepthStep *step)
 {
-  double rounded = round (value * 10) / 10;
-  const char *unit = lk_depth_feet (step) ? "ft" : "m";
+  struct lookout_depth_plan plan;
 
-  if (rounded == round (rounded))
-    return g_strdup_printf ("%d %s", (int) rounded, unit);
-  return g_strdup_printf ("%.1f %s", rounded, unit);
+  lookout_depth_plan (step->draft_m, step->clearance_m, lk_depth_feet (step), &plan);
+  return plan;
 }
 
-/* Write the numbers the engine draws with.
- *
- * The shallow contour follows the safety depth, which makes the first shade
- * the water the boat cannot cross. */
+/* A depth in metres, in the unit on screen. Free with g_free. */
+static char *
+lk_depth_measure (LkDepthStep *step, double v_m, int bare)
+{
+  char text[LOOKOUT_DEPTH_MAX];
+
+  lookout_fmt_depth (v_m, (lk_depth_feet (step) ? LOOKOUT_DEPTH_FEET : LOOKOUT_DEPTH_METRES) |
+                              bare,
+                     text, sizeof text);
+  return g_strdup (text);
+}
+
+/* Write the numbers the engine draws with. */
 static void
 lk_depth_apply (LkDepthStep *step)
 {
   tile57_mariner *mariner = lk_mariner_raw (step->flow->mariner);
-  gboolean feet = lk_depth_feet (step);
-  double safety = lk_depth_safety (step->draft, step->clearance);
-  double contour = lk_depth_contour (safety, feet);
-  double deep = lk_depth_deep_contour (contour, feet);
-  double scale = feet ? 1.0 / LK_FEET_PER_METRE : 1.0;
+  struct lookout_depth_plan plan = lk_depth_plan (step);
 
-  mariner->safety_depth = safety * scale;
-  mariner->shallow_contour = safety * scale;
-  mariner->safety_contour = contour * scale;
-  mariner->deep_contour = deep * scale;
+  mariner->safety_depth = plan.safety_depth_m;
+  mariner->shallow_contour = plan.shallow_contour_m;
+  mariner->safety_contour = plan.safety_contour_m;
+  mariner->deep_contour = plan.deep_contour_m;
   mariner->four_shade_water = true;
   lk_mariner_touch (step->flow->mariner);
 }
@@ -169,10 +92,7 @@ static void lk_depth_rebuild (LkDepthStep *step);
 static void
 lk_depth_show_draft (LkDepthStep *step)
 {
-  double rounded = round (step->draft * 10) / 10;
-  g_autofree char *text = rounded == round (rounded)
-                              ? g_strdup_printf ("%d", (int) rounded)
-                              : g_strdup_printf ("%.1f", rounded);
+  g_autofree char *text = lk_depth_measure (step, step->draft_m, LOOKOUT_DEPTH_BARE);
 
   if (g_strcmp0 (gtk_editable_get_text (GTK_EDITABLE (step->entry)), text) == 0)
     return;
@@ -189,13 +109,14 @@ lk_depth_entry_changed (GtkEntry *entry, gpointer user_data)
   const char *text = gtk_editable_get_text (GTK_EDITABLE (entry));
   double value = g_ascii_strtod (text, NULL);
   double cap = lk_depth_feet (step) ? 100 : 30;
+  double metres_per_unit = lk_depth_feet (step) ? LOOKOUT_METRES_PER_FOOT : 1.0;
 
   /* An empty field is a number half typed. The step holds the last draft it
    * read and waits. */
   if (step->busy || value <= 0)
     return;
 
-  step->draft = MIN (value, cap);
+  step->draft_m = MIN (value, cap) * metres_per_unit;
   lk_depth_apply (step);
   lk_depth_rebuild (step);
 }
@@ -206,17 +127,17 @@ lk_depth_unit_toggled (GtkToggleButton *button, gpointer user_data)
   LkDepthStep *step = user_data;
   tile57_mariner *mariner = lk_mariner_raw (step->flow->mariner);
   gboolean to_feet = gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (step->feet));
-  double factor;
+  struct lookout_depth_plan plan;
 
   if (step->busy || (mariner->depth_unit == 1) == to_feet)
     return;
 
-  /* Convert the boat, and snap the clearance to one the new unit offers. A
-   * draft the mariner typed in one unit is the same boat in the other. */
-  factor = to_feet ? LK_FEET_PER_METRE : 1.0 / LK_FEET_PER_METRE;
+  /* The same boat in the new unit: the draft rounded to a half unit, and the
+   * clearance snapped to one the unit offers. */
   mariner->depth_unit = to_feet ? 1 : 0;
-  step->draft = round (step->draft * factor * 2) / 2;
-  step->clearance = lk_depth_nearest_clearance (step->clearance * factor, to_feet);
+  plan = lk_depth_plan (step);
+  step->draft_m = plan.draft_rounded_m;
+  step->clearance_m = plan.clearance_m;
 
   lk_depth_show_draft (step);
   lk_depth_apply (step);
@@ -229,7 +150,7 @@ lk_depth_pill_clicked (GtkButton *button, gpointer user_data)
   LkDepthStep *step = user_data;
   const double *value = g_object_get_data (G_OBJECT (button), "lk-clearance");
 
-  step->clearance = *value;
+  step->clearance_m = *value;
   lk_depth_apply (step);
   lk_depth_rebuild (step);
 }
@@ -238,18 +159,15 @@ lk_depth_pill_clicked (GtkButton *button, gpointer user_data)
 static void
 lk_depth_fill_derived (LkDepthStep *step)
 {
-  gboolean feet = lk_depth_feet (step);
-  double safety = lk_depth_safety (step->draft, step->clearance);
-  double contour = lk_depth_contour (safety, feet);
-  double deep = lk_depth_deep_contour (contour, feet);
+  struct lookout_depth_plan plan = lk_depth_plan (step);
   GtkWidget *child;
 
   while ((child = gtk_widget_get_first_child (step->derived)) != NULL)
     gtk_box_remove (GTK_BOX (step->derived), child);
 
-  g_autofree char *safety_text = lk_depth_measure (step, safety);
-  g_autofree char *contour_text = lk_depth_measure (step, contour);
-  g_autofree char *deep_text = lk_depth_measure (step, deep);
+  g_autofree char *safety_text = lk_depth_measure (step, plan.safety_depth_m, 0);
+  g_autofree char *contour_text = lk_depth_measure (step, plan.safety_contour_m, 0);
+  g_autofree char *deep_text = lk_depth_measure (step, plan.deep_contour_m, 0);
   g_autofree char *contour_why =
       g_strdup_printf ("Water shallower than this shades as unsafe. Rounded up to a "
                        "contour the survey draws, so %s reads as %s.",
@@ -292,23 +210,22 @@ lk_depth_fill_derived (LkDepthStep *step)
 static void
 lk_depth_fill_pills (LkDepthStep *step)
 {
-  gboolean feet = lk_depth_feet (step);
-  guint n = 0;
-  const double *all = lk_depth_clearances (feet, &n);
+  struct lookout_depth_plan plan = lk_depth_plan (step);
   GtkWidget *child;
 
   while ((child = gtk_widget_get_first_child (step->pills)) != NULL)
     gtk_box_remove (GTK_BOX (step->pills), child);
 
-  for (guint i = 0; i < n; i++)
+  for (guint i = 0; i < G_N_ELEMENTS (plan.clearances); i++)
     {
-      g_autofree char *text = lk_depth_measure (step, all[i]);
+      double metres = plan.clearances[i] * plan.metres_per_unit;
+      g_autofree char *text = lk_depth_measure (step, metres, 0);
       GtkWidget *pill = gtk_button_new_with_label (text);
       double *value = g_new (double, 1);
 
-      *value = all[i];
+      *value = metres;
       gtk_widget_add_css_class (pill, "pill");
-      if (fabs (all[i] - step->clearance) < 0.001)
+      if (fabs (plan.clearances[i] - plan.clearance) < 0.001)
         gtk_widget_add_css_class (pill, "suggested-action");
       g_object_set_data_full (G_OBJECT (pill), "lk-clearance", value, g_free);
       g_signal_connect (pill, "clicked", G_CALLBACK (lk_depth_pill_clicked), step);
@@ -320,8 +237,7 @@ static void
 lk_depth_rebuild (LkDepthStep *step)
 {
   gboolean feet = lk_depth_feet (step);
-  double safety = lk_depth_safety (step->draft, step->clearance);
-  double contour = lk_depth_contour (safety, feet);
+  struct lookout_depth_plan plan = lk_depth_plan (step);
 
   /* The toggles, and NOT the draft field: writing the field from here fought
    * the mariner's own typing. Clearing it put the old number back mid-edit,
@@ -333,8 +249,8 @@ lk_depth_rebuild (LkDepthStep *step)
   lk_depth_fill_pills (step);
   lk_depth_fill_derived (step);
   if (step->water != NULL)
-    lk_depth_water_set (step->water, safety, contour,
-                        lk_depth_deep_contour (contour, feet), feet,
+    lk_depth_water_set (step->water, plan.safety_depth, plan.safety_contour,
+                        plan.deep_contour, feet,
                         lk_mariner_raw (step->flow->mariner)->scheme);
   lk_first_run_refresh_footer (step->flow);
 }
@@ -361,11 +277,16 @@ lk_first_run_depths_new (LkFirstRunFlow *flow)
       lk_mariner_touch (flow->mariner);
     }
 
-  /* Start at a small keelboat. The stored safety depth is no help: it starts
-   * at the engine's 10 m, and a draft read back out of that gives 9.7 m. */
+  /* Start at the core's small keelboat, which a draft of 0 selects. The
+   * stored safety depth is no help: it starts at the engine's 10 m, and a
+   * draft read back out of that gives 9.7 m. */
   feet = lk_depth_feet (step);
-  step->draft = feet ? 5.5 : 1.7;
-  step->clearance = feet ? 2.0 : 0.6;
+  {
+    struct lookout_depth_plan start = lk_depth_plan (step);
+
+    step->draft_m = start.draft_m;
+    step->clearance_m = start.clearance_m;
+  }
 
   GtkWidget *heading =
       lk_step_heading ("How deep does your boat sit?",
