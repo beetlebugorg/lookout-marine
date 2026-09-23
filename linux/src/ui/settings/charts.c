@@ -83,7 +83,7 @@ lk_charts_folder_clicked (GtkButton *button, gpointer user_data)
  * most visits do not want, and the sentence saying what a chart link IS has to
  * stand open with it: together they cost the pane a block of height that the
  * mariner reads past every time. Both belong where the mariner has just asked
- * to add one (apple/LookoutMarine/Charts/ChartsSection.swift, AddChartSheet).
+ * to add one (apple/LookoutMarine/Library/ChartsSection.swift, AddChartSheet).
  */
 
 static void
@@ -549,7 +549,7 @@ lk_sets_summary (GPtrArray *rows)
  * prepare, and the pictures added with it. With only a gap between them, two
  * such sets read as one. The reference draws each set as a List row, which
  * separates them the same way
- * (apple/LookoutMarine/Charts/ChartsSection.swift). */
+ * (apple/LookoutMarine/Library/ChartsSection.swift). */
 static void
 lk_sets_list_rule (GtkWidget *list)
 {
@@ -570,7 +570,7 @@ lk_set_row_column (LkSettings *settings, const LkChartSetRow *set, GtkWidget *co
     /* WHO OWNS THIS SET. Charts go in and out of a managed set through the
      * NOAA chart downloader. Without the mark a mariner reads the download
      * as a folder they picked, and looks for it on the disk
-     * (apple/LookoutMarine/Charts/ChartsSection.swift, ManagedBadge). */
+     * (apple/LookoutMarine/Library/ChartsSection.swift, ManagedBadge). */
     if (set->managed)
       {
         GtkWidget *line = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
@@ -642,7 +642,7 @@ lk_set_row_action (LkSettings *settings, const LkChartSetRow *set)
      * downloaded cells under downloads/NOAA, which no page lists. The
      * picker's region record still counted that water as held. The
      * reference gives the managed row the same button
-     * (apple/LookoutMarine/Charts/ChartsSection.swift, ChartSetRow). */
+     * (apple/LookoutMarine/Library/ChartsSection.swift, ChartSetRow). */
     if (set->managed)
       {
         action = gtk_button_new_with_label ("Manage…");
@@ -777,7 +777,7 @@ lk_settings_fill_sets_list (LkSettings *settings)
        * prepare, and the pictures added with it. The gap inside a block is
        * smaller than the gap between blocks, and a separator closes each one.
        * The reference groups it the same way
-       * (apple/LookoutMarine/Charts/ChartsSection.swift). */
+       * (apple/LookoutMarine/Library/ChartsSection.swift). */
       GtkWidget *entry = gtk_box_new (GTK_ORIENTATION_VERTICAL, 8);
       GtkWidget *row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 10);
       GtkWidget *toggle = lk_settings_switch (set->on);

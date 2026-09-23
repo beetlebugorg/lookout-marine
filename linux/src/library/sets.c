@@ -199,7 +199,7 @@ lk_chart_sets_rows (LkChartSets *self)
        * folder remains. That folder produced a row with a switch over zero
        * charts and a size of zero. Before the scan completes the count is 0
        * for every set, so this waits on `scanned`. The reference drops the
-       * same row (apple/LookoutMarine/Charts/ChartsModel.swift,
+       * same row (apple/LookoutMarine/Library/ChartLibrary.swift,
        * pullChartSets). */
       lookout_chart_set_files (self->sets, set->path, &n_files);
       if (set->scanned != 0 && n_files == 0)

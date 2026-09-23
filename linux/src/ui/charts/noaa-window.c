@@ -160,7 +160,7 @@ lk_noaa_window_sync (LkNoaa *noaa, gpointer user_data)
   /* Water the device holds in full has no cells to add or remove, so the
    * button above is insensitive. Fetching it again repairs a damaged
    * download and picks up any edition NOAA has reissued, so that press has a
-   * button of its own (apple/LookoutMarine/Charts/NoaaRegionList.swift). */
+   * button of its own (apple/LookoutMarine/Library/NoaaPicker.swift). */
   gtk_widget_set_visible (self->again, ready && picked && !removes &&
                                            lk_noaa_cells (noaa) <= lk_noaa_held (noaa));
 }
