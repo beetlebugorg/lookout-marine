@@ -562,27 +562,60 @@ pub const Sets = struct {
     /// row instead. Called with `mu` held.
     fn countHeldBack(self: *Sets, out: []usize) void {
         @memset(out, 0);
-        const Won = struct { row: usize, held: Openable, managed: bool };
-        var byName = std.StringHashMap(Won).init(self.gpa);
+        const won = self.winners() catch return;
+        defer self.gpa.free(won);
+        var byName = std.StringHashMap(usize).init(self.gpa);
+        defer byName.deinit();
+        for (won) |w| {
+            if (w.name.len != 0) byName.put(w.name, w.row) catch return;
+        }
+        for (self.rows.items, 0..) |r, i| {
+            if (!r.on) continue;
+            for (r.openable) |o| {
+                if (o.name.len == 0) continue;
+                const row = byName.get(o.name) orelse continue;
+                if (row != i) out[i] += 1;
+            }
+        }
+    }
+
+    /// One chart compose draws, and the row it is drawn from.
+    const Winner = struct { path: [:0]const u8, name: []const u8, row: usize };
+
+    /// The charts compose draws, in the order first seen: each path once,
+    /// and for each dataset name the copy Openable.beats keeps. A file with
+    /// no dataset name is kept on its path alone. Owned by `gpa`. Called
+    /// with `mu` held.
+    fn winners(self: *Sets) ![]Winner {
+        var out = std.ArrayList(Winner).empty;
+        errdefer out.deinit(self.gpa);
+        // The winner so far for each dataset name, as its index in `out`.
+        var byName = std.StringHashMap(struct { at: usize, held: Openable, managed: bool }).init(self.gpa);
         defer byName.deinit();
         for (self.rows.items, 0..) |r, i| {
             if (!r.on) continue;
             for (r.openable) |o| {
-                if (o.name.len == 0) continue;
+                var seen = false;
+                for (out.items) |q| {
+                    if (std.mem.eql(u8, q.path, o.path)) seen = true;
+                }
+                if (seen) continue;
+                const w: Winner = .{ .path = o.path, .name = o.name, .row = i };
+                if (o.name.len == 0) {
+                    try out.append(self.gpa, w);
+                    continue;
+                }
                 if (byName.get(o.name)) |won| {
                     if (!o.beats(won.held, r.managed, won.managed)) continue;
+                    out.items[won.at] = w;
+                    try byName.put(o.name, .{ .at = won.at, .held = o, .managed = r.managed });
+                    continue;
                 }
-                byName.put(o.name, .{ .row = i, .held = o, .managed = r.managed }) catch return;
+                try byName.put(o.name, .{ .at = out.items.len, .held = o, .managed = r.managed });
+                try out.append(self.gpa, w);
             }
         }
-        for (self.rows.items, 0..) |r, i| {
-            if (!r.on) continue;
-            for (r.openable) |o| {
-                if (o.name.len == 0) continue;
-                const won = byName.get(o.name) orelse continue;
-                if (won.row != i) out[i] += 1;
-            }
-        }
+        return out.toOwnedSlice(self.gpa);
     }
 
     /// Put a folder on the list and scan it. False when it is already there.
@@ -807,48 +840,17 @@ pub const Sets = struct {
             if (k.gen == self.gen) return k.out;
         }
         const a = self.reads.allocator();
-        var out = std.ArrayList([:0]const u8).empty;
-        // The winner so far for each dataset name, as its index in `out`.
-        var byName = std.StringHashMap(struct {
-            at: usize,
-            held: Openable,
-            managed: bool,
-        }).init(self.gpa);
-        defer byName.deinit();
-
-        for (self.rows.items) |r| {
-            if (!r.on) continue;
-            for (r.openable) |o| {
-                var seen = false;
-                for (out.items) |q| {
-                    if (std.mem.eql(u8, q, o.path)) seen = true;
-                }
-                if (seen) continue;
-                if (o.name.len == 0) {
-                    out.append(a, o.path) catch return &.{};
-                    continue;
-                }
-                if (byName.get(o.name)) |won| {
-                    if (!o.beats(won.held, r.managed, won.managed)) continue;
-                    out.items[won.at] = o.path;
-                    byName.put(o.name, .{ .at = won.at, .held = o, .managed = r.managed }) catch {};
-                    continue;
-                }
-                byName.put(o.name, .{
-                    .at = out.items.len,
-                    .held = o,
-                    .managed = r.managed,
-                }) catch {};
-                out.append(a, o.path) catch return &.{};
-            }
-        }
-        std.mem.sort([:0]const u8, out.items, {}, struct {
+        const won = self.winners() catch return &.{};
+        defer self.gpa.free(won);
+        const out = a.alloc([:0]const u8, won.len) catch return &.{};
+        for (won, out) |w, *p| p.* = w.path;
+        std.mem.sort([:0]const u8, out, {}, struct {
             fn lt(_: void, x: [:0]const u8, y: [:0]const u8) bool {
                 return std.mem.lessThan(u8, x, y);
             }
         }.lt);
-        const ptrs = a.alloc([*:0]const u8, out.items.len) catch return &.{};
-        for (out.items, ptrs) |p, *dst| dst.* = p.ptr;
+        const ptrs = a.alloc([*:0]const u8, out.len) catch return &.{};
+        for (out, ptrs) |p, *dst| dst.* = p.ptr;
         self.compose_read = .{ .gen = self.gen, .out = ptrs };
         return ptrs;
     }
