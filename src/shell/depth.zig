@@ -135,6 +135,91 @@ pub fn plan(draft_m: f64, clearance_m: f64, feet: bool) Plan {
     };
 }
 
+// ---- the preview -------------------------------------------------------------
+
+/// The depth step's picture: a seabed falling away from a shore, shaded by the
+/// plan. The soundings are the seabed and hold still, and the shading is the
+/// mariner's and moves over them. Their depths are multiples of the safety
+/// contour, so a sounding keeps its place and its number until the contour
+/// steps to the next rung.
+///
+/// Measured in contours rather than metres because the answers span a dinghy
+/// and a ship: a fixed 40 m slope puts a 5 ft contour in the first pixel of the
+/// panel and a 30 ft one halfway up it.
+pub const preview_segments = 48;
+pub const preview_points = preview_segments + 1;
+pub const preview_spots = 12;
+
+/// Laid out as lookout_depth_preview in lookout-shell.h. Every coordinate is
+/// in a unit square with y down.
+pub const Preview = extern struct {
+    /// Four lines across the panel, each at x = i / 48: the shore, the safety
+    /// depth, the safety contour and the deep contour, in that order.
+    y: [4][preview_points]f64,
+    spot_x: [preview_spots]f64,
+    spot_y: [preview_spots]f64,
+    /// A sounding in the unit on screen, rounded up to a whole number.
+    spot_sounding: [preview_spots]c_int,
+    /// 1 for a sounding at or shallower than the safety depth, which the chart
+    /// draws bold.
+    spot_bold: [preview_spots]c_int,
+};
+
+/// Where the shore meets the water, as a fraction of the panel's height.
+const shore_at = 0.14;
+/// How steeply the slope falls away. Shallow water gets most of the panel,
+/// because that is where both contours fall.
+const slope_k = 2.07;
+
+/// Each spot depth, as a multiple of the safety contour, and how far across
+/// the panel it stands.
+const spots = [preview_spots][2]f64{
+    .{ 0.12, 0.28 }, .{ 0.30, 0.68 }, .{ 0.45, 0.14 }, .{ 0.62, 0.50 },
+    .{ 0.80, 0.84 }, .{ 1.00, 0.32 }, .{ 1.22, 0.62 }, .{ 1.48, 0.20 },
+    .{ 1.78, 0.44 }, .{ 2.12, 0.78 }, .{ 2.50, 0.34 }, .{ 2.85, 0.58 },
+};
+
+/// How far up the panel a depth lies. The floor is half again past the deep
+/// contour, so the last shade has water in it.
+fn reach(floor: f64, d: f64) f64 {
+    if (!(floor > 0)) return shore_at;
+    const f = std.math.pow(f64, std.math.clamp(d / floor, 0, 1), 1.0 / slope_k);
+    return shore_at + (1 - shore_at) * f;
+}
+
+/// A point on the line at height `h`, `u` of the way across. Every line is the
+/// same shape moved up by its depth, so the lines never cross and each band
+/// keeps its share of the panel from edge to edge.
+fn lineY(h: f64, u: f64) f64 {
+    const wave = 0.055 * @sin(u * std.math.pi * 1.7 + 0.4) + 0.045 * u;
+    return 1 - h + wave;
+}
+
+pub fn preview(p: Plan) Preview {
+    const floor = p.deep_contour * 1.5;
+    var out: Preview = undefined;
+    const heights = [4]f64{
+        shore_at,
+        reach(floor, p.safety_depth),
+        reach(floor, p.safety_contour),
+        reach(floor, p.deep_contour),
+    };
+    for (heights, 0..) |h, line| {
+        for (0..preview_points) |i| {
+            const u = @as(f64, @floatFromInt(i)) / preview_segments;
+            out.y[line][i] = lineY(h, u);
+        }
+    }
+    for (spots, 0..) |spot, i| {
+        const d = p.safety_contour * spot[0];
+        out.spot_x[i] = spot[1];
+        out.spot_y[i] = lineY(reach(floor, d), spot[1]);
+        out.spot_sounding[i] = @intFromFloat(@ceil(d));
+        out.spot_bold[i] = @intFromBool(d <= p.safety_depth);
+    }
+    return out;
+}
+
 // ---- tests ------------------------------------------------------------------
 
 const t = std.testing;
@@ -270,4 +355,26 @@ test "the ladders climb" {
         try t.expect(l[0] > 0);
         for (l[0 .. l.len - 1], l[1..]) |a, b| try t.expect(a < b);
     }
+}
+
+test "the preview's lines stack shore, safety depth, safety contour, deep contour" {
+    const v = preview(inUnit(5.5, 2, true));
+    for (0..preview_points) |i| {
+        // y is down, so a deeper line sits higher on the panel.
+        try t.expect(v.y[0][i] > v.y[1][i]);
+        try t.expect(v.y[1][i] > v.y[2][i]);
+        try t.expect(v.y[2][i] > v.y[3][i]);
+    }
+    try t.expectApproxEqAbs(@as(f64, 1 - 0.14 + 0.055 * @sin(0.4)), v.y[0][0], 1e-12);
+}
+
+test "the preview's soundings are multiples of the safety contour, bold when unsafe" {
+    const p = inUnit(5.5, 2, true);
+    const v = preview(p);
+    // 5.5 ft and 2 ft: safety depth 8 ft, safety contour 12 ft.
+    try t.expectEqual(@as(c_int, 2), v.spot_sounding[0]); // 12 x 0.12, rounded up
+    try t.expectEqual(@as(c_int, 1), v.spot_bold[0]);
+    try t.expectEqual(@as(c_int, 12), v.spot_sounding[5]);
+    try t.expectEqual(@as(c_int, 0), v.spot_bold[5]);
+    try t.expectEqual(@as(f64, 0.32), v.spot_x[5]);
 }

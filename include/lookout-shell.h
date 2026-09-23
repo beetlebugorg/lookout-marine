@@ -410,6 +410,40 @@ struct lookout_depth_plan {
 void lookout_depth_plan(double draft_m, double clearance_m, int feet,
                         struct lookout_depth_plan *out);
 
+/* The depth step's picture: a seabed falling away from a shore, with four
+ * lines across it and twelve soundings on it. The soundings are multiples of
+ * the safety contour, so each keeps its place and its number until the contour
+ * steps to the next rung, and the shading moves over them.
+ *
+ * Every coordinate is in a unit square with y down, to scale by the panel's
+ * size. A line's point i is at x = i / 48. Fill each band as the shape from the
+ * bottom left, along its line, to the bottom right: the deep contour's band
+ * first, then the safety contour's, then the safety depth's, then the shore's
+ * as land. */
+#define LOOKOUT_DEPTH_PREVIEW_POINTS 49
+#define LOOKOUT_DEPTH_PREVIEW_SPOTS 12
+
+enum {
+    LOOKOUT_DEPTH_LINE_SHORE = 0,
+    LOOKOUT_DEPTH_LINE_SAFETY_DEPTH = 1,
+    LOOKOUT_DEPTH_LINE_SAFETY_CONTOUR = 2,
+    LOOKOUT_DEPTH_LINE_DEEP_CONTOUR = 3,
+};
+
+struct lookout_depth_preview {
+    double y[4][LOOKOUT_DEPTH_PREVIEW_POINTS];
+    double spot_x[LOOKOUT_DEPTH_PREVIEW_SPOTS];
+    double spot_y[LOOKOUT_DEPTH_PREVIEW_SPOTS];
+    /* In the unit on screen, rounded up to a whole number. */
+    int spot_sounding[LOOKOUT_DEPTH_PREVIEW_SPOTS];
+    /* 1 at or shallower than the safety depth, which the chart draws bold. */
+    int spot_bold[LOOKOUT_DEPTH_PREVIEW_SPOTS];
+};
+
+/* Fill `out` for `plan`. A NULL either is ignored. */
+void lookout_depth_preview(const struct lookout_depth_plan *plan,
+                           struct lookout_depth_preview *out);
+
 /* ---- the coverage coastline --------------------------------------------
  *
  * The coastline a NOAA region picker draws under the regions, baked into the

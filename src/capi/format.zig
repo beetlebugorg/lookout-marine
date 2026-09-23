@@ -140,6 +140,19 @@ export fn lookout_depth_plan(draft_m: f64, clearance_m: f64, feet: c_int, out: ?
     owned.fill(depth.Plan, dst, depth.plan(draft_m, clearance_m, feet != 0));
 }
 
+// lookout_depth_preview in lookout-shell.h.
+comptime {
+    std.debug.assert(depth.preview_points == 49 and depth.preview_spots == 12);
+    std.debug.assert(@offsetOf(depth.Preview, "spot_x") == 4 * 49 * @sizeOf(f64));
+}
+
+/// The depth step's picture for a plan. See lookout-shell.h.
+export fn lookout_depth_preview(plan: ?*const depth.Plan, out: ?*depth.Preview) void {
+    const p = plan orelse return;
+    const dst = out orelse return;
+    owned.fill(depth.Preview, dst, depth.preview(p.*));
+}
+
 // ---- the coverage coastline --------------------------------------------------
 
 /// Width over height of a Mercator window. See lookout-shell.h.
