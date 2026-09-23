@@ -315,19 +315,6 @@ lk_set_remove_ask_free (LkSetRemoveAsk *ask)
   g_free (ask);
 }
 
-/* The reference's estimate: about 0.2 s to rebuild each prepared chart. */
-static char *
-lk_rebuild_estimate (guint charts)
-{
-  double seconds = charts * 0.2;
-
-  if (seconds < 60)
-    return g_strdup ("under a minute");
-  if (seconds < 3600)
-    return g_strdup_printf ("about %d minutes", (int) ((seconds / 60) + 0.5));
-  return g_strdup_printf ("about %.1f hours", seconds / 3600);
-}
-
 static void
 lk_chart_set_remove_answered (GObject *source, GAsyncResult *result, gpointer user_data)
 {
@@ -373,7 +360,10 @@ lk_chart_set_remove_clicked (GtkButton *button, gpointer user_data)
   question = g_strdup_printf ("Remove %s?", name != NULL ? name : "this set");
   if (charts > 0)
     {
-      g_autofree char *estimate = lk_rebuild_estimate (charts);
+      char estimate[LOOKOUT_DURATION_MAX];
+
+      /* The reference's estimate: about 0.2 s to rebuild each prepared chart. */
+      lookout_fmt_duration (charts * 0.2, LOOKOUT_DURATION_ABOUT, estimate, sizeof estimate);
       detail = g_strdup_printf ("This deletes the %u charts Lookout prepared from it. Your "
                                 "folder is not touched. Re-adding it rebuilds them, %s.",
                                 charts, estimate);
@@ -547,7 +537,9 @@ lk_sets_summary (GPtrArray *rows)
   if (!scanned || charts == 0)
     return g_strdup ("");
 
-  g_autofree char *size = g_format_size (bytes);
+  char size[LOOKOUT_BYTES_MAX];
+
+  lookout_fmt_bytes (bytes, size, sizeof size);
   return g_strdup_printf ("%u charts · %s", charts, size);
 }
 

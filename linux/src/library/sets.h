@@ -57,9 +57,6 @@ typedef struct {
   guint    bands[7];
 } LkChartSetRow;
 
-/* A usage band in the words the readouts use. "Unknown" outside 1 to 6. */
-const char *lk_chart_band_name (int band);
-
 void lk_chart_set_row_free (LkChartSetRow *row);
 
 /* The library changed on its own: a background scan landed a title and a size.

@@ -140,7 +140,7 @@ lk_band_row_new (const LkBakeBand *band)
   GtkWidget *row = gtk_box_new (GTK_ORIENTATION_VERTICAL, 7);
   GtkWidget *head = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 10);
   GtkWidget *swatch = gtk_drawing_area_new ();
-  GtkWidget *name = gtk_label_new (lk_chart_band_name (band->band));
+  GtkWidget *name = gtk_label_new (lookout_usage_band_name (band->band));
   gboolean complete = band->done >= band->total;
   gboolean waiting = band->done == 0 && !complete;
   g_autofree char *detail = complete  ? g_strdup_printf ("%u charts", band->total)
@@ -283,8 +283,9 @@ lk_first_run_importing_sync (GtkWidget *step)
   g_autofree char *subtitle = NULL;
   if (self->from_noaa)
     {
-      g_autofree char *size = g_format_size (bytes);
+      char size[LOOKOUT_BYTES_MAX];
 
+      lookout_fmt_bytes (bytes, size, sizeof size);
       subtitle = g_strdup_printf ("NOAA · %u charts · %s", ordered, size);
     }
   else if (work != NULL && work->total > 0)

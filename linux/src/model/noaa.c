@@ -395,13 +395,15 @@ lk_noaa_cost_words (guint32 cells, guint64 bytes, guint32 held, guint64 held_byt
 {
   /* Water wholly installed prices as a repair, so a number far under the
    * region's size reads as a saving rather than a mistake. */
+  char size[LOOKOUT_BYTES_MAX];
+
   if (cells == 0 && held > 0)
     {
-      g_autofree char *size = g_format_size (held_bytes);
+      lookout_fmt_bytes (held_bytes, size, sizeof size);
       return g_strdup_printf ("%u charts, all installed · %s to fetch again", held, size);
     }
 
-  g_autofree char *size = g_format_size (bytes);
+  lookout_fmt_bytes (bytes, size, sizeof size);
   if (held > 0)
     return g_strdup_printf ("%u charts, %s · %u already installed", cells, size, held);
   return g_strdup_printf ("%u charts, %s", cells, size);

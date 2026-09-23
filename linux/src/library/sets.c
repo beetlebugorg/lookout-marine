@@ -483,15 +483,6 @@ lk_chart_set_agency (const char *producer)
   return NULL;
 }
 
-const char *
-lk_chart_band_name (int band)
-{
-  static const char *names[] = { "Overview", "General", "Coastal",
-                                 "Approach", "Harbor", "Berthing" };
-
-  return band >= 1 && band <= 6 ? names[band - 1] : "Unknown";
-}
-
 /* "512 charts · 3 pictures · Coastal to Harbor · 1.2 GB": what a settings row
  * reads under the name. The counts are the core's; the wording is this
  * shell's, and each shell writes its own. */
@@ -516,14 +507,16 @@ lk_chart_set_detail (const lookout_chart_set *row)
     {
       g_string_append (detail, detail->len > 0 ? " · " : "");
       if (row->band_lo == row->band_hi)
-        g_string_append (detail, lk_chart_band_name (row->band_lo));
+        g_string_append (detail, lookout_usage_band_name (row->band_lo));
       else
-        g_string_append_printf (detail, "%s to %s", lk_chart_band_name (row->band_lo),
-                                lk_chart_band_name (row->band_hi));
+        g_string_append_printf (detail, "%s to %s", lookout_usage_band_name (row->band_lo),
+                                lookout_usage_band_name (row->band_hi));
     }
   if (row->bytes > 0)
     {
-      g_autofree char *size = g_format_size (row->bytes);
+      char size[LOOKOUT_BYTES_MAX];
+
+      lookout_fmt_bytes (row->bytes, size, sizeof size);
       g_string_append_printf (detail, "%s%s", detail->len > 0 ? " · " : "", size);
     }
   if (detail->len == 0)

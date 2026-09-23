@@ -77,13 +77,11 @@ lk_bake_progress_remaining (const LkBakeProgress *p)
     return NULL;
 
   double per = p->elapsed / (double) p->done;
-  double left = per * (double) (p->total - p->done);
+  char left[LOOKOUT_DURATION_MAX];
 
-  if (left < 60)
-    return g_strdup ("under a minute left");
-  if (left < 3600)
-    return g_strdup_printf ("about %d min left", (int) ((left / 60) + 0.5));
-  return g_strdup_printf ("about %.1f h left", left / 3600);
+  lookout_fmt_duration (per * (double) (p->total - p->done), LOOKOUT_DURATION_LEFT, left,
+                        sizeof left);
+  return g_strdup (left);
 }
 
 /* ---- where prepared charts live ------------------------------------------ */

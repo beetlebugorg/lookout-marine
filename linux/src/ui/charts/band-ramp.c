@@ -179,7 +179,7 @@ lk_band_legend_entry (int band, guint count)
 {
   GtkWidget *row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 5);
   GtkWidget *swatch = gtk_drawing_area_new ();
-  GtkWidget *name = gtk_label_new (lk_chart_band_name (band));
+  GtkWidget *name = gtk_label_new (lookout_usage_band_name (band));
   g_autofree char *text = g_strdup_printf ("%u", count);
   GtkWidget *number = gtk_label_new (text);
 
@@ -239,7 +239,7 @@ lk_band_ramp_set (GtkWidget *ramp, const guint bands[7])
       if (bands[band] == 0)
         continue;
       g_string_append_printf (spoken, "%s%s %u", spoken->len > 0 ? ", " : "",
-                              lk_chart_band_name (band), bands[band]);
+                              lookout_usage_band_name (band), bands[band]);
     }
   gtk_accessible_update_property (GTK_ACCESSIBLE (bar), GTK_ACCESSIBLE_PROPERTY_LABEL,
                                   spoken->str, -1);
