@@ -35,7 +35,7 @@ import java.io.FileOutputStream
  * and SettingsView sitting over the Metal layer.
  *
  * Charts come from a library chosen in the Charts tab, else anything pushed
- * into the app's external files dir — see [ChartsModel]. No chart ships in the
+ * into the app's external files dir (see [ChartsModel]). No chart ships in the
  * APK: a device with nothing installed opens the engine empty, draws the
  * basemap and runs setup over it. Libraries are opened IN PLACE (by path,
  * mmap'd) and never copied.

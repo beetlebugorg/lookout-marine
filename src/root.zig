@@ -759,9 +759,9 @@ pub const Lookout = struct {
     ///
     /// A publisher's style is fixed: the mariner's settings do not reach
     /// inside it and neither does the SCAMIN latitude. Re-setting it costs a
-    /// parse of every layer it declares and a re-fold of its sprite packs —
+    /// parse of every layer it declares and a re-fold of its sprite packs,
     /// over a second of the calling thread for a 389 layer style with 5,354
-    /// sprite cells — so a dirty style leaves it alone while this is true.
+    /// sprite cells. A dirty style leaves it alone while this is true.
     alt_applied: bool = false,
     /// The alt style's sprite packs (index JSON + sheet PNG, bytes as
     /// fetched), kept so a scheme change, which rebakes the S-52 sheet and

@@ -30,7 +30,7 @@ typedef struct {
    *
    * IT IS NOT DROPPED WHEN THE CORE IS TOLD. An ADD does not set the core's
    * active url until the style has landed, so between the two the snapshot
-   * reads "busy, nothing active" — and NO ACTIVE URL IS LOOKOUT'S OWN CHART.
+   * reads "busy, nothing active", and NO ACTIVE URL IS LOOKOUT'S OWN CHART.
    * The row put the pick back on Lookout's chart for the whole resolve, which
    * reads as the pick being refused. */
   char              *pending;

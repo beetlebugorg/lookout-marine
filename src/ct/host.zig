@@ -545,8 +545,8 @@ pub const Host = struct {
 
     /// Fold a pack whose sheet is already decoded.
     ///
-    /// The decode is the expensive half — 274 ms of a 486 ms fold for a
-    /// 4096 by 4096 sheet — and it needs nothing of the host, so a caller
+    /// The decode is the expensive half: 274 ms of a 486 ms fold for a
+    /// 4096 by 4096 sheet. It uses nothing of the host, so a caller
     /// that has a thread to spare does it there and comes here with the
     /// pixels. `img.rgba` is borrowed for the call.
     pub fn addSpriteCells(self: *Host, prefix: []const u8, index_json: []const u8, img: ct.png.Image) usize {

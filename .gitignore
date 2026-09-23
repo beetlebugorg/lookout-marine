@@ -18,7 +18,7 @@ zig-pkg/
 !android/app/src/main/res/mipmap-*/*.png
 # And the first-run pictures: the chart the welcome step shows, and one render
 # of each online chart the app offers. Sources for the build, not build
-# output — a clone without them cannot show a mariner what it draws. Android
+# output. A clone without them cannot show a mariner what it draws. Android
 # reaches the hero as R.drawable.welcome_chart, so a clone without it does not
 # compile at all. Each shell keeps its own copy, as they do for the icons.
 !linux/data/firstrun/*.png

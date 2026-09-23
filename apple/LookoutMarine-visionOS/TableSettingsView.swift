@@ -43,9 +43,9 @@ struct TableSettingsView: View {
         .onDisappear { plugins.stopPolling() }
         // An opaque back, for the reason the pick report has one: a form read
         // against whatever the room holds is a form read twice. The window is
-        // .plain, so nothing is behind this one until it is put there — the
-        // glass carries the window's shape and shadow, and the surface fills
-        // it, so the sofa stops showing through the depth settings.
+        // .plain, so nothing is behind this one until it is put there. The
+        // glass has the window's shape and shadow, and the surface fills it,
+        // so the room does not show through the depth settings.
         .background(Chrome.surface)
         .glassBackgroundEffect()
     }
