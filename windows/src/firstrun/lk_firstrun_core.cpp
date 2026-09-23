@@ -129,6 +129,29 @@ namespace lkw
         clearance_m_ = plan_.clearance_m;
     }
 
+    void FirstRun::Open()
+    {
+        setup_ = std::shared_ptr<lookout_setup>(lookout_setup_new(), lookout_setup_free);
+    }
+
+    void FirstRun::Note(lookout_setup_facts const &f)
+    {
+        if (setup_ == nullptr)
+            return;
+        lookout_setup_note(setup_.get(), &f);
+        lookout_setup_read(setup_.get(), &state_);
+    }
+
+    int FirstRun::Act(lookout_setup_facts const &f, int action, int arg)
+    {
+        if (setup_ == nullptr)
+            return -1;
+        Note(f);
+        int const source = lookout_setup_act(setup_.get(), action, arg);
+        lookout_setup_read(setup_.get(), &state_);
+        return source;
+    }
+
     void DepthChoice::Plan() { lookout_depth_plan(draft_m_, clearance_m_, feet_ ? 1 : 0, &plan_); }
 
     struct ::lookout_depth_preview DepthChoice::Preview() const

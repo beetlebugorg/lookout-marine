@@ -175,6 +175,7 @@ namespace winrt::LookoutMarine::implementation
             // A mariner who picked an online chart has a chart, so setup has no
             // reason to stand over it. The pick counts from the first frame,
             // and the style it names resolves several frames later.
+            setup_nothing_to_draw = true;
             if (SetupShouldRun())
             {
                 readout_timer.Stop(); // a basemap under a setup card reads out nothing
@@ -319,6 +320,7 @@ namespace winrt::LookoutMarine::implementation
 #if defined(LOOKOUT_DEV_HOOKS)
         ApplyDevHooks();
 #endif
+        setup_nothing_to_draw = true;
         if (SetupShouldRun())
         {
             readout_timer.Stop(); // nothing to read out under a setup card

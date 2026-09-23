@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <lookout-library.h> // lookout_setup_state
 #include <lookout-shell.h>   // lookout_depth_plan
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -209,6 +210,19 @@ namespace lkw
     class FirstRun
     {
     public:
+        // ---- the core's setup state machine (lookout_setup) --------------
+        // Open and the calls below are defined in lk_firstrun_core.cpp, which
+        // links the core. A model that is never opened holds no handle, and
+        // the model suite reads state into it with Read.
+        void Open();
+        // Hand the core what the app observes, and read its state back.
+        void Note(lookout_setup_facts const &f);
+        // Note `f`, apply a LOOKOUT_SETUP_* action, and read the state back.
+        // Returns the LOOKOUT_SETUP_FROM_* source the shell acts on, or -1.
+        int Act(lookout_setup_facts const &f, int action, int arg);
+        // True when setup is down and has a reason to come up.
+        bool ShouldRun() const { return state_.should_run != 0; }
+
         // ---- the core's state, as last read ------------------------------
         void Read(lookout_setup_state const &s) { state_ = s; }
         FirstRunStep step() const { return static_cast<FirstRunStep>(state_.step); }
@@ -298,6 +312,7 @@ namespace lkw
         double Fraction() const;
 
     private:
+        std::shared_ptr<lookout_setup> setup_;
         lookout_setup_state          state_{};
         ChartSource                  source_{ ChartSource::Noaa };
         std::wstring                 order_regions_;

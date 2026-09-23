@@ -142,7 +142,7 @@ namespace winrt::LookoutMarine::implementation
         readout_timer.Interval(std::chrono::milliseconds(100));
         readout_timer.Tick([this](auto &&, auto &&) { OnRendering(nullptr, nullptr); });
 
-        setup = lookout_setup_new();
+        first_run.Open();
         NoaaOpen();
 
         // The ROOT ELEMENT's SizeChanged, not the window's: the element fires
@@ -171,8 +171,6 @@ namespace winrt::LookoutMarine::implementation
             // a scan thread and the store, so they close in that order.
             NoaaClose();
             sets.Close();
-            lookout_setup_free(setup);
-            setup = nullptr;
             // The store coalesces its writes, so the last of them reaches the
             // disk here rather than at whatever the window was doing.
             lk_store_shutdown();

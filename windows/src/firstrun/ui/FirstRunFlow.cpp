@@ -107,12 +107,9 @@ namespace winrt::LookoutMarine::implementation
         FirstRunFadeBottom().Color(panel);
     }
 
-    // Note what the core's setup reads off the app, and read its state back
-    // into the view model.
-    void MainWindow::SetupNote()
+    // What the core's setup reads off the app.
+    lookout_setup_facts MainWindow::SetupFacts()
     {
-        if (setup == nullptr)
-            return;
         lookout_setup_facts f{};
         f.catalog_ready = noaa.state().have_catalog;
         f.picked = !noaa_region_id.empty();
@@ -136,35 +133,23 @@ namespace winrt::LookoutMarine::implementation
             f.pick_charts = all_held ? held : cells;
             f.pick_bytes = all_held ? held_bytes : bytes;
         }
-        lookout_setup_note(setup, &f);
-        lookout_setup_state s{};
-        lookout_setup_read(setup, &s);
-        first_run.Read(s);
+        return f;
     }
+
+    void MainWindow::SetupNote() { first_run.Note(SetupFacts()); }
 
     // Apply a LOOKOUT_SETUP_* action on current facts. Returns the source the
     // shell acts on, or -1.
     int MainWindow::SetupAct(int action, int arg)
     {
-        if (setup == nullptr)
-            return -1;
-        SetupNote();
-        int const source = lookout_setup_act(setup, action, arg);
-        lookout_setup_state s{};
-        lookout_setup_read(setup, &s);
-        first_run.Read(s);
-        return source;
+        return first_run.Act(SetupFacts(), action, arg);
     }
 
     // Raise setup when the core's state says it has a reason to come up.
-    // Called where the app settles on having no chart to draw.
     bool MainWindow::SetupShouldRun()
     {
-        setup_nothing_to_draw = true;
         SetupNote();
-        lookout_setup_state s{};
-        lookout_setup_read(setup, &s);
-        return s.should_run != 0;
+        return first_run.ShouldRun();
     }
 
     void MainWindow::FirstRunBegin()
