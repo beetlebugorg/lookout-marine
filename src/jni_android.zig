@@ -3381,11 +3381,12 @@ export fn Java_org_beetlebug_lookout_Lookout_nChartSetsChanged(env: [*c]j.JNIEnv
     return if (lookout_chart_sets_changed(setsOf(s)) != 0) 1 else 0;
 }
 
-/// String[] nChartSetsAll(long s) -- the list, in the order added. Thirteen
+/// String[] nChartSetsAll(long s) -- the list, in the order added. Twenty-one
 /// strings per set:
 ///
 ///   path, title, producer, on, scanned, charts, pictures, unprepared,
-///   bytes, bandLo, bandHi, managed, heldBack
+///   bytes, bandLo, bandHi, managed, heldBack, toPrepare, refused,
+///   band1 .. band6 (charts per band)
 export fn Java_org_beetlebug_lookout_Lookout_nChartSetsAll(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong) j.jobjectArray {
     _ = cls;
     var n: usize = 0;
@@ -3470,24 +3471,6 @@ export fn Java_org_beetlebug_lookout_Lookout_nChartSetsCompose(env: [*c]j.JNIEnv
     var n: usize = 0;
     const paths = lookout_chart_sets_compose(setsOf(s), &n) orelse return jstrArray(env, &.{});
     return jstrArray(env, paths[0..n]);
-}
-
-/// String[] nChartSetsTodo(long s) -- what each set still has to prepare, in
-/// the order nChartSetsAll lists them. Nine strings per set:
-///
-///   path, toPrepare, refused, band1 .. band6
-export fn Java_org_beetlebug_lookout_Lookout_nChartSetsTodo(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong) j.jobjectArray {
-    _ = cls;
-    var n: usize = 0;
-    const all = lookout_chart_sets_all(setsOf(s), &n) orelse return jstrArray(env, &.{});
-
-    var out = Strings.init();
-    defer out.deinit();
-
-    for (all[0..n]) |sp| {
-        jrows.todoRow(&out, sp orelse continue);
-    }
-    return out.toArray(env);
 }
 
 /// String[] nChartSetToPrepare(long s, String path) -- the files one set still

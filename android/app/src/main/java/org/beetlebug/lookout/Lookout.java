@@ -313,11 +313,6 @@ public final class Lookout implements AutoCloseable {
     public static String[] chartSetToPrepare(long s, String path) {
         return s == 0 ? new String[0] : nChartSetToPrepare(s, path);
     }
-    /** What each set still has to prepare, in the order chartSetsAll lists
-     *  them: path, toPrepare, refused, then band 1 to 6. */
-    public static String[] chartSetsTodo(long s) {
-        return s == 0 ? new String[0] : nChartSetsTodo(s);
-    }
     /** Record that the mariner stopped the prepare of a set. */
     public static void chartSetsNoteCancel(long s, String path) {
         if (s != 0) nChartSetsNoteCancel(s, path);
@@ -498,7 +493,6 @@ public final class Lookout implements AutoCloseable {
     private static native boolean nChartSetsRescan(long s, String path);
     private static native boolean nChartSetsSetManaged(long s, String path, boolean managed);
     private static native String[] nChartSetToPrepare(long s, String path);
-    private static native String[] nChartSetsTodo(long s);
     private static native void nChartSetsNoteCancel(long s, String path);
     private static native boolean nChartSetsNoteBake(long s, String path, long job);
     private static native String nFmtPosition(double lat, double lon);

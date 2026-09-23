@@ -48,6 +48,12 @@ object ChartSets {
         /** The charts this set holds that another switched-on set draws
          *  instead. 0 for a set switched off. */
         val heldBack: Int = 0,
+        /** The files still to prepare: `unprepared` less `refused`. */
+        val toPrepare: Int = 0,
+        /** Files a finished bake of this set did not prepare. */
+        val refused: Int = 0,
+        /** The vector charts by usage band, prepared or not. Band 1 first. */
+        val bandCount: List<Int> = List(6) { 0 },
     ) {
         val name: String get() = path.substringAfterLast('/').ifEmpty { path }
     }
@@ -127,7 +133,7 @@ object ChartSets {
     fun noteBake(path: String, job: Long): Boolean = Lookout.chartSetsNoteBake(handle, path, job)
 
     /**
-     * The flat read: thirteen strings per set. `internal` so the suite drives the
+     * The flat read: twenty-one strings per set. `internal` so the suite drives the
      * same walk with no core.
      */
     internal fun decode(flat: Array<String>?): List<Set> {
@@ -150,6 +156,9 @@ object ChartSets {
                     bandHi = flat[k + 10].toIntOrNull() ?: 0,
                     managed = flat[k + 11] != "0",
                     heldBack = flat[k + 12].toIntOrNull() ?: 0,
+                    toPrepare = flat[k + 13].toIntOrNull() ?: 0,
+                    refused = flat[k + 14].toIntOrNull() ?: 0,
+                    bandCount = List(6) { b -> flat[k + 15 + b].toIntOrNull() ?: 0 },
                 ),
             )
             k += FIELDS
@@ -157,5 +166,5 @@ object ChartSets {
         return out
     }
 
-    private const val FIELDS = 13
+    private const val FIELDS = 21
 }

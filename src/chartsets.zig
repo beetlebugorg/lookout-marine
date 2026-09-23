@@ -64,6 +64,10 @@ pub const Set = extern struct {
     /// `to_prepare` by usage band: `band_todo[0]` is band 1. A file with no
     /// band is in no entry.
     band_todo: [6]usize = @splat(0),
+    /// The vector charts by usage band, prepared or not: `band_count[0]` is
+    /// band 1. `charts` and the vector files in `unprepared`, less any cell
+    /// with no band. Pictures are in no entry.
+    band_count: [6]usize = @splat(0),
 };
 
 /// One chart that can be handed to the engine, and the dataset it holds.
@@ -106,6 +110,7 @@ const Row = struct {
     bytes: u64 = 0,
     band_lo: u8 = 0,
     band_hi: u8 = 0,
+    band_count: [6]usize = @splat(0),
     /// Every chart in this set that can be handed to the engine now, sorted.
     openable: []Openable = &.{},
     /// Every file the scan found, as the scan found it. A shell bakes from
@@ -552,6 +557,7 @@ pub const Sets = struct {
                 .to_prepare = todo.to_prepare,
                 .refused = todo.refused,
                 .band_todo = todo.bands,
+                .band_count = r.band_count,
             });
             p.* = dst;
         }
@@ -1141,6 +1147,7 @@ pub const Sets = struct {
         var unprepared: usize = 0;
         var lo: u8 = 0;
         var hi: u8 = 0;
+        var bands: [6]usize = @splat(0);
         // The prepared charts first, then whatever the source folder still
         // holds that they did not replace.
         if (prepared) |p| {
@@ -1151,6 +1158,7 @@ pub const Sets = struct {
                 if (c.band >= 1 and c.band <= 6) {
                     if (lo == 0 or c.band < lo) lo = c.band;
                     if (c.band > hi) hi = c.band;
+                    bands[c.band - 1] += 1;
                 }
             }
             for (p.raster) |c| {
@@ -1168,6 +1176,7 @@ pub const Sets = struct {
             if (c.band >= 1 and c.band <= 6) {
                 if (lo == 0 or c.band < lo) lo = c.band;
                 if (c.band > hi) hi = c.band;
+                bands[c.band - 1] += 1;
             }
         }
         for (scan.raster) |c| {
@@ -1201,6 +1210,7 @@ pub const Sets = struct {
             r.bytes = scan.totalBytes();
             r.band_lo = lo;
             r.band_hi = hi;
+            r.band_count = bands;
             r.scanned = true;
             r.last_scan = number;
             // The agency when the charts agree on one, else the folder name.
@@ -2166,6 +2176,22 @@ test "a stale cell is listed to prepare" {
     const row = s.all()[0];
     try t.expectEqual(@as(usize, 1), row.to_prepare);
     try t.expectEqual(@as(usize, 1), row.band_todo[4]);
+}
+
+test "a set counts its vector charts by band, prepared or not" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const dir = try f.folderNamed("Set A", &.{ "US5MD1MC.000", "US3EC11M.pmtiles", "ncds_08.mbtiles" });
+    defer t.allocator.free(dir);
+
+    const s = try f.open();
+    defer s.close();
+    try t.expect(s.add(dir));
+    settle(s);
+
+    const row = s.all()[0];
+    try t.expectEqual([6]usize{ 0, 0, 1, 0, 1, 0 }, row.band_count);
+    try t.expectEqual(@as(usize, 1), row.pictures);
 }
 
 test "a refused cell is not listed after its bake result is noted" {

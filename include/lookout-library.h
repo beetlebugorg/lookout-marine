@@ -332,6 +332,10 @@ typedef struct {
     /* `to_prepare` by usage band: band_todo[0] is band 1. A file with no band
      * is in no entry. */
     size_t band_todo[6];
+    /* The vector charts by usage band, prepared or not: band_count[0] is
+     * band 1. `charts` and the vector files in `unprepared`, less any cell
+     * with no band. Pictures are in no entry. */
+    size_t band_count[6];
 } lookout_chart_set;
 
 /* Load the saved list off `store` and start the background scans.

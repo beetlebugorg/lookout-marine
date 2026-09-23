@@ -31,13 +31,17 @@ class ChartSetsTest {
         bandHi: Int = 0,
         managed: Boolean = false,
         heldBack: Int = 0,
+        toPrepare: Int = 0,
+        refused: Int = 0,
+        bandCount: List<Int> = List(6) { 0 },
     ): List<String> = listOf(
         path, title, producer,
         if (on) "1" else "0", if (scanned) "1" else "0",
         charts.toString(), pictures.toString(), unprepared.toString(),
         bytes.toString(), bandLo.toString(), bandHi.toString(),
         if (managed) "1" else "0", heldBack.toString(),
-    )
+        toPrepare.toString(), refused.toString(),
+    ) + bandCount.map { it.toString() }
 
     private fun read(vararg sets: List<String>): Array<String> =
         sets.flatMap { it }.toTypedArray()
@@ -67,8 +71,7 @@ class ChartSetsTest {
         assertEquals(0, noaa.heldBack)
     }
 
-    /** managed and heldBack are the last two fields of each set. */
-    @Test fun theTrailingFieldsReadManagedAndHeldBack() {
+    @Test fun managedAndHeldBackAreRead() {
         val both = ChartSets.decode(read(
             set("/charts/mine", "mine", charts = 40, bandLo = 4, bandHi = 5, heldBack = 12),
             set("/charts/NOAA", "NOAA", managed = true),
@@ -79,6 +82,19 @@ class ChartSetsTest {
         assertEquals(5, both[0].bandHi)
         assertTrue(both[1].managed)
         assertEquals("/charts/NOAA", both[1].path)
+    }
+
+    @Test fun theBandCountsAndWorkLeftAreRead() {
+        val one = ChartSets.decode(read(
+            set("/charts/mine", "mine", unprepared = 9, toPrepare = 7, refused = 2,
+                bandCount = listOf(1, 2, 0, 0, 3, 1)),
+            set("/charts/NOAA", "NOAA", managed = true),
+        ))
+        assertEquals(2, one.size)
+        assertEquals(7, one[0].toPrepare)
+        assertEquals(2, one[0].refused)
+        assertEquals(listOf(1, 2, 0, 0, 3, 1), one[0].bandCount)
+        assertTrue(one[1].managed)
     }
 
     /** A set switched off stays on the list. Removing is the other control. */
