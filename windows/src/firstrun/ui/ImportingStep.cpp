@@ -33,12 +33,11 @@ namespace winrt::LookoutMarine::implementation
                     L"A cell holds survey data, not a drawn chart, so Lookout converts each one "
                     L"on the way in. This happens once per set."));
 
-        auto const &order = first_run.order();
-        if (order.has_value())
+        if (first_run.ordered())
         {
-            body.Children().Append(Line(order->regions, 14, true));
-            body.Children().Append(Muted(L"NOAA · " + Thousands(order->charts) +
-                                         L" charts · " + SizeText(order->bytes)));
+            body.Children().Append(Line(first_run.order_regions(), 14, true));
+            body.Children().Append(Muted(L"NOAA · " + Thousands(first_run.order_charts()) +
+                                         L" charts · " + SizeText(first_run.order_bytes())));
         }
 
         // A transfer that left nothing to bake. The step states what the
@@ -184,7 +183,7 @@ namespace winrt::LookoutMarine::implementation
         for (auto const &b : shown.bands)
             s += "|" + winrt::to_string(b.name);
         s += (shown.downloading || shown.baking) ? "|stop" : "|done";
-        s += first_run.order().has_value() ? "|order" : "|none";
+        s += first_run.ordered() ? "|order" : "|none";
         s += first_run.import_stalled() ? "|ended" : "";
         return s;
     }

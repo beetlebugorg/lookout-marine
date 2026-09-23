@@ -124,9 +124,18 @@ namespace winrt::LookoutMarine::implementation
         f.chart_open = lk_controller_is_open(controller) && chart_has_cells;
         f.noaa_outcome = noaa.state().outcome;
         f.noaa_run = noaa.state().run;
+        // Water the device holds whole is priced as what it holds, so an order
+        // to fetch it again counts its charts.
         if (!noaa_region_id.empty())
-            lookout_noaa_cost(noaa.handle(), noaa_region_id.c_str(), &f.pick_charts, &f.pick_bytes,
-                              nullptr, nullptr);
+        {
+            uint32_t cells = 0, held = 0;
+            uint64_t bytes = 0, held_bytes = 0;
+            lookout_noaa_cost(noaa.handle(), noaa_region_id.c_str(), &cells, &bytes, &held,
+                              &held_bytes);
+            bool const all_held = cells == 0 && held > 0;
+            f.pick_charts = all_held ? held : cells;
+            f.pick_bytes = all_held ? held_bytes : bytes;
+        }
         lookout_setup_note(setup, &f);
         lookout_setup_state s{};
         lookout_setup_read(setup, &s);
@@ -339,31 +348,21 @@ namespace winrt::LookoutMarine::implementation
             if (noaa_region_id.empty())
                 return;
 
-            // Price it once, here, and keep what it reported. The page outlives
-            // the transfer's counters. A re-price mid-download moves the target
-            // the mariner is watching.
-            uint32_t cells = 0;
-            uint64_t bytes = 0;
-            lookout_noaa_cost(noaa.handle(), noaa_region_id.c_str(), &cells, &bytes,
-                                    nullptr, nullptr);
-
-            lkw::FirstRunOrder order;
-            order.region_ids = noaa_region_id;
-            order.charts     = cells;
-            order.bytes      = bytes;
-            // Name the regions rather than their ids, so "Alaska" for "d17",
-            // and every one the mariner picked.
+            // The core latched the order's counts on advance. The page names
+            // the regions rather than their ids, so "Alaska" for "d17", and
+            // every one the mariner picked.
+            std::wstring names;
             lookout_noaa_region const *regions = nullptr;
             size_t const n = lookout_noaa_regions(&regions);
             for (size_t i = 0; i < n && regions != nullptr; ++i)
             {
                 if (!lkw::RegionPicked(noaa_region_id, regions[i].id))
                     continue;
-                if (!order.regions.empty())
-                    order.regions += L", ";
-                order.regions += winrt::to_hstring(regions[i].name);
+                if (!names.empty())
+                    names += L", ";
+                names += winrt::to_hstring(regions[i].name);
             }
-            first_run.set_order(std::move(order));
+            first_run.set_order_regions(std::move(names));
 
             // `again` fetches the cells this device already holds as well,
             // for a pick of water that is wholly installed.
@@ -671,7 +670,7 @@ namespace winrt::LookoutMarine::implementation
         now.push_back({ want > 0 ? Thousands(shown.fetched) + L" of " + Thousands(want)
                                  : std::wstring{},
                         shown.downloading,
-                        first_run.order().has_value() && !shown.downloading });
+                        first_run.ordered() && !shown.downloading });
         now.push_back({ shown.found > 0 ? Thousands(shown.found) + L" found" : std::wstring{},
                         shown.baking && shown.found == 0, shown.found > 0 });
         now.push_back({ shown.found > 0 ? Thousands(shown.baked) + L" of " + Thousands(shown.found)

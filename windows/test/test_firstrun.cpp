@@ -97,13 +97,15 @@ void TestFirstRun()
 
     Suite("lk_firstrun: the counts are latched");
     {
-        FirstRun f = At(FirstRunStep::Importing);
-        FirstRunOrder o;
-        o.regions    = L"Alaska";
-        o.region_ids = "d17";
-        o.charts     = 1238;
-        o.bytes      = 222661011;
-        f.set_order(std::move(o));
+        FirstRun f;
+        lookout_setup_state s{};
+        s.step         = static_cast<uint8_t>(FirstRunStep::Importing);
+        s.showing      = 1;
+        s.ordered      = 1;
+        s.order_charts = 1238;
+        s.order_bytes  = 222661011;
+        f.Read(s);
+        f.set_order_regions(L"Alaska");
 
         Case("before the transfer reports, the order is what is expected");
         LK_EQ(f.expected(), 1238u);
@@ -318,11 +320,10 @@ void TestFirstRun()
          * the model and the page drew them over the new run. */
         Case("a second run starts with nothing of the first on it");
         FirstRun twice = At(FirstRunStep::Importing);
-        twice.set_order(FirstRunOrder{ L"Mid-Atlantic", "d5", 930, 102760448 });
+        twice.set_order_regions(L"Mid-Atlantic");
         twice.Observe(Baking(3, 9));
-        LK_EQ(twice.order().has_value(), true);
         twice.Restart();
-        LK_EQ(twice.order().has_value(), false);
+        LK_EQ(twice.order_regions().empty(), true);
         LK_EQ(twice.shown().found, 0u);
     }
 }

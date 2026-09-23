@@ -171,7 +171,7 @@ namespace lkw
     {
         if (shown_.expected > 0)
             return shown_.expected;
-        return order_.has_value() ? order_->charts : 0;
+        return state_.order_charts;
     }
 
     double FirstRun::Fraction() const

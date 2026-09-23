@@ -13,7 +13,6 @@
 #include <cstdint>
 #include <lookout-library.h> // lookout_setup_state
 #include <lookout-shell.h>   // lookout_depth_plan
-#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -36,17 +35,6 @@ namespace lkw
         OnlineChart, // a published style, drawn as the chart
         Importing,   // charts arriving and converting; setup stays open
         Depths,      // the safety contour, once there is a chart to draw it on
-    };
-
-    // What the mariner asked NOAA for, kept from the moment they asked. The
-    // download service resets its counters when the transfer ends. The page
-    // outlives the transfer.
-    struct FirstRunOrder
-    {
-        std::wstring regions;    // the names, for the page
-        std::string  region_ids; // "d5,d8", for the core
-        uint32_t     charts{ 0 };
-        uint64_t     bytes{ 0 };
     };
 
     // One usage band's share of the bake. Coarse band first. That is the order
@@ -247,7 +235,7 @@ namespace lkw
         // counts.
         void Restart()
         {
-            order_.reset();
+            order_regions_.clear();
             shown_ = FirstRunLive{};
         }
 
@@ -280,8 +268,14 @@ namespace lkw
         std::wstring Footnote(Footnotes const &f) const;
 
         // ---- the order, and the counts ------------------------------------
-        std::optional<FirstRunOrder> const &order() const { return order_; }
-        void set_order(FirstRunOrder o) { order_ = std::move(o); }
+        // The NOAA order as the core latched it when the mariner asked. The
+        // download service resets its counters when the transfer ends, and
+        // the page outlives the transfer. The shell keeps only the names.
+        bool ordered() const { return state_.ordered != 0; }
+        uint32_t order_charts() const { return state_.order_charts; }
+        uint64_t order_bytes() const { return state_.order_bytes; }
+        std::wstring const &order_regions() const { return order_regions_; }
+        void set_order_regions(std::wstring names) { order_regions_ = std::move(names); }
 
         // Hand this every reading of the two services. It keeps the last
         // figures each of them reported.
@@ -306,7 +300,7 @@ namespace lkw
     private:
         lookout_setup_state          state_{};
         ChartSource                  source_{ ChartSource::Noaa };
-        std::optional<FirstRunOrder> order_;
+        std::wstring                 order_regions_;
         FirstRunLive                 shown_;
     };
 }
