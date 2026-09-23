@@ -139,9 +139,11 @@ export fn lookout_chart_set_to_prepare(
 }
 
 /// A managed set whose prepare is unfinished and was not stopped since it
-/// last changed, or null. Borrowed until the next call that changes the list.
+/// last changed, or null. Null while a NOAA service is open on the sets, which
+/// finishes it. Borrowed until the next call that changes the list.
 export fn lookout_chart_sets_resume(s: ?*lookout_chart_sets) ?[*:0]const u8 {
     const x = s orelse return null;
+    if (x.followed()) return null;
     const p = x.resumePath() orelse return null;
     return p.ptr;
 }

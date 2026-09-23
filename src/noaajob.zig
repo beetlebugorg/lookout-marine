@@ -2,9 +2,10 @@
 //!
 //! The core decides which cells a region needs (src/noaa.zig), asks the shell
 //! for each url, and writes the exchange-set zips into a staging directory.
-//! The shell fetches bytes and bakes the directory afterward. No socket opens
-//! here, for the reason chart links give: one fetcher serves the whole app,
-//! and the shell owns it.
+//! The shell fetches bytes. What a download writes is then baked into the
+//! chart sets' prepared root through `Baker` (see Handle.stepPrepare). No
+//! socket opens here, for the reason chart links give: one fetcher serves the
+//! whole app, and the shell owns it.
 //!
 //! A district arrives as one zip where NOAA publishes one, so a region costs a
 //! handful of requests rather than a thousand. Those zips run to a couple of
@@ -215,6 +216,26 @@ pub const State = extern struct {
     /// The directories being deleted, and how many are gone.
     remove_done: u32 = 0,
     remove_total: u32 = 0,
+    /// 1 while the managed set's prepare runs, after a download or to finish
+    /// one an earlier launch left.
+    preparing: u8 = 0,
+    /// The files the prepare has been through, of `to_prepare`. Both stay at
+    /// their last values once it ends, until the next run or prepare.
+    prepared: u32 = 0,
+    to_prepare: u32 = 0,
+    /// The same by usage band: band_done[0] is band 1.
+    band_done: [6]u32 = @splat(0),
+    band_total: [6]u32 = @splat(0),
+};
+
+/// The prepare's counts, as the snapshot reads them. Handle.stepPrepare
+/// writes them under the api lock.
+pub const PrepView = struct {
+    preparing: bool = false,
+    prepared: u32 = 0,
+    to_prepare: u32 = 0,
+    band_done: [6]u32 = @splat(0),
+    band_total: [6]u32 = @splat(0),
 };
 
 /// The catalog, the plan, and the transfer.
@@ -247,6 +268,14 @@ pub const Service = struct {
     /// Ordering again can clear the cause: the catalog was missing, or a
     /// transfer failed on the network.
     retry: bool = false,
+    /// Set by the Handle when it prepares what a download writes. A run that
+    /// wrote a cell then ends when the prepare does.
+    prepares: bool = false,
+    /// How the transfers of a run that waits on its prepare ended: finished,
+    /// or cancelled. Null when no run waits.
+    transfers_end: ?Outcome = null,
+    /// The prepare's counts, for the snapshot.
+    prep: PrepView = .{},
 
     next_req: u64 = 1,
     reqs: std.ArrayList(Req) = .empty,
@@ -531,7 +560,11 @@ pub const Service = struct {
         self.clearStage();
         self.inflight = 0;
         self.catalog_inflight = false;
-        if (self.phase == .downloading) self.outcome = .cancelled;
+        if (self.phase == .downloading) {
+            // What arrived before the stop is prepared, and the run ends
+            // cancelled when that does.
+            if (self.prepares and self.done > 0) self.transfers_end = .cancelled else self.outcome = .cancelled;
+        }
         if (self.phase == .downloading or self.phase == .reading_catalog) {
             self.phase = if (self.cat != null) .ready else .idle;
             self.changed = true;
@@ -747,6 +780,8 @@ pub const Service = struct {
         self.run +%= 1;
         self.outcome = .running;
         self.retry = false;
+        self.transfers_end = null;
+        if (!self.prep.preparing) self.prep = .{};
         self.changed = true;
     }
 
@@ -868,7 +903,11 @@ pub const Service = struct {
         }
         if (self.inflight == 0 and self.next_job >= self.plan.items.len and self.phase == .downloading) {
             self.phase = .ready;
-            self.endRun(if (self.done > 0) .finished else .failed, "");
+            if (self.prepares and self.done > 0) {
+                // The run ends once what arrived is prepared.
+                self.transfers_end = .finished;
+                self.changed = true;
+            } else self.endRun(if (self.done > 0) .finished else .failed, "");
         }
     }
 
@@ -1541,6 +1580,11 @@ pub const Service = struct {
             .outcome = @intFromEnum(self.outcome),
             .run = self.run,
             .retry = @intFromBool(self.retry),
+            .preparing = @intFromBool(self.prep.preparing),
+            .prepared = self.prep.prepared,
+            .to_prepare = self.prep.to_prepare,
+            .band_done = self.prep.band_done,
+            .band_total = self.prep.band_total,
         };
         for (self.removers.items) |r| {
             s.removing = 1;
@@ -1575,6 +1619,71 @@ pub const Box = extern struct {
     north: f64,
 };
 
+/// The bake a prepare runs through. src/capi/noaa.zig sets src/bakejob.zig's,
+/// and the tests here set a fake. This file cannot import bakejob, which
+/// @cImports tile57, because it is a test root of its own.
+pub const Baker = struct {
+    /// Start a bake that owns every string from here, as bakejob.Job.start
+    /// does, calling `wake` as the count moves and when it ends. Null when it
+    /// does not start, and the strings are freed.
+    start: *const fn (
+        alloc: std.mem.Allocator,
+        source: [:0]u8,
+        ins: [][:0]u8,
+        outs: [][:0]u8,
+        cells: usize,
+        sheets: usize,
+        lifts: usize,
+        archive: bool,
+        wake: ?WakeFn,
+        user: ?*anyopaque,
+    ) ?*anyopaque,
+    poll: *const fn (job: *anyopaque) BakeState,
+    /// Stop at the next chart boundary.
+    cancel: *const fn (job: *anyopaque) void,
+    /// The paths the bake was given, for chartsets.Sets.noteBake.
+    ins: *const fn (job: *anyopaque) []const [:0]const u8,
+    /// Join the bake and free it. Cancel first, or this waits for it.
+    free: *const fn (job: *anyopaque) void,
+};
+
+/// One read of a bake.
+pub const BakeState = struct {
+    done: u32 = 0,
+    /// The charts written. Set when the bake ends.
+    baked: u32 = 0,
+    ok: bool = true,
+    running: bool = false,
+    /// Why a phase stopped, NUL-terminated.
+    why: [256]u8 = @splat(0),
+};
+
+/// The prepare of one managed set. It has three steps, each driven from
+/// adopt: wait for a scan of the set, bake what the scan lists to prepare,
+/// and wait for the scan that reads the bake's output.
+const Prep = struct {
+    stage: Step = .none,
+    /// The set. Owned.
+    path: []u8 = &.{},
+    /// The scan to wait for is numbered above this.
+    after: u64 = 0,
+    job: ?*anyopaque = null,
+    /// The usage band of each file handed to the bake, in the order it runs.
+    bands: []u8 = &.{},
+    /// The run whose end waits on this prepare. `for_run` is false for a
+    /// prepare an earlier launch left.
+    for_run: bool = false,
+    run: u32 = 0,
+    /// The mariner stopped it, or its set went.
+    stopped: bool = false,
+    /// How the bake ended.
+    baked: u32 = 0,
+    ok: bool = true,
+    why: [256]u8 = @splat(0),
+
+    const Step = enum { none, scan_in, baking, scan_out };
+};
+
 /// A service and the lock that serializes calls into it.
 ///
 /// lookout_noaa is one of these. Every method except respondChunk and poll
@@ -1605,14 +1714,53 @@ pub const Handle = struct {
     record: ?u64 = null,
     record_read: bool = false,
 
+    /// The bake a prepare runs through. With none, no prepare runs, and a run
+    /// ends when its transfers do.
+    baker: ?Baker = null,
+    prep: Prep = .{},
+    /// A cancel that arrived after a run's transfers ended and before its
+    /// prepare began. The prepare starts stopped.
+    stop_next: bool = false,
+    /// Bakes stopped for a new download. adopt frees each once it ends.
+    retired: std.ArrayList(*anyopaque) = .empty,
+    /// Raised by the sets when a scan ends or a set is removed, and read by
+    /// adopt.
+    scans_moved: std.atomic.Value(bool) = .init(false),
+    following: bool = false,
+
     pub fn init(alloc: std.mem.Allocator) Handle {
         return .{ .svc = Service.init(alloc) };
     }
 
     pub fn deinit(self: *Handle) void {
+        if (self.following) if (self.sets) |sets| sets.followScans(null);
+        self.following = false;
+        self.dropPrepare(true);
+        if (self.baker) |b| for (self.retired.items) |j| {
+            b.cancel(j);
+            b.free(j);
+        };
+        self.retired.deinit(self.svc.alloc);
         self.svc.deinit();
         if (self.cells) |*a| a.deinit();
         self.cells = null;
+    }
+
+    /// Follow the sets' scans, so a prepare waiting on one continues when it
+    /// ends, and a managed set's prepare an earlier launch left is finished.
+    /// Call once the handle is at the address it keeps.
+    pub fn follow(self: *Handle) void {
+        const sets = self.sets orelse return;
+        sets.followScans(.{ .call = scanMoved, .ctx = self });
+        self.following = true;
+        self.scans_moved.store(true, .release);
+    }
+
+    /// The sets' call, under their lock. Posts and returns.
+    fn scanMoved(ctx: *anyopaque) void {
+        const self: *Handle = @ptrCast(@alignCast(ctx));
+        self.scans_moved.store(true, .release);
+        if (self.svc.wake) |w| w(self.svc.user);
     }
 
     pub fn setProvider(self: *Handle, get: ?clinks.HttpGetFn, stop: ?clinks.HttpCancelFn, wake: ?WakeFn, user: ?*anyopaque) void {
@@ -1620,6 +1768,8 @@ pub const Handle = struct {
         defer self.mu.unlock();
         self.svc.setProvider(get, stop, wake, user);
         self.svc.publish();
+        // A scan that ended before the fetcher was set has woken no one.
+        if (wake) |w| if (self.scans_moved.load(.acquire)) w(user);
     }
 
     /// One piece of a response. No lock: see Service.respondChunk.
@@ -1632,7 +1782,9 @@ pub const Handle = struct {
         self.mu.lock();
         defer self.mu.unlock();
         self.svc.adopt();
+        self.stepPrepare();
         self.settleCheck();
+        if (self.svc.changed) self.svc.publish();
     }
 
     /// Adopt, then report whether the published state changed since the
@@ -1756,7 +1908,7 @@ pub const Handle = struct {
         const add = maskOf(districts);
         if (add != 0) self.writeRecord((self.readRecord() orelse 0) | add);
         self.syncHeld();
-        self.svc.start(districts, dest, again);
+        self.startRun(districts, dest, again);
         self.svc.publish();
     }
 
@@ -1914,6 +2066,13 @@ pub const Handle = struct {
         // cell. Holding `unpack_work` over the renames waits for it.
         const stopped = self.svc.runReaches(districts) and (picked == 0 or !self.svc.run_update or doomed.items.len != 0);
         if (stopped) self.svc.stopRun();
+        // A bake reading the cells about to go is stopped and waited for.
+        if (picked == 0 or doomed.items.len != 0) self.dropPrepare(true);
+        // An empty pick deletes whatever the stopped run brought.
+        if (picked == 0) if (self.svc.transfers_end) |_| {
+            self.svc.transfers_end = null;
+            self.svc.endRun(.cancelled, "");
+        };
 
         var moved: u32 = 0;
         if (picked == 0) {
@@ -1923,7 +2082,7 @@ pub const Handle = struct {
         }
 
         if (picked != 0 and (again or self.svc.costOf(districts).cells != 0))
-            self.svc.start(districts, dest, again);
+            self.startRun(districts, dest, again);
         return moved;
     }
 
@@ -2086,7 +2245,10 @@ pub const Handle = struct {
         const list = alloc.alloc(noaa.Installed, held.len) catch return;
         defer alloc.free(list);
         for (held, list) |h, *o| o.* = .{ .name = h.name, .edition = h.edition, .update = h.update };
+        self.svc.prepares = self.canPrepare();
+        const before = self.svc.run;
         self.svc.startUpdate(list, dest);
+        self.replacedPrepare(before);
         self.svc.publish();
     }
 
@@ -2157,11 +2319,314 @@ pub const Handle = struct {
         if (self.store) |st| st.setNumber(settings.group_chartsets, checked_key, @floatFromInt(at));
     }
 
+    /// Stop the download and the prepare. What arrived before a stop in the
+    /// transfer is still prepared. A stop in the prepare is recorded on the
+    /// set, so it does not resume on its own.
     pub fn cancel(self: *Handle) void {
         self.mu.lock();
         defer self.mu.unlock();
+        const ended = self.svc.phase != .downloading and self.svc.transfers_end != null;
         self.svc.cancelAll();
+        switch (self.prep.stage) {
+            .none => if (ended) {
+                self.svc.transfers_end = .cancelled;
+                self.stop_next = true;
+            },
+            .scan_in => self.prep.stopped = true,
+            .baking => {
+                self.prep.stopped = true;
+                if (self.baker) |b| if (self.prep.job) |j| b.cancel(j);
+            },
+            // The bake has ended. Its charts are read back as they are.
+            .scan_out => {},
+        }
         self.svc.publish();
+    }
+
+    // ---- the prepare ------------------------------------------------------
+
+    fn canPrepare(self: *Handle) bool {
+        const sets = self.sets orelse return false;
+        return self.baker != null and sets.prepared_root.len != 0;
+    }
+
+    /// Start a download, and stop the prepare it replaces.
+    fn startRun(self: *Handle, districts: []const u8, dest: []const u8, again: bool) void {
+        self.svc.prepares = self.canPrepare();
+        const before = self.svc.run;
+        self.svc.start(districts, dest, again);
+        self.replacedPrepare(before);
+    }
+
+    /// A new download writes into the set a prepare may be reading. The
+    /// prepare stops, and the new run's prepare covers its files.
+    fn replacedPrepare(self: *Handle, before: u32) void {
+        if (self.svc.run == before or self.svc.phase != .downloading) return;
+        self.stop_next = false;
+        self.dropPrepare(false);
+    }
+
+    /// End the prepare where it is, with no record on the set. A run
+    /// waiting on it ends cancelled. `wait` joins its bake, and otherwise
+    /// adopt frees the bake once it stops.
+    fn dropPrepare(self: *Handle, wait: bool) void {
+        if (self.prep.stage == .none) return;
+        if (self.prep.job) |j| if (self.baker) |b| {
+            b.cancel(j);
+            if (wait) b.free(j) else self.retired.append(self.svc.alloc, j) catch b.free(j);
+        };
+        self.prep.job = null;
+        if (self.prep.for_run and self.svc.run == self.prep.run and self.svc.outcome == .running) {
+            self.svc.transfers_end = null;
+            self.svc.endRun(.cancelled, "");
+        }
+        self.clearPrepare();
+    }
+
+    fn clearPrepare(self: *Handle) void {
+        const alloc = self.svc.alloc;
+        if (self.prep.path.len != 0) alloc.free(self.prep.path);
+        if (self.prep.bands.len != 0) alloc.free(self.prep.bands);
+        self.prep = .{};
+        // The counts stay for a shell to read the end from, until the next
+        // run or prepare starts.
+        self.svc.prep.preparing = false;
+        self.svc.changed = true;
+    }
+
+    /// Free the stopped bakes that have ended.
+    fn reapBakes(self: *Handle) void {
+        const b = self.baker orelse return;
+        var i: usize = 0;
+        while (i < self.retired.items.len) {
+            const j = self.retired.items[i];
+            if (b.poll(j).running) {
+                i += 1;
+                continue;
+            }
+            _ = self.retired.swapRemove(i);
+            b.free(j);
+        }
+    }
+
+    /// Move the prepare on. Called from adopt with `mu` held.
+    fn stepPrepare(self: *Handle) void {
+        self.reapBakes();
+        const moved = self.scans_moved.swap(false, .acq_rel);
+        switch (self.prep.stage) {
+            .none => {
+                if (self.svc.phase == .downloading) return;
+                if (self.svc.transfers_end != null) return self.beginPrepare(self.svc.dest, true);
+                if (!moved or !self.canPrepare()) return;
+                const path = self.sets.?.resumePath() orelse return;
+                self.beginPrepare(path, false);
+            },
+            .scan_in => self.awaitScanIn(),
+            .baking => self.pollBake(),
+            .scan_out => self.awaitScanOut(),
+        }
+    }
+
+    /// Put the set on the list as the service's and wait for a scan of it.
+    /// A run's set is read again, because the scan before the download does
+    /// not list what arrived. A resumed set's last scan lists its files.
+    fn beginPrepare(self: *Handle, path: []const u8, for_run: bool) void {
+        const sets = self.sets orelse return;
+        const own = self.svc.alloc.dupe(u8, path) catch {
+            if (for_run) self.endWaitingRun(.failed, "out of memory");
+            return;
+        };
+        var after: u64 = 0;
+        if (for_run) {
+            after = sets.scanCount();
+            if (!sets.add(own)) _ = sets.rescan(own);
+            _ = sets.setManaged(own, true);
+        }
+        self.prep = .{
+            .stage = .scan_in,
+            .path = own,
+            .after = after,
+            .for_run = for_run,
+            .run = self.svc.run,
+            .stopped = for_run and self.stop_next,
+        };
+        self.stop_next = false;
+        self.svc.prep = .{ .preparing = true };
+        self.svc.changed = true;
+        self.awaitScanIn();
+    }
+
+    /// End a run whose prepare did not start.
+    fn endWaitingRun(self: *Handle, outcome: Outcome, why: []const u8) void {
+        self.svc.transfers_end = null;
+        self.svc.endRun(outcome, why);
+    }
+
+    fn awaitScanIn(self: *Handle) void {
+        const sets = self.sets orelse return self.finishPrepare();
+        switch (sets.scannedSince(self.prep.path, self.prep.after)) {
+            .waiting => return,
+            .gone => {
+                self.prep.stopped = true;
+                return self.finishPrepare();
+            },
+            .read => {},
+        }
+        if (self.prep.stopped) {
+            sets.noteCancel(self.prep.path);
+            return self.finishPrepare();
+        }
+        // A bake stopped for a new download may still be writing. Its end
+        // wakes the shell, and the next adopt continues from here.
+        if (self.retired.items.len != 0) return;
+        self.startBake(sets);
+    }
+
+    /// Bake what the set lists to prepare into its prepared directory, in
+    /// the order and the layout src/shell/bake.zig sets.
+    fn startBake(self: *Handle, sets: *chartsets.Sets) void {
+        const alloc = self.svc.alloc;
+        const b = self.baker orelse return self.finishPrepare();
+        var arena = std.heap.ArenaAllocator.init(alloc);
+        defer arena.deinit();
+        const a = arena.allocator();
+
+        // The list is borrowed until the next call that changes it, so it is
+        // copied before anything else runs.
+        const files = sets.toPrepare(self.prep.path);
+        const items = a.alloc(bake.Item, files.len) catch return self.failPrepare("out of memory");
+        for (files, items) |f, *it| {
+            it.* = .{
+                .path = a.dupe(u8, std.mem.span(f.path)) catch return self.failPrepare("out of memory"),
+                .name = a.dupe(u8, std.mem.span(f.name)) catch return self.failPrepare("out of memory"),
+                .band = @intCast(@max(0, @min(255, f.band))),
+                .work = switch (f.kind) {
+                    .source => .cell,
+                    .raster_source => .sheet,
+                    else => .lift,
+                },
+            };
+        }
+        if (items.len == 0) return self.finishPrepare();
+        bake.order(items);
+
+        const out_dir = std.fs.path.join(a, &.{ sets.prepared_root, bake.preparedName(self.prep.path) }) catch
+            return self.failPrepare("out of memory");
+        const ins = alloc.alloc([:0]u8, items.len) catch return self.failPrepare("out of memory");
+        const outs = alloc.alloc([:0]u8, items.len) catch {
+            alloc.free(ins);
+            return self.failPrepare("out of memory");
+        };
+        var made: usize = 0;
+        var counts: [3]usize = @splat(0);
+        const bands = alloc.alloc(u8, items.len) catch null;
+        for (items, 0..) |it, i| {
+            const out = bake.outputPath(a, out_dir, self.prep.path, it) catch break;
+            if (std.fs.path.dirname(out)) |d| makeDir(d) catch {};
+            ins[i] = alloc.dupeZ(u8, it.path) catch break;
+            outs[i] = alloc.dupeZ(u8, out) catch {
+                alloc.free(ins[i]);
+                break;
+            };
+            made += 1;
+            counts[@intCast(@intFromEnum(it.work))] += 1;
+            if (bands) |x| x[i] = it.band;
+        }
+        const source = alloc.dupeZ(u8, self.prep.path) catch null;
+        if (made != items.len or source == null or bands == null) {
+            for (ins[0..made], outs[0..made]) |x, y| {
+                alloc.free(x);
+                alloc.free(y);
+            }
+            alloc.free(ins);
+            alloc.free(outs);
+            if (source) |x| alloc.free(x);
+            if (bands) |x| alloc.free(x);
+            return self.failPrepare("out of memory");
+        }
+        const job = b.start(alloc, source.?, ins, outs, counts[0], counts[1], counts[2], bake.isArchive(self.prep.path), self.svc.wake, self.svc.user) orelse {
+            alloc.free(bands.?);
+            return self.failPrepare("could not start preparing the downloaded charts");
+        };
+        self.prep.job = job;
+        self.prep.bands = bands.?;
+        self.prep.stage = .baking;
+        var view = PrepView{ .preparing = true, .to_prepare = @intCast(items.len) };
+        for (items) |it| {
+            if (it.band >= 1 and it.band <= 6) view.band_total[it.band - 1] += 1;
+        }
+        self.svc.prep = view;
+        self.svc.changed = true;
+    }
+
+    /// End a prepare that could not bake, and fail the run waiting on it.
+    fn failPrepare(self: *Handle, why: []const u8) void {
+        self.prep.ok = false;
+        copyZ(&self.prep.why, why);
+        self.finishPrepare();
+    }
+
+    /// Read the bake. When it has stopped, record how it ended on the set and
+    /// read the set again.
+    fn pollBake(self: *Handle) void {
+        const b = self.baker orelse return self.finishPrepare();
+        const sets = self.sets orelse return self.finishPrepare();
+        const job = self.prep.job orelse return self.finishPrepare();
+        const st = b.poll(job);
+
+        // The bake runs coarse band first, so the count fills the bands in
+        // the order the files were handed over.
+        var view = self.svc.prep;
+        view.prepared = @min(st.done, view.to_prepare);
+        view.band_done = @splat(0);
+        for (self.prep.bands[0..view.prepared]) |band| {
+            if (band >= 1 and band <= 6) view.band_done[band - 1] += 1;
+        }
+        if (!std.meta.eql(view, self.svc.prep)) {
+            self.svc.prep = view;
+            self.svc.changed = true;
+        }
+        if (st.running) return;
+
+        sets.noteBake(self.prep.path, b.ins(job), st.ok and !self.prep.stopped);
+        self.prep.baked = st.baked;
+        self.prep.ok = st.ok;
+        self.prep.why = st.why;
+        b.free(job);
+        self.prep.job = null;
+        self.prep.after = sets.scanCount();
+        self.prep.stage = .scan_out;
+        _ = sets.rescan(self.prep.path);
+        self.awaitScanOut();
+    }
+
+    fn awaitScanOut(self: *Handle) void {
+        const sets = self.sets orelse return self.finishPrepare();
+        if (sets.scannedSince(self.prep.path, self.prep.after) == .waiting) return;
+        self.finishPrepare();
+    }
+
+    /// End the prepare. A run waiting on it ends: cancelled when it was
+    /// stopped, finished when a chart was prepared or none had to be, and
+    /// empty when the bake refused every file.
+    fn finishPrepare(self: *Handle) void {
+        const p = &self.prep;
+        if (p.for_run and self.svc.run == p.run and self.svc.outcome == .running) {
+            const transfers = self.svc.transfers_end orelse .finished;
+            self.svc.transfers_end = null;
+            if (p.stopped or transfers == .cancelled) {
+                self.svc.endRun(.cancelled, "");
+            } else if (!p.ok) {
+                const why = std.mem.sliceTo(&p.why, 0);
+                self.svc.endRun(.failed, if (why.len != 0) why else "the downloaded charts could not be prepared");
+            } else if (p.baked > 0 or self.svc.prep.to_prepare == 0) {
+                self.svc.endRun(.finished, "");
+            } else {
+                self.svc.endRun(.empty, "none of the downloaded charts could be prepared");
+            }
+        }
+        if (self.sets) |sets| sets.noteChanged();
+        self.clearPrepare();
     }
 };
 
@@ -3735,4 +4200,255 @@ test "a record under an old key is read into the core's key" {
     defer again.deinit();
     again.store = f.store;
     try testing.expectEqual(@as(?u64, 0), again.readRecord());
+}
+
+// ---- the prepare ---------------------------------------------------------------
+
+/// A bake with no engine under it. It writes a chart for each cell it is
+/// given, or none with `fake_refuse`. With `fake_hold` it runs until it is
+/// cancelled and writes no chart.
+const FakeBake = struct {
+    alloc: std.mem.Allocator,
+    source: [:0]u8,
+    ins: [][:0]u8,
+    outs: [][:0]u8,
+    done: u32 = 0,
+    baked: u32 = 0,
+    cancelled: bool = false,
+};
+
+var fake_refuse = false;
+var fake_hold = false;
+
+fn fakeStart(
+    alloc: std.mem.Allocator,
+    source: [:0]u8,
+    ins: [][:0]u8,
+    outs: [][:0]u8,
+    cells: usize,
+    sheets: usize,
+    lifts: usize,
+    archive: bool,
+    wake: ?WakeFn,
+    user: ?*anyopaque,
+) ?*anyopaque {
+    _ = .{ cells, sheets, lifts, archive, wake, user };
+    const j = alloc.create(FakeBake) catch return null;
+    j.* = .{ .alloc = alloc, .source = source, .ins = ins, .outs = outs };
+    if (fake_hold) return j;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    for (outs) |o| {
+        j.done += 1;
+        if (fake_refuse) continue;
+        std.Io.Dir.cwd().writeFile(io, .{ .sub_path = o, .data = "chart" }) catch continue;
+        j.baked += 1;
+    }
+    return j;
+}
+
+fn fakeJob(p: *anyopaque) *FakeBake {
+    return @ptrCast(@alignCast(p));
+}
+
+fn fakePoll(p: *anyopaque) BakeState {
+    const j = fakeJob(p);
+    return .{ .done = j.done, .baked = j.baked, .running = fake_hold and !j.cancelled };
+}
+
+fn fakeCancel(p: *anyopaque) void {
+    fakeJob(p).cancelled = true;
+}
+
+fn fakeIns(p: *anyopaque) []const [:0]const u8 {
+    return fakeJob(p).ins;
+}
+
+fn fakeFree(p: *anyopaque) void {
+    const j = fakeJob(p);
+    for (j.ins) |x| j.alloc.free(x);
+    for (j.outs) |x| j.alloc.free(x);
+    j.alloc.free(j.ins);
+    j.alloc.free(j.outs);
+    j.alloc.free(j.source);
+    j.alloc.destroy(j);
+}
+
+const fake_baker = Baker{
+    .start = fakeStart,
+    .poll = fakePoll,
+    .cancel = fakeCancel,
+    .ins = fakeIns,
+    .free = fakeFree,
+};
+
+/// Respond to each request the recorder holds with its cell's exchange set.
+fn respondCells(f: *ApplyFixture, from: usize) !void {
+    const alloc = testing.allocator;
+    for (f.rec.ids.items[from..], f.rec.urls.items[from..]) |id, url| {
+        const base = std.fs.path.basename(url);
+        const name = base[0 .. base.len - ".zip".len];
+        const entry = try std.fmt.allocPrint(alloc, "ENC_ROOT/{s}/{s}.000", .{ name, name });
+        defer alloc.free(entry);
+        const zip = try testZip(alloc, &.{.{ .name = entry, .data = "cell" }});
+        defer alloc.free(zip);
+        f.h.respondChunk(id, zip, 200, true);
+    }
+}
+
+/// Adopt until `until` holds of the state, and return it.
+fn adoptUntil(f: *ApplyFixture, until: *const fn (State) bool) State {
+    for (0..5000) |_| {
+        f.h.adopt();
+        const st = f.h.poll();
+        if (until(st)) return st;
+        lock.sleepMs(1);
+    }
+    return f.h.poll();
+}
+
+fn runEnded(st: State) bool {
+    return st.outcome != @intFromEnum(Outcome.running);
+}
+
+fn baking(st: State) bool {
+    return st.to_prepare != 0;
+}
+
+/// The one set on the list, as the sets read it.
+fn onlySet(f: *ApplyFixture) *const chartsets.Set {
+    const rows = f.sets.all();
+    std.debug.assert(rows.len == 1);
+    return rows[0];
+}
+
+/// A fixture whose handle prepares through the fake bake.
+fn prepareFixture(f: *ApplyFixture) !void {
+    fake_refuse = false;
+    fake_hold = false;
+    try f.init(&.{}, &.{});
+    f.h.baker = fake_baker;
+    f.h.follow();
+}
+
+test "a download prepares the cells it fetched into the managed set" {
+    var f: ApplyFixture = undefined;
+    try prepareFixture(&f);
+    defer f.deinit();
+
+    f.h.download(&.{5}, f.dest, false);
+    try testing.expectEqual(@as(usize, 3), f.rec.ids.items.len);
+    try respondCells(&f, 0);
+    const st = adoptUntil(&f, runEnded);
+
+    try testing.expectEqual(@as(u8, @intFromEnum(Outcome.finished)), st.outcome);
+    try testing.expectEqual(@as(u8, 0), st.preparing);
+    // The counts stay at the end.
+    try testing.expectEqual(@as(u32, 3), st.prepared);
+    try testing.expectEqual(@as(u32, 3), st.to_prepare);
+    for ([_][]const u8{ "US500001", "US500002", "US500003" }) |c| {
+        var buf: [64]u8 = undefined;
+        try testing.expect(f.has(try std.fmt.bufPrint(&buf, "Charts/NOAA/{s}/{s}.pmtiles", .{ c, c })));
+    }
+    // The set read back after the bake draws the three charts.
+    f.settle();
+    const row = onlySet(&f);
+    try testing.expectEqual(@as(c_int, 1), row.managed);
+    try testing.expectEqual(@as(usize, 3), row.charts);
+    try testing.expectEqual(@as(usize, 0), row.to_prepare);
+    try testing.expect(f.sets.takeChanged());
+}
+
+test "a prepare counts by band while it runs" {
+    var f: ApplyFixture = undefined;
+    try prepareFixture(&f);
+    defer f.deinit();
+    fake_hold = true;
+    defer fake_hold = false;
+
+    f.h.download(&.{5}, f.dest, false);
+    try respondCells(&f, 0);
+    const st = adoptUntil(&f, baking);
+    try testing.expectEqual(@as(u8, 1), st.preparing);
+    try testing.expectEqual(@as(u8, @intFromEnum(Outcome.running)), st.outcome);
+    try testing.expectEqual(@as(u32, 3), st.to_prepare);
+    try testing.expectEqual(@as(u32, 0), st.prepared);
+    // Every cell here is band 5.
+    try testing.expectEqual(@as(u32, 3), st.band_total[4]);
+    try testing.expectEqual(@as(u32, 0), st.band_done[4]);
+
+    fakeJob(f.h.prep.job.?).done = 2;
+    f.h.adopt();
+    try testing.expectEqual(@as(u32, 2), f.h.poll().prepared);
+    try testing.expectEqual(@as(u32, 2), f.h.poll().band_done[4]);
+    f.h.cancel();
+    _ = adoptUntil(&f, runEnded);
+}
+
+test "a download whose every cell is refused ends empty" {
+    var f: ApplyFixture = undefined;
+    try prepareFixture(&f);
+    defer f.deinit();
+    fake_refuse = true;
+    defer fake_refuse = false;
+
+    f.h.download(&.{5}, f.dest, false);
+    try respondCells(&f, 0);
+    const st = adoptUntil(&f, runEnded);
+
+    try testing.expectEqual(@as(u8, @intFromEnum(Outcome.empty)), st.outcome);
+    try testing.expectEqual(@as(u8, 0), st.retry);
+    try testing.expect(std.mem.sliceTo(&st.err, 0).len != 0);
+    // The refusals are recorded, so the set does not ask for them again.
+    f.settle();
+    const row = onlySet(&f);
+    try testing.expectEqual(@as(usize, 3), row.refused);
+    try testing.expectEqual(@as(usize, 0), row.to_prepare);
+    try testing.expect(f.sets.resumePath() == null);
+}
+
+test "a cancel during the prepare ends cancelled, and the set does not resume" {
+    var f: ApplyFixture = undefined;
+    try prepareFixture(&f);
+    defer f.deinit();
+    fake_hold = true;
+    defer fake_hold = false;
+
+    f.h.download(&.{5}, f.dest, false);
+    try respondCells(&f, 0);
+    _ = adoptUntil(&f, baking);
+    try testing.expect(f.h.prep.job != null);
+
+    f.h.cancel();
+    const st = adoptUntil(&f, runEnded);
+    try testing.expectEqual(@as(u8, @intFromEnum(Outcome.cancelled)), st.outcome);
+    try testing.expectEqual(@as(u8, 0), st.preparing);
+
+    f.settle();
+    try testing.expectEqual(@as(usize, 3), onlySet(&f).to_prepare);
+    try testing.expect(f.sets.resumePath() == null);
+    // Nothing starts it again on its own.
+    f.h.adopt();
+    try testing.expectEqual(@as(u8, 0), f.h.poll().preparing);
+}
+
+test "a managed set left unprepared is finished once the sets are read" {
+    var f: ApplyFixture = undefined;
+    fake_refuse = false;
+    fake_hold = false;
+    try f.init(&.{ "US500001", "US500002" }, &.{});
+    defer f.deinit();
+    f.h.baker = fake_baker;
+    try testing.expectEqualStrings(f.dest, f.sets.resumePath().?);
+
+    f.h.follow();
+    try testing.expect(f.sets.followed());
+    for (0..5000) |_| {
+        f.h.adopt();
+        if (f.has("Charts/NOAA/US500002/US500002.pmtiles") and f.h.poll().preparing == 0) break;
+        lock.sleepMs(1);
+    }
+    try testing.expect(f.has("Charts/NOAA/US500001/US500001.pmtiles"));
+    try testing.expectEqual(@as(u8, 0), f.h.poll().preparing);
+    // No run was ordered, so none is numbered.
+    try testing.expectEqual(@as(u32, 0), f.h.poll().run);
 }

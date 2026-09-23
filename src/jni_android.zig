@@ -2065,25 +2065,9 @@ const lookout_noaa_region_info = extern struct {
     recorded: u8,
 };
 
-const lookout_noaa_state = extern struct {
-    phase: u8,
-    have_catalog: u8,
-    date: [16]u8,
-    checked_at: i64,
-    catalog_cells: u32,
-    total: u32,
-    done: u32,
-    failed: u32,
-    bytes_total: u64,
-    bytes_done: u64,
-    err: [256]u8,
-    outcome: u8,
-    run: u32,
-    retry: u8,
-    removing: u8,
-    remove_done: u32,
-    remove_total: u32,
-};
+// The core's own type, the one lookout_noaa_poll writes. A hand-copied
+// layout drifts when the core appends a field.
+const lookout_noaa_state = @import("noaajob.zig").State;
 
 extern fn lookout_noaa_regions(out: *?[*]const lookout_noaa_region) usize;
 

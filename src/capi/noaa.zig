@@ -10,6 +10,7 @@ const noaajob = @import("../noaajob.zig");
 const clinks = @import("../chartlinks.zig");
 const capi = @import("../capi.zig");
 const clock = @import("../clock.zig");
+const bakejob = @import("../bakejob.zig");
 
 const gpa = capi.gpa;
 
@@ -68,6 +69,8 @@ export fn lookout_noaa_open(store: ?*anyopaque, sets: ?*anyopaque) ?*lookout_noa
     n.* = noaajob.Handle.init(gpa);
     n.store = @ptrCast(@alignCast(store));
     n.sets = @ptrCast(@alignCast(sets));
+    n.baker = bakejob.noaa_baker;
+    n.follow();
     return n;
 }
 

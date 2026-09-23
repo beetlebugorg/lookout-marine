@@ -7,7 +7,8 @@
 //! THE SHELL POLLS. No callback crosses back out. A bake worker is not an
 //! attached JVM thread and must not become one to move a progress bar, and a
 //! callback into Swift or C++ from a tile57 worker would need the same care for
-//! the same reason. A poll is one atomic read.
+//! the same reason. A poll is one atomic read. The NOAA service's prepare
+//! passes a wake that only posts, so its owner polls when the count moves.
 //!
 //! `src/shell/bake.zig` decides the ORDER and the output paths. This runs what
 //! it decided.
@@ -17,6 +18,13 @@ const std = @import("std");
 const cc = @import("c.zig").c;
 const rules = @import("shell/bake.zig");
 const sleepMs = @import("lock.zig").sleepMs;
+const clock = @import("clock.zig");
+const noaajob = @import("noaajob.zig");
+
+/// Called as the count moves, at most every `rules.post_ms`, and once when the
+/// job ends. From a tile57 worker or the job's own thread. It posts and
+/// returns.
+pub const WakeFn = *const fn (user: ?*anyopaque) callconv(.c) void;
 
 pub const Job = struct {
     gpa: std.mem.Allocator,
@@ -52,6 +60,12 @@ pub const Job = struct {
     lifts: usize,
     archive: bool,
 
+    /// Null for a shell's bake, which polls on a timer of its own.
+    wake: ?WakeFn = null,
+    wake_user: ?*anyopaque = null,
+    /// When the count last woke the owner, in monotonic milliseconds.
+    woke_ms: std.atomic.Value(i64) = .init(0),
+
     /// Take the paths and start the thread. The job owns every string from
     /// here. Null when the thread cannot be spawned, and the strings are freed.
     pub fn start(
@@ -63,6 +77,23 @@ pub const Job = struct {
         sheets: usize,
         lifts: usize,
         archive: bool,
+    ) ?*Job {
+        return startWaking(gpa, source, ins, outs, cells, sheets, lifts, archive, null, null);
+    }
+
+    /// `start`, calling `wake` with `user` as the count moves and when the job
+    /// ends.
+    pub fn startWaking(
+        gpa: std.mem.Allocator,
+        source: [:0]u8,
+        ins: [][:0]u8,
+        outs: [][:0]u8,
+        cells: usize,
+        sheets: usize,
+        lifts: usize,
+        archive: bool,
+        wake: ?WakeFn,
+        user: ?*anyopaque,
     ) ?*Job {
         const self = gpa.create(Job) catch {
             freeAll(gpa, source, ins, outs);
@@ -78,6 +109,8 @@ pub const Job = struct {
             .lifts = lifts,
             .archive = archive,
             .total = @intCast(ins.len),
+            .wake = wake,
+            .wake_user = user,
         };
         self.thread = std.Thread.spawn(.{}, run, .{self}) catch {
             self.free();
@@ -137,6 +170,8 @@ pub const Job = struct {
         const cpus: u32 = @intCast(std.Thread.getCpuCount() catch 4);
         const workers = rules.workers(cpus);
 
+        // The job's end wakes the owner, after `running` clears.
+        defer if (self.wake) |w| w(self.wake_user);
         const ins_c = self.gpa.alloc([*c]const u8, self.ins.len) catch {
             self.running.store(false, .release);
             return;
@@ -205,7 +240,19 @@ pub const Job = struct {
         _ = total;
         const self: *Job = @ptrCast(@alignCast(ctx orelse return false));
         _ = self.done.fetchMax(self.phase_offset + done, .release);
+        self.wakeOwner();
         return !self.cancelled.load(.acquire);
+    }
+
+    /// Wake the owner for a moved count, at most every `rules.post_ms`.
+    /// Several workers report at once, so one of them wins each slot.
+    fn wakeOwner(self: *Job) void {
+        const w = self.wake orelse return;
+        const now = clock.ticksMs();
+        const last = self.woke_ms.load(.acquire);
+        if (now - last < rules.post_ms) return;
+        if (self.woke_ms.cmpxchgStrong(last, now, .acq_rel, .acquire) != null) return;
+        w(self.wake_user);
     }
 
     /// tile57's per-chart LABEL callback: which chart of the phase was just
@@ -214,6 +261,63 @@ pub const Job = struct {
         const self: *Job = @ptrCast(@alignCast(ctx orelse return));
         self.last_out.store(self.phase_offset + index + 1, .release);
     }
+};
+
+// ---- the NOAA service's prepare -------------------------------------------------
+
+fn jobOf(p: *anyopaque) *Job {
+    return @ptrCast(@alignCast(p));
+}
+
+fn bakeStart(
+    alloc: std.mem.Allocator,
+    source: [:0]u8,
+    ins: [][:0]u8,
+    outs: [][:0]u8,
+    cells: usize,
+    sheets: usize,
+    lifts: usize,
+    archive: bool,
+    wake: ?noaajob.WakeFn,
+    user: ?*anyopaque,
+) ?*anyopaque {
+    return Job.startWaking(alloc, source, ins, outs, cells, sheets, lifts, archive, wake, user);
+}
+
+fn bakePoll(p: *anyopaque) noaajob.BakeState {
+    const x = jobOf(p).poll();
+    var st = noaajob.BakeState{
+        .done = x.done,
+        .baked = x.baked,
+        .ok = x.ok != 0,
+        .running = x.running != 0,
+    };
+    const why = std.mem.sliceTo(&x.why, 0);
+    const n = @min(why.len, st.why.len - 1);
+    @memcpy(st.why[0..n], why[0..n]);
+    return st;
+}
+
+fn bakeCancel(p: *anyopaque) void {
+    jobOf(p).cancel();
+}
+
+fn bakeIns(p: *anyopaque) []const [:0]const u8 {
+    return jobOf(p).ins;
+}
+
+fn bakeFree(p: *anyopaque) void {
+    jobOf(p).free();
+}
+
+/// The bake the NOAA service prepares a download with, the one
+/// lookout_bake_start runs.
+pub const noaa_baker = noaajob.Baker{
+    .start = bakeStart,
+    .poll = bakePoll,
+    .cancel = bakeCancel,
+    .ins = bakeIns,
+    .free = bakeFree,
 };
 
 /// How far a bake has got. A snapshot: every field is read in one call.

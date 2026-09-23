@@ -22,7 +22,7 @@ const cstyle = @import("ct/style.zig");
 const craster = @import("ct/raster.zig"); // the raster underlay's data half
 const ctprovided = @import("ct/provided.zig");
 const clinks = @import("chartlinks.zig"); // charts by link: resolve, serve, persist
-const noaajob = @import("noaajob.zig"); // NOAA chart catalog and downloads
+pub const noaajob = @import("noaajob.zig"); // NOAA chart catalog and downloads
 const camera = @import("charttable").camera; // charttable's camera IS the camera
 const pick_rules = @import("pick.zig"); // what a cursor pick reports, and in what order
 pub const library = @import("library.zig"); // what a folder of charts holds
@@ -45,8 +45,11 @@ const plugins_on = @import("build_options").plugins;
 const plugin_read = @import("plugins");
 const phost = if (plugins_on) @import("plugin/host.zig") else struct {};
 const clock = @import("clock.zig");
-const settings = @import("settings.zig");
-/// The bake, for the host test that drives it over a real archive.
+pub const settings = @import("settings.zig");
+/// The bake, for the host test that drives it over a real archive, and the
+/// NOAA prepare that runs it over real cells.
+pub const chartsets = @import("chartsets.zig");
+pub const noaa = @import("noaa.zig");
 pub const bakejob = @import("bakejob.zig");
 pub const bake_rules = @import("shell/bake.zig");
 const frame_rules = @import("shell/frame.zig"); // when the next frame is

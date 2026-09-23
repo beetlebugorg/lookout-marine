@@ -455,7 +455,9 @@ void lookout_chart_sets_note_cancel(lookout_chart_sets *s, const char *path);
  * and scanned, with a file to prepare and no stop recorded since it last
  * changed. A shell calls this when no bake is running, typically after
  * lookout_chart_sets_changed, and bakes lookout_chart_set_to_prepare for the
- * path. Borrowed until the next call that changes the list. */
+ * path. NULL while a lookout_noaa service is open on these sets, because the
+ * service finishes the prepare itself. Borrowed until the next call that
+ * changes the list. */
 const char *lookout_chart_sets_resume(lookout_chart_sets *s);
 
 /* Put a folder on the list and scan it. 1 when it joined, 0 when it was
@@ -867,8 +869,9 @@ const lookout_chart_link *const *lookout_links_all(const lookout_links *r, size_
  * NOAA publishes an ENC for every United States waterway at no cost, and a
  * product catalog (ENCProdCat.xml) listing each cell with its edition, its
  * download url and the Coast Guard district it is filed under. lookout reads
- * that catalog, decides which cells a region needs, fetches them, and writes
- * the exchange-set zips into a directory the shell then bakes.
+ * that catalog, decides which cells a region needs, fetches them, writes
+ * the exchange sets into a directory, and prepares what arrived. See
+ * THE PREPARE below.
  *
  * The shell keeps the one job it has for chart links: fetch the bytes at a
  * url. The service has a handle of its own, lookout_noaa, opened with
@@ -883,7 +886,20 @@ const lookout_chart_link *const *lookout_links_all(const lookout_links *r, size_
  * is sailing and be filed under the district next door. Selecting a region
  * therefore takes the cells NOAA files under it AND every cell whose own
  * coverage overlaps one of those. The result is a superset of NOAA's own
- * per-district bundle, so a region never draws with a hole in it. */
+ * per-district bundle, so a region never draws with a hole in it.
+ *
+ * THE PREPARE. When a download, an apply or an update writes a cell, the
+ * service puts the download directory on the chart sets as a managed set,
+ * reads it again, and bakes its lookout_chart_set_to_prepare list into
+ * lookout_bake_prepared_name(dest_dir) under the chart sets' prepared root,
+ * on the bake's own threads. It then records the bake with
+ * lookout_chart_sets_note_bake and reads the set again, and
+ * lookout_chart_sets_changed returns 1. The run's `outcome` stays
+ * LOOKOUT_NOAA_RUNNING until then. The service also finishes a managed set's
+ * prepare that an earlier launch left, so lookout_chart_sets_resume returns
+ * NULL while it is open. A service opened with no sets, or with sets that
+ * have no prepared root, prepares no chart, and a run ends with its
+ * transfers. */
 
 /* One region a mariner picks from. The strings are static. */
 typedef struct {
@@ -925,18 +941,23 @@ typedef struct {
 
 /* lookout_noaa_state.outcome: how the download numbered `run` ended. */
 #define LOOKOUT_NOAA_NONE      0 /* no download has been ordered */
+/* Downloading, or preparing what arrived. */
 #define LOOKOUT_NOAA_RUNNING   1
-/* The plan ran to its end and at least one chart arrived. `failed` counts
- * the charts that did not. */
+/* The plan ran to its end, at least one chart arrived, and the prepare
+ * ended with at least one chart prepared, or with none left to prepare.
+ * `failed` counts the charts that did not arrive. */
 #define LOOKOUT_NOAA_FINISHED  2
 /* Every chart the order named is already installed, or an update found no
- * reissue. No request went out. */
+ * reissue, and no request went out. Or charts arrived and the prepare
+ * refused every one of them. Ordering again cannot change a refusal, so
+ * `retry` is 0. `error` names the refusal in the second case. */
 #define LOOKOUT_NOAA_EMPTY     3
 /* Stopped by lookout_noaa_cancel, by a new download, or by clearing the
- * fetcher. */
+ * fetcher. A stop during the transfer still prepares what arrived, and the
+ * run ends when that does. */
 #define LOOKOUT_NOAA_CANCELLED 4
-/* The plan ran to its end with no chart arriving, or hit an error. `error`
- * names the cause. */
+/* The plan ran to its end with no chart arriving, or hit an error, or the
+ * prepare failed. `error` names the cause. */
 #define LOOKOUT_NOAA_FAILED    5
 /* The order ended before any transfer: no catalog, no fetcher, or no download
  * directory. `error` names the cause. */
@@ -979,6 +1000,19 @@ typedef struct {
      * chart and the cell it was prepared from are two. */
     uint32_t remove_done;
     uint32_t remove_total;
+    /* 1 while the service prepares the managed set: after a download, or to
+     * finish one an earlier launch left. */
+    uint8_t preparing;
+    /* The files the prepare has been through, of `to_prepare`. These and the
+     * band counts keep their last values once the prepare ends, until the
+     * next download or prepare starts. */
+    uint32_t prepared;
+    uint32_t to_prepare;
+    /* The same by usage band: band_done[0] is band 1. The bake runs coarse
+     * band first, so the bands fill in that order. A file with no band is in
+     * no entry. */
+    uint32_t band_done[6];
+    uint32_t band_total[6];
 } lookout_noaa_state;
 
 /* ---- The NOAA service handle ----------------------------------------------
@@ -1005,22 +1039,26 @@ typedef struct {
 typedef struct lookout_noaa lookout_noaa;
 
 /* Open the service. `store` and `sets` are borrowed and must outlive the
- * handle. Either may be NULL. With no sets, no cell is held and the update
- * check finds none to check. With no store, the update check is daily and its
- * time is kept for the life of the handle. The service reads its cached
- * catalog on the first lookout_noaa_refresh. NULL when it cannot be
- * allocated. */
+ * handle. Either may be NULL. With no sets, no cell is held, the update
+ * check finds none to check, and no chart is prepared. The prepare writes
+ * under the prepared root the sets were opened with. With no store, the
+ * update check is daily and its time is kept for the life of the handle. The
+ * service reads its cached catalog on the first lookout_noaa_refresh. NULL
+ * when it cannot be allocated. */
 lookout_noaa *lookout_noaa_open(lookout_store *store, lookout_chart_sets *sets);
 
 /* Cancel the download and free the handle. The shell stops calling
  * lookout_noaa_http_respond_chunk on `n` before this. */
 void lookout_noaa_close(lookout_noaa *n);
 
-/* Called once for each response queued for adopt, and at most four times a
- * second while a transfer's bytes arrive, so a shell whose frame loop has
- * stopped knows to call lookout_noaa_changed. An idle service does not
+/* Called once for each response queued for adopt, at most four times a
+ * second while a transfer's bytes arrive, at most five times a second while
+ * a prepare's count moves, once when a prepare's bake ends, and when a scan
+ * of the chart sets ends or a set is removed. A shell whose frame loop has
+ * stopped then knows to call lookout_noaa_changed. An idle service does not
  * call it. Called from any thread, including from inside
- * lookout_noaa_http_respond_chunk and from a thread of lookout's own.
+ * lookout_noaa_http_respond_chunk and lookout_chart_sets_remove, and from a
+ * thread of lookout's own.
  * Post to the shell's own loop and return. Do not call into lookout from
  * it. */
 typedef void (*lookout_noaa_wake)(void *user);
@@ -1090,8 +1128,9 @@ size_t lookout_noaa_region_coverage(lookout_noaa *n, const char *region_id,
 
 /* Download the cells covering these regions into `dest_dir`, created if it is
  * not there. Each cell's exchange set is unpacked as it arrives, so `dest_dir`
- * becomes an ordinary ENC_ROOT and bakes in one lookout_bake_start. Replaces a
- * download already running. Progress surfaces through lookout_noaa_poll.
+ * becomes an ordinary ENC_ROOT, and what arrived is prepared as THE PREPARE
+ * above sets out. Replaces a download already running, and stops a prepare
+ * running. Progress surfaces through lookout_noaa_poll.
  *
  * Cells already held are left out, so picking water that is partly installed
  * fetches the rest of it. `again` nonzero fetches those too, so a mariner can
@@ -1140,7 +1179,8 @@ int lookout_noaa_region_state(lookout_noaa *n, const char *region_id,
  *
  * - The pick becomes the record.
  * - A download fetching water outside the pick is stopped. An update is
- *   stopped when this deletes charts.
+ *   stopped when this deletes charts, and so is a prepare, which this waits
+ *   for.
  * - The regions the picker ticked (see lookout_noaa_region_info.recorded)
  *   and the pick leaves out are given back. Their cells that no picked
  *   region selects are deleted: the cell directory under `dest_dir`, and the
@@ -1196,7 +1236,9 @@ void lookout_noaa_update(lookout_noaa *n, const char *dest_dir);
 int lookout_noaa_update_due(lookout_noaa *n);
 
 /* Stop the download that is running and drop its outstanding requests. The
- * cells already written stay where they are. */
+ * cells already written stay where they are, and are prepared. A cancel
+ * while they are prepared stops the prepare and records the stop with
+ * lookout_chart_sets_note_cancel, so the set does not resume on its own. */
 void lookout_noaa_cancel(lookout_noaa *n);
 
 #ifdef __cplusplus

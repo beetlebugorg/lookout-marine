@@ -121,6 +121,8 @@ const Row = struct {
     /// failed, as hashes of `refusalKey`. Null when none is recorded. A
     /// landing scan that finds a file to prepare outside it clears it.
     stopped: ?std.AutoHashMapUnmanaged(u64, void) = null,
+    /// The number of the last scan read into this row. 0 before the first.
+    last_scan: u64 = 0,
 };
 
 /// The files a finished bake was given, for the next scan of its set to
@@ -194,6 +196,20 @@ pub const Sets = struct {
     notes: std.ArrayList(Note) = .empty,
     /// How many scans the worker has started.
     scans: u64 = 0,
+    /// Called under `mu` each time a scan ends or a set is removed. The NOAA
+    /// service sets it to follow the set it prepares. Null with no follower.
+    on_scan: ?OnScan = null,
+
+    /// A function called when a scan ends or a set is removed, and its
+    /// context. It runs with `mu` held, often on the scan worker, so it posts
+    /// and returns.
+    pub const OnScan = struct {
+        call: *const fn (ctx: *anyopaque) void,
+        ctx: *anyopaque,
+    };
+
+    /// Where a scan of one set stands, for `scannedSince`.
+    pub const ScanState = enum { waiting, read, gone };
 
     const group = settings.group_chartsets;
     const paths_key = "paths";
@@ -302,6 +318,42 @@ pub const Sets = struct {
         const was = self.dirty;
         self.dirty = false;
         return was;
+    }
+
+    /// Follow the scans as they end and the sets as they are removed, or
+    /// stop with null.
+    pub fn followScans(self: *Sets, f: ?OnScan) void {
+        self.mu.lock();
+        defer self.mu.unlock();
+        self.on_scan = f;
+    }
+
+    /// True while a follower is set. The NOAA service is the only one, and it
+    /// finishes the managed set's prepare itself.
+    pub fn followed(self: *Sets) bool {
+        self.mu.lock();
+        defer self.mu.unlock();
+        return self.on_scan != null;
+    }
+
+    /// How many scans the worker has started. A scan of a set numbered above
+    /// this read the set after this call.
+    pub fn scanCount(self: *Sets) u64 {
+        self.mu.lock();
+        defer self.mu.unlock();
+        return self.scans;
+    }
+
+    /// Whether a scan of `path` numbered above `after` has been read into its
+    /// row.
+    pub fn scannedSince(self: *Sets, path: []const u8, after: u64) ScanState {
+        self.mu.lock();
+        defer self.mu.unlock();
+        for (self.rows.items) |r| {
+            if (!std.mem.eql(u8, r.path, path)) continue;
+            return if (r.last_scan > after) .read else .waiting;
+        }
+        return .gone;
     }
 
     /// Raise the flag takeChanged reads, for a change made outside a scan.
@@ -598,6 +650,7 @@ pub const Sets = struct {
             break;
         }
         self.resetReads();
+        if (found) if (self.on_scan) |f| f.call(f.ctx);
         self.mu.unlock();
         if (found) self.save();
         return found;
@@ -1154,6 +1207,7 @@ pub const Sets = struct {
             r.band_lo = lo;
             r.band_hi = hi;
             r.scanned = true;
+            r.last_scan = number;
             // The agency when the charts agree on one, else the folder name.
             if (scan.producer) |p| {
                 if (self.gpa.dupeZ(u8, &p)) |owned| {
@@ -1164,9 +1218,11 @@ pub const Sets = struct {
             self.retired.append(self.gpa, old) catch old.free(self.gpa);
             self.gen +%= 1;
             self.dirty = true;
+            if (self.on_scan) |f| f.call(f.ctx);
             return;
         }
         // The row went while the scan ran.
+        if (self.on_scan) |f| f.call(f.ctx);
         for (openable.items) |o| {
             self.gpa.free(o.path);
             self.gpa.free(o.name);
