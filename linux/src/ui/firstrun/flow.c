@@ -69,15 +69,15 @@ lk_first_run_frame_country (LkFirstRunFlow *self)
                         .lat = LK_FIRST_RUN_VIEW_LAT,
                         .zoom = LK_FIRST_RUN_VIEW_ZOOM,
                         .rotation_deg = 0 };
-  tile57_mariner mariner;
+  tile57_mariner *mariner = lk_mariner_raw (self->mariner);
 
-  if (!lk_chart_controller_is_open (controller))
-    return;
-
-  lk_chart_controller_set_view (controller, view);
-  mariner = lk_chart_controller_get_mariner (controller);
-  mariner.depth_unit = (tile57_depth_unit) 1; /* feet */
-  lk_chart_controller_set_mariner (controller, mariner);
+  if (lk_chart_controller_is_open (controller))
+    lk_chart_controller_set_view (controller, view);
+  if (mariner->depth_unit != 1)
+    {
+      mariner->depth_unit = (tile57_depth_unit) 1; /* feet */
+      lk_mariner_touch (self->mariner);
+    }
 }
 
 /* What the mariner asked NOAA for, kept from the moment they asked. */

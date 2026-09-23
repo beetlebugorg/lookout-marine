@@ -263,20 +263,10 @@ lk_first_run_depths_new (LkFirstRunFlow *flow)
   GtkWidget *columns = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 26);
   GtkWidget *boat = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
   LkDepthStep *step = g_new0 (LkDepthStep, 1);
-  tile57_mariner *mariner = lk_mariner_raw (flow->mariner);
   gboolean feet;
 
   step->flow = flow;
   g_object_set_data_full (G_OBJECT (body), "lk-depth-step", step, lk_depth_step_free);
-
-  /* Setup asks in feet. The engine's own default is metres, and these charts
-   * are sailed where a boat is measured in feet. The unit is the mariner's
-   * from the second time the step is built, so switching it holds. */
-  if (!lk_first_run_asked_depths (flow->flow) && mariner->depth_unit != 1)
-    {
-      mariner->depth_unit = 1;
-      lk_mariner_touch (flow->mariner);
-    }
 
   /* Start at the core's small keelboat, which a draft of 0 selects. The
    * stored safety depth is no help: it starts at the engine's 10 m, and a

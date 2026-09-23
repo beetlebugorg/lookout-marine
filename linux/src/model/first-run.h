@@ -79,10 +79,4 @@ void     lk_first_run_set_order_regions (LkFirstRun *self, const char *regions);
 gboolean lk_first_run_order (LkFirstRun *self, const char **out_regions,
                             guint32 *out_charts, guint64 *out_bytes);
 
-
-/* Whether the depth step has been shown in this run. FALSE the first time it
- * is asked, and TRUE from then on, so the step seeds the boat and the unit
- * once and leaves the mariner's own answers alone after that. */
-gboolean lk_first_run_asked_depths (LkFirstRun *self);
-
 G_END_DECLS
