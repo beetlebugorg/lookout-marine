@@ -597,6 +597,7 @@ pub fn build(b: *std.Build) void {
         "src/trash.zig",
         "src/httpgather.zig",
         "src/library.zig",
+        "src/firstrun.zig",
         "src/jni_rows.zig",
         "src/plugin_dev_replay.zig",
         "plugins/nmea0183/parser.zig",

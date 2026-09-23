@@ -4038,3 +4038,99 @@ export fn Java_org_beetlebug_lookout_Lookout_nNoaaSvcRegionCoverage(env: [*c]j.J
     env_(env).SetDoubleArrayRegion.?(env, out, 0, @intCast(wrote * 4), flat.ptr);
     return @intCast(have);
 }
+
+// ---- setup ------------------------------------------------------------------
+//
+// The setup state machine (lookout_setup_*), as long[] slots.
+
+const firstrun = @import("firstrun.zig");
+const c_setup = firstrun.Setup;
+
+extern fn lookout_setup_new() ?*c_setup;
+extern fn lookout_setup_free(s: ?*c_setup) void;
+extern fn lookout_setup_note(s: ?*c_setup, facts: *const firstrun.Facts) void;
+extern fn lookout_setup_act(s: ?*c_setup, action: c_int, arg: c_int) c_int;
+extern fn lookout_setup_read(s: ?*c_setup, out: *firstrun.State) void;
+
+fn setupOf(s: j.jlong) ?*c_setup {
+    if (s == 0) return null;
+    return @ptrFromInt(@as(usize, @bitCast(s)));
+}
+
+/// long nSetupNew()
+export fn Java_org_beetlebug_lookout_Lookout_nSetupNew(env: [*c]j.JNIEnv, cls: j.jclass) j.jlong {
+    _ = env;
+    _ = cls;
+    const s = lookout_setup_new() orelse return 0;
+    return @bitCast(@as(u64, @intFromPtr(s)));
+}
+
+/// void nSetupFree(long s)
+export fn Java_org_beetlebug_lookout_Lookout_nSetupFree(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong) void {
+    _ = env;
+    _ = cls;
+    lookout_setup_free(setupOf(s));
+}
+
+/// void nSetupNote(long s, long[] facts) -- [0] catalog ready, [1] picked,
+/// [2] on a link, [3] nothing_to_draw, [4] has charts, [5] work running,
+/// [6] downloading, [7] chart open, [8] NOAA outcome, [9] NOAA run,
+/// [10] pick charts, [11] pick bytes. Missing slots read as 0.
+export fn Java_org_beetlebug_lookout_Lookout_nSetupNote(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong, facts: j.jlongArray) void {
+    _ = cls;
+    var buf: [12]j.jlong = @splat(0);
+    if (facts != null) {
+        const len: usize = @intCast(@max(0, env_(env).GetArrayLength.?(env, facts)));
+        const n = @min(len, buf.len);
+        if (n > 0) env_(env).GetLongArrayRegion.?(env, facts, 0, @intCast(n), &buf);
+    }
+    const flag = struct {
+        fn f(v: j.jlong) u8 {
+            return if (v != 0) 1 else 0;
+        }
+    }.f;
+    const f: firstrun.Facts = .{
+        .catalog_ready = flag(buf[0]),
+        .picked = flag(buf[1]),
+        .on_link = flag(buf[2]),
+        .nothing_to_draw = flag(buf[3]),
+        .has_charts = flag(buf[4]),
+        .work_running = flag(buf[5]),
+        .downloading = flag(buf[6]),
+        .chart_open = flag(buf[7]),
+        .noaa_outcome = @truncate(@as(u64, @bitCast(buf[8]))),
+        .noaa_run = @truncate(@as(u64, @bitCast(buf[9]))),
+        .pick_charts = @truncate(@as(u64, @bitCast(buf[10]))),
+        .pick_bytes = @bitCast(buf[11]),
+    };
+    lookout_setup_note(setupOf(s), &f);
+}
+
+/// int nSetupAct(long s, int action, int arg) -- the source to act on, or -1.
+export fn Java_org_beetlebug_lookout_Lookout_nSetupAct(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong, action: j.jint, arg: j.jint) j.jint {
+    _ = env;
+    _ = cls;
+    return lookout_setup_act(setupOf(s), action, arg);
+}
+
+/// void nSetupRead(long s, long[] out) -- [0] step, [1] showing, [2] should
+/// run, [3] can go back, [4] primary enabled, [5] terms showing, [6] picker
+/// only, [7] ordered, [8] import ended, [9] saw work, [10] order charts,
+/// [11] order bytes. A shorter array gets the slots that fit.
+export fn Java_org_beetlebug_lookout_Lookout_nSetupRead(env: [*c]j.JNIEnv, cls: j.jclass, s: j.jlong, out: j.jlongArray) void {
+    _ = cls;
+    if (out == null) return;
+    var st: firstrun.State = .{};
+    lookout_setup_read(setupOf(s), &st);
+    const buf = [12]j.jlong{
+        st.step,            st.showing,
+        st.should_run,      st.can_go_back,
+        st.primary_enabled, st.terms_showing,
+        st.picker_only,     st.ordered,
+        st.import_ended,    st.saw_work,
+        st.order_charts,    @bitCast(st.order_bytes),
+    };
+    const len: usize = @intCast(@max(0, env_(env).GetArrayLength.?(env, out)));
+    const n = @min(len, buf.len);
+    if (n > 0) env_(env).SetLongArrayRegion.?(env, out, 0, @intCast(n), &buf);
+}

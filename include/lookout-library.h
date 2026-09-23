@@ -1241,6 +1241,124 @@ int lookout_noaa_update_due(lookout_noaa *n);
  * lookout_chart_sets_note_cancel, so the set does not resume on its own. */
 void lookout_noaa_cancel(lookout_noaa *n);
 
+/* ---- Setup ----------------------------------------------------------------
+ *
+ * The setup flow's state: the step on screen, what the primary action and
+ * Back do, and whether setup comes up. The shell notes the facts it observes
+ * and applies the mariner's actions, then reads the state back. The titles
+ * and the words of each step stay in the shell.
+ *
+ * WHEN IT RUNS. Setup comes up over an app that has settled on having no
+ * chart to draw and has no chart link selected, on every launch that finds
+ * one. Set Up Later and a finished run put it away for the life of the
+ * handle. A library seen with charts in it since setup last came up brings
+ * it back once the library is empty again, so a mariner who removes every
+ * chart has the page that builds a library. One whose library never held
+ * charts keeps Set Up Later.
+ *
+ * The handle does no I/O, and its state ends with the handle. Call it from
+ * one thread: it has no lock. */
+
+typedef struct lookout_setup lookout_setup;
+
+/* lookout_setup_state.step, and the argument of LOOKOUT_SETUP_BEGIN. */
+#define LOOKOUT_SETUP_STEP_WELCOME   0
+#define LOOKOUT_SETUP_STEP_SOURCE    1
+#define LOOKOUT_SETUP_STEP_COVERAGE  2
+#define LOOKOUT_SETUP_STEP_ONLINE    3
+#define LOOKOUT_SETUP_STEP_IMPORTING 4
+#define LOOKOUT_SETUP_STEP_DEPTHS    5
+
+/* Where the first charts come from: the argument of LOOKOUT_SETUP_ADVANCE on
+ * the source step, and what lookout_setup_act returns. */
+#define LOOKOUT_SETUP_FROM_NOAA   0
+#define LOOKOUT_SETUP_FROM_ONLINE 1
+#define LOOKOUT_SETUP_FROM_FILES  2
+
+/* The actions lookout_setup_act applies. */
+/* Raise setup on the step in `arg`. An unknown step is the welcome step. */
+#define LOOKOUT_SETUP_BEGIN        0
+/* Raise the step in `arg` on its own, such as the coverage picker opened from
+ * the Charts pane. Back applies only from an ended import, and Continue on
+ * the import step puts it away. */
+#define LOOKOUT_SETUP_BEGIN_PICKER 1
+/* The primary action. `arg` is the source picked, read on the source step.
+ * NOAA raises the terms and stays on the source step. */
+#define LOOKOUT_SETUP_ADVANCE      2
+#define LOOKOUT_SETUP_BACK         3
+/* NOAA's terms accepted: on to the coverage step. */
+#define LOOKOUT_SETUP_AGREE        4
+/* NOAA's terms dismissed. The source step stays. */
+#define LOOKOUT_SETUP_DECLINE      5
+/* Set Up Later, Cancel, or the end of a finished run. */
+#define LOOKOUT_SETUP_LATER        6
+
+/* What the shell observes. Each uint8_t is 0 or 1 unless stated. */
+typedef struct {
+    uint8_t catalog_ready;   /* NOAA's catalog is loaded */
+    uint8_t picked;          /* the coverage pick holds a region */
+    uint8_t on_link;         /* a chart link is selected */
+    uint8_t nothing_to_draw; /* the app has settled on no chart to draw */
+    /* A switched-on set holds something to draw. Read it from the sets:
+     * nothing_to_draw is also 0 while the first scan of a launch runs. */
+    uint8_t has_charts;
+    uint8_t work_running;    /* a bake, a scan or a NOAA prepare runs */
+    uint8_t downloading;     /* a NOAA transfer runs */
+    uint8_t chart_open;      /* a chart with cells in it is open */
+    /* lookout_noaa_state.outcome and .run. */
+    uint8_t noaa_outcome;
+    uint32_t noaa_run;
+    /* What Download orders, as the shell prices the pick. Setup keeps the
+     * values it holds when Download is pressed. */
+    uint32_t pick_charts;
+    uint64_t pick_bytes;
+} lookout_setup_facts;
+
+/* What the views read. Each uint8_t is 0 or 1 unless stated. */
+typedef struct {
+    uint8_t step;            /* a LOOKOUT_SETUP_STEP_* value */
+    uint8_t showing;
+    /* Setup is down and has a reason to come up. The shell applies
+     * LOOKOUT_SETUP_BEGIN. */
+    uint8_t should_run;
+    uint8_t can_go_back;
+    uint8_t primary_enabled;
+    uint8_t terms_showing;   /* NOAA's terms are up over the source step */
+    uint8_t picker_only;     /* raised by LOOKOUT_SETUP_BEGIN_PICKER */
+    /* A NOAA download was ordered from the coverage step since setup came
+     * up or since Back from the import step. */
+    uint8_t ordered;
+    /* The order's run ended FAILED, REFUSED, EMPTY or CANCELLED, no work
+     * runs, and no chart is ready to continue to. The import step shows the
+     * end, and Back returns to the coverage step. */
+    uint8_t import_ended;
+    /* Work ran on the import step, or the order finished. An import yet to
+     * start and one that has finished both have no work running. */
+    uint8_t saw_work;
+    /* The order as it was placed: pick_charts and pick_bytes at Download. */
+    uint32_t order_charts;
+    uint64_t order_bytes;
+} lookout_setup_state;
+
+/* A setup handle, down, with no facts noted. NULL when it cannot be
+ * allocated. */
+lookout_setup *lookout_setup_new(void);
+void lookout_setup_free(lookout_setup *s);
+
+/* Replace the facts. Call it whenever one of them changes, then read the
+ * state. */
+void lookout_setup_note(lookout_setup *s, const lookout_setup_facts *facts);
+
+/* Apply a LOOKOUT_SETUP_* action. Returns the LOOKOUT_SETUP_FROM_* source the
+ * shell acts on, else -1: NOAA after Download on the coverage step, to start
+ * the download; ONLINE after Continue on the online step; FILES after
+ * Continue with files picked, to raise the shell's picker. Setup is put away
+ * before FILES returns. */
+int lookout_setup_act(lookout_setup *s, int action, int arg);
+
+/* Read the state. The type and the call cannot share a name in C. */
+void lookout_setup_read(lookout_setup *s, lookout_setup_state *out);
+
 #ifdef __cplusplus
 }
 #endif

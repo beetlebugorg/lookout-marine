@@ -4,7 +4,8 @@
 //! hosts need no allocator.
 //!
 //! The rest of the ABI is in capi/: bake.zig, chartsets.zig, format.zig,
-//! frame.zig, library.zig, noaa.zig, pick.zig, plugins.zig and settings.zig.
+//! frame.zig, library.zig, noaa.zig, pick.zig, plugins.zig, settings.zig and
+//! setup.zig.
 const std = @import("std");
 const builtin = @import("builtin");
 
@@ -659,6 +660,7 @@ comptime {
     _ = @import("capi/chartsets.zig");
     _ = @import("capi/settings.zig");
     _ = @import("capi/plugins.zig");
+    _ = @import("capi/setup.zig");
     // The Android Java shell's JNI natives ride in the same archive (they
     // wrap this C ABI for org.beetlebug.lookout.Lookout). Only an android
     // target analyzes the file: it @cImports the NDK's jni.h, which only the
