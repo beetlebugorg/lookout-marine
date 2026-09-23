@@ -376,7 +376,8 @@ namespace winrt::LookoutMarine::implementation
         //
         // The MODEL decides; this half only draws it. See firstrun/lk_firstrun.h.
         void FirstRunAttach(); // wire the pane's three buttons, once
-        void FirstRunBegin();  // no chart to draw: put setup up
+        void FirstRunBegin();
+        void FirstRunShowWholeCountry();  // no chart to draw: put setup up
         // Get charts from NOAA, from the Charts pane: the coverage step alone.
         void ShowNoaaPicker();
         // Open the engine with NO cells so the basemap draws, then begin
@@ -411,7 +412,6 @@ namespace winrt::LookoutMarine::implementation
          * step on a keystroke would take the draft field's focus with it, so
          * the field commits and everything else is written in place. */
         lkw::DepthChoice depth_choice{ true };
-        bool depth_seeded{ false };
         Microsoft::UI::Xaml::Controls::TextBox depth_draft{ nullptr };
         std::vector<Microsoft::UI::Xaml::Controls::Button> depth_pills;
         std::vector<Microsoft::UI::Xaml::Controls::Button> depth_units;

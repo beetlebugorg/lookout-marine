@@ -687,6 +687,16 @@ lk_controller_set_center(lk_controller *self, double lon, double lat)
     lookout_set_view(self->handle, &v);
 }
 
+void
+lk_controller_set_view(lk_controller *self, double lon, double lat, double zoom)
+{
+    kick(self);
+    if (!lk_controller_is_open(self))
+        return;
+    lookout_view v = { lon, lat, zoom, 0 };
+    lookout_set_view(self->handle, &v);
+}
+
 /* ---- mariner ------------------------------------------------------------ */
 
 void

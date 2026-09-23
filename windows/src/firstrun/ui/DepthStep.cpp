@@ -30,14 +30,6 @@ namespace winrt::LookoutMarine::implementation
     // to, and a picture of the water they shade.
     void MainWindow::FirstRunDepths(Controls::StackPanel const &body)
     {
-        // Feet to start with, the unit most of the boats this is for measure
-        // in. The mariner's own answer stands for the rest of the session and
-        // goes to the store with the numbers.
-        if (!depth_seeded)
-        {
-            depth_seeded = true;
-            depth_choice = lkw::DepthChoice{ true };
-        }
         depth_pills.clear();
         depth_units.clear();
         depth_rows.clear();

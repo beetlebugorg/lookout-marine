@@ -162,7 +162,22 @@ namespace winrt::LookoutMarine::implementation
     {
         first_run.Restart();
         SetupAct(LOOKOUT_SETUP_BEGIN, LOOKOUT_SETUP_STEP_WELCOME);
+        FirstRunShowWholeCountry();
         FirstRunRender();
+    }
+
+    // Frame the lower 48 behind setup, so the chart under it shows the
+    // coastline the mariner is choosing from. United States charts label
+    // depths in feet, and setup is the one moment the unit can be chosen
+    // before the first sounding draws.
+    void MainWindow::FirstRunShowWholeCountry()
+    {
+        lk_controller_set_view(controller, -96.0, 38.0, 5.0);
+        tile57_mariner m{};
+        lk_controller_get_mariner(controller, &m);
+        m.depth_unit = (tile57_depth_unit)1; /* feet */
+        lk_controller_set_mariner(controller, &m);
+        depth_choice = lkw::DepthChoice{ true };
     }
 
     void MainWindow::FirstRunRender()

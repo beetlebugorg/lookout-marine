@@ -167,6 +167,7 @@ int  lk_controller_geo_at(lk_controller *self, double x, double y, double *lon, 
 /* View. */
 void lk_controller_fit_chart(lk_controller *self);
 void lk_controller_set_center(lk_controller *self, double lon, double lat); /* keep zoom/rot */
+void lk_controller_set_view(lk_controller *self, double lon, double lat, double zoom); /* north up */
 
 /* Mariner. */
 void lk_controller_get_mariner(lk_controller *self, tile57_mariner *out);
