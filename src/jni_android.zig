@@ -1953,64 +1953,35 @@ export fn Java_org_beetlebug_lookout_Lookout_nChartLinksImport(env: [*c]j.JNIEnv
 }
 
 // ---- pictures of a linked chart ----------------------------------------
-//
-// A list of charts wants a picture of each. Two ways, and the shell picks:
-// the tile url a raster style names, fetched like any other url, or the
-// engine's own render of the style through a second handle with no window.
 
-extern fn lookout_chart_links_preview(h: ?*anyopaque) void;
-extern fn lookout_chart_link_preview_url(h: ?*anyopaque, link: [*:0]const u8, lon: f64, lat: f64, zoom: c_int, out: [*]u8, out_len: usize) c_int;
-extern fn lookout_chart_link_draw(h: ?*anyopaque, url: [*:0]const u8) void;
-extern fn lookout_snapshot_rgba(h: ?*anyopaque, dst: [*]u8, dst_len: usize) c_int;
+extern fn lookout_chart_link_picture(h: ?*anyopaque, url: [*:0]const u8, kind: c_int, lon: f64, lat: f64, zoom: f64, width: c_int, height: c_int, dst: [*]u8) c_int;
+extern fn lookout_chart_link_pictures_cancel(h: ?*anyopaque) void;
 
-/// void nChartLinksPreview(long h) -- read every link's style for the tile its
-/// picture comes from. The answers arrive through the fetcher.
-export fn Java_org_beetlebug_lookout_Lookout_nChartLinksPreview(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) void {
+/// int nChartLinkPicture(long h, String url, int kind, double lon, double lat,
+/// double zoom, int width, int height, byte[] dst) -- one chart's picture, as
+/// lookout_chart_link_picture returns it. On READY dst holds width*height*4
+/// bytes of premultiplied RGBA.
+export fn Java_org_beetlebug_lookout_Lookout_nChartLinkPicture(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, url: j.jstring, kind: j.jint, lon: j.jdouble, lat: j.jdouble, zoom: j.jdouble, width: j.jint, height: j.jint, dst: j.jbyteArray) j.jint {
+    _ = cls;
+    const h = fromLong(hl) orelse return 0;
+    if (url == null or dst == null or width <= 0 or height <= 0) return 0;
+    const n: usize = @intCast(env_(env).GetArrayLength.?(env, dst));
+    if (n < @as(usize, @intCast(width)) * @as(usize, @intCast(height)) * 4) return 0;
+    const c = env_(env).GetStringUTFChars.?(env, url, null) orelse return 0;
+    defer env_(env).ReleaseStringUTFChars.?(env, url, c);
+    const p = env_(env).GetByteArrayElements.?(env, dst, null) orelse return 0;
+    const r = lookout_chart_link_picture(h.l, @ptrCast(c), kind, lon, lat, zoom, width, height, @ptrCast(p));
+    // 0 copies the pixels back to the Java array. Only READY wrote them.
+    env_(env).ReleaseByteArrayElements.?(env, dst, p, if (r == 1) 0 else j.JNI_ABORT);
+    return r;
+}
+
+/// void nChartLinkPicturesCancel(long h) -- drop the pictures still pending.
+export fn Java_org_beetlebug_lookout_Lookout_nChartLinkPicturesCancel(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) void {
     _ = env;
     _ = cls;
     const h = fromLong(hl) orelse return;
-    lookout_chart_links_preview(h.l);
-}
-
-/// String nChartLinkPreviewUrl(long h, String link, double lon, double lat,
-/// int zoom) -- the tile that pictures this chart at a point, or null when the
-/// style names no raster tiles.
-export fn Java_org_beetlebug_lookout_Lookout_nChartLinkPreviewUrl(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, link: j.jstring, lon: j.jdouble, lat: j.jdouble, zoom: j.jint) j.jstring {
-    _ = cls;
-    const h = fromLong(hl) orelse return null;
-    if (link == null) return null;
-    const c = env_(env).GetStringUTFChars.?(env, link, null) orelse return null;
-    defer env_(env).ReleaseStringUTFChars.?(env, link, c);
-    var buf: [2048]u8 = undefined;
-    const ok = lookout_chart_link_preview_url(h.l, @ptrCast(c), lon, lat, @intCast(zoom), &buf, buf.len);
-    if (ok == 0) return null;
-    return jstr(env, @ptrCast(&buf));
-}
-
-/// void nChartLinkDraw(long h, String url) -- install this style for drawing
-/// without keeping the link, picking it or writing the list. For a handle
-/// opened with no window, to picture a chart the mariner has not chosen.
-export fn Java_org_beetlebug_lookout_Lookout_nChartLinkDraw(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, url: j.jstring) void {
-    _ = cls;
-    const h = fromLong(hl) orelse return;
-    if (url == null) return;
-    const c = env_(env).GetStringUTFChars.?(env, url, null) orelse return;
-    defer env_(env).ReleaseStringUTFChars.?(env, url, c);
-    lookout_chart_link_draw(h.l, @ptrCast(c));
-}
-
-/// boolean nSnapshotRgba(long h, byte[] dst) -- the last frame as RGBA, w*h*4
-/// bytes. The C call answers 0 for success; this answers true.
-export fn Java_org_beetlebug_lookout_Lookout_nSnapshotRgba(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, dst: j.jbyteArray) j.jboolean {
-    _ = cls;
-    const h = fromLong(hl) orelse return 0;
-    if (dst == null) return 0;
-    const n: usize = @intCast(env_(env).GetArrayLength.?(env, dst));
-    const p = env_(env).GetByteArrayElements.?(env, dst, null) orelse return 0;
-    const ok = lookout_snapshot_rgba(h.l, @ptrCast(p), n);
-    // 0 commits the copy back to the Java array; JNI_ABORT would drop it.
-    env_(env).ReleaseByteArrayElements.?(env, dst, p, 0);
-    return if (ok == 0) 1 else 0;
+    lookout_chart_link_pictures_cancel(h.l);
 }
 
 // ---- S-52 colours -------------------------------------------------------

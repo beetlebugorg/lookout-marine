@@ -342,6 +342,10 @@ class ChartController(private val appContext: Context) {
         // the readouts at 10 Hz.
         followPin(l)
         watchPlugins(l, frameTimeNanos)
+        // The chart-link list, the credit and the error, from the core. Before
+        // the throttle: a finished chart picture raises the flag on the tick
+        // before the loop stops, and a throttled tick skips the poll.
+        chartLinkController.poll(l)
         if (lastPushNs != 0L && frameTimeNanos - lastPushNs < PUSH_INTERVAL_NS) return
         lastPushNs = frameTimeNanos
         l.readouts(readoutBuf)
@@ -382,10 +386,6 @@ class ChartController(private val appContext: Context) {
         // coverage, so this is read on the frame, not only when something is
         // pressed. Cheap: a handful of calls over a handful of sets.
         rasterController.pushRaster(l)
-        // The chart-link list, the credit and the error, from the core. A
-        // landing answer raises needs-redraw, so a resolve keeps this ticking
-        // until it is done.
-        chartLinkController.poll(l)
         if (r == lastPushed) return
         lastPushed = r
         access.onMain {

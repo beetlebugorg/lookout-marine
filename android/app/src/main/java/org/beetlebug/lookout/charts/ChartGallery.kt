@@ -34,6 +34,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -46,7 +48,9 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -63,9 +67,10 @@ import androidx.compose.ui.unit.dp
  * rather than a list, so two styles with similar names are told apart by
  * looking.
  *
- * A shipped style carries its picture in the app. One the mariner pasted shows
- * its kind and its url: rendering a style needs it resolved and its tiles
- * fetched, and this shell has no second engine to draw it with.
+ * The core draws each tile's picture: the chart on screen as the engine draws
+ * it, and one publisher tile for any other raster style. Without one, a
+ * shipped style shows the picture the app ships with, and any other shows its
+ * kind and its url.
  */
 @Composable
 fun ChartGallery(
@@ -74,6 +79,14 @@ fun ChartGallery(
     cells: Int,
     onAdd: () -> Unit,
 ) {
+    val density = LocalDensity.current
+    val widthPx = with(density) { TILE.roundToPx() }
+    val heightPx = with(density) { ART.roundToPx() }
+    // A picture finishing, a pick and a new link all change the revision.
+    LaunchedEffect(links.revision, widthPx, heightPx) {
+        links.askPictures(listOf("") + links.chartLinks.map { it.url }, widthPx, heightPx)
+    }
+    DisposableEffect(Unit) { onDispose { links.stopPictures() } }
     Row(
         Modifier
             .fillMaxWidth()
@@ -86,6 +99,7 @@ fun ChartGallery(
             detail = if (cells > 0) "From your chart sets · $cells cells"
                      else "From your chart sets",
             active = links.activeChartLink == null,
+            picture = links.pictures[""],
             art = R.drawable.welcome_chart,
             onSelect = { links.selectChartLink(null) },
         )
@@ -97,6 +111,7 @@ fun ChartGallery(
                 name = name,
                 detail = url,
                 active = links.activeChartLink == url,
+                picture = links.pictures[url],
                 art = ChartCatalog.art(url),
                 // A shipped chart the mariner has not taken yet is added,
                 // which the core reads and then picks.
@@ -136,6 +151,8 @@ private fun ChartTile(
     name: String,
     detail: String,
     active: Boolean,
+    /** This chart as the core pictured it. */
+    picture: ImageBitmap?,
     art: Int?,
     onSelect: () -> Unit,
     onRefresh: (() -> Unit)? = null,
@@ -161,7 +178,14 @@ private fun ChartTile(
                     .height(ART)
                     .clip(RoundedCornerShape(topStart = 10.dp, topEnd = 10.dp)),
             ) {
-                if (art != null) {
+                if (picture != null) {
+                    Image(
+                        picture,
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                    )
+                } else if (art != null) {
                     Image(
                         painterResource(art),
                         contentDescription = null,

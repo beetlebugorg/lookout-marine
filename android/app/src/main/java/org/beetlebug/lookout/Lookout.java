@@ -986,19 +986,20 @@ public final class Lookout implements AutoCloseable {
 
     // ---- pictures of a linked chart ------------------------------------
 
-    /** Read every link's style for the tile its picture comes from. The
-     *  answers arrive through the fetcher. */
-    public void chartLinksPreview()              { if (h != 0) nChartLinksPreview(h); }
-    /** The tile that pictures one chart at a point, or null when the style
-     *  names no raster tiles. */
-    public String chartLinkPreviewUrl(String link, double lon, double lat, int zoom) {
-        return h == 0 ? null : nChartLinkPreviewUrl(h, link, lon, lat, zoom);
+    /** lookout_chart_link_picture's kinds and results. */
+    public static final int PICTURE_TILE = 0, PICTURE_RENDER = 1;
+    public static final int PICTURE_NONE = 0, PICTURE_READY = 1, PICTURE_PENDING = 2;
+
+    /** One chart's picture at a point. "" is Lookout's own chart. On
+     *  PICTURE_READY dst holds width * height * 4 bytes of premultiplied
+     *  RGBA. */
+    public int chartLinkPicture(String url, int kind, double lon, double lat, double zoom,
+                                int width, int height, byte[] dst) {
+        return h == 0 ? PICTURE_NONE
+                      : nChartLinkPicture(h, url, kind, lon, lat, zoom, width, height, dst);
     }
-    /** Draw this style without keeping the link, picking it or writing the
-     *  list. For a handle with no window, to picture a chart nobody chose. */
-    public void chartLinkDraw(String url)        { if (h != 0) nChartLinkDraw(h, url); }
-    /** The last frame as RGBA, width * height * 4 bytes. */
-    public boolean snapshotRgba(byte[] dst)      { return h != 0 && nSnapshotRgba(h, dst); }
+    /** Drop the pictures still pending. */
+    public void chartLinkPicturesCancel()        { if (h != 0) nChartLinkPicturesCancel(h); }
 
     // ---- S-52 colours ---------------------------------------------------
 
@@ -1139,10 +1140,9 @@ public final class Lookout implements AutoCloseable {
     private static native String nChartLinksJson(long h);
     private static native boolean nChartLinksChanged(long h);
     private static native void nChartLinksImport(long h, String json);
-    private static native void nChartLinksPreview(long h);
-    private static native String nChartLinkPreviewUrl(long h, String link, double lon, double lat, int zoom);
-    private static native void nChartLinkDraw(long h, String url);
-    private static native boolean nSnapshotRgba(long h, byte[] dst);
+    private static native int nChartLinkPicture(long h, String url, int kind, double lon, double lat,
+                                                double zoom, int width, int height, byte[] dst);
+    private static native void nChartLinkPicturesCancel(long h);
     private static native boolean nS52Color(String token, int scheme, float[] out);
     private static native double nMapAspect(double w, double e, double s, double n);
     private static native float[] nMapProject(double w, double e, double s, double n,
