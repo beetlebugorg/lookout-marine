@@ -183,6 +183,7 @@ class ChartEngine private constructor() {
                         // nothing then asked the loop to build the scene, and
                         // the chart stayed blank until a set was toggled.
                         if (n > 0) kick()
+                        controller.noteChartCells(engine)
                     }, "lookout-library-add").also { it.start() }
                 }
             }

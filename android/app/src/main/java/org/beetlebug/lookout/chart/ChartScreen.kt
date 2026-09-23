@@ -404,7 +404,7 @@ fun ChartScreen(
         hasCharts = charts.chartPaths.isNotEmpty(),
         workRunning = charts.importer.state?.running == true || noaa.preparing,
         downloading = noaa.phase == NoaaController.Phase.DOWNLOADING,
-        chartOpen = charts.chartPaths.isNotEmpty(),
+        chartOpen = controller.chartHasCells,
         noaaOutcome = noaa.outcome,
         noaaRun = noaa.run,
         pickCharts = if (noaa.cells > 0) noaa.cells else noaa.held,

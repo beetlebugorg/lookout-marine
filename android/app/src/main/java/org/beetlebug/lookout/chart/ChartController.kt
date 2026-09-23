@@ -105,6 +105,18 @@ class ChartController(private val appContext: Context) {
     var rendering by mutableStateOf(false)
         private set
 
+    /** True while an open chart has cells. A handle opened over the basemap
+     *  alone has none. */
+    var chartHasCells by mutableStateOf(false)
+        private set
+
+    /** Called off the main thread, at attach and when cells join a live
+     *  handle. */
+    fun noteChartCells(l: Lookout) {
+        val cells = l.chartsCount() > 0
+        access.onMain { chartHasCells = cells }
+    }
+
     /** Which step the startup loader is showing. */
     var loadPhase by mutableStateOf(LoadPhase.MAPPING)
         private set
@@ -227,6 +239,7 @@ class ChartController(private val appContext: Context) {
         // here — only the mariner's old SharedPreferences list, once.
         chartLinkController.start(l)
         val loaded = date
+        noteChartCells(l)
         access.onMain {
             mariner.loadFrom(v, loaded)
             plugins.drainOpenFiles()
@@ -317,6 +330,7 @@ class ChartController(private val appContext: Context) {
         // after the engine and its alarm were gone.
         access.onMain {
             rendering = false
+            chartHasCells = false
             identify = emptyList()
             alertsController.clear()
             // The plugins' declared tables went with them.
