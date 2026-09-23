@@ -48,7 +48,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlin.math.PI
-import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
@@ -61,46 +60,35 @@ import kotlin.math.sin
  * S-52 numbers the engine draws with, the safety depth and the safety contour,
  * and states what each one does to the chart.
  *
- * The engine is always given metres, so feet convert on the way out.
+ * The core derives the numbers (lookout_depth_plan). The boat is held in
+ * metres, and the plan returns it in the unit on screen for display.
  */
 @Composable
 fun DepthStep(m: MarinerState) {
     val feet = m.depthUnit == DepthUnit.FEET
     val unit = if (feet) "ft" else "m"
 
-    // The boat, in the unit on screen. MarinerState keeps the numbers the
-    // chart draws with; these two are the question behind them.
-    //
-    // Held in the unit on screen so every number displays round. A metric list
-    // converted into feet gives a 4.9 ft clearance and a 16.4 ft contour.
-    var draft by remember { mutableStateOf(if (feet) 5.5 else 1.7) }
-    var clearance by remember { mutableStateOf(if (feet) 2.0 else 0.6) }
+    // The boat, in metres. MarinerState keeps the numbers the chart draws
+    // with; these two are the question behind them. The core's starting
+    // keelboat seeds them.
+    var draftM by remember { mutableStateOf(DepthPlan.of(0.0, 0.0, feet).draftM) }
+    var clearanceM by remember { mutableStateOf(DepthPlan.of(0.0, 0.0, feet).clearanceM) }
 
-    val clearances = if (feet) listOf(1.0, 2.0, 3.0, 5.0) else listOf(0.3, 0.6, 1.0, 1.5)
-    // The contours an S-57 survey draws. The safety contour is the first of
-    // these at or past the safety depth, because the chart shades on a contour
-    // the survey has.
-    val ladder = if (feet) listOf(6.0, 12.0, 18.0, 30.0, 60.0, 90.0, 120.0, 180.0, 240.0, 300.0)
-                 else listOf(2.0, 5.0, 10.0, 20.0, 30.0, 50.0, 75.0, 100.0)
-
-    // Draft plus clearance, rounded up to a whole foot or metre. A chart names
-    // its depths in whole numbers, and the fraction belongs to the keel rather
-    // than to the water.
-    val safetyDepth = ceil(draft + clearance)
-    val safetyContour = ladder.firstOrNull { it >= safetyDepth } ?: ladder.last()
-    // The step does not ask for the deep contour, so it comes off the same
-    // ladder and displays round.
-    val deepContour = ladder.firstOrNull { it >= safetyContour * 2 } ?: ladder.last()
-
-    fun metres(v: Double) = if (feet) v / 3.28084 else v
+    val plan = DepthPlan.of(draftM, clearanceM, feet)
+    val draft = plan.draft
+    val clearance = plan.clearance
+    val clearances = plan.clearances
+    val safetyDepth = plan.safetyDepth
+    val safetyContour = plan.safetyContour
+    val deepContour = plan.deepContour
 
     // Every change goes to the engine, so the chart behind the page is already
     // drawn the mariner's way when the page closes.
     LaunchedEffect(safetyDepth, safetyContour, deepContour, feet) {
-        m.safetyDepth = metres(safetyDepth)
-        m.safetyContour = metres(safetyContour)
-        m.deepContour = metres(deepContour)
-        m.shallowContour = metres(min(safetyContour, max(ladder.first(), safetyDepth)))
+        m.safetyDepth = plan.safetyDepthM
+        m.safetyContour = plan.safetyContourM
+        m.deepContour = plan.deepContourM
+        m.shallowContour = plan.shallowContourM
     }
 
     Column(
@@ -112,7 +100,9 @@ fun DepthStep(m: MarinerState) {
             blurb = "Lookout shades water your boat cannot cross. It needs one number to do that, and everything else follows from it.",
         )
 
-        numberRow("Draft", draft, unit, step = if (feet) 0.5 else 0.1) { draft = it }
+        numberRow("Draft", draft, unit, step = if (feet) 0.5 else 0.1) {
+            draftM = it * plan.metresPerUnit
+        }
         Text(
             "Deepest point of the hull below the waterline, keel included.",
             style = MaterialTheme.typography.bodySmall,
@@ -128,14 +118,12 @@ fun DepthStep(m: MarinerState) {
                         selected = m.depthUnit == u,
                         onClick = {
                             if (m.depthUnit == u) return@SegmentedButton
-                            // The boat does not change when the unit does.
-                            val toFeet = u == DepthUnit.FEET
-                            val k = if (toFeet) 3.28084 else 1 / 3.28084
-                            draft = round1(draft * k)
-                            val want = clearance * k
-                            val list = if (toFeet) listOf(1.0, 2.0, 3.0, 5.0)
-                                       else listOf(0.3, 0.6, 1.0, 1.5)
-                            clearance = list.minByOrNull { kotlin.math.abs(it - want) } ?: list[1]
+                            // The boat does not change when the unit does. The
+                            // draft rounds to the nearest half unit and the
+                            // clearance snaps to one the new unit offers.
+                            val next = DepthPlan.of(draftM, clearanceM, u == DepthUnit.FEET)
+                            draftM = next.draftRoundedM
+                            clearanceM = next.clearanceM
                             m.depthUnit = u
                         },
                         shape = SegmentedButtonDefaults.itemShape(i, 2),
@@ -153,7 +141,7 @@ fun DepthStep(m: MarinerState) {
             for (c in clearances) {
                 FilterChip(
                     selected = clearance == c,
-                    onClick = { clearance = c },
+                    onClick = { clearanceM = c * plan.metresPerUnit },
                     label = { Text("${trim(c)} $unit") },
                 )
             }

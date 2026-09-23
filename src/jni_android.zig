@@ -2222,6 +2222,21 @@ export fn Java_org_beetlebug_lookout_Lookout_nZoomDeltaForScale(env: [*c]j.JNIEn
     return lookout_zoom_delta_for_scale(current, wanted);
 }
 
+// lookout_depth_plan is seventeen doubles in a row. See lookout-shell.h.
+const depth_plan_len = 17;
+extern fn lookout_depth_plan(draft_m: f64, clearance_m: f64, feet: c_int, out: *[depth_plan_len]f64) void;
+
+/// double[] nDepthPlan(double draftM, double clearanceM, boolean feet) -- the
+/// depth settings for a boat, as lookout_depth_plan's fields in their order.
+export fn Java_org_beetlebug_lookout_Lookout_nDepthPlan(env: [*c]j.JNIEnv, cls: j.jclass, draft_m: j.jdouble, clearance_m: j.jdouble, feet: j.jboolean) j.jdoubleArray {
+    _ = cls;
+    var plan: [depth_plan_len]f64 = undefined;
+    lookout_depth_plan(draft_m, clearance_m, if (feet != 0) 1 else 0, &plan);
+    const arr = env_(env).NewDoubleArray.?(env, depth_plan_len) orelse return null;
+    env_(env).SetDoubleArrayRegion.?(env, arr, 0, depth_plan_len, &plan);
+    return arr;
+}
+
 /// String nLicensesJson() -- this app's terms and every component it is built
 /// from, as the JSON the licenses screen decodes. Baked into the binary, so it
 /// needs no chart open and no handle.
