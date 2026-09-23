@@ -466,7 +466,7 @@ lk_raster_group_row (LkSettings *settings, GtkWidget *list, const LkRasterGroup 
    * and the pill is how a mariner tells them apart without a heading
    * splitting the list in two. */
   GtkWidget *kind = gtk_label_new ("RASTER");
-  GtkWidget *name = lk_caption (group->name);
+  GtkWidget *name = gtk_label_new (group->name);
   g_autofree char *count = g_strdup_printf (group->paths->len == 1 ? "%u file" : "%u files",
                                             group->paths->len);
   GtkWidget *files = gtk_label_new (count);
@@ -475,7 +475,10 @@ lk_raster_group_row (LkSettings *settings, GtkWidget *list, const LkRasterGroup 
   gtk_widget_add_css_class (kind, "lk-type-pill");
   gtk_widget_add_css_class (kind, "dim-label");
   gtk_widget_set_valign (kind, GTK_ALIGN_CENTER);
+  gtk_widget_add_css_class (name, "caption");
   if (!any_on)
+    gtk_widget_add_css_class (name, "dim-label");
+  gtk_label_set_xalign (GTK_LABEL (name), 0.0);
   gtk_label_set_ellipsize (GTK_LABEL (name), PANGO_ELLIPSIZE_END);
   gtk_widget_add_css_class (files, "dim-label");
   gtk_widget_add_css_class (files, "caption");
