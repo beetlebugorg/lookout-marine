@@ -1,4 +1,4 @@
-//  NoaaRegionList.swift: picking the waters to download.
+//  NoaaPicker.swift: picking the waters to download.
 //
 //  Setup asks this on its coverage step, and Mariner settings asks it again
 //  from Charts. One list, so the two places name the same regions and price

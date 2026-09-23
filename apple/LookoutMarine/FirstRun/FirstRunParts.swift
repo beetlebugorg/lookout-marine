@@ -160,25 +160,6 @@ struct SourceCard: View {
     }
 }
 
-/// The chosen card's 2pt accent border and tinted fill, or the plain one.
-struct CardSkin: ViewModifier {
-    let picked: Bool
-    var radius: CGFloat = 12
-
-    func body(content: Content) -> some View {
-        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
-        content
-            .background(picked ? Chrome.accent.opacity(0.05) : Chrome.surface, in: shape)
-            // Clipped to the card. A card whose content draws to its own edge,
-            // a picture filling the top of a chart tile among them, ran past
-            // the corners and over the card beside it.
-            .clipShape(shape)
-            .overlay(shape.strokeBorder(picked ? Chrome.accent : Chrome.edge.opacity(0.7),
-                                        lineWidth: picked ? 2 : 1))
-            .contentShape(shape)
-    }
-}
-
 /// A warning on a step, such as the publisher's, in the publisher's terms.
 /// Amber, and shaped differently from an ordinary note, so it separates from
 /// the page at a glance. With no lead the body is the whole warning, in ink.
