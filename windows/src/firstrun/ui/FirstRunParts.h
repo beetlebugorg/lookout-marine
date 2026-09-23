@@ -50,8 +50,6 @@ namespace lkw::setup
     inline constexpr double kSeabedW = 286;
     inline constexpr double kSeabedH = 210;
 
-    Windows::UI::Color S52Color(wchar_t const *token, uint32_t scheme);
-    uint32_t SchemeOf(lk_controller *c);
     void PaintPicked(Button const &b, bool on, bool dark);
     Windows::Foundation::Point SeabedPoint(double t, double u);
 

@@ -6,6 +6,7 @@
 
 #include <windows.h>
 
+#include "lk_controller.h"
 #include "lk_format.h"
 
 namespace lkw
@@ -48,6 +49,22 @@ namespace lkw
     winrt::Windows::UI::Color Hex(uint32_t v)
     {
         return { 0xFF, (uint8_t)(v >> 16), (uint8_t)(v >> 8), (uint8_t)v };
+    }
+
+    winrt::Windows::UI::Color S52(char const *token, uint32_t scheme, uint8_t alpha)
+    {
+        float rgba[4]{ 0.5f, 0.5f, 0.5f, 1 };
+        lookout_s52_color(token, scheme, rgba);
+        auto byte = [](float v) { return (uint8_t)(v * 255.0f + 0.5f); };
+        return { alpha, byte(rgba[0]), byte(rgba[1]), byte(rgba[2]) };
+    }
+
+    uint32_t SchemeOf(::lk_controller *c)
+    {
+        tile57_mariner m{};
+        if (c != nullptr)
+            lk_controller_get_mariner(c, &m);
+        return (uint32_t)m.scheme;
     }
 
     std::string ShippedDataDir()

@@ -14,6 +14,8 @@
 #include <winrt/Microsoft.UI.Xaml.Media.Imaging.h>
 #include <winrt/Microsoft.UI.Xaml.h>
 
+struct lk_controller;
+
 namespace lkw
 {
     /* One line of text at a size, wrapped. `strong` is a heading or a figure a
@@ -31,6 +33,13 @@ namespace lkw
     /* An opaque colour from 0xRRGGBB, for the palette tables the chart's
      * schemes are drawn from. */
     winrt::Windows::UI::Color Hex(uint32_t v);
+
+    /* A colour from the core's palette (lookout_s52_color) in `scheme`, by S-52
+     * token or by the core's BAND1 to BAND6, at `alpha`. Grey for a token the
+     * palette lacks. */
+    winrt::Windows::UI::Color S52(char const *token, uint32_t scheme, uint8_t alpha = 0xFF);
+    /* The scheme the chart draws in, 0 day, 1 dusk, 2 night. */
+    uint32_t SchemeOf(::lk_controller *c);
 
     /* Where the data shipped beside the executable lives: the setup pictures
      * and the coastline. Empty when the path cannot be read. */

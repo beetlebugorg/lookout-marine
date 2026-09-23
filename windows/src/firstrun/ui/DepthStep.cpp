@@ -316,7 +316,7 @@ namespace winrt::LookoutMarine::implementation
             // The four shades, with the water each one covers.
             Grid keys;
             wchar_t const *names[] = { L"Unsafe", L"Shallow", L"Medium", L"Deep" };
-            wchar_t const *tokens[] = { L"DEPVS", L"DEPMS", L"DEPMD", L"DEPDW" };
+            char const *tokens[] = { "DEPVS", "DEPMS", "DEPMD", "DEPDW" };
             for (int i = 0; i < 4; ++i)
             {
                 ColumnDefinition c;
@@ -334,7 +334,7 @@ namespace winrt::LookoutMarine::implementation
                 swatch.Width(11);
                 swatch.Height(11);
                 swatch.CornerRadius({ 3, 3, 3, 3 });
-                swatch.Background(SolidColorBrush{ S52Color(tokens[i], SchemeOf(controller)) });
+                swatch.Background(SolidColorBrush{ lkw::S52(tokens[i], lkw::SchemeOf(controller)) });
                 swatch.BorderThickness({ 1, 1, 1, 1 });
                 swatch.BorderBrush(HairlineBrush(DarkChrome()));
                 swatch.VerticalAlignment(VerticalAlignment::Center);
@@ -479,9 +479,9 @@ namespace winrt::LookoutMarine::implementation
             return;
         depth_seabed.Children().Clear();
         auto const &d = depth_choice;
-        uint32_t const scheme = SchemeOf(controller);
-        auto shade = [scheme](wchar_t const *token) {
-            return SolidColorBrush{ S52Color(token, scheme) };
+        uint32_t const scheme = lkw::SchemeOf(controller);
+        auto shade = [scheme](char const *token) {
+            return SolidColorBrush{ lkw::S52(token, scheme) };
         };
         auto ink = [](uint8_t alpha) {
             return SolidColorBrush{ Windows::UI::Color{ alpha, 0, 0, 0 } };
@@ -490,7 +490,7 @@ namespace winrt::LookoutMarine::implementation
         Shapes::Rectangle back;
         back.Width(kSeabedW);
         back.Height(kSeabedH);
-        back.Fill(shade(L"DEPDW"));
+        back.Fill(shade("DEPDW"));
         depth_seabed.Children().Append(back);
 
         // Every line is the same shape, moved up by its depth, so each band
@@ -518,14 +518,14 @@ namespace winrt::LookoutMarine::implementation
         };
 
         constexpr double kShoreAt = 0.14;
-        auto fill = [&](double t, wchar_t const *token) {
+        auto fill = [&](double t, char const *token) {
             auto p = shoal(t);
             p.Fill(shade(token));
             depth_seabed.Children().Append(p);
         };
-        fill(d.Reach(d.plan().deep_contour), L"DEPMD");
-        fill(d.Reach(d.plan().safety_contour), L"DEPMS");
-        fill(d.Reach(d.plan().safety_depth), L"DEPVS");
+        fill(d.Reach(d.plan().deep_contour), "DEPMD");
+        fill(d.Reach(d.plan().safety_contour), "DEPMS");
+        fill(d.Reach(d.plan().safety_depth), "DEPVS");
 
         // The safety contour drawn bold, the way S-52 draws the contour a boat
         // is measured against.
@@ -538,7 +538,7 @@ namespace winrt::LookoutMarine::implementation
         line(d.Reach(d.plan().safety_contour), 0x73, 1.8);
         line(d.Reach(d.plan().deep_contour), 0x2E, 0.8);
 
-        fill(kShoreAt, L"LANDA");
+        fill(kShoreAt, "LANDA");
         line(kShoreAt, 0x73, 1.0);
 
         // Spot depths, bold at or shallower than the safety depth. That is

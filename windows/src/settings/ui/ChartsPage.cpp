@@ -32,19 +32,13 @@ namespace
     constexpr double kAddTileWidth = 176;
     constexpr double kTileGap = 10;
 
-    /* The S-52 depth ramp, deep to shallow, read as fine to coarse. Band 6 is
-     * berthing detail and band 1 is an overview. */
-    winrt::Windows::UI::Color BandColor(int band)
+    /* The band ramp, the core's BAND1 to BAND6 in `scheme`: band 6 is berthing
+     * detail and band 1 is an overview. */
+    winrt::Windows::UI::Color BandColor(int band, uint32_t scheme)
     {
-        switch (band)
-        {
-        case 6: return Hex(0x2F8FE0);
-        case 5: return Hex(0x61B7FF);
-        case 4: return Hex(0x82CAFF);
-        case 3: return Hex(0xA7D9FB);
-        case 2: return Hex(0xC9EDFF);
-        default: return Hex(0xE4F5FF);
-        }
+        char token[] = "BAND1";
+        token[4] = (char)('0' + std::clamp(band, 1, 6));
+        return lkw::S52(token, scheme);
     }
 
     /* A url with its middle taken out. A style link holds the publisher, the
@@ -67,7 +61,7 @@ namespace
      * the width of each band says how much of the set is at that scale.
      *
      * `bands` is keyed 1 to 6, coarse to fine, as the scan counted them. */
-    Controls::StackPanel BandRamp(std::map<int, size_t> const &bands, bool dark)
+    Controls::StackPanel BandRamp(std::map<int, size_t> const &bands, bool dark, uint32_t scheme)
     {
         auto edge = [dark](double alpha) {
             return Media::SolidColorBrush{ lkw::WithAlpha(
@@ -87,7 +81,7 @@ namespace
             bar.ColumnDefinitions().Append(c);
 
             Controls::Border seg;
-            seg.Background(Media::SolidColorBrush{ BandColor(fine[i].first) });
+            seg.Background(Media::SolidColorBrush{ BandColor(fine[i].first, scheme) });
             // A hairline between the segments. Four of the six bands are the
             // pale end of the ramp, and side by side in a 9 point bar they
             // read as one stripe.
@@ -118,7 +112,7 @@ namespace
             swatch.Width(8);
             swatch.Height(8);
             swatch.CornerRadius({ 2, 2, 2, 2 });
-            swatch.Background(Media::SolidColorBrush{ BandColor(band) });
+            swatch.Background(Media::SolidColorBrush{ BandColor(band, scheme) });
             swatch.BorderThickness({ 1, 1, 1, 1 });
             swatch.BorderBrush(edge(0.5));
             swatch.Margin({ 0, 0, 5, 0 });
@@ -755,7 +749,7 @@ namespace winrt::LookoutMarine::implementation
                 {
                     row.ramp.Children().Clear();
                     if (!set.bands.empty())
-                        row.ramp.Children().Append(BandRamp(set.bands, dark));
+                        row.ramp.Children().Append(BandRamp(set.bands, dark, lkw::SchemeOf(controller)));
                     row.bands = set.bands;
                 }
                 row.ramp.Opacity(set.on ? 1.0 : 0.5);

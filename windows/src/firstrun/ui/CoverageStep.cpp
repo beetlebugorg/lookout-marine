@@ -57,10 +57,11 @@ namespace winrt::LookoutMarine::implementation
         canvas.Width(width);
         canvas.Height(height);
 
-        // S-52 shallow blue and GSHHG land, so the picker sits in the app's
-        // own palette. The same pair the reference uses.
-        auto water = SolidColorBrush{ Windows::UI::Color{ 0x8C, 0xAD, 0xD6, 0xFF } };
-        auto land = SolidColorBrush{ Windows::UI::Color{ 0x8C, 0xA3, 0x96, 0x54 } };
+        // The palette's medium-depth water and its land, at 0.55 alpha, in the
+        // scheme the chart draws in.
+        uint32_t const scheme = lkw::SchemeOf(controller);
+        auto water = SolidColorBrush{ lkw::S52("DEPMD", scheme, 0x8C) };
+        auto land = SolidColorBrush{ lkw::S52("LANDA", scheme, 0x8C) };
 
         Shapes::Rectangle back;
         back.Width(width);

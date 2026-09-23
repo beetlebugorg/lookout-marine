@@ -95,44 +95,6 @@ namespace lkw::setup
         return t;
     }
 
-    // One colour out of the engine's own palette, in the scheme on screen, so
-    // a legend and the chart cannot drift apart. The fallbacks are the day
-    // scheme's own values, for a token the engine does not answer for.
-    Windows::UI::Color S52Color(wchar_t const *token, uint32_t scheme)
-    {
-        struct Fallback
-        {
-            wchar_t const       *token;
-            Windows::UI::Color   color;
-        };
-        static Fallback const kFallbacks[] = {
-            { L"DEPVS", { 0xFF, 0x61, 0xB8, 0xFF } }, { L"DEPMS", { 0xFF, 0x82, 0xC9, 0xFF } },
-            { L"DEPMD", { 0xFF, 0xA6, 0xD9, 0xFA } }, { L"DEPDW", { 0xFF, 0xC9, 0xED, 0xFF } },
-            { L"LANDA", { 0xFF, 0xBF, 0xBF, 0x8F } }, { L"DEPCN", { 0xFF, 0x75, 0x8C, 0x96 } },
-        };
-        Windows::UI::Color out{ 0xFF, 0x80, 0x80, 0x80 };
-        for (auto const &f : kFallbacks)
-            if (wcscmp(f.token, token) == 0)
-                out = f.color;
-
-        char narrow[16]{};
-        for (size_t i = 0; i < 15 && token[i] != 0; ++i)
-            narrow[i] = (char)token[i];
-        float rgba[4]{ 0, 0, 0, 1 };
-        if (lookout_s52_color(narrow, scheme, rgba) != 0)
-            out = { (uint8_t)(rgba[3] * 255.0f + 0.5f), (uint8_t)(rgba[0] * 255.0f + 0.5f),
-                    (uint8_t)(rgba[1] * 255.0f + 0.5f), (uint8_t)(rgba[2] * 255.0f + 0.5f) };
-        return out;
-    }
-
-    uint32_t SchemeOf(lk_controller *c)
-    {
-        tile57_mariner m{};
-        if (c != nullptr)
-            lk_controller_get_mariner(c, &m);
-        return (uint32_t)m.scheme;
-    }
-
     // A pill or a segment wearing the pick.
     void PaintPicked(Button const &b, bool on, bool dark)
     {
