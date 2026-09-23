@@ -43,7 +43,7 @@ struct NoaaDownloadPanel: View {
     }
 
     private var detail: String {
-        var s = "\(NoaaModel.sizeText(state.bytesDone)) of \(NoaaModel.sizeText(state.bytesTotal))"
+        var s = "\(TextFormat.bytes(state.bytesDone)) of \(TextFormat.bytes(state.bytesTotal))"
         if state.failed > 0 { s += " · \(state.failed) failed" }
         return s + ". Lookout prepares them when the download finishes."
     }

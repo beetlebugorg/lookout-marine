@@ -100,9 +100,7 @@ struct BakeProgress: Equatable {
         guard done >= 3, total > done, elapsed > 1 else { return nil }
         let perCell = elapsed / Double(done)
         let left = perCell * Double(total - done)
-        if left < 60 { return "under a minute left" }
-        if left < 3600 { return "about \(Int((left / 60).rounded())) min left" }
-        return String(format: "about %.1f h left", left / 3600)
+        return TextFormat.timeLeft(left)
     }
 }
 

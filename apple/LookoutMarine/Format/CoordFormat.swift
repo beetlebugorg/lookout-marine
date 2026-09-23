@@ -1,4 +1,4 @@
-//  CoordFormat.swift — the strings the readouts print.
+//  CoordFormat.swift: the strings the readouts and the chart panels print.
 //
 //  Wrappers over the core's format kit (lookout-shell.h). See CoordFormatTests.
 
@@ -46,44 +46,63 @@ enum CoordFormat {
         coreString(LOOKOUT_SCALE_MAX) { lookout_fmt_scale(denominator, $0, $1) }
     }
 
-    /// The scale at the width a phone has for it: `1:4.8M` from 1,000,000 up,
-    /// the full number below that.
+    /// The scale at the width a phone has for it: `1:4.80M` from 1,000,000
+    /// up, the full number below that.
     ///
     /// The readouts do not fit one line on a phone once the denominator runs
-    /// to seven digits, and the row then falls to two lines. Three significant
-    /// figures state the same scale a mariner reads off it.
-    static func scaleShort(_ denominator: Double) -> String {
-        guard denominator >= 1_000_000 else { return scale(denominator) }
-        let millions = denominator / 1_000_000
-        let text = millions >= 100 ? String(format: "%.0f", millions)
-                                   : String(format: "%.1f", millions)
-        return "1:\(text)M"
+    /// to seven digits, and the row then falls to two lines.
+    static func scaleCompact(_ denominator: Double) -> String {
+        coreString(LOOKOUT_SCALE_MAX) { lookout_fmt_scale_compact(denominator, $0, $1) }
     }
 
-    /// A position at two decimals of minutes: `38°58.58'N 076°28.57'W`.
-    ///
-    /// Two decimals is about two metres, inside any GPS fix. The third is
-    /// what a phone's row spends its last characters on.
-    static func positionShort(lat: Double, lon: Double) -> String {
-        "\(dm2(lat, isLat: true)) \(dm2(lon, isLat: false))"
-    }
-
-    /// One coordinate at two decimals of minutes.
-    static func dm2(_ value: Double, isLat: Bool) -> String {
-        let hemisphere = isLat ? (value < 0 ? "S" : "N") : (value < 0 ? "W" : "E")
-        var degrees = Int(abs(value))
-        var minutes = (abs(value) - Double(degrees)) * 60
-        // 59.999 minutes rounds to 60, so the degree goes up.
-        if (minutes * 100).rounded() >= 6000 {
-            minutes = 0
-            degrees += 1
-        }
-        let width = isLat ? 2 : 3
-        return String(format: "%0\(width)d°%05.2f'%@", degrees, minutes, hemisphere)
+    /// A position at two decimals of minutes: `38°58.58'N 076°28.57'W`, for
+    /// a phone's row.
+    static func positionCompact(lat: Double, lon: Double) -> String {
+        coreString(LOOKOUT_POSITION_MAX) { lookout_fmt_position_compact(lat, lon, $0, $1) }
     }
 
     /// The S-52 navigational purpose band for a display scale.
     static func band(_ denominator: Double) -> String {
         String(cString: lookout_band_name(denominator))
+    }
+}
+
+/// Sizes, counts, times, depths and usage bands, from the core's format kit.
+enum TextFormat {
+    /// A size in megabytes or gigabytes: `226.5 MB`, `1.23 GB`.
+    static func bytes(_ bytes: UInt64) -> String {
+        coreString(LOOKOUT_BYTES_MAX) { lookout_fmt_bytes(bytes, $0, $1) }
+    }
+
+    /// A count grouped in threes: `7,214`.
+    static func count<T: BinaryInteger>(_ n: T) -> String {
+        coreString(LOOKOUT_COUNT_MAX) { lookout_fmt_count(UInt64(clamping: n), $0, $1) }
+    }
+
+    /// A countdown on a running job: `about 3 min left`.
+    static func timeLeft(_ seconds: Double) -> String {
+        coreString(LOOKOUT_DURATION_MAX) {
+            lookout_fmt_duration(seconds, Int32(LOOKOUT_DURATION_LEFT), $0, $1)
+        }
+    }
+
+    /// An estimate before a job starts: `about 3 minutes`.
+    static func about(_ seconds: Double) -> String {
+        coreString(LOOKOUT_DURATION_MAX) {
+            lookout_fmt_duration(seconds, Int32(LOOKOUT_DURATION_ABOUT), $0, $1)
+        }
+    }
+
+    /// A depth given in metres, in the unit on screen: `5 m`, `12 ft`. With
+    /// `bare`, the number alone.
+    static func depth(_ metres: Double, feet: Bool, bare: Bool = false) -> String {
+        let unit = (feet ? LOOKOUT_DEPTH_FEET : LOOKOUT_DEPTH_METRES)
+            | (bare ? LOOKOUT_DEPTH_BARE : 0)
+        return coreString(LOOKOUT_DEPTH_MAX) { lookout_fmt_depth(metres, Int32(unit), $0, $1) }
+    }
+
+    /// The name of an S-57 usage band, 1 to 6.
+    static func usageBand(_ band: Int) -> String {
+        String(cString: lookout_usage_band_name(Int32(clamping: band)))
     }
 }

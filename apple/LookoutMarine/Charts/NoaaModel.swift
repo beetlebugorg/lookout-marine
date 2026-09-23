@@ -303,10 +303,10 @@ final class NoaaModel {
     /// What a pick costs, in the mariner's words.
     var costLine: String {
         if allInstalled {
-            return "\(held) charts, all installed · \(NoaaModel.sizeText(heldBytes)) to fetch again"
+            return "\(TextFormat.count(held)) charts, all installed · \(TextFormat.bytes(heldBytes)) to fetch again"
         }
-        var s = "\(cells) charts, \(NoaaModel.sizeText(bytes))"
-        if held > 0 { s += " · \(held) already installed" }
+        var s = "\(TextFormat.count(cells)) charts, \(TextFormat.bytes(bytes))"
+        if held > 0 { s += " · \(TextFormat.count(held)) already installed" }
         return s
     }
 
@@ -415,13 +415,5 @@ final class NoaaModel {
         return docs
             .appendingPathComponent("Charts", isDirectory: true)
             .appendingPathComponent("NOAA", isDirectory: true).path
-    }
-
-    /// A size a mariner reads before agreeing to download it.
-    static func sizeText(_ bytes: UInt64) -> String {
-        let f = ByteCountFormatter()
-        f.countStyle = .file
-        f.allowedUnits = bytes >= 1 << 30 ? [.useGB] : [.useMB]
-        return f.string(fromByteCount: Int64(bytes))
     }
 }

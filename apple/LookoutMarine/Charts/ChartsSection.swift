@@ -188,7 +188,7 @@ struct ChartsSections: View {
         let bytes = sets.reduce(Int64(0)) { sum, s in
             sum + s.cells.reduce(0) { $0 + $1.bytes } + s.rasters.reduce(0) { $0 + $1.bytes }
         }
-        return "\(cells) charts · \(NoaaModel.sizeText(UInt64(max(bytes, 0))))"
+        return "\(cells) charts · \(TextFormat.bytes(UInt64(max(bytes, 0))))"
     }
 
     /// What the last update check found, and when it ran.

@@ -81,7 +81,7 @@ struct PositionReadout: View {
     /// for them.
     private var coordString: String {
         guard let lat = model.readouts.shipLat, let lon = model.readouts.shipLon else { return "" }
-        return compact ? CoordFormat.positionShort(lat: lat, lon: lon)
+        return compact ? CoordFormat.positionCompact(lat: lat, lon: lon)
                        : CoordFormat.ownShip(lat: lat, lon: lon)
     }
 

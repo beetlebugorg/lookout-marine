@@ -151,7 +151,7 @@ struct NoaaPickerSheet: View {
     /// What Apply is about to do, in the mariner's words.
     private var planLine: String {
         var parts: [String] = []
-        if adding { parts.append("Add \(noaa.cells) charts, \(NoaaModel.sizeText(noaa.bytes))") }
+        if adding { parts.append("Add \(TextFormat.count(noaa.cells)) charts, \(TextFormat.bytes(noaa.bytes))") }
         let gone = removing
         if !gone.isEmpty {
             parts.append("remove \(gone.map(\.name).joined(separator: ", "))")

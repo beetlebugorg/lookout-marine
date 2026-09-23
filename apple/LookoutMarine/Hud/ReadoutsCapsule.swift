@@ -87,7 +87,7 @@ struct ReadoutsCapsule: View {
                 .accessibilityIdentifier("band")
             separator
             Button(action: onScaleTap) {
-                Text(compact ? CoordFormat.scaleShort(model.readouts.scaleDenominator)
+                Text(compact ? CoordFormat.scaleCompact(model.readouts.scaleDenominator)
                              : CoordFormat.scale(model.readouts.scaleDenominator))
                     .fontWeight(.semibold)
                     .foregroundStyle(Chrome.accent)

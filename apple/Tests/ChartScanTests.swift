@@ -150,9 +150,9 @@ final class ChartSetTests: XCTestCase {
     }
 
     func testEveryBandName() {
-        XCTAssertEqual((1...6).map(ChartSet.bandName),
+        XCTAssertEqual((1...6).map(TextFormat.usageBand),
                        ["Overview", "General", "Coastal", "Approach", "Harbor", "Berthing"])
-        XCTAssertEqual(ChartSet.bandName(0), "Unknown")
+        XCTAssertEqual(TextFormat.usageBand(0), "Unknown")
     }
 
     /// A chart still inside an archive is not a path the engine can open.

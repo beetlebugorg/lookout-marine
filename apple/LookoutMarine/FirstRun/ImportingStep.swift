@@ -191,7 +191,7 @@ struct ImportingStep: View {
     /// mariner dropped has neither, so it states what is known.
     private var subtitle: String {
         if let o = order {
-            return "NOAA · \(o.charts) charts · \(NoaaModel.sizeText(o.bytes))"
+            return "NOAA · \(o.charts) charts · \(TextFormat.bytes(o.bytes))"
         }
         if let w = work, w.total > 0 { return "\(w.total) charts" }
         return "Reading the folder"

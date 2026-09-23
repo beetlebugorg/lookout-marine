@@ -458,17 +458,12 @@ struct DepthStep: View {
 
     /// A depth on screen, with its unit on it.
     private func measure(_ v: Double) -> String {
-        let rounded = (v * 10).rounded() / 10
-        let text = rounded == rounded.rounded()
-            ? "\(Int(rounded))" : String(format: "%.1f", rounded)
-        return "\(text) \(unit)"
+        TextFormat.depth(v * plan.metres_per_unit, feet: feet)
     }
 
     /// The draft alone, for the field, with no unit on it.
     private func showDraft() {
-        let rounded = (draft * 10).rounded() / 10
-        draftText = rounded == rounded.rounded()
-            ? "\(Int(rounded))" : String(format: "%.1f", rounded)
+        draftText = TextFormat.depth(draftM, feet: feet, bare: true)
     }
 
     private func readDraft() {

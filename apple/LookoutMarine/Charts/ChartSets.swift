@@ -210,7 +210,7 @@ struct ChartSet: Identifiable, Hashable {
         }
         if let lo = cells.map(\.band).filter({ $0 > 0 }).min(),
            let hi = cells.map(\.band).filter({ $0 > 0 }).max() {
-            let loName = ChartSet.bandName(lo), hiName = ChartSet.bandName(hi)
+            let loName = TextFormat.usageBand(lo), hiName = TextFormat.usageBand(hi)
             parts.append(lo == hi ? loName : "\(loName) to \(hiName)")
         }
         parts.append(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))
@@ -223,19 +223,7 @@ struct ChartSet: Identifiable, Hashable {
     var bandCounts: [(band: Int, name: String, count: Int)] {
         (1...6).compactMap { b in
             let n = cells.filter { $0.band == b }.count
-            return n == 0 ? nil : (b, ChartSet.bandName(b), n)
-        }
-    }
-
-    static func bandName(_ band: Int) -> String {
-        switch band {
-        case 1: return "Overview"
-        case 2: return "General"
-        case 3: return "Coastal"
-        case 4: return "Approach"
-        case 5: return "Harbor"
-        case 6: return "Berthing"
-        default: return "Unknown"
+            return n == 0 ? nil : (b, TextFormat.usageBand(b), n)
         }
     }
 }

@@ -673,7 +673,7 @@ final class ChartsModel {
         // The bake runs coarse band first, so the panel reads its band list in
         // that order (lookout_bake_order, include/lookout-library.h).
         let bands: [BandTotal] = row.bandTodo.enumerated().compactMap { i, n in
-            n == 0 ? nil : BandTotal(band: i + 1, name: ChartSet.bandName(i + 1), total: n)
+            n == 0 ? nil : BandTotal(band: i + 1, name: TextFormat.usageBand(i + 1), total: n)
         }
         bake = BakeProgress(done: 0, total: total, name: title, bands: bands)
         job.onProgress = { [weak self, weak job] p in
@@ -774,9 +774,7 @@ final class ChartsModel {
         // Measured on this machine over a mixed Chesapeake set: about a fifth
         // of a second a chart with every core working.
         let seconds = Double(n) * 0.2
-        if seconds < 60 { return "under a minute" }
-        if seconds < 3600 { return "about \(Int((seconds / 60).rounded())) minutes" }
-        return String(format: "about %.1f hours", seconds / 3600)
+        return TextFormat.about(seconds)
     }
 
     /// Take a set off the list.
@@ -864,7 +862,7 @@ final class ChartsModel {
         // BakeProgress.bandProgress walks the count down the bands in that
         // order.
         let bands: [BandTotal] = st.bandTotal.enumerated().compactMap { i, n in
-            n == 0 ? nil : BandTotal(band: i + 1, name: ChartSet.bandName(i + 1), total: Int(n))
+            n == 0 ? nil : BandTotal(band: i + 1, name: TextFormat.usageBand(i + 1), total: Int(n))
         }
         // By the agency that made them, as the row names the set.
         let name = sets.first(where: \.managed)?.title
