@@ -138,8 +138,15 @@ pub const Pictures = struct {
         const cell = cellOf(kind, lon, lat, zoom);
         const now = clock.ticksMs();
         if (self.find(url, kind, cell, w, h)) |p| {
-            p.used_ms = now;
-            return self.copyOut(p, dst);
+            // A publisher tile stands in only until the chart is drawn. Once
+            // it is, the snapshot replaces it.
+            if (p.source != .tile or !isActive(main, url)) {
+                p.used_ms = now;
+                return self.copyOut(p, dst);
+            }
+            if (p.fetching) main.links.cancelRelay(TILE_TOKEN | p.serial);
+            p.fetching = false;
+            p.state = .dropped;
         }
 
         const source: Source = switch (kind) {
@@ -827,6 +834,20 @@ test "a tile picture and a snapshot come back, and then the frame loop stops" {
     try testing.expectEqual(Result.ready, main.chartLinkPicture(url, .tile, -76.48, 38.97, 9, 32, 16, &dst));
     try testing.expectEqualSlices(u8, &.{ 200, 40, 40, 255 }, dst[0..4]);
     try testing.expectEqual(Result.ready, main.chartLinkPicture("", .tile, -76.48, 38.97, 9, 32, 16, &dst));
+
+    // Picked, the link is pictured as it is drawn.
+    main.links.select(url);
+    try testing.expectEqual(Result.pending, main.chartLinkPicture(url, .tile, -76.48, 38.97, 9, 32, 16, &dst));
+    tries = 0;
+    while (tries < 400) : (tries += 1) {
+        presented(main);
+        _ = main.frameStep();
+        _ = f.respondAll(main, test_style, tile);
+        if (main.chartLinkPicture(url, .tile, -76.48, 38.97, 9, 32, 16, &dst) != .pending) break;
+        @import("lock.zig").sleepMs(5);
+    }
+    try testing.expectEqual(Result.ready, main.chartLinkPicture(url, .tile, -76.48, 38.97, 9, 32, 16, &dst));
+    try testing.expectEqual(Source.snapshot, main.pictures.find(url, .tile, cellOf(.tile, -76.48, 38.97, 9), 32, 16).?.source);
 
     // Every picture is ready, so the loop stops.
     presented(main);
