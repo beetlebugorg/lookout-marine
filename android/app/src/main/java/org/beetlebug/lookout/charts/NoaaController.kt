@@ -104,6 +104,20 @@ class NoaaController(
     var picked by mutableStateOf<Set<String>>(emptySet())
         private set
 
+    /** True while an update check waits on its catalog read. */
+    var updateChecking by mutableStateOf(false)
+        private set
+    /** Unix seconds of the last update check recorded, 0 for never. */
+    var updateCheckedAt by mutableStateOf(0L)
+        private set
+    /** How many downloaded cells NOAA has reissued, counted after the last
+     *  check recorded. 0 before one has been. */
+    var outdated by mutableStateOf(0)
+        private set
+    /** How often the check runs, a Lookout.NOAA_CHECK_ value. */
+    var updateCheck by mutableStateOf(Lookout.NOAA_CHECK_DAILY)
+        private set
+
     /** Each region's real coverage, read once the catalog is in. */
     var coverage by mutableStateOf<Map<String, List<Box>>>(emptyMap())
         private set
@@ -113,15 +127,21 @@ class NoaaController(
     val allInstalled: Boolean get() = held > 0 && cells == 0
 
     private val worker = Executors.newSingleThreadExecutor { Thread(it, "lookout-noaa") }
-    private val pollBuf = LongArray(25)
+    private val pollBuf = LongArray(31)
     private val costBuf = LongArray(4)
     /** Whether the last state read had a catalog. Worker only. */
     private var hadCatalog = false
+    /** The recorded check [outdated] was counted after. Worker only. */
+    private var countedAt = 0L
 
     init {
         if (noaa != 0L) {
             NoaaService.onWake = { worker.execute { pull() } }
-            worker.execute { pull(force = true) }
+            worker.execute {
+                val c = Lookout.noaaUpdateCheck(noaa)
+                access.onMain { updateCheck = c }
+                pull(force = true)
+            }
         }
     }
 
@@ -205,6 +225,35 @@ class NoaaController(
     }
 
     /**
+     * Start an update check when the core finds one due, and count again
+     * against the library as it is now. The core reads the cadence and the
+     * last check from the store, and makes no request while the library holds
+     * no downloaded cell. Called when a chart opens and when the sets change.
+     */
+    fun considerUpdateCheck() {
+        call {
+            if (countedAt != 0L) {
+                val n = Lookout.noaaOutdated(noaa)
+                access.onMain { outdated = n }
+            }
+            Lookout.noaaUpdateDue(noaa)
+        }
+    }
+
+    /** How often to check. A mariner who just asked for checks gets one. */
+    fun chooseUpdateCheck(cadence: Int) {
+        updateCheck = cadence
+        call { Lookout.noaaSetUpdateCheck(noaa, cadence) }
+        if (cadence != Lookout.NOAA_CHECK_NEVER) considerUpdateCheck()
+    }
+
+    /** Download the reissued editions of the downloaded cells into [destDir]. */
+    fun update(destDir: String) {
+        error = null
+        call { Lookout.noaaUpdate(noaa, destDir) }
+    }
+
+    /**
      * Take the core's state when it changed, and publish it. WORKER THREAD.
      * [force] reads it regardless, for the first read.
      */
@@ -235,6 +284,15 @@ class NoaaController(
         val nPrepared = pollBuf[11].toInt()
         val nToPrepare = pollBuf[12].toInt()
         val nBandTotal = List(6) { pollBuf[19 + it].toInt() }
+        val nChecking = pollBuf[29] != 0L
+        val nCheckedAt = pollBuf[30]
+        // A check the core has recorded is counted once.
+        val nOutdated = if (!nChecking && nCheckedAt != countedAt) {
+            countedAt = nCheckedAt
+            Lookout.noaaOutdated(noaa)
+        } else {
+            null
+        }
 
         if (gained) readCost()
         val boxes = if (gained) readCoverage() else null
@@ -256,6 +314,9 @@ class NoaaController(
             prepared = nPrepared
             toPrepare = nToPrepare
             bandTotal = nBandTotal
+            updateChecking = nChecking
+            updateCheckedAt = nCheckedAt
+            if (nOutdated != null) outdated = nOutdated
             if (boxes != null) coverage = boxes
         }
     }

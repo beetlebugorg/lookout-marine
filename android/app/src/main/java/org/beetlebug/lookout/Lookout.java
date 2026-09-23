@@ -1078,6 +1078,19 @@ public final class Lookout implements AutoCloseable {
     public static String[] noaaText(long n)             { return nNoaaSvcText(n); }
     public static void noaaRefresh(long n)              { nNoaaSvcRefresh(n); }
     public static void noaaCancel(long n)               { nNoaaSvcCancel(n); }
+    /** The managed cells NOAA has reissued. 0 until a check is recorded. */
+    public static int noaaOutdated(long n)              { return nNoaaOutdated(n); }
+    /** Download the reissued editions into destDir. */
+    public static void noaaUpdate(long n, String destDir) { nNoaaUpdate(n, destDir); }
+    /** Start the update check when one is due. True while it runs. */
+    public static boolean noaaUpdateDue(long n)         { return nNoaaUpdateDue(n); }
+    /** How often the update check runs: NOAA_CHECK_NEVER, _STARTUP or _DAILY. */
+    public static int noaaUpdateCheck(long n)           { return nNoaaUpdateCheck(n); }
+    public static void noaaSetUpdateCheck(long n, int cadence) { nNoaaSetUpdateCheck(n, cadence); }
+    /** lookout_noaa_update_check's LOOKOUT_NOAA_CHECK_* values. */
+    public static final int NOAA_CHECK_NEVER = 0;
+    public static final int NOAA_CHECK_STARTUP = 1;
+    public static final int NOAA_CHECK_DAILY = 2;
     /** out[0] cells, [1] bytes, [2] cells already held, [3] what fetching
      *  those again costs. */
     public static boolean noaaCost(long n, String regionIds, long[] out) {
@@ -1160,6 +1173,11 @@ public final class Lookout implements AutoCloseable {
     private static native String[] nNoaaSvcText(long n);
     private static native void nNoaaSvcRefresh(long n);
     private static native void nNoaaSvcCancel(long n);
+    private static native int nNoaaOutdated(long n);
+    private static native void nNoaaUpdate(long n, String destDir);
+    private static native boolean nNoaaUpdateDue(long n);
+    private static native int nNoaaUpdateCheck(long n);
+    private static native void nNoaaSetUpdateCheck(long n, int cadence);
     private static native boolean nNoaaSvcCost(long n, String regionIds, long[] out);
     private static native void nNoaaSvcDownload(long n, String regionIds, String destDir, boolean again);
     private static native int nNoaaSvcApply(long n, String pickedIds, String destDir, boolean again);

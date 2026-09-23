@@ -391,6 +391,12 @@ fun ChartScreen(
         if (open) charts.adoptNoaaPrepare()
     }
 
+    // The update check, when a chart opens and when the sets change. The core
+    // decides whether one is due, and counts the reissues against the sets.
+    LaunchedEffect(controller.chartHasCells, charts.sets) {
+        noaa.considerUpdateCheck()
+    }
+
     // Setup, over the running chart. It comes up on any launch that settles on
     // nothing to draw, and a published style counts as something: somebody
     // sailing on one has no empty library to fill.

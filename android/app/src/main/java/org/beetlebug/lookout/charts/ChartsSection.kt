@@ -2,6 +2,8 @@ package org.beetlebug.lookout.charts
 
 import org.beetlebug.lookout.Lookout
 
+import android.text.format.DateUtils
+
 import org.beetlebug.lookout.ui.Footer
 import org.beetlebug.lookout.ui.SectionHeader
 
@@ -42,6 +44,9 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -99,7 +104,7 @@ fun ChartsSection(
     if (charts.sets.isEmpty() && pictures.paths.isEmpty()) {
         Footer(if (charts.scanning) "Finding charts…" else "No chart sets")
     } else {
-        for (set in charts.sets) ChartSetRow(set, charts)
+        for (set in charts.sets) ChartSetRow(set, charts, noaa)
         // The pictures, in the same list. A picture and a survey are different
         // kinds of chart, and the row says which, but they arrive in the same
         // folders and switch on the same way. Two lists made the mariner
@@ -172,6 +177,8 @@ fun ChartsSection(
         tag = "get-charts-noaa",
         onClick = { pickingNoaa = true },
     )
+
+    UpdateCheckRow(noaa)
 
     if (charts.storageAccess) {
         AddChartRow(
@@ -453,7 +460,7 @@ private fun PictureRows(controller: RasterController) {
 }
 
 @Composable
-private fun ChartSetRow(set: ChartSets.Set, charts: ChartsModel) {
+private fun ChartSetRow(set: ChartSets.Set, charts: ChartsModel, noaa: NoaaController) {
     var confirming by remember(set.path) { mutableStateOf(false) }
 
     SwitchRow(
@@ -476,6 +483,27 @@ private fun ChartSetRow(set: ChartSets.Set, charts: ChartsModel) {
     }
     if (set.heldBack > 0) {
         RowNote(plural(set.heldBack, "chart") + " also in another set")
+    }
+    // What NOAA has reissued since these were downloaded, and the way to fetch
+    // it. Only on the downloaded set: that is the set whose provenance this
+    // app knows, and the one it can update in place.
+    if (set.managed && noaa.outdated > 0) {
+        Row(
+            Modifier.padding(start = 40.dp, end = 20.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "${noaa.outdated} charts have newer editions",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(
+                onClick = { noaa.update(charts.noaaDir.absolutePath) },
+                enabled = noaa.phase != NoaaController.Phase.DOWNLOADING &&
+                    charts.importer.state?.running != true && !noaa.preparing,
+            ) { Text("Update") }
+        }
     }
     // What scales the set holds. A set that stops at Coastal does not draw the
     // harbour a passage ends in, and one line says so at a glance.
@@ -538,6 +566,55 @@ private fun summary(set: ChartSets.Set): String {
 }
 
 private fun plural(n: Int, one: String): String = if (n == 1) "$n $one" else "$n ${one}s"
+
+/**
+ * How often to look for newer editions of the downloaded charts. The question
+ * an app asks about its own updates, asked about the charts: NOAA reissues
+ * cells continuously, and a chart a season out of date is the kind a mariner
+ * wants told about.
+ */
+@Composable
+private fun UpdateCheckRow(noaa: NoaaController) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp)) {
+        Text("Check for NOAA chart updates", style = MaterialTheme.typography.bodyMedium)
+        Spacer(Modifier.height(6.dp))
+        val choices = listOf(
+            Lookout.NOAA_CHECK_NEVER to "Never",
+            Lookout.NOAA_CHECK_STARTUP to "At startup",
+            Lookout.NOAA_CHECK_DAILY to "Daily",
+        )
+        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+            choices.forEachIndexed { i, (cadence, label) ->
+                SegmentedButton(
+                    selected = noaa.updateCheck == cadence,
+                    onClick = { noaa.chooseUpdateCheck(cadence) },
+                    shape = SegmentedButtonDefaults.itemShape(i, choices.size),
+                ) { Text(label) }
+            }
+        }
+        updateCheckedText(noaa)?.let {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                it,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/** What the last update check found, and when it ran. */
+private fun updateCheckedText(noaa: NoaaController): String? {
+    if (noaa.updateChecking) return "Checking NOAA for newer editions…"
+    if (noaa.updateCheckedAt == 0L) {
+        return if (noaa.updateCheck == Lookout.NOAA_CHECK_NEVER) null else "Not checked yet"
+    }
+    val ago = DateUtils.getRelativeTimeSpanString(
+        noaa.updateCheckedAt * 1000, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS,
+    )
+    return if (noaa.outdated == 0) "Every chart was current $ago"
+    else "${noaa.outdated} charts have newer editions, checked $ago"
+}
 
 /** One more line under a set's summary. */
 @Composable

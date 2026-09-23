@@ -3619,6 +3619,11 @@ extern fn lookout_noaa_download(n: ?*c_noaa, region_ids: [*:0]const u8, dest_dir
 extern fn lookout_noaa_apply(n: ?*c_noaa, picked_ids: [*:0]const u8, dest_dir: [*:0]const u8, again: c_int) u32;
 extern fn lookout_noaa_region_state(n: ?*c_noaa, region_id: [*:0]const u8, out: *lookout_noaa_region_info) c_int;
 extern fn lookout_noaa_cancel(n: ?*c_noaa) void;
+extern fn lookout_noaa_outdated(n: ?*c_noaa) u32;
+extern fn lookout_noaa_update(n: ?*c_noaa, dest_dir: [*:0]const u8) void;
+extern fn lookout_noaa_update_due(n: ?*c_noaa) c_int;
+extern fn lookout_noaa_update_check(n: ?*c_noaa) c_int;
+extern fn lookout_noaa_set_update_check(n: ?*c_noaa, cadence: c_int) void;
 
 fn noaaOf(n: j.jlong) ?*c_noaa {
     if (n == 0) return null;
@@ -3806,15 +3811,18 @@ export fn Java_org_beetlebug_lookout_Lookout_nNoaaSvcChanged(env: [*c]j.JNIEnv, 
     return if (lookout_noaa_changed(noaaOf(n)) != 0) 1 else 0;
 }
 
-/// boolean nNoaaSvcPoll(long n, long[] out) -- the slots of nNoaaPoll, then
-/// [8] outcome and [9] run, then the prepare: [10] preparing, [11] prepared,
-/// [12] to prepare, [13..18] done by band and [19..24] total by band. A
-/// shorter array gets the slots that fit.
+/// boolean nNoaaSvcPoll(long n, long[] out) -- [0] phase, [1] checked_at,
+/// [2] catalog cells, [3] total, [4] done, [5] failed, [6] bytes total,
+/// [7] bytes done, [8] outcome and [9] run, then the prepare: [10] preparing,
+/// [11] prepared, [12] to prepare, [13..18] done by band and [19..24] total by
+/// band, then [25] retry, [26] removing, [27] remove done, [28] remove total,
+/// [29] update checking and [30] update checked at. A shorter array gets the
+/// slots that fit.
 export fn Java_org_beetlebug_lookout_Lookout_nNoaaSvcPoll(env: [*c]j.JNIEnv, cls: j.jclass, n: j.jlong, out: j.jlongArray) j.jboolean {
     _ = cls;
     var st: lookout_noaa_state = std.mem.zeroes(lookout_noaa_state);
     lookout_noaa_poll(noaaOf(n), &st);
-    var buf: [25]j.jlong = @splat(0);
+    var buf: [31]j.jlong = @splat(0);
     buf[0..13].* = .{
         @intCast(st.phase),         st.checked_at,
         @intCast(st.catalog_cells), @intCast(st.total),
@@ -3828,6 +3836,11 @@ export fn Java_org_beetlebug_lookout_Lookout_nNoaaSvcPoll(env: [*c]j.JNIEnv, cls
         buf[13 + i] = @intCast(d);
         buf[19 + i] = @intCast(t);
     }
+    buf[25..31].* = .{
+        @intCast(st.retry),           @intCast(st.removing),
+        @intCast(st.remove_done),     @intCast(st.remove_total),
+        @intCast(st.update_checking), st.update_checked_at,
+    };
     if (out != null) {
         const len: usize = @intCast(@max(0, env_(env).GetArrayLength.?(env, out)));
         const n_out = @min(len, buf.len);
@@ -3856,6 +3869,42 @@ export fn Java_org_beetlebug_lookout_Lookout_nNoaaSvcCancel(env: [*c]j.JNIEnv, c
     _ = env;
     _ = cls;
     lookout_noaa_cancel(noaaOf(n));
+}
+
+/// int nNoaaOutdated(long n) -- the managed cells NOAA has reissued.
+export fn Java_org_beetlebug_lookout_Lookout_nNoaaOutdated(env: [*c]j.JNIEnv, cls: j.jclass, n: j.jlong) j.jint {
+    _ = env;
+    _ = cls;
+    return @intCast(lookout_noaa_outdated(noaaOf(n)));
+}
+
+/// void nNoaaUpdate(long n, String destDir) -- download the reissued editions.
+export fn Java_org_beetlebug_lookout_Lookout_nNoaaUpdate(env: [*c]j.JNIEnv, cls: j.jclass, n: j.jlong, dest_dir: j.jstring) void {
+    _ = cls;
+    if (dest_dir == null) return;
+    const dest = Borrowed.get(env, dest_dir) orelse return;
+    defer dest.release(env);
+    lookout_noaa_update(noaaOf(n), dest.ptr());
+}
+
+/// boolean nNoaaUpdateDue(long n) -- start the update check when one is due.
+export fn Java_org_beetlebug_lookout_Lookout_nNoaaUpdateDue(env: [*c]j.JNIEnv, cls: j.jclass, n: j.jlong) j.jboolean {
+    _ = env;
+    _ = cls;
+    return if (lookout_noaa_update_due(noaaOf(n)) != 0) 1 else 0;
+}
+
+/// int nNoaaUpdateCheck(long n) -- the cadence, a LOOKOUT_NOAA_CHECK_* value.
+export fn Java_org_beetlebug_lookout_Lookout_nNoaaUpdateCheck(env: [*c]j.JNIEnv, cls: j.jclass, n: j.jlong) j.jint {
+    _ = env;
+    _ = cls;
+    return lookout_noaa_update_check(noaaOf(n));
+}
+
+export fn Java_org_beetlebug_lookout_Lookout_nNoaaSetUpdateCheck(env: [*c]j.JNIEnv, cls: j.jclass, n: j.jlong, cadence: j.jint) void {
+    _ = env;
+    _ = cls;
+    lookout_noaa_set_update_check(noaaOf(n), cadence);
 }
 
 /// boolean nNoaaSvcCost(long n, String regionIds, long[] out) -- the slots of
