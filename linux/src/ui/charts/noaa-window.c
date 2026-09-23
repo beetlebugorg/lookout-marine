@@ -131,7 +131,7 @@ lk_noaa_window_sync (LkNoaa *noaa, gpointer user_data)
       g_autofree char *names = g_strjoinv (", ", dropped);
       g_autofree char *gone = g_strdup_printf ("remove %s", names);
 
-      if (lk_noaa_cells (noaa) > lk_noaa_held (noaa))
+      if (lk_noaa_cells (noaa) > 0)
         {
           g_autofree char *add = lk_noaa_cost_line (noaa);
           plan = g_strdup_printf ("%s · %s", add, gone);
@@ -161,8 +161,8 @@ lk_noaa_window_sync (LkNoaa *noaa, gpointer user_data)
    * button above is insensitive. Fetching it again repairs a damaged
    * download and picks up any edition NOAA has reissued, so that press has a
    * button of its own (apple/LookoutMarine/Library/NoaaPicker.swift). */
-  gtk_widget_set_visible (self->again, ready && picked && !removes &&
-                                           lk_noaa_cells (noaa) <= lk_noaa_held (noaa));
+  gtk_widget_set_visible (self->again,
+                          ready && picked && !removes && lk_noaa_all_installed (noaa));
 }
 
 /* Fetch the whole pick again, held cells included. */
