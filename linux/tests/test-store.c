@@ -8,22 +8,6 @@
 
 #include "model/store.h"
 
-/* The NOAA update cadence, as the Charts page saves it. Daily on a device
- * that has never said. */
-static void
-test_noaa_update_cadence (void)
-{
-  g_autofree char *first = lk_store_load_noaa_update_check ();
-
-  g_assert_cmpstr (first, ==, "daily");
-
-  lk_store_save_noaa_update_check ("startup");
-
-  g_autofree char *second = lk_store_load_noaa_update_check ();
-
-  g_assert_cmpstr (second, ==, "startup");
-}
-
 static void
 test_recents_order_and_cap (void)
 {
@@ -144,7 +128,6 @@ main (int argc, char *argv[])
 
   g_test_init (&argc, &argv, NULL);
 
-  g_test_add_func ("/store/noaa-update-cadence", test_noaa_update_cadence);
   g_test_add_func ("/store/recents", test_recents_order_and_cap);
   g_test_add_func ("/store/raster", test_raster_roundtrip);
   g_test_add_func ("/store/raster-all", test_raster_all_roundtrip);

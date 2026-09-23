@@ -346,25 +346,6 @@ lk_store_save_chart_link_active (const char *url)
   lk_store_wrote ();
 }
 
-char *
-lk_store_load_noaa_update_check (void)
-{
-  g_autofree char *value =
-      lk_store_load_string (LOOKOUT_STORE_CHARTSETS, "noaa-update-check");
-
-  if (value == NULL || value[0] == '\0')
-    return g_strdup ("daily");
-  return g_steal_pointer (&value);
-}
-
-void
-lk_store_save_noaa_update_check (const char *cadence)
-{
-  lookout_store_set_text (lk_store_handle (), LOOKOUT_STORE_CHARTSETS,
-                          "noaa-update-check", cadence);
-  lk_store_wrote ();
-}
-
 /* ---- plugin settings ----------------------------------------------------- */
 
 char **

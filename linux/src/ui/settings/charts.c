@@ -23,7 +23,6 @@
 #include "ui/charts/band-ramp.h"
 #include "ui/charts/gallery.h"
 #include "ui/charts/noaa-window.h"
-#include "model/store.h"
 #include "ui/open-dialogs.h"
 #include "ui/work-panel.h"
 
@@ -268,11 +267,12 @@ lk_settings_links_changed (LkChartLinks *links, gpointer user_data)
 static void
 lk_charts_update_cadence_chosen (LkSettings *settings, int chosen)
 {
-  static const char *const keys[] = { "never", "startup", "daily" };
+  static const int cadences[] = { LOOKOUT_NOAA_CHECK_NEVER, LOOKOUT_NOAA_CHECK_STARTUP,
+                                  LOOKOUT_NOAA_CHECK_DAILY };
 
   if (chosen < 0 || chosen > 2)
     return;
-  lk_store_save_noaa_update_check (keys[chosen]);
+  lk_noaa_set_update_check (lk_app_model_get_noaa (settings->model), cadences[chosen]);
   /* A mariner who just asked for the check gets one now. */
   if (chosen != 0)
     lk_app_model_check_noaa_updates (settings->model);
@@ -1276,10 +1276,10 @@ lk_build_charts_page (LkSettings *settings)
    * survey changes, and a mariner sailing on last season's edition has no way
    * to know. The read is about 10 MB, so it runs once a day at most. */
   static const char *const cadences[] = { "Never", "At startup", "Daily", NULL };
-  g_autofree char *cadence = lk_store_load_noaa_update_check ();
-  int chosen = g_str_equal (cadence, "never")     ? 0
-               : g_str_equal (cadence, "startup") ? 1
-                                                  : 2;
+  int cadence = lk_noaa_get_update_check (lk_app_model_get_noaa (settings->model));
+  int chosen = cadence == LOOKOUT_NOAA_CHECK_NEVER     ? 0
+               : cadence == LOOKOUT_NOAA_CHECK_STARTUP ? 1
+                                                       : 2;
 
   lk_choice_row_plain (add_group, settings, "Check for NOAA chart updates", cadences,
                        chosen, lk_charts_update_cadence_chosen);

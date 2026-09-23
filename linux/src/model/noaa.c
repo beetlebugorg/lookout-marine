@@ -42,10 +42,10 @@ struct _LkNoaa {
   gboolean order_again;
   /* Retry found no catalog. It orders again when the catalog read ends. */
   gboolean retry_waiting;
-  /* How many managed charts NOAA has reissued, and whether a check is waiting
-   * on the catalog it reads that from. */
+  /* How many managed charts NOAA has reissued, as counted after the check
+   * recorded at `counted_at`. */
   guint32  outdated;
-  gboolean checking;
+  gint64   counted_at;
   /* The core's prepare and removal, drawn as the shell's bake and removal. */
   gboolean       preparing;
   gint64         prepare_started_us;
@@ -649,8 +649,7 @@ lk_noaa_check_updates (LkNoaa *self)
 {
   g_return_if_fail (LK_IS_NOAA (self));
 
-  if (lk_noaa_update_due (self))
-    self->checking = TRUE;
+  lk_noaa_update_due (self);
 }
 
 void
@@ -658,9 +657,25 @@ lk_noaa_sets_changed (LkNoaa *self)
 {
   g_return_if_fail (LK_IS_NOAA (self));
 
-  /* The count and the check both follow the managed sets. */
-  self->outdated = lk_noaa_outdated (self);
+  /* The count and the check both follow the managed sets. There is no count
+   * until a check has been recorded. */
+  if (self->state.update_checked_at != 0)
+    self->outdated = lk_noaa_outdated (self);
   lk_noaa_check_updates (self);
+}
+
+int
+lk_noaa_get_update_check (LkNoaa *self)
+{
+  g_return_val_if_fail (LK_IS_NOAA (self), LOOKOUT_NOAA_CHECK_DAILY);
+  return lookout_noaa_update_check (self->service);
+}
+
+void
+lk_noaa_set_update_check (LkNoaa *self, int cadence)
+{
+  g_return_if_fail (LK_IS_NOAA (self));
+  lookout_noaa_set_update_check (self->service, cadence);
 }
 
 guint32
@@ -723,10 +738,10 @@ lk_noaa_flow (LkNoaa *self)
 {
   const lookout_noaa_state *state = &self->state;
 
-  /* A check ends when its catalog read ends. */
-  if (self->checking && state->phase != LOOKOUT_NOAA_READING)
+  /* A check that the core has recorded is counted once. */
+  if (!state->update_checking && state->update_checked_at != self->counted_at)
     {
-      self->checking = FALSE;
+      self->counted_at = state->update_checked_at;
       self->outdated = lk_noaa_outdated (self);
     }
   if (self->retry_waiting && (state->have_catalog || state->phase != LOOKOUT_NOAA_READING))

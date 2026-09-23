@@ -130,8 +130,8 @@ void lk_noaa_cancel (LkNoaa *self);
  * that replaces them. The core reads the editions off the managed sets. */
 guint32 lk_noaa_outdated (LkNoaa *self);
 
-/* Start the update check when the store's cadence says one is due. TRUE while
- * the check runs. The count is lk_noaa_outdated once the catalog read ends. */
+/* Start the update check when the core's cadence says one is due. TRUE while
+ * the check runs. The count is lk_noaa_outdated once the core records it. */
 gboolean lk_noaa_update_due (LkNoaa *self);
 
 void    lk_noaa_update (LkNoaa *self, const char *dest_dir);
@@ -157,6 +157,11 @@ void lk_noaa_check_updates (LkNoaa *self);
 /* The chart sets changed: count the reissued charts again, and check for
  * more when one is due. */
 void lk_noaa_sets_changed (LkNoaa *self);
+
+/* How often the update check runs, as LOOKOUT_NOAA_CHECK_*. The core keeps
+ * it in the store. */
+int  lk_noaa_get_update_check (LkNoaa *self);
+void lk_noaa_set_update_check (LkNoaa *self, int cadence);
 
 /* How many managed charts NOAA has reissued, as the last count found. */
 guint32 lk_noaa_outdated_found (LkNoaa *self);

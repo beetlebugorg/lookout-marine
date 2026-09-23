@@ -75,11 +75,6 @@ void     lk_store_save_chart_hidden (gboolean hidden);
 char *lk_store_load_chart_links (void);
 void  lk_store_save_chart_links (const char *json);
 
-/* How often to ask NOAA for newer editions: "never", "startup" or "daily".
- * Daily on a device that has never said. Free with g_free. */
-char *lk_store_load_noaa_update_check (void);
-void  lk_store_save_noaa_update_check (const char *cadence);
-
 char *lk_store_load_chart_link_active (void);
 void  lk_store_save_chart_link_active (const char *url);
 
