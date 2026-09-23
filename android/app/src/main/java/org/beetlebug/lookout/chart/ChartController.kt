@@ -37,6 +37,7 @@ import org.beetlebug.lookout.plugins.TableController
 import org.beetlebug.lookout.plugins.TableSpec
 import org.beetlebug.lookout.plugins.readTableSpecs
 import org.beetlebug.lookout.plugins.trimmed
+import org.beetlebug.lookout.settings.DepthUnit
 import org.beetlebug.lookout.settings.MarinerState
 import org.beetlebug.lookout.settings.Scheme
 import org.beetlebug.lookout.store.Store
@@ -620,6 +621,17 @@ class ChartController(private val appContext: Context) {
     }
 
     fun resetRotation() = onEngine { it.resetRotation() }
+
+    /**
+     * Frame the lower 48 behind setup, so the chart under it shows the
+     * coastline the mariner is choosing from. United States charts label
+     * depths in feet, and setup is the one moment the unit can be chosen
+     * before the first sounding draws.
+     */
+    fun showWholeCountry() {
+        onEngine { it.setView(-96.0, 38.0, 5.0, 0.0) }
+        mariner.depthUnit = DepthUnit.FEET
+    }
 
     // ---- the chart menu and markers -----------------------------------------
 

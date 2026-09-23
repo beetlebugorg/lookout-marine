@@ -444,7 +444,10 @@ fun ChartScreen(
     )
     LaunchedEffect(setupFacts) {
         controller.firstRun.note(setupFacts)
-        if (controller.firstRun.shouldBegin) controller.firstRun.begin()
+        if (controller.firstRun.shouldBegin) {
+            controller.firstRun.begin()
+            controller.showWholeCountry()
+        }
     }
     if (controller.firstRun.showing) {
         FirstRunSetup(
