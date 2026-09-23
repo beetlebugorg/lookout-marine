@@ -676,6 +676,13 @@ namespace winrt::LookoutMarine::implementation
         // and line the same, and rebuilding for those flickered the whole
         // page several times a second.
         RefreshChartsPageOnChange();
+        // The online setup step enables Continue once a link is selected.
+        if (first_run.showing() && first_run.step() == lkw::FirstRunStep::OnlineChart)
+        {
+            FirstRunPrimaryBtn().Content(
+                box_value(first_run.PrimaryTitle(!active_chart_link.empty())));
+            FirstRunRestate();
+        }
     }
 
     // ---- the management surface --------------------------------------------

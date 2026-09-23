@@ -212,7 +212,7 @@ namespace winrt::LookoutMarine::implementation
         FirstRunBackBtn().Visibility(picker || first_run.CanGoBack() ? Visibility::Visible
                                                                     : Visibility::Collapsed);
         FirstRunFooterShape(first_run.step() == lkw::FirstRunStep::Welcome);
-        FirstRunPrimaryBtn().Content(box_value(first_run.PrimaryTitle(!chart_link_url.empty())));
+        FirstRunPrimaryBtn().Content(box_value(first_run.PrimaryTitle(!active_chart_link.empty())));
 
         auto body = FirstRunBody();
         body.Children().Clear();
@@ -361,8 +361,7 @@ namespace winrt::LookoutMarine::implementation
         }
 
         case lkw::ChartSource::Online:
-            if (!chart_link_url.empty())
-                AddChartLink(chart_link_url);
+            // The link was added and selected on the step itself.
             break;
 
         case lkw::ChartSource::Files:
@@ -527,16 +526,34 @@ namespace winrt::LookoutMarine::implementation
         // the link field stands alone under the same two lines it has there.
         body.Children().Append(Line(L"Another link", 13, true));
 
+        // A link is added on Enter or Add. The core selects it once it
+        // resolves, and the links poll restates the step then.
+        Grid row;
+        ColumnDefinition c0, c1;
+        c0.Width({ 1, GridUnitType::Star });
+        c1.Width({ 1, GridUnitType::Auto });
+        row.ColumnDefinitions().Append(c0);
+        row.ColumnDefinitions().Append(c1);
+        row.ColumnSpacing(8);
+
         TextBox box;
         box.PlaceholderText(L"https://…/style.json");
-        box.Text(winrt::to_hstring(chart_link_url));
-        box.TextChanged([this, box](auto &&, auto &&) {
-            chart_link_url = winrt::to_string(box.Text());
-            // The button reads Skip until there is a chart to continue with.
-            FirstRunPrimaryBtn().Content(
-                box_value(first_run.PrimaryTitle(!chart_link_url.empty())));
+        auto add = [this, box] {
+            AddChartLink(winrt::to_string(box.Text()));
+            box.Text(L"");
+        };
+        box.KeyDown([add](auto &&, auto &&e) {
+            if (e.Key() == Windows::System::VirtualKey::Enter)
+                add();
         });
-        body.Children().Append(box);
+        row.Children().Append(box);
+
+        Button add_btn;
+        add_btn.Content(box_value(L"Add"));
+        add_btn.Click([add](auto &&, auto &&) { add(); });
+        Grid::SetColumn(add_btn, 1);
+        row.Children().Append(add_btn);
+        body.Children().Append(row);
         body.Children().Append(Muted(L"MapLibre style or TileJSON link", 11.5));
     }
 

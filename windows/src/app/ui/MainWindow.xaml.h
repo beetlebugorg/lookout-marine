@@ -535,9 +535,6 @@ namespace winrt::LookoutMarine::implementation
         // per page, so a read that failed is not asked for again on every
         // render; the step's Try Again is what asks after that.
         bool noaa_catalog_asked{ false };
-        // What the online step has been given, so the button can read Skip
-        // until there is something to continue with.
-        std::string chart_link_url;
         bool first_run_footer_welcome{ false };
         bool first_run_footer_shaped{ false };
 
