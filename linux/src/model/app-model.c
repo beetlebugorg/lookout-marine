@@ -14,28 +14,10 @@ struct _LkAppModel {
   LkChartController *controller;
   LkChartLinks      *chart_links;
   LkNoaa            *noaa;
-  /* The `run` of the download this model follows to its end, or 0 when it
-   * follows none. */
-  guint32            noaa_run;
-  /* The last order, which Retry repeats: the regions and `again` of a
-   * download, or an update when `noaa_order_ids` is NULL. */
-  char              *noaa_order_ids;
-  gboolean           noaa_order_again;
-  /* Retry found no catalog. It orders again when the catalog read ends. */
-  gboolean           noaa_retry_waiting;
   /* The open error reports the end of a NOAA download, and Retry can clear
    * it when `noaa_alert_retry` is set. */
   gboolean           noaa_alert;
   gboolean           noaa_alert_retry;
-  /* The core's prepare, drawn as a bake. */
-  gboolean           noaa_preparing;
-  gint64             noaa_prepare_started_us;
-  LkBakeProgress     noaa_prepare_progress;
-  LkBakeBand         noaa_prepare_bands[6];
-  /* How many managed charts NOAA has reissued, and whether a check is waiting
-   * on the catalog it reads that from. */
-  guint32            noaa_outdated;
-  gboolean           noaa_checking;
   /* A folder imported and waiting for the core's scan of it. The bake reads
    * what the core lists to prepare, and that list is empty until the scan has
    * read the folder. */
@@ -64,9 +46,6 @@ struct _LkAppModel {
   LkBakeProgress remove_progress;
   char          *remove_name;
   gboolean       removing;
-  /* The NOAA service's removal, from its state. */
-  LkBakeProgress noaa_remove_progress;
-  gboolean       noaa_removing;
   GStrv    recents;
 
   gboolean is_opening;
@@ -179,10 +158,10 @@ lk_app_model_get_property (GObject *object, guint prop_id, GValue *value, GParam
     case PROP_SCHEME:              g_value_set_int (value, self->scheme); break;
     case PROP_BUILDING:            g_value_set_boolean (value, self->building); break;
     case PROP_BAKING:
-      g_value_set_boolean (value, self->baking || self->noaa_preparing);
+      g_value_set_boolean (value, lk_app_model_get_baking (self));
       break;
     case PROP_REMOVING:
-      g_value_set_boolean (value, self->removing || self->noaa_removing);
+      g_value_set_boolean (value, lk_app_model_get_remove_progress (self) != NULL);
       break;
     case PROP_VIEW_WIDTH:          g_value_set_int (value, self->view_width); break;
     case PROP_VIEW_HEIGHT:         g_value_set_int (value, self->view_height); break;
@@ -222,7 +201,6 @@ lk_app_model_dispose (GObject *object)
   g_clear_pointer (&self->pending_open_source, g_free);
   g_clear_pointer (&self->bake_name, g_free);
   g_clear_pointer (&self->remove_name, g_free);
-  g_clear_pointer (&self->noaa_order_ids, g_free);
   g_clear_pointer (&self->recents, g_strfreev);
   g_clear_pointer (&self->overlay_pin, g_free);
   g_clear_pointer (&self->pick_results, g_ptr_array_unref);
@@ -313,8 +291,6 @@ static void lk_app_model_remove_progress (const LkBakeProgress *progress,
 static void lk_app_model_noaa_note_all (LkAppModel *self);
 static void lk_app_model_raise_error (LkAppModel *self, const char *message,
                                       gboolean noaa, gboolean retry);
-static void lk_app_model_order_noaa_download (LkAppModel *self, const char *ids,
-                                              gboolean again);
 static void lk_app_model_start_import (LkAppModel *self);
 static void lk_app_model_open_prepared (LkAppModel *self, const char *source,
                                         gboolean pictures);
@@ -394,9 +370,7 @@ lk_app_model_sets_changed (GObject *owner)
 
   if (!lk_chart_sets_scanning (self->chart_sets))
     lk_app_model_noaa_note_all (self);
-  /* The count and the check both follow the managed sets. */
-  self->noaa_outdated = lk_noaa_outdated (self->noaa);
-  lk_app_model_check_noaa_updates (self);
+  lk_noaa_sets_changed (self->noaa);
   lk_app_model_emit_chart_sets_changed (self);
   lk_app_model_start_import (self);
 }
@@ -429,55 +403,11 @@ lk_app_model_recompose_library (LkAppModel *self)
     }
 }
 
-/* End the followed download when its outcome is no longer running, and
- * prepare what arrived. A stop keeps the charts that arrived before it.
- *
- * A failure raises the open error, and so does a refusal that a retry can
- * clear. Setup shows the end in its own step, so the window skips this
- * alert while setup is showing. */
-static void
-lk_app_model_noaa_follow (LkAppModel *self)
-{
-  const lookout_noaa_state *state = lk_noaa_state (self->noaa);
-
-  if (self->noaa_run == 0 || state->run != self->noaa_run ||
-      state->outcome == LOOKOUT_NOAA_RUNNING)
-    return;
-  self->noaa_run = 0;
-
-  if (state->outcome == LOOKOUT_NOAA_FAILED ||
-      (state->outcome == LOOKOUT_NOAA_REFUSED && state->retry))
-    lk_app_model_raise_error (self,
-                              state->error[0] != '\0'
-                                  ? state->error
-                                  : "The download stopped before any chart arrived.",
-                              TRUE, state->retry != 0);
-}
-
-/* Order the last download or update again. */
-static void
-lk_app_model_noaa_reorder (LkAppModel *self)
-{
-  g_autofree char *ids = g_strdup (self->noaa_order_ids);
-
-  if (ids != NULL)
-    lk_app_model_order_noaa_download (self, ids, self->noaa_order_again);
-  else
-    lk_app_model_download_noaa_updates (self);
-}
-
 void
 lk_app_model_retry_noaa (LkAppModel *self)
 {
   g_return_if_fail (LK_IS_APP_MODEL (self));
-
-  if (lk_noaa_state (self->noaa)->have_catalog)
-    {
-      lk_app_model_noaa_reorder (self);
-      return;
-    }
-  self->noaa_retry_waiting = TRUE;
-  lk_noaa_refresh (self->noaa);
+  lk_noaa_retry (self->noaa);
 }
 
 gboolean
@@ -490,89 +420,26 @@ lk_app_model_noaa_alert (LkAppModel *self, gboolean *out_retry)
   return self->noaa_alert;
 }
 
-/* Follow the download or update just ordered. `before` is the `run` read
- * before the order. */
 static void
-lk_app_model_noaa_ordered (LkAppModel *self, guint32 before)
+lk_app_model_noaa_alerted (LkNoaa *noaa, const char *message, gboolean ended,
+                           gboolean retry, gpointer user_data)
 {
-  guint32 run = lk_noaa_state (self->noaa)->run;
-
-  if (run == before)
-    return;
-  self->noaa_run = run;
-  lk_app_model_noaa_follow (self);
+  lk_app_model_raise_error (LK_APP_MODEL (user_data), message, ended, retry);
 }
 
-/* The core's prepare of a download, drawn as a bake. Its end opens the chart
- * on what it made. */
+/* The core's prepare or removal moved. `library_changed` when it took charts
+ * out or a prepare ended, and the chart opens again on the library. */
 static void
-lk_app_model_noaa_prepare (LkAppModel *self, const lookout_noaa_state *state)
+lk_app_model_noaa_work_moved (LkNoaa *noaa, gboolean library_changed, gpointer user_data)
 {
-  gboolean was = self->noaa_preparing;
+  LkAppModel *self = user_data;
 
-  if (!state->preparing && !was)
-    return;
-  self->noaa_preparing = state->preparing != 0;
-  if (self->noaa_preparing && !was)
-    self->noaa_prepare_started_us = g_get_monotonic_time ();
-
-  self->noaa_prepare_progress = (LkBakeProgress) {
-    .kind = LK_BAKE_IMPORT,
-    .done = (int) state->prepared,
-    .total = (int) state->to_prepare,
-    /* The download directory's name, as the shell's bake titled it. */
-    .name = "NOAA",
-    .elapsed = (g_get_monotonic_time () - self->noaa_prepare_started_us) / 1e6,
-    .bands = self->noaa_prepare_bands,
-  };
-  for (guint i = 0; i < G_N_ELEMENTS (state->band_total); i++)
-    if (state->band_total[i] > 0)
-      self->noaa_prepare_bands[self->noaa_prepare_progress.n_bands++] = (LkBakeBand) {
-        .band = (int) i + 1,
-        .total = state->band_total[i],
-        .done = state->band_done[i],
-      };
   g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_BAKING]);
-
-  if (was && !self->noaa_preparing)
+  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_REMOVING]);
+  if (library_changed)
     {
       lk_app_model_recompose_library (self);
       lk_app_model_emit_chart_sets_changed (self);
-    }
-}
-
-static void
-lk_app_model_noaa_changed (LkNoaa *noaa, gpointer user_data)
-{
-  LkAppModel *self = user_data;
-  const lookout_noaa_state *state = lk_noaa_state (noaa);
-
-  /* A check ends when its catalog read ends. */
-  if (self->noaa_checking && state->phase != LOOKOUT_NOAA_READING)
-    {
-      self->noaa_checking = FALSE;
-      self->noaa_outdated = lk_noaa_outdated (noaa);
-    }
-  if (self->noaa_retry_waiting &&
-      (state->have_catalog || state->phase != LOOKOUT_NOAA_READING))
-    {
-      self->noaa_retry_waiting = FALSE;
-      lk_app_model_noaa_reorder (self);
-    }
-  lk_app_model_noaa_follow (self);
-  lk_app_model_noaa_prepare (self, state);
-
-  /* A removal an apply started. Each change notifies, so the panel moves. */
-  if (state->removing || self->noaa_removing)
-    {
-      self->noaa_removing = state->removing != 0;
-      self->noaa_remove_progress = (LkBakeProgress) {
-        .kind = LK_BAKE_REMOVE,
-        .done = (int) state->remove_done,
-        .total = (int) state->remove_total,
-        .name = state->removing ? "NOAA charts" : "",
-      };
-      g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_REMOVING]);
     }
 }
 
@@ -599,7 +466,9 @@ lk_app_model_init (LkAppModel *self)
    * them. The service is open for the life of the model, so a chart reopen
    * leaves a download running. */
   self->noaa = lk_noaa_new (lk_store_handle (), lk_chart_sets_handle (self->chart_sets));
-  g_signal_connect (self->noaa, "changed", G_CALLBACK (lk_app_model_noaa_changed), self);
+  g_signal_connect (self->noaa, "alert", G_CALLBACK (lk_app_model_noaa_alerted), self);
+  g_signal_connect (self->noaa, "work-moved", G_CALLBACK (lk_app_model_noaa_work_moved),
+                    self);
 }
 
 LkAppModel *
@@ -661,61 +530,14 @@ lk_app_model_start_noaa_download (LkAppModel *self, gboolean again)
   g_return_if_fail (LK_IS_APP_MODEL (self));
 
   ids = lk_noaa_picked_ids (self->noaa);
-  lk_app_model_order_noaa_download (self, ids, again);
+  lk_noaa_order_download (self->noaa, ids, again);
 }
 
 void
 lk_app_model_apply_noaa_pick (LkAppModel *self)
 {
-  g_autofree char *dest = NULL;
-  guint32 before;
-
   g_return_if_fail (LK_IS_APP_MODEL (self));
-
-  dest = lk_noaa_download_dir ();
-  if (g_mkdir_with_parents (dest, 0700) != 0)
-    {
-      lk_app_model_set_open_error (self, "Couldn't make a place to download charts to.");
-      return;
-    }
-
-  g_free (self->noaa_order_ids);
-  self->noaa_order_ids = lk_noaa_picked_ids (self->noaa);
-  self->noaa_order_again = FALSE;
-  before = lk_noaa_state (self->noaa)->run;
-  /* The charts it gives back are out of the library when it returns, so the
-   * chart opens again on what is left. */
-  if (lk_noaa_apply (self->noaa, dest, FALSE) > 0)
-    {
-      lk_app_model_recompose_library (self);
-      lk_app_model_emit_chart_sets_changed (self);
-    }
-  lk_app_model_noaa_ordered (self, before);
-}
-
-static void
-lk_app_model_order_noaa_download (LkAppModel *self, const char *ids, gboolean again)
-{
-  g_autofree char *dest = NULL;
-  guint32 before;
-
-  dest = lk_noaa_download_dir ();
-  if (g_mkdir_with_parents (dest, 0700) != 0)
-    {
-      lk_app_model_set_open_error (self, "Couldn't make a place to download charts to.");
-      return;
-    }
-
-  /* Price against what is already here first. A mariner who picks water they
-   * partly hold fetches the rest of it. */
-  lk_app_model_noaa_note_all (self);
-
-  g_free (self->noaa_order_ids);
-  self->noaa_order_ids = g_strdup (ids);
-  self->noaa_order_again = again;
-  before = lk_noaa_state (self->noaa)->run;
-  lk_noaa_download (self->noaa, ids, dest, again);
-  lk_app_model_noaa_ordered (self, before);
+  lk_noaa_order_apply (self->noaa);
 }
 
 /* ---- opening charts ----------------------------------------------------- */
@@ -1015,37 +837,21 @@ guint32
 lk_app_model_noaa_outdated (LkAppModel *self)
 {
   g_return_val_if_fail (LK_IS_APP_MODEL (self), 0);
-  return self->noaa_outdated;
+  return lk_noaa_outdated_found (self->noaa);
 }
 
 void
 lk_app_model_check_noaa_updates (LkAppModel *self)
 {
   g_return_if_fail (LK_IS_APP_MODEL (self));
-
-  if (lk_noaa_update_due (self->noaa))
-    self->noaa_checking = TRUE;
+  lk_noaa_check_updates (self->noaa);
 }
 
 void
 lk_app_model_download_noaa_updates (LkAppModel *self)
 {
-  g_autofree char *dest = NULL;
-  guint32 before;
-
   g_return_if_fail (LK_IS_APP_MODEL (self));
-
-  dest = lk_noaa_download_dir ();
-  if (g_mkdir_with_parents (dest, 0700) != 0)
-    {
-      lk_app_model_set_open_error (self, "Couldn't make a place to download charts to.");
-      return;
-    }
-
-  g_clear_pointer (&self->noaa_order_ids, g_free);
-  before = lk_noaa_state (self->noaa)->run;
-  lk_noaa_update (self->noaa, dest);
-  lk_app_model_noaa_ordered (self, before);
+  lk_noaa_order_update (self->noaa);
 }
 
 static void
@@ -1925,7 +1731,7 @@ gboolean    lk_app_model_get_building (LkAppModel *self)          { return self-
 gboolean
 lk_app_model_get_baking (LkAppModel *self)
 {
-  return self->baking || self->noaa_preparing;
+  return self->baking || lk_noaa_prepare_progress (self->noaa) != NULL;
 }
 
 gboolean
@@ -1960,7 +1766,7 @@ lk_app_model_get_bake_progress (LkAppModel *self)
   g_return_val_if_fail (LK_IS_APP_MODEL (self), NULL);
   if (self->baking)
     return &self->bake_progress;
-  return self->noaa_preparing ? &self->noaa_prepare_progress : NULL;
+  return lk_noaa_prepare_progress (self->noaa);
 }
 
 const LkBakeProgress *
@@ -1969,7 +1775,7 @@ lk_app_model_get_remove_progress (LkAppModel *self)
   g_return_val_if_fail (LK_IS_APP_MODEL (self), NULL);
   if (self->removing)
     return &self->remove_progress;
-  return self->noaa_removing ? &self->noaa_remove_progress : NULL;
+  return lk_noaa_remove_progress (self->noaa);
 }
 
 void
@@ -1979,7 +1785,7 @@ lk_app_model_cancel_bake (LkAppModel *self)
   /* The core prepares a download, so its stop is the NOAA service's. */
   if (self->bake == NULL)
     {
-      if (self->noaa_preparing)
+      if (lk_noaa_prepare_progress (self->noaa) != NULL)
         lk_noaa_cancel (self->noaa);
       return;
     }

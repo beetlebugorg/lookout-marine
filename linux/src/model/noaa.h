@@ -23,6 +23,8 @@
 #include <glib-object.h>
 #include <lookout.h>
 
+#include "library/bake.h"
+
 G_BEGIN_DECLS
 
 #define LK_TYPE_NOAA (lk_noaa_get_type ())
@@ -132,6 +134,36 @@ guint32 lk_noaa_outdated (LkNoaa *self);
 gboolean lk_noaa_update_due (LkNoaa *self);
 
 void    lk_noaa_update (LkNoaa *self, const char *dest_dir);
+
+/* ---- the orders the app follows ------------------------------------------ */
+
+/* Download `region_ids`, apply the pick, or fetch the reissued editions, into
+ * the download directory, and follow the order to its end. ::alert reports a
+ * directory that cannot be made, and an order that ended FAILED, or REFUSED
+ * with retry set. ::work-moved reports the core's prepare and removal. */
+void lk_noaa_order_download (LkNoaa *self, const char *region_ids, gboolean again);
+void lk_noaa_order_apply (LkNoaa *self);
+void lk_noaa_order_update (LkNoaa *self);
+
+/* Place the last order again. With no catalog loaded this reads the catalog
+ * first and orders when that read ends. */
+void lk_noaa_retry (LkNoaa *self);
+
+/* Start the update check when the core finds one due. The count arrives when
+ * the catalog read ends, through ::changed. */
+void lk_noaa_check_updates (LkNoaa *self);
+
+/* The chart sets changed: count the reissued charts again, and check for
+ * more when one is due. */
+void lk_noaa_sets_changed (LkNoaa *self);
+
+/* How many managed charts NOAA has reissued, as the last count found. */
+guint32 lk_noaa_outdated_found (LkNoaa *self);
+
+/* The core's prepare and removal, as the shell's bake reports them. NULL when
+ * none runs. */
+const LkBakeProgress *lk_noaa_prepare_progress (LkNoaa *self);
+const LkBakeProgress *lk_noaa_remove_progress (LkNoaa *self);
 
 /* Where downloaded cells are staged before they bake. ONE directory, so the
  * whole download bakes as a single chart set. Free with g_free. */
