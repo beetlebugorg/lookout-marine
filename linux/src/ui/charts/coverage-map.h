@@ -11,6 +11,7 @@
  */
 #pragma once
 
+#include "model/app-model.h"
 #include "model/noaa.h"
 #include "ui/charts/coastline.h"
 
@@ -27,7 +28,7 @@ G_BEGIN_DECLS
  * Reads the pick and the coverage off `noaa` live and redraws on its
  * ::changed. A click lands on a region's own water, not on a rectangle around
  * it, and does nothing until the catalog is in. */
-GtkWidget *lk_coverage_map_new (LkNoaa *noaa);
+GtkWidget *lk_coverage_map_new (LkNoaa *noaa, LkAppModel *model);
 
 /* The regions as pills under the map: the name, and a mark on a chosen one.
  * The same selection the map drives. */

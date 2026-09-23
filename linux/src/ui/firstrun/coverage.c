@@ -23,7 +23,7 @@ lk_first_run_coverage_new (LkFirstRunFlow *flow)
                        "Pick the water you use. Lookout downloads those charts and "
                        "prepares them. You can add the rest later.");
   GtkWidget *line = lk_noaa_catalog_line_new (noaa);
-  GtkWidget *map = lk_coverage_map_new (noaa);
+  GtkWidget *map = lk_coverage_map_new (noaa, flow->model);
   GtkWidget *pills = lk_noaa_region_pills_new (noaa);
 
   gtk_widget_set_margin_top (heading, 26);

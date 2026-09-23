@@ -293,7 +293,7 @@ lk_noaa_window_present (GtkWindow *parent, LkAppModel *model)
   gtk_widget_set_margin_end (page, 18);
   gtk_box_append (GTK_BOX (page), blurb);
   gtk_box_append (GTK_BOX (page), lk_noaa_catalog_line_new (noaa));
-  gtk_box_append (GTK_BOX (page), lk_coverage_map_new (noaa));
+  gtk_box_append (GTK_BOX (page), lk_coverage_map_new (noaa, model));
   gtk_box_append (GTK_BOX (page), lk_coverage_key_new ());
   gtk_box_append (GTK_BOX (page), lk_noaa_region_pills_new (noaa));
 

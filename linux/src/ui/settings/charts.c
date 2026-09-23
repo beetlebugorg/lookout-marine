@@ -701,7 +701,7 @@ lk_set_row_extras (LkSettings *settings, const LkChartSetRow *set, GtkWidget *en
      * harbour a passage ends in. */
     if (lk_band_ramp_count (set->bands) > 0)
       {
-        GtkWidget *ramp = lk_band_ramp_new (set->bands);
+        GtkWidget *ramp = lk_band_ramp_new (set->bands, settings->model);
 
         gtk_widget_set_margin_start (ramp, 30);
         gtk_widget_set_opacity (ramp, set->on ? 1.0 : 0.5);

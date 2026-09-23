@@ -13,25 +13,21 @@
 #define LK_RAMP_HEIGHT 9
 
 void
-lk_band_ramp_color (int band, double *out_r, double *out_g, double *out_b)
+lk_band_ramp_source (cairo_t *cr, int band, LkAppModel *model)
 {
-  /* #2F8FE0, #61B7FF, #82CAFF, #A7D9FB, #C9EDFF, #E4F5FF. */
-  static const double ramp[6][3] = {
-    { 0.184, 0.561, 0.878 }, /* band 6, berthing */
-    { 0.380, 0.718, 1.000 }, /* band 5, harbour */
-    { 0.510, 0.792, 1.000 }, /* band 4, approach */
-    { 0.655, 0.851, 0.984 }, /* band 3, coastal */
-    { 0.788, 0.929, 1.000 }, /* band 2, general */
-    { 0.894, 0.961, 1.000 }, /* band 1, overview */
-  };
-  int at = band >= 1 && band <= 6 ? 6 - band : 5;
+  char token[8];
+  float rgba[4] = { 0.5f, 0.5f, 0.5f, 1.0f };
 
-  if (out_r != NULL)
-    *out_r = ramp[at][0];
-  if (out_g != NULL)
-    *out_g = ramp[at][1];
-  if (out_b != NULL)
-    *out_b = ramp[at][2];
+  g_snprintf (token, sizeof token, "BAND%d", CLAMP (band, 1, 6));
+  lookout_s52_color (token, (guint32) lk_app_model_get_scheme (model), rgba);
+  cairo_set_source_rgb (cr, rgba[0], rgba[1], rgba[2]);
+}
+
+void
+lk_band_ramp_follow (GtkWidget *area, LkAppModel *model)
+{
+  g_signal_connect_object (model, "notify::scheme", G_CALLBACK (gtk_widget_queue_draw),
+                           area, G_CONNECT_SWAPPED);
 }
 
 guint
@@ -134,13 +130,11 @@ lk_band_bar_draw (GtkDrawingArea *area, cairo_t *cr, int width, int height,
   /* Finest first, so the bar runs from the deep end of the ramp to the pale. */
   for (int band = 6; band >= 1; band--)
     {
-      double r, g, b;
       double segment = lk_band_ramp_width (bands, band, room);
 
       if (segment <= 0)
         continue;
-      lk_band_ramp_color (band, &r, &g, &b);
-      cairo_set_source_rgb (cr, r, g, b);
+      lk_band_ramp_source (cr, band, user_data);
       cairo_rectangle (cr, x, 0, segment, height);
       cairo_fill (cr);
       x += segment + LK_RAMP_HAIR;
@@ -162,10 +156,8 @@ lk_band_swatch_draw (GtkDrawingArea *area, cairo_t *cr, int width, int height,
                      gpointer user_data)
 {
   int band = GPOINTER_TO_INT (g_object_get_data (G_OBJECT (area), "lk-band"));
-  double r, g, b;
 
-  lk_band_ramp_color (band, &r, &g, &b);
-  cairo_set_source_rgb (cr, r, g, b);
+  lk_band_ramp_source (cr, band, user_data);
   cairo_rectangle (cr, 0.5, 0.5, width - 1, height - 1);
   cairo_fill_preserve (cr);
   cairo_set_source_rgba (cr, 0, 0, 0, 0.25);
@@ -175,7 +167,7 @@ lk_band_swatch_draw (GtkDrawingArea *area, cairo_t *cr, int width, int height,
 
 /* One band: its ramp colour, its name, and how many cells it holds. */
 static GtkWidget *
-lk_band_legend_entry (int band, guint count)
+lk_band_legend_entry (int band, guint count, LkAppModel *model)
 {
   GtkWidget *row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 5);
   GtkWidget *swatch = gtk_drawing_area_new ();
@@ -186,8 +178,9 @@ lk_band_legend_entry (int band, guint count)
   gtk_widget_set_size_request (swatch, 8, 8);
   gtk_widget_set_valign (swatch, GTK_ALIGN_CENTER);
   g_object_set_data (G_OBJECT (swatch), "lk-band", GINT_TO_POINTER (band));
-  gtk_drawing_area_set_draw_func (GTK_DRAWING_AREA (swatch), lk_band_swatch_draw,
-                                  NULL, NULL);
+  gtk_drawing_area_set_draw_func (GTK_DRAWING_AREA (swatch), lk_band_swatch_draw, model,
+                                  NULL);
+  lk_band_ramp_follow (swatch, model);
 
   gtk_widget_add_css_class (name, "caption");
   gtk_widget_add_css_class (name, "dim-label");
@@ -229,7 +222,10 @@ lk_band_ramp_set (GtkWidget *ramp, const guint bands[7])
     {
       if (bands[band] == 0)
         continue;
-      gtk_flow_box_append (GTK_FLOW_BOX (legend), lk_band_legend_entry (band, bands[band]));
+      gtk_flow_box_append (GTK_FLOW_BOX (legend),
+                           lk_band_legend_entry (band, bands[band],
+                                                 g_object_get_data (G_OBJECT (ramp),
+                                                                    "lk-model")));
     }
 
   /* One sentence for a reader who cannot see the bar. */
@@ -249,14 +245,15 @@ lk_band_ramp_set (GtkWidget *ramp, const guint bands[7])
 }
 
 GtkWidget *
-lk_band_ramp_new (const guint bands[7])
+lk_band_ramp_new (const guint bands[7], LkAppModel *model)
 {
   GtkWidget *box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 6);
   GtkWidget *bar = gtk_drawing_area_new ();
   GtkWidget *legend = gtk_flow_box_new ();
 
   gtk_widget_set_size_request (bar, -1, LK_RAMP_HEIGHT);
-  gtk_drawing_area_set_draw_func (GTK_DRAWING_AREA (bar), lk_band_bar_draw, NULL, NULL);
+  gtk_drawing_area_set_draw_func (GTK_DRAWING_AREA (bar), lk_band_bar_draw, model, NULL);
+  lk_band_ramp_follow (bar, model);
 
   /* Wraps rather than scrolls: six bands fit two lines at any width the pane
    * reaches. */
@@ -270,6 +267,7 @@ lk_band_ramp_new (const guint bands[7])
   gtk_box_append (GTK_BOX (box), legend);
   g_object_set_data (G_OBJECT (box), "lk-bar", bar);
   g_object_set_data (G_OBJECT (box), "lk-legend", legend);
+  g_object_set_data (G_OBJECT (box), "lk-model", model);
 
   lk_band_ramp_set (box, bands);
   return box;

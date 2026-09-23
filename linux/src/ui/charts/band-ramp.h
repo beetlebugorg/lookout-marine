@@ -9,20 +9,24 @@
 
 #include <gtk/gtk.h>
 
+#include "model/app-model.h"
+
 G_BEGIN_DECLS
 
 /* The bar and its legend, from a set's per-band cell counts (index 1 to 6, as
  * LkChartSetRow states them). Draws nothing when no band has a cell. */
-GtkWidget *lk_band_ramp_new (const guint bands[7]);
+GtkWidget *lk_band_ramp_new (const guint bands[7], LkAppModel *model);
 
 /* Re-letter and redraw one in place, for a row whose scan has just landed. */
 void lk_band_ramp_set (GtkWidget *ramp, const guint bands[7]);
 
-/* The ramp colour for one usage band, as RGB in 0..1.
- *
- * The S-52 depth ramp, deep to shallow, read as fine to coarse: band 6 is
- * berthing detail and band 1 is an overview. */
-void lk_band_ramp_color (int band, double *out_r, double *out_g, double *out_b);
+/* Set one usage band's ramp colour as the source of `cr`: the core's BAND1 to
+ * BAND6 token in the model's scheme. Band 6, berthing detail, is the deep end
+ * of the ramp, and band 1, an overview, the pale end. */
+void lk_band_ramp_source (cairo_t *cr, int band, LkAppModel *model);
+
+/* Redraw `area` when the model's scheme changes. */
+void lk_band_ramp_follow (GtkWidget *area, LkAppModel *model);
 
 /* One band's width in a bar with `room` points of fill.
  *
@@ -36,7 +40,7 @@ double lk_band_ramp_width (const guint bands[7], int band, double room);
 guint lk_band_ramp_count (const guint bands[7]);
 
 /* One band's colour as a swatch, for a legend or a list of bands. The band
- * comes off the widget as "lk-band". */
+ * comes off the widget as "lk-band", and `user_data` is the LkAppModel. */
 void lk_band_swatch_draw (GtkDrawingArea *area, cairo_t *cr, int width, int height,
                           gpointer user_data);
 

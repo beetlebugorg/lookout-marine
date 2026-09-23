@@ -135,7 +135,7 @@ lk_phase_row_set (LkPhaseRow *row, const char *detail, LkPhaseState state)
 
 /* One band: its ramp color, its name, and how much of it is prepared. */
 static GtkWidget *
-lk_band_row_new (const LkBakeBand *band)
+lk_band_row_new (const LkBakeBand *band, LkAppModel *model)
 {
   GtkWidget *row = gtk_box_new (GTK_ORIENTATION_VERTICAL, 7);
   GtkWidget *head = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 10);
@@ -151,8 +151,9 @@ lk_band_row_new (const LkBakeBand *band)
   gtk_widget_set_size_request (swatch, 11, 11);
   gtk_widget_set_valign (swatch, GTK_ALIGN_CENTER);
   g_object_set_data (G_OBJECT (swatch), "lk-band", GINT_TO_POINTER (band->band));
-  gtk_drawing_area_set_draw_func (GTK_DRAWING_AREA (swatch), lk_band_swatch_draw, NULL,
+  gtk_drawing_area_set_draw_func (GTK_DRAWING_AREA (swatch), lk_band_swatch_draw, model,
                                   NULL);
+  lk_band_ramp_follow (swatch, model);
 
   if (!complete && !waiting)
     gtk_widget_add_css_class (name, "heading");
@@ -219,7 +220,7 @@ lk_importing_fill_bands (LkImporting *self, const LkBakeProgress *work, gboolean
       /* A bake that has stopped has reached all of them. */
       if (!running)
         band.done = band.total;
-      gtk_box_append (GTK_BOX (self->bands), lk_band_row_new (&band));
+      gtk_box_append (GTK_BOX (self->bands), lk_band_row_new (&band, self->flow->model));
     }
 }
 

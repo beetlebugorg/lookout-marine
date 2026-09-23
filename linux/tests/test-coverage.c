@@ -58,7 +58,7 @@ match_toggle (GtkWidget *widget, gconstpointer data)
 static void
 test_map_has_three_panels (void)
 {
-  GtkWidget *map = hosted (lk_coverage_map_new (noaa));
+  GtkWidget *map = hosted (lk_coverage_map_new (noaa, model));
 
   g_assert_nonnull (map);
   g_assert_cmpuint (count (map, match_drawing_area), ==, 3);
@@ -175,7 +175,7 @@ click_gesture_of (GtkWidget *area)
 static void
 test_click_needs_a_catalog (void)
 {
-  GtkWidget *map = hosted (lk_coverage_map_new (noaa));
+  GtkWidget *map = hosted (lk_coverage_map_new (noaa, model));
   GtkWidget *area = lk_test_find (map, match_drawing_area, NULL);
   const LkNoaaRegion *d5 = lk_noaa_region (noaa, "d5");
   const LkMapWindow window48 = { .west = -132, .east = -64, .south = 20, .north = 52 };
