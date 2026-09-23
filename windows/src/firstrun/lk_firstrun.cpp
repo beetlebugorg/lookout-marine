@@ -318,93 +318,9 @@ namespace lkw
         return s;
     }
 
-    void FirstRun::Back()
-    {
-        switch (step_)
-        {
-        case FirstRunStep::Source:
-            step_ = FirstRunStep::Welcome;
-            break;
-        case FirstRunStep::Importing:
-            // Only a stalled one. CanGoBack is what says so.
-            step_ = FirstRunStep::Coverage;
-            break;
-        case FirstRunStep::Coverage:
-        case FirstRunStep::OnlineChart:
-            step_ = FirstRunStep::Source;
-            break;
-        default:
-            // The depths step has no way back. The charts are already
-            // arriving by then.
-            break;
-        }
-    }
-
-    std::optional<ChartSource> FirstRun::Advance()
-    {
-        switch (step_)
-        {
-        case FirstRunStep::Welcome:
-            step_ = FirstRunStep::Source;
-            return std::nullopt;
-
-        case FirstRunStep::Source:
-            switch (source_)
-            {
-            case ChartSource::Noaa:
-                // NOAA's terms apply to NOAA's charts, so they are asked where
-                // those charts are chosen. The step stays put here.
-                // AgreeToEncTerms moves it. A mariner who picks an online
-                // chart or their own files downloads no ENC and is asked to
-                // accept none.
-                showing_enc_terms_ = true;
-                return std::nullopt;
-            case ChartSource::Online:
-                step_ = FirstRunStep::OnlineChart;
-                return std::nullopt;
-            case ChartSource::Files:
-                // The flow has finished asking. The shell raises its picker
-                // and setup closes.
-                Finish();
-                return ChartSource::Files;
-            }
-            return std::nullopt;
-
-        case FirstRunStep::Coverage:
-            step_ = FirstRunStep::Importing;
-            return ChartSource::Noaa;
-
-        case FirstRunStep::OnlineChart:
-            step_ = FirstRunStep::Depths;
-            return ChartSource::Online;
-
-        case FirstRunStep::Importing:
-            // One step opened on its own ends here. The mariner set their
-            // depths when they first set the app up.
-            if (picker_only_)
-                Finish();
-            else
-                step_ = FirstRunStep::Depths;
-            return std::nullopt;
-
-        case FirstRunStep::Depths:
-            Finish();
-            return std::nullopt;
-        }
-        return std::nullopt;
-    }
-
-    void FirstRun::Finish()
-    {
-        put_away_    = true;
-        showing_     = false;
-        step_        = FirstRunStep::Welcome;
-        picker_only_ = false;
-    }
-
     std::wstring FirstRun::Title() const
     {
-        switch (step_)
+        switch (step())
         {
         case FirstRunStep::Welcome:     return L"Welcome";
         case FirstRunStep::Source:      return L"Add charts";
@@ -418,13 +334,13 @@ namespace lkw
 
     std::wstring FirstRun::PrimaryTitle(bool has_chart) const
     {
-        switch (step_)
+        switch (step())
         {
         case FirstRunStep::Welcome:
         case FirstRunStep::Source:      return L"Continue";
         // A picker opened from the Charts pane does both halves at once, so
         // its action is Apply rather than Download.
-        case FirstRunStep::Coverage:    return picker_only_ ? L"Apply" : L"Download";
+        case FirstRunStep::Coverage:    return picker_only() ? L"Apply" : L"Download";
         case FirstRunStep::OnlineChart: return has_chart ? L"Continue" : L"Skip";
         case FirstRunStep::Importing:   return L"Continue";
         case FirstRunStep::Depths:      return L"Start Sailing";
@@ -434,7 +350,7 @@ namespace lkw
 
     std::wstring FirstRun::Footnote(Footnotes const &f) const
     {
-        switch (step_)
+        switch (step())
         {
         case FirstRunStep::Welcome:
         case FirstRunStep::Source:
@@ -443,7 +359,7 @@ namespace lkw
         case FirstRunStep::Coverage:
             if (!f.have_catalog)
                 return L"";
-            if (picker_only_)
+            if (picker_only())
             {
                 // A picker states a plan: what is being fetched, what is being
                 // given back, or what the pick holds. With nothing ticked and
@@ -477,19 +393,6 @@ namespace lkw
         return L"";
     }
 
-    bool FirstRun::PrimaryEnabled(bool have_catalog, bool region_picked, bool chart_ready) const
-    {
-        switch (step_)
-        {
-        case FirstRunStep::Coverage: return have_catalog && region_picked;
-        case FirstRunStep::Importing:
-            // saw_bake separates an import that has yet to start from one
-            // that has finished: both report no work running.
-            return saw_bake_ && !shown_.downloading && !shown_.baking && chart_ready;
-        default: return true;
-        }
-    }
-
     void FirstRun::Observe(FirstRunLive const &live)
     {
         // Whether each service is working stays live. The spinners and the
@@ -497,8 +400,6 @@ namespace lkw
         // the page spinning over finished work.
         shown_.downloading = live.downloading;
         shown_.baking      = live.baking;
-        if (live.baking)
-            saw_bake_ = true;
 
         // The counts are latched. A reading with no total means the service
         // reset behind its own completion.
@@ -540,9 +441,9 @@ namespace lkw
             return kFetchShare +
                    static_cast<double>(shown_.baked) / shown_.found * (1.0 - kFetchShare);
 
-        // Finished. A bake was seen and is no longer running. saw_bake_ is
-        // what separates this from the state before anything started.
-        if (saw_bake_ && !shown_.baking)
+        // Finished. Work was seen and is no longer running. saw_work is what
+        // separates this from the state before anything started.
+        if (state_.saw_work && !shown_.baking)
             return 1.0;
 
         return 0.0;

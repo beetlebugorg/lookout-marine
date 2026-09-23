@@ -263,6 +263,8 @@ namespace winrt::LookoutMarine::implementation
             // Only when a row on the page changed. A rescan that finds what it
             // found before raises the same flag.
             RefreshChartsPageOnChange();
+            // Setup reads whether the library holds charts.
+            SetupNote();
 
             // A scan completing is often the first moment the library composes
             // at all. The open at startup asks the model what the switched-on

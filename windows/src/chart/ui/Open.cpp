@@ -175,7 +175,7 @@ namespace winrt::LookoutMarine::implementation
             // A mariner who picked an online chart has a chart, so setup has no
             // reason to stand over it. The pick counts from the first frame,
             // and the style it names resolves several frames later.
-            if (first_run.ShouldRun(true, lk_controller_chart_link_selected(controller) != 0))
+            if (SetupShouldRun())
             {
                 readout_timer.Stop(); // a basemap under a setup card reads out nothing
                 FirstRunBegin();
@@ -198,6 +198,7 @@ namespace winrt::LookoutMarine::implementation
         if (OpenChart(paths))
         {
             chart_has_cells = !paths.empty();
+            setup_nothing_to_draw = paths.empty();
             InstallStoredRasters(); // the open destroyed the handle they rode on
             RestoreRasterShown();   // which sets were drawn, and the ENC-hidden switch
             NoaaConsiderUpdateCheck();
@@ -318,7 +319,7 @@ namespace winrt::LookoutMarine::implementation
 #if defined(LOOKOUT_DEV_HOOKS)
         ApplyDevHooks();
 #endif
-        if (first_run.ShouldRun(true, lk_controller_chart_link_selected(controller) != 0))
+        if (SetupShouldRun())
         {
             readout_timer.Stop(); // nothing to read out under a setup card
             FirstRunBegin();

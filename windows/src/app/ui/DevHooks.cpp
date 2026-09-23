@@ -134,7 +134,8 @@ namespace winrt::LookoutMarine::implementation
                 }
                 if (known)
                 {
-                    first_run.BeginAt(at);
+                    first_run.Restart();
+                    SetupAct(LOOKOUT_SETUP_BEGIN_PICKER, static_cast<int>(at));
                     FirstRunRender();
                 }
             }

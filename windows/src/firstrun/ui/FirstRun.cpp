@@ -405,17 +405,17 @@ namespace winrt::LookoutMarine::implementation
             // same button closes it and leaves the chart standing.
             if (first_run.picker_only())
             {
-                first_run.Finish();
+                SetupAct(LOOKOUT_SETUP_LATER, 0);
                 FirstRunRender();
                 return;
             }
-            first_run.Back();
+            SetupAct(LOOKOUT_SETUP_BACK, 0);
             FirstRunRender();
         });
         FirstRunLaterBtn().Click([this](auto &&, auto &&) {
             // Set Up Later leaves a usable app behind it. The basemap is
             // already drawing, so putting the card away is enough.
-            first_run.Finish();
+            SetupAct(LOOKOUT_SETUP_LATER, 0);
             FirstRunRender();
         });
     }
@@ -443,7 +443,8 @@ namespace winrt::LookoutMarine::implementation
         noaa_picked_seeded = false;
         noaa_held_at_open.clear();
         lookout_noaa_refresh(noaa);
-        first_run.BeginAt(lkw::FirstRunStep::Coverage);
+        first_run.Restart();
+        SetupAct(LOOKOUT_SETUP_BEGIN_PICKER, LOOKOUT_SETUP_STEP_COVERAGE);
         FirstRunRender();
     }
 
@@ -466,14 +467,67 @@ namespace winrt::LookoutMarine::implementation
         FirstRunFadeBottom().Color(panel);
     }
 
+    // Note what the core's setup reads off the app, and read its state back
+    // into the view model.
+    void MainWindow::SetupNote()
+    {
+        if (setup == nullptr)
+            return;
+        lookout_setup_facts f{};
+        f.catalog_ready = noaa_state.have_catalog;
+        f.picked = !noaa_region_id.empty();
+        f.on_link = lk_controller_chart_link_selected(controller) != 0;
+        f.nothing_to_draw = setup_nothing_to_draw;
+        f.has_charts = !ChartSetOpenPaths().empty() || !raster_paths.empty();
+        f.work_running = bake_job != nullptr || noaa_state.preparing || !pending_set.empty();
+        f.downloading = noaa_state.phase == LOOKOUT_NOAA_DOWNLOADING;
+        f.chart_open = lk_controller_is_open(controller) && chart_has_cells;
+        f.noaa_outcome = noaa_state.outcome;
+        f.noaa_run = noaa_state.run;
+        if (!noaa_region_id.empty())
+            lookout_noaa_cost(noaa, noaa_region_id.c_str(), &f.pick_charts, &f.pick_bytes,
+                              nullptr, nullptr);
+        lookout_setup_note(setup, &f);
+        lookout_setup_state s{};
+        lookout_setup_read(setup, &s);
+        first_run.Read(s);
+    }
+
+    // Apply a LOOKOUT_SETUP_* action on current facts. Returns the source the
+    // shell acts on, or -1.
+    int MainWindow::SetupAct(int action, int arg)
+    {
+        if (setup == nullptr)
+            return -1;
+        SetupNote();
+        int const source = lookout_setup_act(setup, action, arg);
+        lookout_setup_state s{};
+        lookout_setup_read(setup, &s);
+        first_run.Read(s);
+        return source;
+    }
+
+    // Raise setup when the core's state says it has a reason to come up.
+    // Called where the app settles on having no chart to draw.
+    bool MainWindow::SetupShouldRun()
+    {
+        setup_nothing_to_draw = true;
+        SetupNote();
+        lookout_setup_state s{};
+        lookout_setup_read(setup, &s);
+        return s.should_run != 0;
+    }
+
     void MainWindow::FirstRunBegin()
     {
-        first_run.Begin();
+        first_run.Restart();
+        SetupAct(LOOKOUT_SETUP_BEGIN, LOOKOUT_SETUP_STEP_WELCOME);
         FirstRunRender();
     }
 
     void MainWindow::FirstRunRender()
     {
+        SetupNote();
         if (!first_run.showing())
         {
             FirstRunPane().Visibility(Visibility::Collapsed);
@@ -607,15 +661,15 @@ namespace winrt::LookoutMarine::implementation
 
     void MainWindow::FirstRunPrimary()
     {
-        auto act = first_run.Advance();
+        int const act = SetupAct(LOOKOUT_SETUP_ADVANCE, static_cast<int>(first_run.source()));
         if (first_run.showing_enc_terms())
         {
             // The model raised NOAA's terms instead of moving the step.
             FirstRunShowEncTerms();
             return;
         }
-        if (act.has_value())
-            FirstRunAct(act.value());
+        if (act >= 0)
+            FirstRunAct(static_cast<lkw::ChartSource>(act));
         FirstRunRender();
     }
 
@@ -745,22 +799,11 @@ namespace winrt::LookoutMarine::implementation
         if (noaa_watch_run != 0 && st.run == noaa_watch_run && ended)
         {
             noaa_watch_run = 0;
-            bool const importing =
-                first_run.showing() && first_run.step() == lkw::FirstRunStep::Importing;
             if (st.outcome == LOOKOUT_NOAA_FINISHED ||
                 (st.outcome == LOOKOUT_NOAA_CANCELLED && st.done > 0))
             {
-                // A prepare shorter than one reading of the state is marked
-                // here, so the step reads it as run.
-                first_run.NoteBakeStarted();
                 AwaitSetScan(lkw::NoaaDownloadDir(), false);
                 LoadChartSets([this] { FinishPendingSet(); });
-            }
-            else if (importing)
-            {
-                first_run.NoteImportStalled(st.error[0] != '\0' ? std::string(st.error)
-                                                                : std::string("No charts arrived."));
-                FirstRunRender();
             }
             else if (!first_run.showing() &&
                      (st.outcome == LOOKOUT_NOAA_FAILED || (st.outcome == LOOKOUT_NOAA_REFUSED && st.retry)))
@@ -872,6 +915,7 @@ namespace winrt::LookoutMarine::implementation
                                        noaa_state.band_done[b], noaa_state.band_total[b] });
 
         first_run.Observe(live);
+        SetupNote();
 
         // The Preparing step moves four times a second. Its values are
         // restated; it is built again only when its shape changes, which is
@@ -980,7 +1024,7 @@ namespace winrt::LookoutMarine::implementation
         }
         uint32_t const moved = NoaaApply(noaa_region_id, false);
         // Nothing to fetch: the picker has done what it was opened for.
-        first_run.Finish();
+        SetupAct(LOOKOUT_SETUP_LATER, 0);
         FirstRunRender();
 
         // Nothing matched: the page has the same line, but the picker just
@@ -1085,9 +1129,9 @@ namespace winrt::LookoutMarine::implementation
 
         auto result = co_await dlg.ShowAsync();
         if (result == ContentDialogResult::Primary)
-            first_run.AgreeToEncTerms();
+            SetupAct(LOOKOUT_SETUP_AGREE, 0);
         else
-            first_run.DeclineEncTerms(); // the source step stands, NOAA still picked
+            SetupAct(LOOKOUT_SETUP_DECLINE, 0); // the source step stands, NOAA still picked
         FirstRunRender();
     }
 
@@ -1637,7 +1681,9 @@ namespace winrt::LookoutMarine::implementation
         {
             body.Children().Append(WarningPanel(
                 L"No charts arrived",
-                winrt::to_hstring(first_run.import_why()).c_str()));
+                winrt::to_hstring(noaa_state.error[0] != 0 ? noaa_state.error
+                                                                : "No charts arrived.")
+                    .c_str()));
             return;
         }
 
@@ -1772,21 +1818,16 @@ namespace winrt::LookoutMarine::implementation
             s += "|" + winrt::to_string(b.name);
         s += (shown.downloading || shown.baking) ? "|stop" : "|done";
         s += first_run.order().has_value() ? "|order" : "|none";
+        s += first_run.import_stalled() ? "|ended" : "";
         return s;
     }
 
     // What the step on screen says now, and whether its action can be taken.
     void MainWindow::FirstRunRestate()
     {
-        // Whether the primary action has anything to do. The model decides;
-        // the shell answers the three questions it cannot see.
-        bool const have_catalog = [&] {
-            lookout_noaa_state const &st = noaa_state;
-            return st.have_catalog != 0;
-        }();
-        bool const chart_ready = lk_controller_is_open(controller) && chart_has_cells;
-        FirstRunPrimaryBtn().IsEnabled(first_run.PrimaryEnabled(
-            have_catalog, !noaa_region_id.empty(), chart_ready));
+        // Whether the primary action has anything to do, from the core.
+        SetupNote();
+        FirstRunPrimaryBtn().IsEnabled(first_run.PrimaryEnabled());
 
         // The coverage step, which is two steps in one: setup downloads water,
         // and a picker opened from the Charts pane applies a plan.
@@ -1803,7 +1844,7 @@ namespace winrt::LookoutMarine::implementation
                     lookout_noaa_cost(noaa, noaa_region_id.c_str(), &cells, nullptr,
                                             nullptr, nullptr);
                 FirstRunPrimaryBtn().IsEnabled(
-                    lkw::ApplyEnabled(have_catalog, cells, removing.size()));
+                    lkw::ApplyEnabled(noaa_state.have_catalog != 0, cells, removing.size()));
                 // Water wholly here has nothing to add and nothing to give
                 // back, and a mariner repairing a damaged download or taking
                 // the edition NOAA reissued still needs a way to fetch it.
@@ -1830,7 +1871,7 @@ namespace winrt::LookoutMarine::implementation
         // footer bar covered it.
         {
             lkw::FirstRun::Footnotes f;
-            f.have_catalog = have_catalog;
+            f.have_catalog = noaa_state.have_catalog != 0;
             f.have_charts = chart_has_cells;
             f.credit = std::wstring{ ScaleBarCredit().Text() };
             f.removing = NoaaRegionNames(removing);

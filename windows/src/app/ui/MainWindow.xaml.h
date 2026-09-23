@@ -474,6 +474,15 @@ namespace winrt::LookoutMarine::implementation
         /* The seabed, drawn from the numbers. */
         void FirstRunDrawSeabed();
         void FirstRunPoll();
+        /* The core's setup state (lookout_setup). SetupNote hands it the
+         * facts and reads the state into first_run, and SetupAct applies an
+         * action. SetupShouldRun notes that the app has settled on no chart
+         * to draw and returns whether setup comes up. */
+        lookout_setup *setup{ nullptr };
+        bool setup_nothing_to_draw{ false };
+        void SetupNote();
+        int SetupAct(int action, int arg);
+        bool SetupShouldRun();
 
         // The welcome picture, outside the step inset so it meets the edges.
         void FirstRunHero(Microsoft::UI::Xaml::Controls::StackPanel const &body);

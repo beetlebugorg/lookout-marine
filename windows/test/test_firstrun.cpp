@@ -26,33 +26,17 @@ using namespace lkw;
 
 namespace
 {
-    /* A flow parked on the step a case is about. */
-    FirstRun At(FirstRunStep want, ChartSource src = ChartSource::Noaa)
+    /* A flow parked on the step a case is about, as the core's setup state
+     * reads there. */
+    FirstRun At(FirstRunStep want, ChartSource src = ChartSource::Noaa, bool picker = false)
     {
         FirstRun f;
-        f.Begin();
+        lookout_setup_state s{};
+        s.step        = static_cast<uint8_t>(want);
+        s.showing     = 1;
+        s.picker_only = picker ? 1 : 0;
+        f.Read(s);
         f.set_source(src);
-        if (want == FirstRunStep::Welcome)
-            return f;
-        f.Advance(); // Welcome -> Source
-        if (want == FirstRunStep::Source)
-            return f;
-        if (src == ChartSource::Noaa)
-        {
-            f.Advance();          // raises the terms, does NOT move
-            f.AgreeToEncTerms();  // -> Coverage
-            if (want == FirstRunStep::Coverage)
-                return f;
-            f.Advance(); // -> Importing
-            if (want == FirstRunStep::Importing)
-                return f;
-            f.Advance(); // -> Depths
-            return f;
-        }
-        f.Advance(); // Source -> OnlineChart
-        if (want == FirstRunStep::OnlineChart)
-            return f;
-        f.Advance(); // -> Depths
         return f;
     }
 
@@ -89,146 +73,6 @@ namespace
 
 void TestFirstRun()
 {
-    Suite("lk_firstrun: whether it runs");
-    {
-        FirstRun f;
-
-        Case("nothing to draw and nothing linked: setup runs");
-        LK_EQ(f.ShouldRun(true, false), true);
-
-        Case("a chart is drawing: setup stays down");
-        LK_EQ(f.ShouldRun(false, false), false);
-
-        Case("a published style drawing in place of a library keeps setup down");
-        LK_EQ(f.ShouldRun(true, true), false);
-
-        Case("Set Up Later holds for the rest of the launch");
-        f.Finish();
-        LK_EQ(f.ShouldRun(true, false), false);
-    }
-
-    Suite("lk_firstrun: NOAA's terms");
-    {
-        FirstRun f = At(FirstRunStep::Source, ChartSource::Noaa);
-
-        Case("continuing with NOAA raises the terms");
-        auto act = f.Advance();
-        LK_EQ(f.showing_enc_terms(), true);
-        LK_EQ(act.has_value(), false);
-
-        /* The gate is the whole point: the step must NOT have moved. */
-        Case("and does not move the step");
-        LK_EQ(f.step(), FirstRunStep::Source);
-
-        Case("cancelling leaves the source step standing");
-        f.DeclineEncTerms();
-        LK_EQ(f.showing_enc_terms(), false);
-        LK_EQ(f.step(), FirstRunStep::Source);
-
-        Case("with NOAA still selected, so another source is open to them");
-        LK_EQ(f.source(), ChartSource::Noaa);
-
-        Case("agreeing goes on to the regions");
-        f.Advance();
-        f.AgreeToEncTerms();
-        LK_EQ(f.showing_enc_terms(), false);
-        LK_EQ(f.step(), FirstRunStep::Coverage);
-    }
-    {
-        Case("an online chart is asked to accept nothing");
-        FirstRun f = At(FirstRunStep::Source, ChartSource::Online);
-        f.Advance();
-        LK_EQ(f.showing_enc_terms(), false);
-        LK_EQ(f.step(), FirstRunStep::OnlineChart);
-
-        Case("nor are the mariner's own files");
-        FirstRun g = At(FirstRunStep::Source, ChartSource::Files);
-        auto act = g.Advance();
-        LK_EQ(g.showing_enc_terms(), false);
-        LK_EQ(act.has_value(), true);
-        LK_EQ(act.value(), ChartSource::Files);
-    }
-
-    Suite("lk_firstrun: the steps");
-    {
-        FirstRun f;
-        f.Begin();
-
-        Case("it opens on Welcome, showing");
-        LK_EQ(f.step(), FirstRunStep::Welcome);
-        LK_EQ(f.showing(), true);
-
-        Case("Welcome offers no way back");
-        LK_EQ(f.CanGoBack(), false);
-
-        Case("the asking steps do");
-        f.Advance();
-        LK_EQ(f.step(), FirstRunStep::Source);
-        LK_EQ(f.CanGoBack(), true);
-        f.Back();
-        LK_EQ(f.step(), FirstRunStep::Welcome);
-
-        Case("the terms stay out of Back: cancelling is not a step");
-        FirstRun g = At(FirstRunStep::Source, ChartSource::Noaa);
-        g.Advance();
-        g.DeclineEncTerms();
-        LK_EQ(g.CanGoBack(), true);
-        g.Back();
-        LK_EQ(g.step(), FirstRunStep::Welcome);
-
-        Case("past the import there is no way back");
-        FirstRun h = At(FirstRunStep::Importing);
-        LK_EQ(h.CanGoBack(), false);
-        h.Advance();
-        LK_EQ(h.step(), FirstRunStep::Depths);
-        LK_EQ(h.CanGoBack(), false);
-
-        Case("Start Sailing ends setup");
-        h.Advance();
-        LK_EQ(h.showing(), false);
-        LK_EQ(h.ShouldRun(true, false), false);
-    }
-
-    Suite("lk_firstrun: one step on its own");
-    {
-        /* Get charts from NOAA in the Charts pane opens the coverage step
-         * alone. The mariner already owns charts and already answered the
-         * welcome questions. */
-        FirstRun f;
-        f.BeginAt(FirstRunStep::Coverage);
-
-        Case("it opens on the step asked for, showing");
-        LK_EQ(f.step(), FirstRunStep::Coverage);
-        LK_EQ(f.showing(), true);
-        LK_EQ(f.picker_only(), true);
-
-        Case("Back has nowhere to go, because there is no step before it");
-        LK_EQ(f.CanGoBack(), false);
-
-        Case("Download still reaches the import");
-        auto act = f.Advance();
-        LK_EQ(f.step(), FirstRunStep::Importing);
-        LK_EQ(act.has_value(), true);
-        LK_EQ(act.value(), ChartSource::Noaa);
-
-        Case("and the import ends the run rather than asking for depths");
-        f.Advance();
-        LK_EQ(f.showing(), false);
-
-        Case("the flag clears, so a later full run reaches the depth step");
-        LK_EQ(f.picker_only(), false);
-        FirstRun g;
-        g.Begin();
-        LK_EQ(g.picker_only(), false);
-        g.Advance();
-        g.Advance();
-        g.AgreeToEncTerms();
-        g.Advance();
-        LK_EQ(g.step(), FirstRunStep::Importing);
-        g.Advance();
-        LK_EQ(g.step(), FirstRunStep::Depths);
-    }
-
     Suite("lk_firstrun: the words");
     {
         Case("each step names itself");
@@ -321,7 +165,11 @@ void TestFirstRun()
         /* Both services are now idle and both have reset. Before saw_bake this
          * state was indistinguishable from "nothing has started". */
         Case("a bake that has been seen and has stopped is finished");
-        LK_EQ(f.saw_bake(), true);
+        lookout_setup_state seen{};
+        seen.step     = static_cast<uint8_t>(FirstRunStep::Importing);
+        seen.showing  = 1;
+        seen.saw_work = 1;
+        f.Read(seen);
         f.Observe(FirstRunLive{});
         LK_EQ(f.Fraction(), 1.0);
     }
@@ -518,49 +366,6 @@ void TestFirstRun()
     }
 
     /* What the primary button can do on the step showing. */
-    Suite("lk_firstrun: whether the primary action is ready");
-    {
-        Case("the early steps always are");
-        LK_EQ(At(FirstRunStep::Welcome).PrimaryEnabled(false, false, false), true);
-        LK_EQ(At(FirstRunStep::Source).PrimaryEnabled(false, false, false), true);
-
-        /* Download with nothing picked, or with no catalog to price it from,
-         * does nothing. */
-        Case("download waits for a catalog and a pick");
-        LK_EQ(At(FirstRunStep::Coverage).PrimaryEnabled(true, true, false), true);
-        LK_EQ(At(FirstRunStep::Coverage).PrimaryEnabled(true, false, false), false);
-        LK_EQ(At(FirstRunStep::Coverage).PrimaryEnabled(false, true, false), false);
-
-        /* While charts arrive there is nothing to continue to. */
-        Case("preparing holds the button until the charts are open");
-        FirstRun f = At(FirstRunStep::Importing);
-        LK_EQ(f.PrimaryEnabled(true, true, true), false); // no bake seen yet
-
-        FirstRunLive baking;
-        baking.baking = true;
-        f.Observe(baking);
-        LK_EQ(f.saw_bake(), true);
-        LK_EQ(f.PrimaryEnabled(true, true, true), false); // still baking
-
-        FirstRunLive done;
-        f.Observe(done);
-        LK_EQ(f.PrimaryEnabled(true, true, true), true);
-        Case("and until the library is open");
-        LK_EQ(f.PrimaryEnabled(true, true, false), false);
-
-        Case("a download still running holds it too");
-        FirstRun g = At(FirstRunStep::Importing);
-        FirstRunLive mid;
-        mid.baking = true;
-        g.Observe(mid);
-        FirstRunLive fetching;
-        fetching.downloading = true;
-        g.Observe(fetching);
-        LK_EQ(g.PrimaryEnabled(true, true, true), false);
-    }
-
-    /* The picked regions, as the core's comma separated list. A pill toggles
-     * one id in it and every other pick stands. */
     Suite("lk_firstrun: the regions picked");
     {
         Case("the first pick starts the list");
@@ -740,8 +545,7 @@ void TestFirstRun()
 
         /* A picker opened from the Charts pane, which is the step on its own. */
         Case("the picker's action does both halves");
-        FirstRun pick;
-        pick.BeginAt(FirstRunStep::Coverage);
+        FirstRun pick = At(FirstRunStep::Coverage, ChartSource::Noaa, true);
         LK_EQ(pick.picker_only(), true);
         LK_EQ(pick.PrimaryTitle(false), std::wstring(L"Apply"));
         LK_EQ(At(FirstRunStep::Coverage).PrimaryTitle(false), std::wstring(L"Download"));
@@ -786,67 +590,15 @@ void TestFirstRun()
         LK_EQ(RemovalNote(0, 1),
               std::wstring(L"1 chart is still in use and stayed on the disk."));
 
-        /* A second download in one launch. The first run's state stayed on the
-         * model, so the scan branch read a bake as already seen and no second
-         * bake started. */
+        /* A second download in one launch. The first run's counts stayed on
+         * the model and the page drew them over the new run. */
         Case("a second run starts with nothing of the first on it");
-        FirstRun twice;
-        twice.Begin();
-        twice.NoteBakeStarted();
+        FirstRun twice = At(FirstRunStep::Importing);
         twice.set_order(FirstRunOrder{ L"Mid-Atlantic", "d5", 930, 102760448 });
-        LK_EQ(twice.saw_bake(), true);
+        twice.Observe(Baking(3, 9));
         LK_EQ(twice.order().has_value(), true);
-        twice.BeginAt(FirstRunStep::Coverage);
-        LK_EQ(twice.saw_bake(), false);
+        twice.Restart();
         LK_EQ(twice.order().has_value(), false);
         LK_EQ(twice.shown().found, 0u);
-        twice.Begin();
-        LK_EQ(twice.saw_bake(), false);
-
-        /* A bake of one or two cells finishes inside the quarter second
-         * between polls, so waiting to observe one running left the step with
-         * no way to know a bake had run at all. */
-        Case("a bake counts as seen when it starts");
-        FirstRun quick;
-        quick.BeginAt(FirstRunStep::Importing);
-        LK_EQ(quick.saw_bake(), false);
-        quick.NoteBakeStarted();
-        LK_EQ(quick.saw_bake(), true);
-
-        /* A transfer that ends with nothing to bake leaves the step waiting
-         * for work that never starts. */
-        Case("a stalled import can go back");
-        FirstRun dead;
-        dead.Begin();
-        dead.set_source(ChartSource::Noaa);
-        while (dead.step() != FirstRunStep::Importing)
-        {
-            if (dead.showing_enc_terms())
-                dead.AgreeToEncTerms();
-            else
-                dead.Advance();
-        }
-        LK_EQ(dead.CanGoBack(), false);
-        dead.NoteImportStalled("every chart for those regions is already installed");
-        LK_EQ(dead.import_stalled(), true);
-        LK_EQ(dead.import_why(),
-              std::string("every chart for those regions is already installed"));
-        LK_EQ(dead.CanGoBack(), true);
-        dead.Back();
-        LK_EQ(dead.step(), FirstRunStep::Coverage);
-
-        /* Setup runs when there is nothing to draw. A mariner already on an
-         * online chart has something. */
-        Case("a linked chart is a chart");
-        LK_EQ(At(FirstRunStep::Welcome).ShouldRun(true, false), true);
-        LK_EQ(At(FirstRunStep::Welcome).ShouldRun(true, true), false);
-        LK_EQ(At(FirstRunStep::Welcome).ShouldRun(false, false), false);
-
-        /* The shell passes whether a link is SELECTED. A style picked on a
-         * previous launch is selected from the first frame and draws once it
-         * resolves, several frames later, so a rule fed the drawing state put
-         * setup over that mariner's chart at every launch. */
-        Case("a link picked and not yet drawing keeps setup down");
-        LK_EQ(At(FirstRunStep::Welcome).ShouldRun(true, true), false);
     }
 }
