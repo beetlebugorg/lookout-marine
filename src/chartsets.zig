@@ -2034,11 +2034,24 @@ test "a list and a file read held across a finished scan stay valid through more
     try t.expect(s.add(dir));
     settle(s);
 
-    try t.expect(s.rescan(dir));
-    const rows = s.all();
-    const held = s.files(dir);
+    // Both reads have to be made before the rescan lands. The worker can
+    // land it first, and then both reads are of the new scan, so the rescan
+    // is asked for again until one has not landed by the time both are read.
+    var rows: []const *const Set = &.{};
+    var held: []const *const library.File = &.{};
+    var before_land = false;
+    for (0..100) |_| {
+        const n = s.scanCount();
+        try t.expect(s.rescan(dir));
+        rows = s.all();
+        held = s.files(dir);
+        before_land = s.scannedSince(dir, n) == .waiting;
+        settle(s);
+        try t.expectEqual(Sets.ScanState.read, s.scannedSince(dir, n));
+        if (before_land) break;
+    }
+    try t.expect(before_land);
     try t.expect(held.len > 0);
-    settle(s);
 
     // A shell reads again after the scan. Both reads return the new scan,
     // and what was held before stays readable.
