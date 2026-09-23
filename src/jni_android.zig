@@ -4120,12 +4120,6 @@ export fn Java_org_beetlebug_lookout_Lookout_nNoaaSvcCost(env: [*c]j.JNIEnv, cls
     return if (ok != 0) 1 else 0;
 }
 
-/// The service reads the held cells off the chart sets, so the names are
-/// ignored.
-export fn Java_org_beetlebug_lookout_Lookout_nNoaaSvcHave(env: [*c]j.JNIEnv, cls: j.jclass, n: j.jlong, names: j.jobjectArray) void {
-    _ = .{ env, cls, n, names };
-}
-
 export fn Java_org_beetlebug_lookout_Lookout_nNoaaSvcDownload(env: [*c]j.JNIEnv, cls: j.jclass, n: j.jlong, ids: j.jstring, dest: j.jstring, again: j.jboolean) void {
     _ = cls;
     if (ids == null or dest == null) return;

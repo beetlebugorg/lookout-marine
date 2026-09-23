@@ -6,7 +6,6 @@ import org.beetlebug.lookout.charts.NoaaController
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import org.beetlebug.lookout.charts.ChartSets
 import org.beetlebug.lookout.charts.costLine
 
 /**
@@ -37,7 +36,7 @@ fun FirstRunSetup(
     // The cells this device holds, so a pick prices what is missing from the
     // water rather than all of it.
     LaunchedEffect(flow.step, charts.sets) {
-        if (flow.step == FirstRunModel.Step.COVERAGE) noaa.noteInstalled(installedCells(charts))
+        if (flow.step == FirstRunModel.Step.COVERAGE) noaa.reprice()
     }
 
     FirstRunFlow(
@@ -114,15 +113,3 @@ private fun footnote(flow: FirstRunModel, noaa: NoaaController): String? = when 
     FirstRunModel.Step.DEPTHS -> "Change any of this later in Mariner settings, in Depths."
     else -> null
 }
-
-/**
- * The NOAA cells already installed, as dataset names without an extension.
- *
- * By name, which is all the core wants: a pick then prices what is missing
- * from the water rather than all of it.
- */
-private fun installedCells(charts: ChartsModel): List<String> =
-    charts.sets.flatMap { set -> ChartSets.files(set.path).map { it.name } }
-        .map { it.substringBefore('.') }
-        .filter { it.startsWith("US") }
-        .distinct()

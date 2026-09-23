@@ -1026,7 +1026,6 @@ public final class Lookout implements AutoCloseable {
     public static boolean noaaCost(long n, String regionIds, long[] out) {
         return nNoaaSvcCost(n, regionIds, out);
     }
-    public static void noaaHave(long n, String[] names) { nNoaaSvcHave(n, names); }
     public static void noaaDownload(long n, String regionIds, String destDir, boolean again) {
         nNoaaSvcDownload(n, regionIds, destDir, again);
     }
@@ -1076,7 +1075,6 @@ public final class Lookout implements AutoCloseable {
     private static native void nNoaaSvcRefresh(long n);
     private static native void nNoaaSvcCancel(long n);
     private static native boolean nNoaaSvcCost(long n, String regionIds, long[] out);
-    private static native void nNoaaSvcHave(long n, String[] names);
     private static native void nNoaaSvcDownload(long n, String regionIds, String destDir, boolean again);
     private static native int nNoaaSvcRegionCoverage(long n, String regionId, double[] out);
     private static native String[] nTables(long h);

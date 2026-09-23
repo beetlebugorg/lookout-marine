@@ -136,15 +136,11 @@ class NoaaController(
     val pickedIds: String get() = regions.filter { picked.contains(it.id) }.joinToString(",") { it.id }
 
     /**
-     * Name the cells this device already holds, so a pick prices what is
-     * missing from the water rather than all of it.
+     * Price the pick again. The core reads the cells this device holds off
+     * the chart sets, so a pick prices what is missing from the water.
      */
-    fun noteInstalled(names: List<String>) {
-        val list = names.toTypedArray()
-        call {
-            Lookout.noaaHave(noaa, list)
-            readCost()
-        }
+    fun reprice() {
+        call { readCost() }
     }
 
     /**

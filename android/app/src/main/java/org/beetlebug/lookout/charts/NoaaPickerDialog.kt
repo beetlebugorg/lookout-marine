@@ -50,7 +50,7 @@ fun NoaaPickerDialog(
     // The catalog, and what this device already holds, so a pick prices what
     // is missing from the water rather than all of it.
     LaunchedEffect(Unit) {
-        noaa.noteInstalled(installedCellNames(charts))
+        noaa.reprice()
         if (!noaa.haveCatalog) noaa.refresh()
     }
 
@@ -125,15 +125,3 @@ fun NoaaPickerDialog(
         }
     }
 }
-
-/**
- * The NOAA cells already installed, as dataset names without an extension.
- *
- * By name, which is all the core wants: a pick then prices what is missing
- * from the water rather than all of it.
- */
-fun installedCellNames(charts: ChartsModel): List<String> =
-    charts.sets.flatMap { set -> ChartSets.files(set.path).map { it.name } }
-        .map { it.substringBefore('.') }
-        .filter { it.startsWith("US") }
-        .distinct()
