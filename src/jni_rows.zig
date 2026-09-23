@@ -11,6 +11,7 @@ const library = @import("library.zig");
 
 pub const Set = chartsets.Set;
 pub const File = library.File;
+pub const Found = library.Found;
 
 /// Strings per set in `setRow`.
 pub const set_fields = 13;
@@ -65,6 +66,20 @@ pub fn fileRow(out: anytype, f: *const File) void {
     out.print("{d}", .{f.south});
     out.print("{d}", .{f.east});
     out.print("{d}", .{f.north});
+}
+
+/// Strings in `foundRow`.
+pub const found_fields = 7;
+
+/// A scan's totals: root, updates, other, refused, sources, bytes, producer.
+pub fn foundRow(out: anytype, f: *const Found) void {
+    out.str(f.root);
+    out.print("{d}", .{f.updates});
+    out.print("{d}", .{f.other});
+    out.print("{d}", .{f.refused});
+    out.print("{d}", .{f.sources});
+    out.print("{d}", .{f.bytes});
+    out.str(f.producer);
 }
 
 const t = std.testing;
@@ -169,4 +184,21 @@ test "a file row reads every field from the core's struct" {
         "/charts/US5MD1MC.000", "US5MD1MC", "2", "5", "Harbor", "11", "12", "1", "-13", "14", "-15", "16",
     }, &rows);
     try t.expectEqual(@as(usize, file_fields), rows.list.items.len);
+}
+
+test "a scan's totals row reads every field from the core's struct" {
+    const f: Found = .{
+        .root = "/charts",
+        .updates = 1,
+        .other = 2,
+        .refused = 3,
+        .sources = 4,
+        .bytes = 5,
+        .producer = "US",
+    };
+    var rows: Rows = .{};
+    defer rows.deinit();
+    foundRow(&rows, &f);
+    try expectRow(&.{ "/charts", "1", "2", "3", "4", "5", "US" }, &rows);
+    try t.expectEqual(@as(usize, found_fields), rows.list.items.len);
 }

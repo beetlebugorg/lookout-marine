@@ -27,14 +27,16 @@ const cc = @import("c.zig").c;
 const bakejob = @import("bakejob.zig");
 const jrows = @import("jni_rows.zig");
 
-// The chart set and file structs are the core's own, the same types the
-// C ABI exports. A hand-copied layout drifts silently when the core adds a
-// field, and every field after it reads one slot off.
+// The chart set, file and scan summary structs are the core's own, the same
+// types the C ABI exports. A hand-copied layout drifts silently when the core
+// adds a field, and every field after it reads one slot off.
 const CChartSet = jrows.Set;
 const CChartFile = jrows.File;
+const CScanSummary = jrows.Found;
 comptime {
     std.debug.assert(CChartSet == @import("capi/chartsets.zig").lookout_chart_set);
     std.debug.assert(CChartFile == @import("capi/library.zig").lookout_chart_file);
+    std.debug.assert(CScanSummary == @import("capi/library.zig").lookout_scan_summary);
 }
 
 // The C ABI (capi.zig exports, same archive — resolved at link).
@@ -3090,16 +3092,6 @@ extern fn lookout_scan_raster(s: ?*const c_scan, out_n: *usize) ?[*]const ?*cons
 extern fn lookout_bake_order(items: [*]CBakeItem, n: usize) void;
 extern fn lookout_bake_output_path(out_dir: ?[*:0]const u8, source: ?[*:0]const u8, item: *const CBakeItem, out: [*]u8, cap: usize) usize;
 
-const CScanSummary = extern struct {
-    root: ?[*:0]const u8,
-    updates: usize,
-    other: usize,
-    refused: usize,
-    sources: usize,
-    bytes: u64,
-    producer: ?[*:0]const u8,
-};
-
 const CBakeItem = extern struct {
     path: ?[*:0]const u8,
     name: ?[*:0]const u8,
@@ -3140,13 +3132,7 @@ export fn Java_org_beetlebug_lookout_Lookout_nScanRead(env: [*c]j.JNIEnv, cls: j
     var out = Strings.init();
     defer out.deinit();
 
-    out.str(found.root);
-    out.print("{d}", .{found.updates});
-    out.print("{d}", .{found.other});
-    out.print("{d}", .{found.refused});
-    out.print("{d}", .{found.sources});
-    out.print("{d}", .{found.bytes});
-    out.str(found.producer);
+    jrows.foundRow(&out, found);
     out.print("{d}", .{cn});
     out.print("{d}", .{rn});
     if (cells) |p| scanFiles(&out, p[0..cn]);
