@@ -133,6 +133,14 @@ lookout_links *lk_controller_chart_links_changed_read(lk_controller *self);
  * picked on a previous launch is selected from the first frame and draws
  * once its style resolves, which is several frames later. */
 int lk_controller_chart_link_selected(lk_controller *self);
+/* A picture of one chart for a chart list (lookout_chart_link_picture). `dst`
+ * holds width * height * 4 bytes of premultiplied RGBA. Returns
+ * LOOKOUT_PICTURE_NONE on a closed handle. A PENDING picture keeps the frame
+ * loop running until it is drawn. */
+int  lk_controller_chart_link_picture(lk_controller *self, const char *url, int kind,
+                                      double lon, double lat, double zoom, int width,
+                                      int height, uint8_t *dst);
+void lk_controller_chart_link_pictures_cancel(lk_controller *self);
 
 /* ---- markers (the mariner's own marks; the core owns and draws them) ----- */
 

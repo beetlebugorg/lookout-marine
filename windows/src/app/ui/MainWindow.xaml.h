@@ -783,6 +783,9 @@ namespace winrt::LookoutMarine::implementation
              * shipped tile keeps the name it ships with. */
             Microsoft::UI::Xaml::Controls::TextBlock title{ nullptr };
             bool mine{ false };
+            /* The core's picture over the shipped art, collapsed until it is
+             * drawn. */
+            Microsoft::UI::Xaml::Controls::Border shot{ nullptr };
         };
         std::vector<ChartTileUi> chart_tile_ui;
         struct ChartSetRowUi
@@ -812,6 +815,8 @@ namespace winrt::LookoutMarine::implementation
         void ChartsWorkSection(Microsoft::UI::Xaml::Controls::StackPanel const &stack);
         void ChartsAddSection(Microsoft::UI::Xaml::Controls::StackPanel const &stack);
         void RefreshChartsPageInPlace();
+        /* Ask the core for each shelf tile's picture, and show those drawn. */
+        void AskChartPictures();
         /* The page's shape, as one string. A change here is a rebuild. */
         std::string ChartsPageStructure();
         void RefreshChartsPageOnChange();

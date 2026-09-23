@@ -41,6 +41,11 @@ namespace lkw
     /* The scheme the chart draws in, 0 day, 1 dusk, 2 night. */
     uint32_t SchemeOf(::lk_controller *c);
 
+    /* A picture the core drew, as premultiplied RGBA with the top row first,
+     * in the premultiplied BGRA a WriteableBitmap holds. */
+    winrt::Microsoft::UI::Xaml::Media::Imaging::WriteableBitmap RgbaBitmap(uint8_t const *rgba,
+                                                                          int width, int height);
+
     /* Where the data shipped beside the executable lives: the setup pictures
      * and the coastline. Empty when the path cannot be read. */
     std::string ShippedDataDir();

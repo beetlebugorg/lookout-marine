@@ -288,6 +288,16 @@ namespace winrt::LookoutMarine::implementation
 
         Controls::Grid art_grid;
         art_grid.Children().Append(crop);
+        // The core's picture of the chart, over the shipped art once it is
+        // drawn (AskChartPictures).
+        Controls::Border shot;
+        shot.Height(kTileArt);
+        shot.CornerRadius({ 10, 10, 0, 0 });
+        shot.Visibility(Visibility::Collapsed);
+        Controls::Image shot_image;
+        shot_image.Stretch(Media::Stretch::UniformToFill);
+        shot.Child(shot_image);
+        art_grid.Children().Append(shot);
         // Built whichever chart draws, and shown by the refresh. A badge that
         // comes and going with a rebuild is a tile rebuilt under the pointer.
         Controls::TextBlock mark;
@@ -354,7 +364,7 @@ namespace winrt::LookoutMarine::implementation
             Controls::ToolTipService::SetToolTip(b, winrt::box_value(winrt::to_hstring(url)));
         Automation::AutomationProperties::SetName(b, name);
         b.Click([this, url, mine](auto &&, auto &&) { PickChartTile(url, mine); });
-        chart_tile_ui.push_back({ url, b, badge, detail, where, title, mine });
+        chart_tile_ui.push_back({ url, b, badge, detail, where, title, mine, shot });
         return b;
     }
 
@@ -760,6 +770,36 @@ namespace winrt::LookoutMarine::implementation
         // own polls.
         PollNoaaPane();
         PollRemovalPane();
+        AskChartPictures();
+    }
+
+    // Request each tile's picture at the chart's center, at zoom 9 and the
+    // tile's size in pixels, as the macOS gallery does. A tile shows its
+    // shipped art while its picture is PENDING or NONE. The core raises the
+    // chart links' changed flag when one is drawn, and the refresh that
+    // follows requests the pictures again.
+    void MainWindow::AskChartPictures()
+    {
+        if (chart_tile_ui.empty() || !lk_controller_is_open(controller))
+            return;
+        lk_readout at{};
+        lk_controller_readout(controller, &at);
+        auto const root = SettingsContent().XamlRoot();
+        double const scale = root != nullptr ? root.RasterizationScale() : 1.0;
+        int const w = (int)(kTileWidth * scale + 0.5);
+        int const h = (int)(kTileArt * scale + 0.5);
+        std::vector<uint8_t> px((size_t)w * (size_t)h * 4);
+        for (auto const &t : chart_tile_ui)
+        {
+            if (t.shot == nullptr || t.shot.Visibility() == Visibility::Visible)
+                continue;
+            if (lk_controller_chart_link_picture(controller, t.url.c_str(), LOOKOUT_PICTURE_TILE,
+                                                 at.lon, at.lat, 9, w, h,
+                                                 px.data()) != LOOKOUT_PICTURE_READY)
+                continue;
+            t.shot.Child().as<Controls::Image>().Source(lkw::RgbaBitmap(px.data(), w, h));
+            t.shot.Visibility(Visibility::Visible);
+        }
     }
 
     void MainWindow::RefreshChartsPageOnChange()

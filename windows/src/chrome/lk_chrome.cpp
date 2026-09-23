@@ -67,6 +67,22 @@ namespace lkw
         return (uint32_t)m.scheme;
     }
 
+    winrt::Microsoft::UI::Xaml::Media::Imaging::WriteableBitmap RgbaBitmap(uint8_t const *rgba,
+                                                                          int width, int height)
+    {
+        winrt::Microsoft::UI::Xaml::Media::Imaging::WriteableBitmap bmp(width, height);
+        uint8_t *out = bmp.PixelBuffer().data();
+        for (size_t i = 0; i < (size_t)width * (size_t)height * 4; i += 4)
+        {
+            out[i]     = rgba[i + 2];
+            out[i + 1] = rgba[i + 1];
+            out[i + 2] = rgba[i];
+            out[i + 3] = rgba[i + 3];
+        }
+        bmp.Invalidate();
+        return bmp;
+    }
+
     std::string ShippedDataDir()
     {
         wchar_t exe[MAX_PATH]{};

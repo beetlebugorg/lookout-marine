@@ -183,6 +183,8 @@ namespace winrt::LookoutMarine::implementation
 
         w.Closed([this](auto &&, auto &&) {
             StopPluginStatusPoll();
+            // Drop the chart pictures still pending for the Charts page.
+            lk_controller_chart_link_pictures_cancel(controller);
             if (settings_size_w > 0 && settings_size_h > 0)
                 lk_store_save_settings_size(settings_size_w, settings_size_h);
             if (settings_window != nullptr)

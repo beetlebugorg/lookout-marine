@@ -946,6 +946,26 @@ lk_controller_chart_link_add(lk_controller *self, const char *link)
     kick(self);
 }
 
+int
+lk_controller_chart_link_picture(lk_controller *self, const char *url, int kind, double lon,
+                                 double lat, double zoom, int width, int height, uint8_t *dst)
+{
+    if (!lk_controller_is_open(self))
+        return LOOKOUT_PICTURE_NONE;
+    int const got = lookout_chart_link_picture(self->handle, url, kind, lon, lat, zoom, width,
+                                               height, dst);
+    if (got == LOOKOUT_PICTURE_PENDING)
+        kick(self);
+    return got;
+}
+
+void
+lk_controller_chart_link_pictures_cancel(lk_controller *self)
+{
+    if (lk_controller_is_open(self))
+        lookout_chart_link_pictures_cancel(self->handle);
+}
+
 void
 lk_controller_chart_link_select(lk_controller *self, const char *url)
 {
