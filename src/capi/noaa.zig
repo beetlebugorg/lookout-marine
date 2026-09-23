@@ -39,11 +39,6 @@ fn cost(n: *noaajob.Handle, region_ids: ?[*:0]const u8, out_cells: ?*u32, out_by
     return 1;
 }
 
-fn regionCells(n: *noaajob.Handle, region_ids: ?[*:0]const u8, out: ?[*][*:0]const u8, cap: usize) usize {
-    var buf: [noaa.regions.len]u8 = undefined;
-    return n.regionCells(noaa.districtsFromIds(&buf, span(region_ids)), out, cap);
-}
-
 fn regionCoverage(n: *noaajob.Handle, region_id: ?[*:0]const u8, out: ?[*]lookout_noaa_box, cap: usize) usize {
     const id = region_id orelse return 0;
     return n.regionCoverage(std.mem.span(id), out, cap);
@@ -124,11 +119,6 @@ export fn lookout_noaa_cost(n: ?*lookout_noaa, region_ids: ?[*:0]const u8, out_c
         return 0;
     };
     return cost(x, region_ids, out_cells, out_bytes, out_held, out_held_bytes);
-}
-
-export fn lookout_noaa_region_cells(n: ?*lookout_noaa, region_ids: ?[*:0]const u8, out: ?[*][*:0]const u8, cap: usize) usize {
-    const x = n orelse return 0;
-    return regionCells(x, region_ids, out, cap);
 }
 
 export fn lookout_noaa_region_coverage(n: ?*lookout_noaa, region_id: ?[*:0]const u8, out: ?[*]lookout_noaa_box, cap: usize) usize {

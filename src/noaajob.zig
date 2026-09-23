@@ -693,10 +693,9 @@ pub const Service = struct {
     /// The dataset names of every cell covering these regions, in catalog
     /// order. Borrowed from the catalog, so valid until the next read.
     ///
-    /// A shell removing water needs the names, because regions overlap: NOAA
-    /// files a cell under one district that covers another's water, and the
-    /// cells to delete are the unpicked regions' minus every region still
-    /// picked.
+    /// A removal needs the names, because regions overlap: NOAA files a cell
+    /// under one district that covers another's water, and the cells to
+    /// delete are the unpicked regions' minus every region still picked.
     pub fn cellsOf(self: *Service, districts: []const u8, out: *std.ArrayList([]const u8)) void {
         const cat = &(self.cat orelse return);
         const picked = noaa.selectRegions(self.alloc, cat, districts) catch return;
@@ -1691,8 +1690,6 @@ const Prep = struct {
 pub const Handle = struct {
     mu: Lock = .{},
     svc: Service,
-    /// The names regionCells last handed out, valid until its next call.
-    cells: ?std.heap.ArenaAllocator = null,
     /// Borrowed from the shell, which keeps both open for the life of the
     /// handle. Either may be null. The held cells and their editions are read
     /// off the sets. With none, no cell is held.
@@ -1742,8 +1739,6 @@ pub const Handle = struct {
         };
         self.retired.deinit(self.svc.alloc);
         self.svc.deinit();
-        if (self.cells) |*a| a.deinit();
-        self.cells = null;
     }
 
     /// Follow the sets' scans, so a prepare waiting on one continues when it
@@ -1832,34 +1827,6 @@ pub const Handle = struct {
     fn managedEditions(self: *Handle) ![]chartsets.Sets.Held {
         const sets = self.sets orelse return self.svc.alloc.alloc(chartsets.Sets.Held, 0);
         return sets.heldCells(self.svc.alloc, .editions);
-    }
-
-    /// Write at most `cap` names into `out` and return how many there are.
-    /// The names stay valid until the next call.
-    pub fn regionCells(self: *Handle, districts: []const u8, out: ?[*][*:0]const u8, cap: usize) usize {
-        self.mu.lock();
-        defer self.mu.unlock();
-        if (!self.svc.haveCatalog()) return 0;
-        const alloc = self.svc.alloc;
-        var names = std.ArrayList([]const u8).empty;
-        defer names.deinit(alloc);
-        self.svc.cellsOf(districts, &names);
-        const dst = out orelse return names.items.len;
-
-        // The catalog holds the names unterminated. A caller reads C strings,
-        // so they are copied into an arena that lives until the next call.
-        if (self.cells) |*old| old.deinit();
-        var arena = std.heap.ArenaAllocator.init(alloc);
-        const a = arena.allocator();
-        var n: usize = 0;
-        for (names.items) |name| {
-            if (n >= cap) break;
-            const z = a.dupeZ(u8, name) catch break;
-            dst[n] = z.ptr;
-            n += 1;
-        }
-        self.cells = arena;
-        return names.items.len;
     }
 
     /// The boxes of the finest coarse band a region has. Writes at most `cap`
@@ -4441,7 +4408,6 @@ test "a managed set left unprepared is finished once the sets are read" {
     try testing.expectEqualStrings(f.dest, f.sets.resumePath().?);
 
     f.h.follow();
-    try testing.expect(f.sets.followed());
     for (0..5000) |_| {
         f.h.adopt();
         if (f.has("Charts/NOAA/US500002/US500002.pmtiles") and f.h.poll().preparing == 0) break;

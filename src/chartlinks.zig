@@ -112,7 +112,7 @@ pub const Entry = struct {
     tiles: []u8 = &.{},
     /// TMS counts y from the south, as askTile's own source flag does.
     tms: bool = false,
-    /// Set when the style was read and has no raster tiles. previewAll skips
+    /// Set when the style was read and has no raster tiles. previewOne skips
     /// the link.
     no_tiles: bool = false,
 };
@@ -1183,21 +1183,6 @@ pub const Links = struct {
 
     /// How many style reads for previews are out at once.
     const MAX_PREVIEW_INFLIGHT = 3;
-
-    /// Read the style of every link with no tile template yet, so a shell can
-    /// draw a thumbnail of it. Nothing here touches the chart on screen.
-    ///
-    /// A style already read and found to have no raster tiles is skipped, and
-    /// so is one whose read is still out. A shell calls this each time the
-    /// chart list opens, and a vector style was fetched every time.
-    pub fn previewAll(self: *Links) void {
-        for (self.entries.items) |e| {
-            if (e.tiles.len != 0 or e.no_tiles) continue;
-            if (self.previewOut(e.url)) continue;
-            if (self.previews_inflight >= MAX_PREVIEW_INFLIGHT) return;
-            _ = self.previewOne(e.url);
-        }
-    }
 
     /// Read one link's style for its tile template. True when the read went
     /// out now or was already out. False when the budget is full, when there
@@ -3145,9 +3130,9 @@ test "chartlinks: a vector style is read once for a preview" {
         try f.answer("style.json", vector, 200);
         const after_add = styleReads(f);
 
-        // Twenty preview passes, one for each time a shell opens the chart
-        // list. The style has no raster tiles, so no pass fetches it.
-        for (0..20) |_| f.links.previewAll();
+        // Twenty calls. The style has no raster tiles, so no call fetches
+        // it.
+        for (0..20) |_| try testing.expect(!f.links.previewOne("https://t.example/style.json"));
         try testing.expectEqual(after_add, styleReads(f));
         try testing.expectEqual(@as(usize, 0), f.links.previewJobsOut());
     }
@@ -3156,7 +3141,7 @@ test "chartlinks: a vector style is read once for a preview" {
         const f = try Fake.open(testing.allocator);
         defer f.close();
         f.links.openStore(dir);
-        for (0..3) |_| f.links.previewAll();
+        for (0..3) |_| try testing.expect(!f.links.previewOne("https://t.example/style.json"));
         try testing.expectEqual(@as(usize, 0), styleReads(f));
     }
 }
@@ -3177,14 +3162,14 @@ test "chartlinks: a preview read that fails is tried again, and its slot is free
     e.tiles = &.{};
     try testing.expect(!e.no_tiles);
 
-    f.links.previewAll();
-    // A second pass while the read is out issues no second request.
-    f.links.previewAll();
+    try testing.expect(f.links.previewOne("https://t.example/style.json"));
+    // A second ask while the read is out issues no second request.
+    try testing.expect(f.links.previewOne("https://t.example/style.json"));
     try testing.expectEqual(@as(usize, 1), f.links.previewJobsOut());
     try f.answer("style.json", "", 503);
     try testing.expectEqual(@as(usize, 0), f.links.previewJobsOut());
 
-    f.links.previewAll();
+    try testing.expect(f.links.previewOne("https://t.example/style.json"));
     try testing.expectEqual(@as(usize, 1), f.links.previewJobsOut());
     try f.answer("style.json", raster, 200);
     try testing.expectEqual(@as(usize, 0), f.links.previewJobsOut());

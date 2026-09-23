@@ -569,43 +569,6 @@ fn fileSize(io: std.Io, path: [:0]const u8) u64 {
     return st.size;
 }
 
-// ---- the JSON a shell reads -------------------------------------------------
-
-fn writeJsonString(out: *std.ArrayList(u8), alloc: std.mem.Allocator, s: []const u8) !void {
-    try out.append(alloc, '"');
-    for (s) |c| switch (c) {
-        '"' => try out.appendSlice(alloc, "\\\""),
-        '\\' => try out.appendSlice(alloc, "\\\\"),
-        '\n' => try out.appendSlice(alloc, "\\n"),
-        '\r' => try out.appendSlice(alloc, "\\r"),
-        '\t' => try out.appendSlice(alloc, "\\t"),
-        0...8, 11, 12, 14...31 => try out.print(alloc, "\\u{x:0>4}", .{c}),
-        else => try out.append(alloc, c),
-    };
-    try out.append(alloc, '"');
-}
-
-fn writeCell(out: *std.ArrayList(u8), alloc: std.mem.Allocator, c: Cell) !void {
-    try out.appendSlice(alloc, "{\"path\":");
-    try writeJsonString(out, alloc, c.path);
-    try out.appendSlice(alloc, ",\"name\":");
-    try writeJsonString(out, alloc, c.name);
-    try out.print(alloc, ",\"kind\":\"{s}\",\"band\":{d},\"bytes\":{d}", .{
-        @tagName(c.kind), c.band, c.bytes,
-    });
-    if (c.band >= 1 and c.band <= 6) {
-        try out.appendSlice(alloc, ",\"bandName\":");
-        try writeJsonString(out, alloc, bandName(c.band));
-    }
-    if (c.facts.scale != 0) try out.print(alloc, ",\"scale\":{d}", .{c.facts.scale});
-    if (c.facts.bounds) |b| try out.print(
-        alloc,
-        ",\"west\":{d},\"south\":{d},\"east\":{d},\"north\":{d}",
-        .{ b[0], b[1], b[2], b[3] },
-    );
-    try out.append(alloc, '}');
-}
-
 // ---- the read a shell draws ---------------------------------------------------
 
 /// What a scanned file is. The same six `Kind` names, as the header states
@@ -702,7 +665,7 @@ pub const Read = struct {
     }
 };
 
-/// The scan as structs. Both this and `toJson` walk the same `Scan`.
+/// The scan as structs.
 pub fn toRead(gpa: std.mem.Allocator, s: *const Scan) !*Read {
     const self = try gpa.create(Read);
     errdefer gpa.destroy(self);
@@ -763,40 +726,6 @@ fn readFiles(a: std.mem.Allocator, cells: []const Cell) ![]const *const File {
         p.* = dst;
     }
     return by_ptr;
-}
-
-/// The scan as JSON, for a shell to read. The caller owns the bytes.
-///
-/// NUL terminated. The length is what a host should use, but a host that
-/// reaches for strlen must not read past the answer.
-pub fn toJson(alloc: std.mem.Allocator, s: *const Scan) ![:0]u8 {
-    var out: std.ArrayList(u8) = .empty;
-    errdefer out.deinit(alloc);
-    try out.appendSlice(alloc, "{\"root\":");
-    try writeJsonString(&out, alloc, s.root);
-    try out.print(alloc, ",\"updates\":{d},\"other\":{d},\"refused\":{d}", .{
-        s.updates, s.other, s.refused,
-    });
-    // Absent rather than empty when the charts disagree: a host that reads a
-    // producer knows every chart here came from it.
-    if (s.producer) |p| {
-        try out.appendSlice(alloc, ",\"producer\":");
-        try writeJsonString(&out, alloc, &p);
-    }
-    try out.print(alloc, ",\"sources\":{d},\"bytes\":{d},\"cells\":[", .{
-        s.sourceCount(), s.totalBytes(),
-    });
-    for (s.cells, 0..) |c, i| {
-        if (i > 0) try out.append(alloc, ',');
-        try writeCell(&out, alloc, c);
-    }
-    try out.appendSlice(alloc, "],\"raster\":[");
-    for (s.raster, 0..) |c, i| {
-        if (i > 0) try out.append(alloc, ',');
-        try writeCell(&out, alloc, c);
-    }
-    try out.appendSlice(alloc, "]}");
-    return out.toOwnedSliceSentinel(alloc, 0);
 }
 
 test "a baked archive and a source cell are charts" {
@@ -1159,7 +1088,7 @@ test "a single file scans as itself" {
     try t.expectEqualStrings("US5MD1MC", s.cells[0].name);
 }
 
-test "the JSON carries what a shell needs to draw the list" {
+test "the read has what a shell needs to draw the list" {
     var tmp = t.tmpDir(.{ .iterate = true });
     defer tmp.cleanup();
     const io = std.Io.Threaded.global_single_threaded.io();
@@ -1169,26 +1098,19 @@ test "the JSON carries what a shell needs to draw the list" {
 
     var s = try scan(t.allocator, io, root, acceptAll, null);
     defer s.deinit();
-    const json = try toJson(t.allocator, &s);
-    defer t.allocator.free(json);
+    const r = try toRead(t.allocator, &s);
+    defer r.free();
 
-    var parsed = try std.json.parseFromSlice(std.json.Value, t.allocator, json, .{});
-    defer parsed.deinit();
-    const o = parsed.value.object;
-    try t.expectEqual(@as(usize, 2), o.get("cells").?.array.items.len);
-    try t.expectEqual(@as(i64, 1), o.get("sources").?.integer);
-    try t.expectEqual(@as(i64, 1), o.get("updates").?.integer);
-    try t.expectEqual(@as(i64, 4), o.get("other").?.integer);
+    try t.expectEqual(@as(usize, 2), r.cells.len);
+    try t.expectEqual(@as(usize, 1), r.found.sources);
+    try t.expectEqual(@as(usize, 1), r.found.updates);
+    try t.expectEqual(@as(usize, 4), r.found.other);
 
-    // A C host reads this through a pointer. Without the terminator, strlen
-    // runs off the end of the answer into whatever follows it.
-    try t.expectEqual(@as(u8, 0), json[json.len]);
-
-    const first = o.get("cells").?.array.items[0].object;
-    try t.expectEqualStrings("US4MD1PM", first.get("name").?.string);
-    try t.expectEqualStrings("baked", first.get("kind").?.string);
-    try t.expectEqualStrings("Approach", first.get("bandName").?.string);
-    try t.expectEqual(@as(i64, 12000), first.get("scale").?.integer);
+    const first = r.cells[0];
+    try t.expectEqualStrings("US4MD1PM", std.mem.span(first.name));
+    try t.expectEqual(FileKind.baked, first.kind);
+    try t.expectEqualStrings("Approach", std.mem.span(first.band_name));
+    try t.expectEqual(@as(f64, 12000), first.scale);
 }
 
 test "an archive's entries classify by name, like a folder's files" {
@@ -1260,9 +1182,9 @@ test "a library is named by the agency that made it" {
     try t.expect(s.producer != null);
     try t.expectEqualStrings("US", &s.producer.?);
 
-    const json = try toJson(a, &s);
-    defer a.free(json);
-    try t.expect(std.mem.indexOf(u8, json, "\"producer\":\"US\"") != null);
+    const r = try toRead(a, &s);
+    defer r.free();
+    try t.expectEqualStrings("US", std.mem.span(r.found.producer));
 }
 
 test "charts from two offices have no one name" {
@@ -1274,11 +1196,10 @@ test "charts from two offices have no one name" {
     defer s.deinit();
     try t.expect(s.producer == null);
 
-    // And the field is left out rather than sent empty, so a host cannot read
-    // a blank producer as an agency.
-    const json = try toJson(a, &s);
-    defer a.free(json);
-    try t.expect(std.mem.indexOf(u8, json, "producer") == null);
+    // The read states no producer with an empty string.
+    const r = try toRead(a, &s);
+    defer r.free();
+    try t.expectEqualStrings("", std.mem.span(r.found.producer));
 }
 
 test "a scan reaches S-101 cells in a subfolder" {
@@ -1316,72 +1237,4 @@ test "a folder of pictures has no producer to report" {
     });
     defer s.deinit();
     try t.expect(s.producer == null);
-}
-
-test "the typed scan says what the JSON says" {
-    var tmp = t.tmpDir(.{ .iterate = true });
-    defer tmp.cleanup();
-    const io = std.Io.Threaded.global_single_threaded.io();
-    try writeTestTree(&tmp, io);
-    const root = try tmpRoot(&tmp);
-    defer t.allocator.free(root);
-
-    var s = try scan(t.allocator, io, root, null, null);
-    defer s.deinit();
-
-    const json = try toJson(t.allocator, &s);
-    defer t.allocator.free(json);
-    var arena = std.heap.ArenaAllocator.init(t.allocator);
-    defer arena.deinit();
-    const doc = try std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), json, .{});
-    const o = doc.object;
-
-    const r = try toRead(t.allocator, &s);
-    defer r.free();
-
-    try t.expectEqualStrings(o.get("root").?.string, std.mem.span(r.found.root));
-    try t.expectEqual(@as(usize, @intCast(o.get("updates").?.integer)), r.found.updates);
-    try t.expectEqual(@as(usize, @intCast(o.get("other").?.integer)), r.found.other);
-    try t.expectEqual(@as(usize, @intCast(o.get("refused").?.integer)), r.found.refused);
-    try t.expectEqual(@as(usize, @intCast(o.get("sources").?.integer)), r.found.sources);
-    try t.expectEqual(@as(u64, @intCast(o.get("bytes").?.integer)), r.found.bytes);
-    // The JSON leaves the producer out when the charts disagree; the read
-    // says so with an empty string.
-    if (o.get("producer")) |p| {
-        try t.expectEqualStrings(p.string, std.mem.span(r.found.producer));
-    } else {
-        try t.expectEqualStrings("", std.mem.span(r.found.producer));
-    }
-
-    try expectSameFiles(o.get("cells").?.array.items, r.cells);
-    try expectSameFiles(o.get("raster").?.array.items, r.raster);
-}
-
-/// One of the scan's two lists, compared field for field against the JSON.
-fn expectSameFiles(list: []const std.json.Value, got: []const *const File) !void {
-    try t.expectEqual(list.len, got.len);
-    for (list, got) |item, f| {
-        const o = item.object;
-        try t.expectEqualStrings(o.get("path").?.string, std.mem.span(f.path));
-        try t.expectEqualStrings(o.get("name").?.string, std.mem.span(f.name));
-        try t.expectEqualStrings(o.get("kind").?.string, @tagName(f.kind));
-        try t.expectEqual(@as(c_int, @intCast(o.get("band").?.integer)), f.band);
-        try t.expectEqual(@as(u64, @intCast(o.get("bytes").?.integer)), f.bytes);
-        // bandName, scale and the bounds appear only when there is one.
-        if (o.get("bandName")) |b| {
-            try t.expectEqualStrings(b.string, std.mem.span(f.band_name));
-        } else {
-            try t.expectEqualStrings("", std.mem.span(f.band_name));
-        }
-        try t.expectEqual(if (o.get("scale")) |v| v.float else 0, f.scale);
-        if (o.get("west")) |w| {
-            try t.expectEqual(@as(c_int, 1), f.located);
-            try t.expectEqual(w.float, f.west);
-            try t.expectEqual(o.get("south").?.float, f.south);
-            try t.expectEqual(o.get("east").?.float, f.east);
-            try t.expectEqual(o.get("north").?.float, f.north);
-        } else {
-            try t.expectEqual(@as(c_int, 0), f.located);
-        }
-    }
 }

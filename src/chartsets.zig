@@ -328,14 +328,6 @@ pub const Sets = struct {
         self.on_scan = f;
     }
 
-    /// True while a follower is set. The NOAA service is the only one, and it
-    /// finishes the managed set's prepare itself.
-    pub fn followed(self: *Sets) bool {
-        self.mu.lock();
-        defer self.mu.unlock();
-        return self.on_scan != null;
-    }
-
     /// How many scans the worker has started. A scan of a set numbered above
     /// this read the set after this call.
     pub fn scanCount(self: *Sets) u64 {

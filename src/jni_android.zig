@@ -1345,8 +1345,6 @@ export fn Java_org_beetlebug_lookout_Lookout_nMarkerRemove(env: [*c]j.JNIEnv, cl
 // ---- the chart's own files and the library ---------------------------------
 
 extern fn lookout_aux_file(h: ?*anyopaque, cell: [*:0]const u8, name: [*:0]const u8, bytes: *[*c]const u8, len: *usize, mime: *[*c]const u8) void;
-extern fn lookout_scan_charts(path: [*:0]const u8, out_len: ?*usize) [*c]const u8;
-extern fn lookout_scan_zip(path: [*:0]const u8, out_len: ?*usize) [*c]const u8;
 
 /// byte[] nAuxFile(long h, String cell, String name, String[] mimeOut) --
 /// null when the chart does not carry the file. The bytes are borrowed from
@@ -1372,28 +1370,6 @@ export fn Java_org_beetlebug_lookout_Lookout_nAuxFile(env: [*c]j.JNIEnv, cls: j.
         env_(env).SetObjectArrayElement.?(env, mime_out, 0, ms);
     }
     return arr;
-}
-
-/// String nScanCharts(String path) -- the scan JSON, or null. NOT REENTRANT:
-/// the two scan calls share one buffer in the core; the shell serializes.
-export fn Java_org_beetlebug_lookout_Lookout_nScanCharts(env: [*c]j.JNIEnv, cls: j.jclass, path: j.jstring, zip: j.jboolean) j.jstring {
-    _ = cls;
-    const cpath = env_(env).GetStringUTFChars.?(env, path, null) orelse return null;
-    defer env_(env).ReleaseStringUTFChars.?(env, path, cpath);
-
-    var len: usize = 0;
-    const json = if (zip != 0)
-        lookout_scan_zip(@ptrCast(cpath), &len)
-    else
-        lookout_scan_charts(@ptrCast(cpath), &len);
-    if (json == null or len == 0) return null;
-
-    // A COUNTED buffer, decoded by length, never as a C string — but
-    // NewStringUTF wants a terminator, so copy through one.
-    const copy = gpa.allocSentinel(u8, len, 0) catch return null;
-    defer gpa.free(copy);
-    @memcpy(copy[0..len], json[0..len]);
-    return env_(env).NewStringUTF.?(env, copy.ptr);
 }
 
 // ---- portrayal quick toggles ------------------------------------------------

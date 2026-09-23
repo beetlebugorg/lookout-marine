@@ -761,11 +761,11 @@ pub const Lookout = struct {
     /// over a second of the calling thread for a 389 layer style with 5,354
     /// sprite cells — so a dirty style leaves it alone while this is true.
     alt_applied: bool = false,
-    /// The alt style's sprite packs (index JSON + sheet PNG, bytes as the
-    /// host fetched them), kept so a scheme change — which rebakes the S-52
-    /// sheet and REPLACES the atlas — can fold them back in. They belong to
-    /// the current alt style: setAltStyle clears them, and the host re-sends
-    /// the new style's packs after.
+    /// The alt style's sprite packs (index JSON + sheet PNG, bytes as
+    /// fetched), kept so a scheme change, which rebakes the S-52 sheet and
+    /// REPLACES the atlas, can fold them back in. They belong to the current
+    /// alt style: setAltStyle clears them, and the chart link sends the new
+    /// style's packs after.
     alt_packs: std.ArrayListUnmanaged(AltPack) = .empty,
     /// Sheets being decoded, in the order they were asked for.
     sheets: std.ArrayListUnmanaged(*SheetDecode) = .empty,
@@ -2791,10 +2791,10 @@ pub const Lookout = struct {
         }
     };
 
-    /// Draw a host-supplied style instead of the engine's portrayal, or null
+    /// Draw a chart link's style instead of the engine's portrayal, or null
     /// for lookout's own chart. The bytes are copied. Any sprite packs
-    /// belong to the style they came with, so they go here — the host sends
-    /// the new style's packs after (altSpritePack).
+    /// belong to the style they came with, so they go here. The chart link
+    /// sends the new style's packs after (altSpritePack).
     pub fn setAltStyle(self: *Lookout, json: ?[]const u8) !void {
         if (self.alt_style) |old| self.alloc.free(old);
         self.alt_style = null;
@@ -2818,7 +2818,7 @@ pub const Lookout = struct {
 
     /// One MapLibre sprite pack for the active alt style: the pack's id as
     /// the icon-name prefix ("" for the spec's "default"), the index JSON
-    /// and the sheet PNG as the host fetched them. Folded into the resident
+    /// and the sheet PNG as fetched. Folded into the resident
     /// atlas at once, kept so a scheme change can fold it back in, and the
     /// scene rebuilt so icons that were missing resolve. Answers how many
     /// cells landed.

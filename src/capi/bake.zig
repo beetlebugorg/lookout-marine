@@ -83,11 +83,6 @@ export fn lookout_bake_free(b: ?*lookout_bake) void {
     if (b) |x| x.free();
 }
 
-/// How many workers a bake on this machine runs. See lookout-library.h.
-export fn lookout_bake_workers(cores: u32) u32 {
-    return rules.workers(cores);
-}
-
 // ---- the rules ----------------------------------------------------------------
 
 pub const lookout_prepare = rules.Prepare;
@@ -169,12 +164,6 @@ export fn lookout_bake_is_derived(root: ?[*:0]const u8, path: ?[*:0]const u8) c_
 /// The prefix a directory being deleted is renamed to. Static storage.
 export fn lookout_bake_trash_prefix() [*:0]const u8 {
     return rules.trash_prefix;
-}
-
-/// True when a directory name is one a removal left behind.
-export fn lookout_bake_is_trash(name: ?[*:0]const u8) c_int {
-    const n = name orelse return 0;
-    return @intFromBool(rules.isTrash(std.mem.span(n)));
 }
 
 /// Delete what removals left under `root`. See lookout-library.h.

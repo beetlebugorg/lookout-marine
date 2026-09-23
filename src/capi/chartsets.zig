@@ -105,11 +105,6 @@ export fn lookout_chart_sets_set_managed(s: ?*lookout_chart_sets, path: ?[*:0]co
     return @intFromBool(x.setManaged(span(path), managed != 0));
 }
 
-export fn lookout_chart_sets_is_managed(s: ?*lookout_chart_sets, path: ?[*:0]const u8) c_int {
-    const x = s orelse return 0;
-    return @intFromBool(x.isManaged(span(path)));
-}
-
 /// The charts to open. Borrowed until the next call that changes the list.
 export fn lookout_chart_sets_compose(s: ?*lookout_chart_sets, out_n: ?*usize) ?[*]const [*:0]const u8 {
     const x = s orelse {
@@ -136,16 +131,6 @@ export fn lookout_chart_set_to_prepare(
     count(out_n, list.len);
     if (list.len == 0) return null;
     return list.ptr;
-}
-
-/// A managed set whose prepare is unfinished and was not stopped since it
-/// last changed, or null. Null while a NOAA service is open on the sets, which
-/// finishes it. Borrowed until the next call that changes the list.
-export fn lookout_chart_sets_resume(s: ?*lookout_chart_sets) ?[*:0]const u8 {
-    const x = s orelse return null;
-    if (x.followed()) return null;
-    const p = x.resumePath() orelse return null;
-    return p.ptr;
 }
 
 /// Record that the mariner stopped a set's prepare.

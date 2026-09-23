@@ -87,7 +87,7 @@ fn bakeRasters(alloc: std.mem.Allocator, in_dir: []const u8, out_dir: []const u8
 }
 
 /// Print what a folder holds, the way a shell's Add Charts panel reads it.
-/// This is the C ABI's lookout_scan_charts, run from the command line.
+/// It is the scan behind lookout_scan_read, from the command line.
 fn scanReport(alloc: std.mem.Allocator, path: []const u8) !void {
     const io = std.Io.Threaded.global_single_threaded.io();
     const t0 = clock.ticksMs();

@@ -472,11 +472,6 @@ enum ChartSetStore {
         return path.withCString { lookout_chart_sets_set_managed(h, $0, managed ? 1 : 0) != 0 }
     }
 
-    static func isManaged(_ path: String) -> Bool {
-        guard let h = handle else { return false }
-        return path.withCString { lookout_chart_sets_is_managed(h, $0) != 0 }
-    }
-
     static func setOff(_ path: String, _ off: Bool) {
         guard let h = handle else { return }
         _ = path.withCString { lookout_chart_sets_set_on(h, $0, off ? 0 : 1) }

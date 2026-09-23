@@ -18,10 +18,6 @@ const capi_io = capi.capi_io;
 
 // ---- the chart library ------------------------------------------------------
 
-/// The last scan's JSON. Held so the pointer the shell reads stays good until
-/// the next scan.
-var scan_json: ?[:0]u8 = null;
-
 /// Add baked charts to the open library. See lookout.h.
 export fn lookout_charts_add(h: ?*lookout, paths: [*]const [*:0]const u8, n: usize) c_int {
     const l = locked(h);
@@ -32,42 +28,11 @@ export fn lookout_charts_add(h: ?*lookout, paths: [*]const [*:0]const u8, n: usi
     return @intCast(l.chartsAdd(list));
 }
 
-/// True while the library's ownership partition is being built. See lookout.h.
-export fn lookout_composing(h: ?*lookout) c_int {
-    const l = locked(h);
-    defer l.apiUnlock();
-    return if (l.loading or l.recomposing) 1 else 0;
-}
-
 /// How many charts the library holds. See lookout.h.
 export fn lookout_charts_count(h: ?*lookout) u32 {
     const l = locked(h);
     defer l.apiUnlock();
     return @intCast(l.charts.items.len);
-}
-
-/// Look through `path` for charts. See lookout.h.
-export fn lookout_scan_charts(path: [*:0]const u8, out_len: ?*usize) ?[*]const u8 {
-    if (scan_json) |old| gpa.free(old);
-    scan_json = null;
-    var s = lk.scanCharts(gpa, capi_io, std.mem.span(path)) catch return null;
-    defer s.deinit();
-    const json = lk.library.toJson(gpa, &s) catch return null;
-    scan_json = json;
-    if (out_len) |p| p.* = json.len;
-    return json.ptr;
-}
-
-/// lookout_scan_charts for a chart set that arrives as one .zip. See lookout.h.
-export fn lookout_scan_zip(path: [*:0]const u8, out_len: ?*usize) ?[*]const u8 {
-    if (scan_json) |old| gpa.free(old);
-    scan_json = null;
-    var s = lk.scanZip(gpa, std.mem.span(path)) catch return null;
-    defer s.deinit();
-    const json = lk.library.toJson(gpa, &s) catch return null;
-    scan_json = json;
-    if (out_len) |p| p.* = json.len;
-    return json.ptr;
 }
 
 pub const lookout_scan = lk.library.Read;
@@ -122,28 +87,10 @@ export fn lookout_scan_raster(s: ?*const lookout_scan, out_n: ?*usize) ?[*]const
     return x.raster.ptr;
 }
 
-/// Draw a host-supplied style instead of lookout's portrayal. See lookout.h.
-export fn lookout_alt_chart_style_json(h: ?*lookout, json: ?[*]const u8, len: usize) c_int {
-    const l = locked(h);
-    defer l.apiUnlock();
-    const bytes: ?[]const u8 = if (json != null and len != 0) json.?[0..len] else null;
-    l.setAltStyle(bytes) catch return 0;
-    return 1;
-}
-
 export fn lookout_alt_chart_style_active(h: ?*lookout) c_int {
     const l = locked(h);
     defer l.apiUnlock();
     return if (l.altStyleActive()) 1 else 0;
-}
-
-/// One sprite pack of the active alt style. See lookout.h.
-export fn lookout_alt_sprite_pack(h: ?*lookout, prefix: ?[*:0]const u8, index_json: [*]const u8, json_len: usize, png: [*]const u8, png_len: usize) c_int {
-    const l = locked(h);
-    defer l.apiUnlock();
-    if (json_len == 0 or png_len == 0) return 0;
-    const p: []const u8 = if (prefix) |pp| std.mem.span(pp) else "";
-    return @intCast(l.altSpritePack(p, index_json[0..json_len], png[0..png_len]));
 }
 
 // ---- charts by link --------------------------------------------------------
@@ -196,32 +143,6 @@ export fn lookout_chart_link_remove(h: ?*lookout, url: ?[*:0]const u8) void {
     l.links.remove(std.mem.span(s));
 }
 
-/// Read every link's style for its tile template. See lookout-library.h.
-export fn lookout_chart_links_preview(h: ?*lookout) void {
-    const l = locked(h);
-    defer l.apiUnlock();
-    l.links.previewAll();
-}
-
-/// The tile url that pictures one chart. See lookout-library.h.
-export fn lookout_chart_link_preview_url(
-    h: ?*lookout,
-    url: ?[*:0]const u8,
-    lon: f64,
-    lat: f64,
-    zoom: i32,
-    out: ?[*]u8,
-    out_len: usize,
-) c_int {
-    const s = url orelse return 0;
-    const dst = out orelse return 0;
-    if (out_len == 0) return 0;
-    const l = locked(h);
-    defer l.apiUnlock();
-    const built = l.links.previewUrl(std.mem.span(s), lon, lat, zoom, dst[0..out_len]) orelse return 0;
-    return if (built.len == 0) 0 else 1;
-}
-
 /// One picture of a chart for a shell's chart list. See lookout-library.h.
 export fn lookout_chart_link_picture(
     h: ?*lookout,
@@ -255,14 +176,6 @@ export fn lookout_chart_link_pictures_cancel(h: ?*lookout) void {
     const l = locked(h);
     defer l.apiUnlock();
     l.chartLinkPicturesCancel();
-}
-
-/// Draw a style without adding it to the list. See lookout-library.h.
-export fn lookout_chart_link_draw(h: ?*lookout, url: ?[*:0]const u8) void {
-    const l = locked(h);
-    defer l.apiUnlock();
-    const s = url orelse return;
-    l.links.drawOnly(std.mem.span(s));
 }
 
 export fn lookout_chart_link_refresh(h: ?*lookout, url: ?[*:0]const u8) void {
