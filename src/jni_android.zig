@@ -2122,8 +2122,8 @@ export fn Java_org_beetlebug_lookout_Lookout_nZoomDeltaForScale(env: [*c]j.JNIEn
     return lookout_zoom_delta_for_scale(current, wanted);
 }
 
-// lookout_depth_plan is seventeen doubles in a row. See lookout-shell.h.
-const depth_plan_len = 17;
+// lookout_depth_plan is nineteen doubles in a row. See lookout-shell.h.
+const depth_plan_len = 19;
 extern fn lookout_depth_plan(draft_m: f64, clearance_m: f64, feet: c_int, out: *[depth_plan_len]f64) void;
 
 /// double[] nDepthPlan(double draftM, double clearanceM, boolean feet) -- the

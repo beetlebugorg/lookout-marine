@@ -45,7 +45,19 @@ pub const Plan = extern struct {
     deep_contour: f64,
     clearances: [4]f64,
     metres_per_unit: f64,
+    /// One press of the draft stepper, and the deepest draft the step accepts,
+    /// in the unit on screen.
+    draft_step: f64,
+    draft_max: f64,
 };
+
+/// One press of the draft stepper: half a foot, or a tenth of a metre.
+const step_feet = 0.5;
+const step_metres = 0.1;
+/// The deepest draft the step accepts. A ship past it is shaded on the last
+/// rung of the ladder anyway.
+const max_feet = 100.0;
+const max_metres = 30.0;
 
 pub fn ladder(feet: bool) []const f64 {
     return if (feet) &ladder_feet else &ladder_metres;
@@ -84,7 +96,9 @@ pub fn plan(draft_m: f64, clearance_m: f64, feet: bool) Plan {
     const seeded = !(draft_m > 0) or !std.math.isFinite(draft_m);
 
     const start = if (feet) start_feet else start_metres;
-    const draft = if (seeded) start.draft else clean(draft_m / mpu);
+    const step: f64 = if (feet) step_feet else step_metres;
+    const most: f64 = if (feet) max_feet else max_metres;
+    const draft = if (seeded) start.draft else std.math.clamp(clean(draft_m / mpu), step, most);
     const clearance = if (seeded)
         start.clearance
     else
@@ -116,6 +130,8 @@ pub fn plan(draft_m: f64, clearance_m: f64, feet: bool) Plan {
         .deep_contour = deep_contour,
         .clearances = if (feet) clearances_feet else clearances_metres,
         .metres_per_unit = mpu,
+        .draft_step = step,
+        .draft_max = most,
     };
 }
 
@@ -127,6 +143,15 @@ const t = std.testing;
 fn inUnit(draft: f64, clearance: f64, feet: bool) Plan {
     const mpu: f64 = if (feet) metres_per_foot else 1;
     return plan(draft * mpu, clearance * mpu, feet);
+}
+
+test "the draft stays between one step and the most the step accepts" {
+    try t.expectEqual(@as(f64, 100), inUnit(140, 2, true).draft);
+    try t.expectEqual(@as(f64, 30), inUnit(40, 1, false).draft);
+    try t.expectEqual(@as(f64, 0.5), inUnit(0.2, 2, true).draft);
+    try t.expectEqual(@as(f64, 0.1), inUnit(0.05, 1, false).draft);
+    try t.expectEqual(@as(f64, 0.5), inUnit(5, 2, true).draft_step);
+    try t.expectEqual(@as(f64, 30), inUnit(5, 1, false).draft_max);
 }
 
 test "the safety depth rounds up to a whole unit" {

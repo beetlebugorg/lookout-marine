@@ -128,9 +128,9 @@ export fn lookout_zoom_delta_for_scale(current_denominator: f64, wanted_denomina
 
 // ---- the depth plan ----------------------------------------------------------
 
-// lookout_depth_plan in lookout-shell.h: seventeen doubles, in this order.
+// lookout_depth_plan in lookout-shell.h: nineteen doubles, in this order.
 comptime {
-    std.debug.assert(@sizeOf(depth.Plan) == 17 * @sizeOf(f64));
+    std.debug.assert(@sizeOf(depth.Plan) == 19 * @sizeOf(f64));
     std.debug.assert(@offsetOf(depth.Plan, "clearances") == 12 * @sizeOf(f64));
 }
 
@@ -138,16 +138,6 @@ comptime {
 export fn lookout_depth_plan(draft_m: f64, clearance_m: f64, feet: c_int, out: ?*depth.Plan) void {
     const dst = out orelse return;
     owned.fill(depth.Plan, dst, depth.plan(draft_m, clearance_m, feet != 0));
-}
-
-/// The contour ladder in the unit on screen. See lookout-shell.h.
-export fn lookout_depth_ladder(feet: c_int, out: ?[*]f64, cap: usize) usize {
-    const l = depth.ladder(feet != 0);
-    if (out) |dst| {
-        const n = @min(cap, l.len);
-        @memcpy(dst[0..n], l[0..n]);
-    }
-    return l.len;
 }
 
 // ---- the coverage coastline --------------------------------------------------

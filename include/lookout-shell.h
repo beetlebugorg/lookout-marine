@@ -398,18 +398,17 @@ struct lookout_depth_plan {
     double deep_contour;
     double clearances[4];    /* the clearances offered, smallest first */
     double metres_per_unit;  /* 1, or LOOKOUT_METRES_PER_FOOT */
+    /* One press of the draft stepper, and the deepest draft the step accepts:
+     * 0.5 and 100 ft, or 0.1 and 30 m. The plan's draft is held between one
+     * step and the most. */
+    double draft_step;
+    double draft_max;
 };
 
 /* Fill `out` for a boat. `feet` is 1 for feet, 0 for metres. A NULL `out` is
  * ignored. */
 void lookout_depth_plan(double draft_m, double clearance_m, int feet,
                         struct lookout_depth_plan *out);
-
-/* The contours an S-57 survey draws, in the unit on screen, shallowest first:
- * 2, 5, 10, 20, 30, 50, 75, 100 m, or 6, 12, 18, 30, 60, 90, 120, 180, 240,
- * 300 ft. Writes up to `cap` rungs and returns how many the ladder has. `out`
- * may be NULL to ask only for the count. */
-size_t lookout_depth_ladder(int feet, double *out, size_t cap);
 
 /* ---- the coverage coastline --------------------------------------------
  *
