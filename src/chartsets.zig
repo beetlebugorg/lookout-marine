@@ -2236,10 +2236,21 @@ test "a cancel stops the resume until the set changes" {
 
     // A download brings a cell that was not there when the bake stopped.
     try f.tmp.dir.writeFile(f.io, .{ .sub_path = "NOAA/US4MD1PM.000", .data = "x" });
-    try t.expect(s.rescan(src));
-    // Not while the set is being read.
-    try t.expect(s.resumePath() == null);
-    settle(s);
+    // Not while the set is being read. The worker can land the rescan before
+    // the check, so the rescan is asked for again until the check is made
+    // while the scan has not landed.
+    var before_land = false;
+    for (0..100) |_| {
+        const n = s.scanCount();
+        try t.expect(s.rescan(src));
+        const resume_path = s.resumePath();
+        before_land = s.scannedSince(src, n) == .waiting;
+        if (before_land) try t.expect(resume_path == null);
+        settle(s);
+        try t.expectEqual(Sets.ScanState.read, s.scannedSince(src, n));
+        if (before_land) break;
+    }
+    try t.expect(before_land);
     try t.expectEqualStrings(src, s.resumePath().?);
 
     // A bake that failed stops it the same way.
