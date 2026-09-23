@@ -20,6 +20,7 @@
 #include "lk_format.h"
 #include "lk_paths.h"
 #include "FirstRunParts.h"
+#include "WrapPanel.h"
 
 using namespace winrt;
 using namespace Microsoft::UI::Xaml;
@@ -356,16 +357,8 @@ namespace winrt::LookoutMarine::implementation
         // The districts as pills, wrapped into rows. The mariner picks as many
         // as they sail.
         {
-            // The card is 720 points wide with a 24 point inset each side, and
-            // the scrollbar overlays the right edge.
-            constexpr double kRoom = 656;
-            constexpr double kGap = 8;
-            StackPanel rows;
-            rows.Spacing(kGap);
-            StackPanel row;
-            row.Orientation(Orientation::Horizontal);
-            row.Spacing(kGap);
-            double used = 0;
+            auto rows = winrt::make<winrt::LookoutMarine::implementation::WrapPanel>();
+            rows.Spacing(8);
             // What of each region is here, by the core's id.
             auto hold_of = [this](std::string const &id) {
                 for (auto const &one : noaa_region_hold)
@@ -379,16 +372,6 @@ namespace winrt::LookoutMarine::implementation
                 bool const picked = lkw::RegionPicked(noaa_region_id, r.id);
                 std::wstring name{ winrt::to_hstring(r.name) };
                 lkw::RegionHold const hold = hold_of(r.id);
-                std::wstring const badge = lkw::RegionBadge(hold);
-                double const wide = RegionPillWidth(name, badge, picked);
-                if (used > 0 && used + kGap + wide > kRoom)
-                {
-                    rows.Children().Append(row);
-                    row = StackPanel{};
-                    row.Orientation(Orientation::Horizontal);
-                    row.Spacing(kGap);
-                    used = 0;
-                }
                 auto pill = RegionPill(name, winrt::to_hstring(r.blurb).c_str(), hold,
                                        picked, st.have_catalog, DarkChrome());
                 std::string const rid = r.id;
@@ -396,11 +379,8 @@ namespace winrt::LookoutMarine::implementation
                     noaa_region_id = lkw::RegionToggle(noaa_region_id, rid);
                     FirstRunRender(); // re-prices the pick
                 });
-                row.Children().Append(pill);
-                used += (used > 0 ? kGap : 0) + wide;
+                rows.Children().Append(pill);
             }
-            if (row.Children().Size() > 0)
-                rows.Children().Append(row);
             body.Children().Append(rows);
         }
     }

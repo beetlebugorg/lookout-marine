@@ -140,6 +140,9 @@
     <ClInclude Include="src\app\ui\App.xaml.h">
       <DependentUpon>App.xaml</DependentUpon>
     </ClInclude>
+    <ClInclude Include="src\chrome\WrapPanel.h">
+      <DependentUpon>WrapPanel.idl</DependentUpon>
+    </ClInclude>
     <ClInclude Include="src\app\ui\MainWindow.xaml.h">
       <DependentUpon>MainWindow.xaml</DependentUpon>
     </ClInclude>
@@ -213,6 +216,7 @@
     <ClCompile Include="src\hud\ui\Scale.cpp" />
     <ClCompile Include="src\hud\ui\lk_format.cpp" />
     <ClCompile Include="src\chrome\lk_chrome.cpp" />
+    <ClCompile Include="src\chrome\WrapPanel.cpp" />
   </ItemGroup>
 
   <!-- library: the installed charts — sets, raster, the bake, charts by link. -->
@@ -297,6 +301,7 @@
   <ItemGroup>
     <Midl Include="src\app\ui\App.idl" />
     <Midl Include="src\app\ui\MainWindow.idl" />
+    <Midl Include="src\chrome\WrapPanel.idl" />
   </ItemGroup>
 
   <ItemGroup>

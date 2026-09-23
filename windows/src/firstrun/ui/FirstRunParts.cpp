@@ -242,19 +242,6 @@ namespace lkw::setup
         return b;
     }
 
-    // About how wide that pill draws, for laying the row out. WinUI has no
-    // panel that wraps, and the card is a fixed 720 points, so the rows are
-    // worked out before anything is built: 12.5 point Segoe runs a little
-    // under 7 points a character, and the capsule adds its padding, its border
-    // and the tick. The badge is 11 point, at about six.
-    double RegionPillWidth(std::wstring const &name, std::wstring const &badge, bool on)
-    {
-        double wide = 28.0 + (on ? 16.0 : 0.0) + (double)name.size() * 7.0;
-        if (!badge.empty())
-            wide += 6.0 + (double)badge.size() * 6.2;
-        return wide;
-    }
-
     // One pickable card: the source step's three, and the coverage step's
     // regions. The border shows the checked state, and the whole card is the
     // click target.

@@ -61,7 +61,6 @@ namespace lkw::setup
 
     Button RegionPill(std::wstring const &name, std::wstring const &blurb,
                       lkw::RegionHold const &hold, bool on, bool enabled, bool dark);
-    double RegionPillWidth(std::wstring const &name, std::wstring const &badge, bool on);
     Button ChoiceCard(wchar_t const *glyph, std::wstring const &title, std::wstring const &blurb,
                       bool picked, bool recommended, bool dark);
 }
