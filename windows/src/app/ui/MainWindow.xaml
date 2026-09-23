@@ -270,7 +270,7 @@
              basemap draws from the first frame at whole-world zoom and seeing
              it behind the card is what tells a mariner the app is working
              before any chart exists. The steps themselves are built in code
-             (firstrun/ui/FirstRun.cpp) the way the settings pages are: they are
+             (firstrun/ui/, a file per step) the way the settings pages are: they are
              mostly prose and a list, and XAML per step runs about four times
              the length. -->
         <Grid x:Name="FirstRunPane" Background="{ThemeResource LkScrimBrush}"

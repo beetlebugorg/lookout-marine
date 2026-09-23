@@ -191,7 +191,12 @@
 
   <!-- firstrun: setup. The model is pch-free so the test target builds it. -->
   <ItemGroup>
-    <ClCompile Include="src\firstrun\ui\FirstRun.cpp" />
+    <ClCompile Include="src\firstrun\ui\FirstRunFlow.cpp" />
+    <ClCompile Include="src\firstrun\ui\FirstRunNoaa.cpp" />
+    <ClCompile Include="src\firstrun\ui\FirstRunParts.cpp" />
+    <ClCompile Include="src\firstrun\ui\CoverageStep.cpp" />
+    <ClCompile Include="src\firstrun\ui\ImportingStep.cpp" />
+    <ClCompile Include="src\firstrun\ui\DepthStep.cpp" />
     <ClCompile Include="src\firstrun\lk_coastline.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
