@@ -102,24 +102,32 @@ private fun catalogLine(noaa: NoaaController) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        noaa.error != null -> Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                noaa.error ?: "",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.weight(1f, fill = false),
-            )
-            TextButton(onClick = { noaa.refresh() }) { Text("Try Again") }
+        // A loaded catalog leads, and a read that failed goes under it: the
+        // picker prices and removes water from the catalog it holds.
+        else -> Column {
+            if (noaa.haveCatalog) {
+                Text(
+                    buildString {
+                        append("${noaa.catalogCells} charts published")
+                        if (noaa.date.isNotEmpty()) append(", catalog dated ${noaa.date}")
+                        append('.')
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            noaa.catalogError?.let { err ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        err,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    TextButton(onClick = { noaa.refresh() }) { Text("Try Again") }
+                }
+            }
         }
-        noaa.haveCatalog -> Text(
-            buildString {
-                append("${noaa.catalogCells} charts published")
-                if (noaa.date.isNotEmpty()) append(", catalog dated ${noaa.date}")
-                append('.')
-            },
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
 }
 

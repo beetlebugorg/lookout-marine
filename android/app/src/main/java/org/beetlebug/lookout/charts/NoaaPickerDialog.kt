@@ -60,15 +60,15 @@ fun NoaaPickerDialog(
         noaa.reprice()
         if (!noaa.haveCatalog) noaa.refresh()
     }
-    // The regions held whole when this opened, ticked. Unticking one of these
-    // gives it back. Unticking one that was never here is a change of mind
-    // before Apply. The catalog prices a region, so this waits for it.
-    var held by remember { mutableStateOf<Set<String>?>(null) }
+    // The regions the core records as held open ticked, so unticking one
+    // gives it back. The catalog prices a region, so this waits for it.
+    var seeded by remember { mutableStateOf(false) }
     var confirmRemoval by remember { mutableStateOf(false) }
     LaunchedEffect(noaa.haveCatalog) {
-        if (noaa.haveCatalog && held == null) noaa.pickRecorded { held = it }
+        if (noaa.haveCatalog && !seeded) noaa.pickRecorded { seeded = true }
     }
-    val removing = noaa.regions.filter { held.orEmpty().contains(it.id) && it.id !in noaa.picked }
+    // The regions Apply gives back, as the core names them.
+    val removing = noaa.regions.filter { it.id in noaa.givingBack }
     val adding = noaa.cells > 0
     // Both halves in one core call. The removal runs first, so swapping one
     // region for another does not hold both on the disk at once.

@@ -57,7 +57,14 @@ class NoaaController(
         private set
     var catalogCells by mutableStateOf(0)
         private set
+    /** The download's error, and the catalog read's, apart. */
     var error by mutableStateOf<String?>(null)
+        private set
+    var catalogError by mutableStateOf<String?>(null)
+        private set
+    /** The region ids an apply of the pick gives back, as the core names
+     *  them. */
+    var givingBack by mutableStateOf<Set<String>>(emptySet())
         private set
 
     /** The download. */
@@ -190,7 +197,6 @@ class NoaaController(
 
     /** Read NOAA's catalog. The result arrives through the next change. */
     fun refresh() {
-        error = null
         call { Lookout.noaaRefresh(noaa) }
     }
 
@@ -217,7 +223,6 @@ class NoaaController(
     fun download(destDir: String, again: Boolean) {
         val ids = pickedIds
         if (ids.isEmpty()) return
-        error = null
         call { order { Lookout.noaaDownload(noaa, ids, destDir, again) } }
     }
 
@@ -246,7 +251,6 @@ class NoaaController(
      */
     fun apply(destDir: String, onDone: (Int) -> Unit) {
         val ids = pickedIds
-        error = null
         call {
             order {
                 val moved = Lookout.noaaApply(noaa, ids, destDir, false)
@@ -285,7 +289,6 @@ class NoaaController(
 
     /** Download the reissued editions of the downloaded cells into [destDir]. */
     fun update(destDir: String) {
-        error = null
         call { order { Lookout.noaaUpdate(noaa, destDir) } }
     }
 
@@ -308,6 +311,7 @@ class NoaaController(
         val text = Lookout.noaaText(noaa)
         val nextDate = if (have) text.getOrNull(0) ?: "" else ""
         val nextError = text.getOrNull(1)?.ifEmpty { null }
+        val nextCatalogError = text.getOrNull(2)?.ifEmpty { null }
         val nCells = pollBuf[2].toInt()
         val nTotal = pollBuf[3].toInt()
         val nDone = pollBuf[4].toInt()
@@ -358,6 +362,7 @@ class NoaaController(
             haveCatalog = have
             date = nextDate
             error = nextError
+            catalogError = nextCatalogError
             catalogCells = nCells
             total = nTotal
             done = nDone
@@ -380,6 +385,8 @@ class NoaaController(
 
     /** WORKER THREAD. Publishes through [access]. */
     private fun readCost(ids: String = pickedIds) {
+        val back = Lookout.noaaGivesBack(noaa, ids).toSet()
+        access.onMain { givingBack = back }
         if (ids.isEmpty() || !Lookout.noaaCost(noaa, ids, costBuf)) {
             access.onMain {
                 cells = 0; bytes = 0; held = 0; heldBytes = 0

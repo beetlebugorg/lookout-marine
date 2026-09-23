@@ -3849,14 +3849,30 @@ export fn Java_org_beetlebug_lookout_Lookout_nNoaaSvcPoll(env: [*c]j.JNIEnv, cls
     return if (st.have_catalog != 0) 1 else 0;
 }
 
-/// String[] nNoaaSvcText(long n) -- the catalog date and the error, the two
-/// strings of the last polled state.
+/// String[] nNoaaSvcText(long n) -- the catalog date, the download's error and
+/// the catalog read's error, the strings of the last polled state.
 export fn Java_org_beetlebug_lookout_Lookout_nNoaaSvcText(env: [*c]j.JNIEnv, cls: j.jclass, n: j.jlong) j.jobjectArray {
     _ = cls;
     var st: lookout_noaa_state = std.mem.zeroes(lookout_noaa_state);
     lookout_noaa_poll(noaaOf(n), &st);
-    const items = [_]?[*:0]const u8{ @ptrCast(&st.date), @ptrCast(&st.err) };
+    const items = [_]?[*:0]const u8{ @ptrCast(&st.date), @ptrCast(&st.err), @ptrCast(&st.catalog_error) };
     return jstrArray(env, &items);
+}
+
+extern fn lookout_noaa_gives_back(n: ?*c_noaa, picked_ids: [*:0]const u8, out: ?[*][*:0]const u8, cap: usize) usize;
+
+/// String[] nNoaaGivesBack(long n, String pickedIds) -- the region ids an
+/// apply of the pick gives back.
+export fn Java_org_beetlebug_lookout_Lookout_nNoaaGivesBack(env: [*c]j.JNIEnv, cls: j.jclass, n: j.jlong, picked_ids: j.jstring) j.jobjectArray {
+    _ = cls;
+    if (picked_ids == null) return jstrArray(env, &.{});
+    const ids = Borrowed.get(env, picked_ids) orelse return jstrArray(env, &.{});
+    defer ids.release(env);
+    var out: [64][*:0]const u8 = undefined;
+    const got = @min(lookout_noaa_gives_back(noaaOf(n), ids.ptr(), &out, out.len), out.len);
+    var items: [64]?[*:0]const u8 = undefined;
+    for (out[0..got], items[0..got]) |o, *i| i.* = o;
+    return jstrArray(env, items[0..got]);
 }
 
 export fn Java_org_beetlebug_lookout_Lookout_nNoaaSvcRefresh(env: [*c]j.JNIEnv, cls: j.jclass, n: j.jlong) void {

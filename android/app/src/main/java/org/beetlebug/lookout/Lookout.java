@@ -1076,6 +1076,8 @@ public final class Lookout implements AutoCloseable {
     public static boolean noaaPoll(long n, long[] out)  { return nNoaaSvcPoll(n, out); }
     /** The catalog date and the error, each possibly empty. */
     public static String[] noaaText(long n)             { return nNoaaSvcText(n); }
+    /** The region ids an apply of pickedIds gives back. */
+    public static String[] noaaGivesBack(long n, String pickedIds) { return nNoaaGivesBack(n, pickedIds); }
     public static void noaaRefresh(long n)              { nNoaaSvcRefresh(n); }
     public static void noaaCancel(long n)               { nNoaaSvcCancel(n); }
     /** The managed cells NOAA has reissued. 0 until a check is recorded. */
@@ -1171,6 +1173,7 @@ public final class Lookout implements AutoCloseable {
     private static native boolean nNoaaSvcChanged(long n);
     private static native boolean nNoaaSvcPoll(long n, long[] out);
     private static native String[] nNoaaSvcText(long n);
+    private static native String[] nNoaaGivesBack(long n, String pickedIds);
     private static native void nNoaaSvcRefresh(long n);
     private static native void nNoaaSvcCancel(long n);
     private static native int nNoaaOutdated(long n);
