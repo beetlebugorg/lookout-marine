@@ -911,7 +911,15 @@ typedef struct {
      * for display. What a region selects comes from the catalog, so these
      * never decide which cells download. */
     double west, south, east, north;
+    /* The map panel the region is drawn on, a LOOKOUT_NOAA_PANEL_ value. */
+    int panel;
 } lookout_noaa_region;
+
+/* lookout_noaa_region.panel. A picker's map has the lower 48 as its main
+ * panel, with Alaska and Hawaii in panels of their own. */
+#define LOOKOUT_NOAA_PANEL_LOWER48 0
+#define LOOKOUT_NOAA_PANEL_ALASKA  1
+#define LOOKOUT_NOAA_PANEL_HAWAII  2
 
 /* ---- S-52 colours ------------------------------------------------------ */
 

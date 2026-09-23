@@ -1,4 +1,5 @@
-/* lookout-shell.h - the shell kit: the license manifest and the format kit.
+/* lookout-shell.h - the shell kit: the license manifest, the format kit and
+ * the coverage coastline.
  * Included from lookout.h. */
 #ifndef LOOKOUT_SHELL_H
 #define LOOKOUT_SHELL_H
@@ -409,6 +410,47 @@ void lookout_depth_plan(double draft_m, double clearance_m, int feet,
  * 300 ft. Writes up to `cap` rungs and returns how many the ladder has. `out`
  * may be NULL to ask only for the count. */
 size_t lookout_depth_ladder(int feet, double *out, size_t cap);
+
+/* ---- the coverage coastline --------------------------------------------
+ *
+ * The coastline a NOAA region picker draws under the regions, baked into the
+ * core from the GSHHG data the basemap is baked from. It covers the waters
+ * the picker shows, simplified to 0.02 degrees.
+ *
+ * A window is a lon/lat box in degrees, w to e and s to n, drawn in Mercator
+ * into a px_w by px_h rectangle with its origin at the top left. Longitude
+ * maps straight through, with no wrap. */
+
+/* GSHHG levels. A lake is its own ring, filled over the land it sits in. */
+#define LOOKOUT_COAST_LAND 1
+#define LOOKOUT_COAST_LAKE 2
+
+/* Width over height of the window drawn in Mercator, for sizing the
+ * rectangle. 1 for an empty window. */
+double lookout_map_aspect(double w, double e, double s, double n);
+
+/* Project `count` points into the window's rectangle. `lonlat` holds
+ * longitude and latitude pairs, and `xy` receives x and y pairs. */
+void lookout_map_project(double w, double e, double s, double n,
+                         double px_w, double px_h,
+                         const double *lonlat, float *xy, size_t count);
+
+/* The rings of one level that reach into the window, projected into its
+ * rectangle. Returns the number of points. `xy` has room for `cap` points,
+ * as x and y pairs. `ends[i]` is the index one past ring i's last point, so
+ * the last ring ends at the returned count. Every ring has at least four
+ * points, so `ends` needs at most a quarter as many entries as there are
+ * points. The call writes only when both buffers hold the whole result: a
+ * call with cap 0 returns the size to allocate. The buffers are the
+ * caller's.
+ *
+ * A ring's last point repeats its first. Fill the land rings as one path, then the lake rings
+ * as another. A ring that crosses the antimeridian is left out, because
+ * drawn straight through it spans the map. */
+size_t lookout_coastline_rings(int level, double w, double e, double s,
+                               double n, double px_w, double px_h,
+                               float *xy, size_t cap,
+                               uint32_t *ends, size_t ends_cap);
 
 #ifdef __cplusplus
 }

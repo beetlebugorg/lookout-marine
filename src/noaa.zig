@@ -108,7 +108,13 @@ pub const Region = struct {
     south: f64,
     east: f64,
     north: f64,
+    /// The map panel a picker draws this region on.
+    panel: Panel = .lower48,
 };
+
+/// A picker's map panels. The values are lookout-library.h's
+/// LOOKOUT_NOAA_PANEL_ numbers.
+pub const Panel = enum(u8) { lower48 = 0, alaska = 1, hawaii = 2 };
 
 pub const regions = [_]Region{
     .{ .id = "d1", .district = 1, .name = "Northeast",
@@ -134,10 +140,12 @@ pub const regions = [_]Region{
        .west = -125.4, .south = 42.0, .east = -122.0, .north = 49.0 },
     .{ .id = "d14", .district = 14, .name = "Pacific Islands",
        .blurb = "Hawaii, Guam and American Samoa",
-       .west = -160.6, .south = 18.6, .east = -154.6, .north = 22.4 },
+       .west = -160.6, .south = 18.6, .east = -154.6, .north = 22.4,
+       .panel = .hawaii },
     .{ .id = "d17", .district = 17, .name = "Alaska",
        .blurb = "All of Alaska",
-       .west = -169.0, .south = 51.5, .east = -130.5, .north = 71.4 },
+       .west = -169.0, .south = 51.5, .east = -130.5, .north = 71.4,
+       .panel = .alaska },
 };
 
 /// The region with this id, or null.
@@ -780,6 +788,17 @@ test "a catalog older than the device reissues no cell" {
     const stale = try outdated(testing.allocator, &cat, &have);
     defer testing.allocator.free(stale);
     try testing.expectEqual(@as(usize, 0), stale.len);
+}
+
+test "Alaska and Hawaii have panels of their own" {
+    for (regions) |r| {
+        const want: Panel = switch (r.district) {
+            17 => .alaska,
+            14 => .hawaii,
+            else => .lower48,
+        };
+        try testing.expectEqual(want, r.panel);
+    }
 }
 
 test "every shipped region has a distinct id and a real district" {

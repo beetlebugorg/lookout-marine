@@ -444,6 +444,7 @@ pub const lookout_noaa_region = extern struct {
     south: f64,
     east: f64,
     north: f64,
+    panel: c_int,
 };
 
 /// The region table, built once from src/noaa.zig.
@@ -459,6 +460,7 @@ const noaa_regions = blk: {
             .south = r.south,
             .east = r.east,
             .north = r.north,
+            .panel = @intFromEnum(r.panel),
         };
     }
     break :blk out;

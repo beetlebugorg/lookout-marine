@@ -7,6 +7,7 @@ const capi = @import("../capi.zig");
 const format = @import("../shell/format.zig");
 const depth = @import("../shell/depth.zig");
 const lic = @import("../licenses.zig");
+const coast = @import("../shell/coastline.zig");
 
 const gpa = capi.gpa;
 
@@ -146,6 +147,34 @@ export fn lookout_depth_ladder(feet: c_int, out: ?[*]f64, cap: usize) usize {
         @memcpy(dst[0..n], l[0..n]);
     }
     return l.len;
+}
+
+// ---- the coverage coastline --------------------------------------------------
+
+/// Width over height of a Mercator window. See lookout-shell.h.
+export fn lookout_map_aspect(w: f64, e: f64, s: f64, n: f64) f64 {
+    return coast.aspect(w, e, s, n);
+}
+
+/// Lon/lat pairs projected into a window's rectangle. See lookout-shell.h.
+export fn lookout_map_project(w: f64, e: f64, s: f64, n: f64, px_w: f64, px_h: f64, lonlat: ?[*]const f64, xy: ?[*]f32, points: usize) void {
+    const src = lonlat orelse return;
+    const dst = xy orelse return;
+    const win = coast.Window{ .west = w, .east = e, .south = s, .north = n, .px_w = px_w, .px_h = px_h };
+    for (0..points) |i| {
+        const p = win.point(src[i * 2], src[i * 2 + 1]);
+        dst[i * 2] = @floatCast(p[0]);
+        dst[i * 2 + 1] = @floatCast(p[1]);
+    }
+}
+
+/// The coastline's rings of one level, projected to pixels. See lookout-shell.h.
+export fn lookout_coastline_rings(level: c_int, w: f64, e: f64, s: f64, n: f64, px_w: f64, px_h: f64, xy: ?[*]f32, cap: usize, ends: ?[*]u32, ends_cap: usize) usize {
+    if (level < 0 or level > 255) return 0;
+    const win = coast.Window{ .west = w, .east = e, .south = s, .north = n, .px_w = px_w, .px_h = px_h };
+    const pts: []f32 = if (xy) |p| p[0 .. cap * 2] else &.{};
+    const ring_ends: []u32 = if (ends) |p| p[0..ends_cap] else &.{};
+    return coast.rings(@intCast(level), win, pts, ring_ends);
 }
 
 // ---- licenses ----------------------------------------------------------------

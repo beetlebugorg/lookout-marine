@@ -2043,16 +2043,7 @@ export fn Java_org_beetlebug_lookout_Lookout_nS52Color(env: [*c]j.JNIEnv, cls: j
 // is polled several times a second while a download runs, and building a
 // document for each poll would allocate through the whole transfer.
 
-const lookout_noaa_region = extern struct {
-    id: [*:0]const u8,
-    name: [*:0]const u8,
-    blurb: [*:0]const u8,
-    district: c_int,
-    west: f64,
-    south: f64,
-    east: f64,
-    north: f64,
-};
+const lookout_noaa_region = @import("capi/library.zig").lookout_noaa_region;
 
 const lookout_noaa_box = extern struct { west: f64, south: f64, east: f64, north: f64 };
 

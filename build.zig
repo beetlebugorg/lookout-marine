@@ -584,6 +584,7 @@ pub fn build(b: *std.Build) void {
         "src/shell/format.zig",
         "src/shell/depth.zig",
         "src/shell/palette.zig",
+        "src/shell/coastline.zig",
         "src/shell/bake.zig",
         "src/shell/frame.zig",
         "src/settings.zig",
