@@ -141,6 +141,21 @@ export fn lookout_noaa_apply(n: ?*lookout_noaa, picked_ids: ?[*:0]const u8, dest
     return apply(x, picked_ids, dest_dir, again);
 }
 
+export fn lookout_noaa_gives_back(n: ?*lookout_noaa, picked_ids: ?[*:0]const u8, out: ?[*][*:0]const u8, cap: usize) usize {
+    const x = n orelse return 0;
+    var buf: [noaa.regions.len]u8 = undefined;
+    const mask = x.givesBack(noaa.districtsFromIds(&buf, span(picked_ids)));
+    var count: usize = 0;
+    for (noaa.regions, 0..) |r, i| {
+        if (mask & (@as(u64, 1) << @intCast(i)) == 0) continue;
+        if (out) |o| if (count < cap) {
+            o[count] = r.id.ptr;
+        };
+        count += 1;
+    }
+    return count;
+}
+
 export fn lookout_noaa_outdated(n: ?*lookout_noaa) u32 {
     const x = n orelse return 0;
     return x.outdated();

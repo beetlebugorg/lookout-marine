@@ -2017,6 +2017,19 @@ pub const Handle = struct {
         return moved;
     }
 
+    /// The regions an apply of `districts` gives back, as a mask of
+    /// noaa.regions: those recorded as held that the pick leaves out. An
+    /// empty pick gives back every one recorded.
+    pub fn givesBack(self: *Handle, districts: []const u8) u64 {
+        self.mu.lock();
+        defer self.mu.unlock();
+        self.syncHeld();
+        const cat = &(self.svc.cat orelse return 0);
+        const charts = self.heldCharts() catch return 0;
+        defer chartsets.Sets.freeHeld(self.svc.alloc, charts);
+        return self.recordedMask(cat, charts) & ~maskOf(districts);
+    }
+
     /// The cells of the regions in `gone` that no region in `keep` covers.
     /// Borrowed from the catalog.
     fn cellsToRemove(self: *Handle, gone: u64, keep: []const u8, out: *std.ArrayList([]const u8)) void {
@@ -3918,6 +3931,22 @@ test "an apply gives one region back and fetches another" {
     const d7 = f.h.regionState("d7").?;
     try testing.expectEqual(@as(u32, 3), d7.cells);
     try testing.expectEqual(@as(u32, 2), d7.held);
+}
+
+test "the regions an apply gives back are the recorded ones the pick leaves out" {
+    var f: ApplyFixture = undefined;
+    const all = [_][]const u8{ "US500001", "US500002", "US500003", "US500004" };
+    try f.init(&all, &all);
+    defer f.deinit();
+    f.store.setText(settings.group_chartsets, Handle.record_key, "d5,d7");
+
+    // District 7 goes, even though district 5 still covers two of its cells.
+    const d5 = maskOf(&.{5});
+    const d7 = maskOf(&.{7});
+    try testing.expectEqual(d7, f.h.givesBack(&.{5}));
+    try testing.expectEqual(@as(u64, 0), f.h.givesBack(&.{ 5, 7 }));
+    // An empty pick gives back every region recorded.
+    try testing.expectEqual(d5 | d7, f.h.givesBack(&.{}));
 }
 
 test "an empty pick during a download stops it and deletes the whole download" {

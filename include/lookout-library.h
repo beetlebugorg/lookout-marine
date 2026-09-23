@@ -1143,6 +1143,14 @@ int lookout_noaa_region_state(lookout_noaa *n, const char *region_id,
 uint32_t lookout_noaa_apply(lookout_noaa *n, const char *picked_ids,
                             const char *dest_dir, int again);
 
+/* The regions lookout_noaa_apply with `picked_ids` gives back: those recorded
+ * as held that the pick leaves out, every recorded one for an empty pick.
+ * Writes up to `cap` region ids, static storage, into `out` and returns how
+ * many there are. `out` may be NULL to ask only for the count. 0 before a
+ * catalog is read. */
+size_t lookout_noaa_gives_back(lookout_noaa *n, const char *picked_ids,
+                               const char **out, size_t cap);
+
 /* How many of the managed sets' cells NOAA has reissued: the catalog lists a
  * higher edition, or the same edition with a higher update number. A cell the
  * catalog no longer lists does not count, because NOAA withdraws cells and
