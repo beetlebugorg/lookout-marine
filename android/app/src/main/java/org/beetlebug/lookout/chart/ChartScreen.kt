@@ -48,6 +48,9 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import org.beetlebug.lookout.charts.NoaaController
@@ -389,6 +392,29 @@ fun ChartScreen(
             if (kept) open = true
         }
         if (open) charts.adoptNoaaPrepare()
+    }
+
+    // A followed NOAA order that failed. Setup shows the end in its own step.
+    noaa.failure?.let { f ->
+        if (!controller.firstRun.showing) {
+            AlertDialog(
+                onDismissRequest = { noaa.failure = null },
+                title = { Text("NOAA Charts") },
+                text = { Text(f.message) },
+                confirmButton = {
+                    if (f.canRetry) {
+                        TextButton(onClick = { noaa.retry() }) { Text("Retry") }
+                    } else {
+                        TextButton(onClick = { noaa.failure = null }) { Text("OK") }
+                    }
+                },
+                dismissButton = if (f.canRetry) {
+                    { TextButton(onClick = { noaa.failure = null }) { Text("OK") } }
+                } else {
+                    null
+                },
+            )
+        }
     }
 
     // The update check, when a chart opens and when the sets change. The core

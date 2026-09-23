@@ -104,6 +104,11 @@ class NoaaController(
     var picked by mutableStateOf<Set<String>>(emptySet())
         private set
 
+    /** A followed order that failed, or was refused for a cause ordering
+     *  again can clear. The screen shows it and clears it. */
+    data class Failure(val message: String, val canRetry: Boolean)
+    var failure by mutableStateOf<Failure?>(null)
+
     /** True while an update check waits on its catalog read. */
     var updateChecking by mutableStateOf(false)
         private set
@@ -133,6 +138,12 @@ class NoaaController(
     private var hadCatalog = false
     /** The recorded check [outdated] was counted after. Worker only. */
     private var countedAt = 0L
+    /** The last order, which Retry repeats, and the run number the state had
+     *  before it, -1 once its end has been read. Worker only. */
+    private var lastOrder: (() -> Unit)? = null
+    private var watchFrom = -1L
+    /** Retry found no catalog. It orders again when the catalog read ends. */
+    private var retryWaiting = false
 
     init {
         if (noaa != 0L) {
@@ -141,6 +152,29 @@ class NoaaController(
                 val c = Lookout.noaaUpdateCheck(noaa)
                 access.onMain { updateCheck = c }
                 pull(force = true)
+            }
+        }
+    }
+
+    /** Place [block] as the order to follow to its end. WORKER THREAD. */
+    private fun order(block: () -> Unit) {
+        lastOrder = block
+        Lookout.noaaPoll(noaa, pollBuf)
+        watchFrom = pollBuf[9]
+        block()
+    }
+
+    /** Place the last order again. With no catalog loaded this reads the
+     *  catalog first and orders when that read ends. */
+    fun retry() {
+        failure = null
+        call {
+            val last = lastOrder ?: return@call
+            if (hadCatalog) {
+                order(last)
+            } else {
+                retryWaiting = true
+                Lookout.noaaRefresh(noaa)
             }
         }
     }
@@ -184,7 +218,7 @@ class NoaaController(
         val ids = pickedIds
         if (ids.isEmpty()) return
         error = null
-        call { Lookout.noaaDownload(noaa, ids, destDir, again) }
+        call { order { Lookout.noaaDownload(noaa, ids, destDir, again) } }
     }
 
     /**
@@ -214,8 +248,10 @@ class NoaaController(
         val ids = pickedIds
         error = null
         call {
-            val moved = Lookout.noaaApply(noaa, ids, destDir, false)
-            access.onMain { onDone(moved) }
+            order {
+                val moved = Lookout.noaaApply(noaa, ids, destDir, false)
+                access.onMain { onDone(moved) }
+            }
         }
     }
 
@@ -250,7 +286,7 @@ class NoaaController(
     /** Download the reissued editions of the downloaded cells into [destDir]. */
     fun update(destDir: String) {
         error = null
-        call { Lookout.noaaUpdate(noaa, destDir) }
+        call { order { Lookout.noaaUpdate(noaa, destDir) } }
     }
 
     /**
@@ -284,6 +320,7 @@ class NoaaController(
         val nPrepared = pollBuf[11].toInt()
         val nToPrepare = pollBuf[12].toInt()
         val nBandTotal = List(6) { pollBuf[19 + it].toInt() }
+        val nRetry = pollBuf[25] != 0L
         val nChecking = pollBuf[29] != 0L
         val nCheckedAt = pollBuf[30]
         // A check the core has recorded is counted once.
@@ -296,6 +333,25 @@ class NoaaController(
 
         if (gained) readCost()
         val boxes = if (gained) readCoverage() else null
+
+        // The followed order's end. A refusal that ordering again cannot
+        // clear shows no alert.
+        var nFailure: Failure? = null
+        if (watchFrom >= 0 && nRun > watchFrom &&
+            nOutcome != OUTCOME_NONE && nOutcome != OUTCOME_RUNNING
+        ) {
+            watchFrom = -1
+            if (nOutcome == OUTCOME_FAILED || (nOutcome == OUTCOME_REFUSED && nRetry)) {
+                nFailure = Failure(
+                    nextError ?: "The download stopped before any chart arrived.",
+                    nRetry,
+                )
+            }
+        }
+        if (retryWaiting && nextPhase != Phase.READING_CATALOG) {
+            retryWaiting = false
+            if (have) lastOrder?.let { worker.execute { order(it); pull() } }
+        }
 
         access.onMain {
             phase = nextPhase
@@ -317,6 +373,7 @@ class NoaaController(
             updateChecking = nChecking
             updateCheckedAt = nCheckedAt
             if (nOutdated != null) outdated = nOutdated
+            if (nFailure != null) failure = nFailure
             if (boxes != null) coverage = boxes
         }
     }
@@ -388,5 +445,6 @@ class NoaaController(
         const val OUTCOME_EMPTY = 3
         const val OUTCOME_CANCELLED = 4
         const val OUTCOME_FAILED = 5
+        const val OUTCOME_REFUSED = 6
     }
 }
