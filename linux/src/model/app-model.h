@@ -79,6 +79,9 @@ void lk_app_model_download_noaa_updates (LkAppModel *self);
  * chrome over it is what they get until they switch one back on. */
 gboolean lk_app_model_all_sets_off (LkAppModel *self);
 
+/* TRUE when a switched-on set holds a chart to draw. */
+gboolean lk_app_model_has_drawable_sets (LkAppModel *self);
+
 /* TRUE while a background scan has a set still to read. The library composes
  * to the sets already read, so a chart opened now can be short or empty. Wait
  * for ::chart-sets-changed and ask again. */

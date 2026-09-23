@@ -209,128 +209,25 @@ test_the_scrim_goes_with_setup (void)
   g_assert_null (page);
 }
 
-/* Setup comes back when the library goes empty.
+/* Setup comes back when the library empties.
  *
- * A mariner who removes every chart through the NOAA picker has an empty
- * library and no way back to the page that builds one, because finishing setup
- * put it away for the run. This reads the rule directly. Driving it through
- * the window needs a library to remove.
- *
- * Set Up Later is the other half. A mariner who never had charts asked for the
- * app, so setup stays down for them. */
+ * A mariner who removes every chart has an empty library and no way back to
+ * the page that builds one, because finishing setup put it away for the run.
+ * The core decides. This checks that the flow notes the facts to it and reads
+ * its state. */
 static void
 test_setup_returns_when_the_library_empties (void)
 {
   g_autoptr (LkFirstRun) run = lk_first_run_new ();
+  lookout_setup_facts facts = { .has_charts = 1 };
 
-  /* A run with charts, put away by finishing setup. */
-  g_assert_false (lk_first_run_should_run (run, FALSE, FALSE));
-  lk_first_run_finish (run);
-  g_assert_false (lk_first_run_should_run (run, FALSE, FALSE));
+  lk_first_run_note (run, &facts);
+  g_assert_false (lk_first_run_should_run (run));
 
   /* The charts go. */
-  g_assert_true (lk_first_run_should_run (run, TRUE, FALSE));
-
-  /* Set Up Later over a library that never had charts holds. */
-  g_autoptr (LkFirstRun) later = lk_first_run_new ();
-
-  g_assert_true (lk_first_run_should_run (later, TRUE, FALSE));
-  lk_first_run_finish (later);
-  g_assert_false (lk_first_run_should_run (later, TRUE, FALSE));
-}
-
-/* NOAA's terms are answered before their charts are picked.
- *
- * The step went straight to coverage and showed the terms as a note beside
- * the map, so there was no accept and no decline. The reference moves to
- * coverage only from the accept. */
-static void
-test_the_noaa_terms_gate_the_coverage_step (void)
-{
-  g_autoptr (LkFirstRun) run = lk_first_run_new ();
-
-  g_setenv ("LOOKOUT_FIRST_RUN", "source", TRUE);
-  lk_first_run_begin (run);
-  g_unsetenv ("LOOKOUT_FIRST_RUN");
-  lk_first_run_set_source (run, LK_FIRST_RUN_NOAA);
-
-  /* Continue asks, and leaves the mariner where they were. */
-  g_assert_false (lk_first_run_advance (run, NULL));
-  g_assert_cmpint (lk_first_run_step (run), ==, LK_FIRST_RUN_SOURCE);
-
-  /* A decline is the same as never answering. */
-  g_assert_cmpint (lk_first_run_step (run), ==, LK_FIRST_RUN_SOURCE);
-
-  lk_first_run_accept_terms (run);
-  g_assert_cmpint (lk_first_run_step (run), ==, LK_FIRST_RUN_COVERAGE);
-
-  /* And the accept applies to that one step alone. */
-  lk_first_run_accept_terms (run);
-  g_assert_cmpint (lk_first_run_step (run), ==, LK_FIRST_RUN_COVERAGE);
-}
-
-/* An import with no chart offers a way out.
- *
- * Continue waits on a bake, and the bake starts only once a cell arrives. A
- * download that failed every cell left the step with Continue dead, Stop with
- * no job, and Back hidden, so the card stood over an empty library with no
- * live control. */
-static void
-test_an_import_with_no_chart_can_go_back (void)
-{
-  g_autoptr (LkFirstRun) run = lk_first_run_new ();
-  LkFirstRunFlow flow = { .model = model, .flow = run };
-
-  g_setenv ("LOOKOUT_FIRST_RUN", "importing", TRUE);
-  lk_first_run_begin (run);
-  g_unsetenv ("LOOKOUT_FIRST_RUN");
-
-  /* No download, no bake, and an empty library. */
-  g_assert_true (lk_app_model_get_nothing_to_draw (model));
-  g_assert_true (lk_first_run_import_stalled (&flow));
-
-  /* Back leaves for the coverage step, where the water is still picked. */
-  lk_first_run_back (run);
-  g_assert_cmpint (lk_first_run_step (run), ==, LK_FIRST_RUN_COVERAGE);
-}
-
-/* A download that failed ends the import, and Back leaves the step. The
- * only transfer fails on the network, so the outcome is FAILED. */
-static void
-test_a_failed_download_can_go_back (void)
-{
-  g_autoptr (LkFirstRun) run = lk_first_run_new ();
-  LkFirstRunFlow flow = { .model = model, .flow = run };
-  LkNoaa *noaa = lk_app_model_get_noaa (model);
-  lookout_noaa *service = lk_noaa_service (noaa);
-  g_autofree char *cached = lk_fixture_catalog_path ();
-  LkFakeFetch fake = { 0 };
-
-  g_setenv ("LOOKOUT_FIRST_RUN", "importing", TRUE);
-  lk_first_run_begin (run);
-  g_unsetenv ("LOOKOUT_FIRST_RUN");
-
-  /* Clearing the fetcher ends a catalog read that an earlier step started. */
-  lk_fixture_cache_catalog ();
-  lookout_noaa_set_http_provider (service, NULL, NULL, NULL, NULL);
-  lookout_noaa_set_http_provider (service, lk_fake_get, lk_fake_cancel, NULL, &fake);
-  lk_noaa_refresh (noaa);
-  lk_noaa_toggle (noaa, "d5");
-  lk_app_model_start_noaa_download (model, FALSE);
-  lk_noaa_clear_picks (noaa);
-  g_assert_cmpint (lk_noaa_state (noaa)->outcome, ==, LOOKOUT_NOAA_RUNNING);
-  g_assert_false (lk_first_run_import_stalled (&flow));
-
-  lookout_noaa_http_respond_chunk (service, fake.last, NULL, 0, 0, 1);
-  lk_noaa_sync (noaa);
-  g_assert_cmpint (lk_noaa_state (noaa)->outcome, ==, LOOKOUT_NOAA_FAILED);
-
-  g_assert_true (lk_first_run_import_stalled (&flow));
-  lk_first_run_back (run);
-  g_assert_cmpint (lk_first_run_step (run), ==, LK_FIRST_RUN_COVERAGE);
-
-  lookout_noaa_set_http_provider (service, NULL, NULL, NULL, NULL);
-  g_assert_cmpint (g_remove (cached), ==, 0);
+  facts = (lookout_setup_facts) { .nothing_to_draw = 1 };
+  lk_first_run_note (run, &facts);
+  g_assert_true (lk_first_run_should_run (run));
 }
 
 /* The page fill stands while there is no chart handle. A chart of no charts
@@ -471,12 +368,6 @@ main (int argc, char *argv[])
   g_test_add_func ("/window/setup-runs-over-an-empty-library",
                    test_setup_runs_over_an_empty_library);
   g_test_add_func ("/window/setup-steps", test_setup_steps);
-  g_test_add_func ("/window/the-noaa-terms-gate-the-coverage-step",
-                   test_the_noaa_terms_gate_the_coverage_step);
-  g_test_add_func ("/window/an-import-with-no-chart-can-go-back",
-                   test_an_import_with_no_chart_can_go_back);
-  g_test_add_func ("/window/a-failed-download-can-go-back",
-                   test_a_failed_download_can_go_back);
   g_test_add_func ("/window/setup-returns-when-the-library-empties",
                    test_setup_returns_when_the_library_empties);
   g_test_add_func ("/window/page-follows-nothing-to-draw", test_page_follows_nothing_to_draw);

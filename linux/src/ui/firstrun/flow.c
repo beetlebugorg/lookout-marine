@@ -17,6 +17,33 @@
 
 static void lk_first_run_rebuild (LkFirstRunFlow *self);
 
+/* Tell the core what the app is doing now. */
+static void
+lk_first_run_flow_note (LkFirstRunFlow *self)
+{
+  LkNoaa *noaa = lk_app_model_get_noaa (self->model);
+  const lookout_noaa_state *state = lk_noaa_state (noaa);
+  gboolean again = lk_noaa_all_installed (noaa);
+  lookout_setup_facts facts = {
+    .catalog_ready = state->have_catalog,
+    .picked = lk_noaa_picked_count (noaa) > 0,
+    .on_link = lk_chart_links_active (lk_app_model_get_chart_links (self->model)) != NULL,
+    .nothing_to_draw = lk_app_model_get_nothing_to_draw (self->model),
+    .has_charts = lk_app_model_has_drawable_sets (self->model),
+    .work_running = lk_app_model_get_baking (self->model) ||
+                    lk_app_model_library_scanning (self->model),
+    .downloading = state->phase == LOOKOUT_NOAA_DOWNLOADING,
+    .chart_open = lk_app_model_get_has_chart (self->model) &&
+                  !lk_app_model_get_chart_is_empty (self->model),
+    .noaa_outcome = state->outcome,
+    .noaa_run = state->run,
+    .pick_charts = again ? lk_noaa_held (noaa) : lk_noaa_cells (noaa),
+    .pick_bytes = again ? lk_noaa_held_bytes (noaa) : lk_noaa_bytes (noaa),
+  };
+
+  lk_first_run_note (self->flow, &facts);
+}
+
 static void
 lk_first_run_flow_free (gpointer data)
 {
@@ -61,8 +88,6 @@ lk_first_run_place_order (LkFirstRunFlow *self)
   guint n = 0;
   const LkNoaaRegion *regions = lk_noaa_regions (noaa, &n);
   g_autoptr (GString) names = g_string_new (NULL);
-  gboolean again = lk_noaa_all_installed (noaa);
-
   for (guint i = 0; i < n; i++)
     {
       if (!lk_noaa_is_picked (noaa, regions[i].id))
@@ -72,10 +97,8 @@ lk_first_run_place_order (LkFirstRunFlow *self)
       g_string_append (names, regions[i].name);
     }
 
-  lk_first_run_set_order (self->flow, names->str,
-                          again ? lk_noaa_held (noaa) : lk_noaa_cells (noaa),
-                          again ? lk_noaa_held_bytes (noaa) : lk_noaa_bytes (noaa));
-  lk_app_model_start_noaa_download (self->model, again);
+  lk_first_run_set_order_regions (self->flow, names->str);
+  lk_app_model_start_noaa_download (self->model, lk_noaa_all_installed (noaa));
 }
 
 /* The mariner's answer to NOAA's terms. Accept moves to the coverage step;
@@ -90,8 +113,8 @@ lk_first_run_terms_answered (GObject *source_object, GAsyncResult *result,
                                                &error);
 
   /* Cancel is 0, Agree is 1. */
-  if (chosen == 1)
-    lk_first_run_accept_terms (self->flow);
+  lk_first_run_act (self->flow, chosen == 1 ? LOOKOUT_SETUP_AGREE : LOOKOUT_SETUP_DECLINE,
+                    0);
 }
 
 /* NOAA's own terms, in their words, before their charts are picked. */
@@ -121,20 +144,17 @@ static void
 lk_first_run_primary_clicked (GtkButton *button, gpointer user_data)
 {
   LkFirstRunFlow *self = user_data;
-  LkFirstRunSource source;
+  int source;
+
+  lk_first_run_flow_note (self);
+  source = lk_first_run_act (self->flow, LOOKOUT_SETUP_ADVANCE,
+                             lk_first_run_source (self->flow));
 
   /* The terms stand between the source step and NOAA's charts. */
-  if (lk_first_run_step (self->flow) == LK_FIRST_RUN_SOURCE &&
-      lk_first_run_source (self->flow) == LK_FIRST_RUN_NOAA)
-    {
-      lk_first_run_ask_terms (self);
-      return;
-    }
+  if (lk_first_run_state (self->flow)->terms_showing)
+    lk_first_run_ask_terms (self);
 
-  if (!lk_first_run_advance (self->flow, &source))
-    return;
-
-  /* The flow has finished asking. The shell does the part it cannot. */
+  /* The shell does the part the core cannot. */
   switch (source)
     {
     case LK_FIRST_RUN_FILES:
@@ -148,7 +168,7 @@ lk_first_run_primary_clicked (GtkButton *button, gpointer user_data)
     case LK_FIRST_RUN_NOAA:
       lk_first_run_place_order (self);
       break;
-    case LK_FIRST_RUN_ONLINE_CHART:
+    default:
       break; /* the chart the mariner picked is already drawing */
     }
 }
@@ -156,13 +176,13 @@ lk_first_run_primary_clicked (GtkButton *button, gpointer user_data)
 static void
 lk_first_run_back_clicked (GtkButton *button, gpointer user_data)
 {
-  lk_first_run_back (((LkFirstRunFlow *) user_data)->flow);
+  lk_first_run_act (((LkFirstRunFlow *) user_data)->flow, LOOKOUT_SETUP_BACK, 0);
 }
 
 static void
 lk_first_run_later_clicked (GtkButton *button, gpointer user_data)
 {
-  lk_first_run_finish (((LkFirstRunFlow *) user_data)->flow);
+  lk_first_run_act (((LkFirstRunFlow *) user_data)->flow, LOOKOUT_SETUP_LATER, 0);
 }
 
 /* Stop the download and the bake. Whatever landed stays: a cancelled bake
@@ -177,56 +197,6 @@ lk_first_run_stop_clicked (GtkButton *button, gpointer user_data)
 }
 
 /* ---- the footer ---------------------------------------------------------- */
-
-/* True once the charts have arrived, converted, and opened. */
-static gboolean
-lk_first_run_import_finished (LkFirstRunFlow *self)
-{
-  const lookout_noaa_state *noaa = lk_noaa_state (lk_app_model_get_noaa (self->model));
-
-  return noaa->outcome != LOOKOUT_NOAA_RUNNING &&
-         !lk_app_model_get_baking (self->model) &&
-         !lk_app_model_get_nothing_to_draw (self->model);
-}
-
-/* The import ended with no chart.
- *
- * A download that failed every cell, a Stop pressed before the first one
- * arrived, and a pick the core refused all reach this. A finished download
- * has prepared charts, and a folder waits on its scan. */
-gboolean
-lk_first_run_import_stalled (LkFirstRunFlow *self)
-{
-  const lookout_noaa_state *noaa = lk_noaa_state (lk_app_model_get_noaa (self->model));
-
-  return lk_first_run_step (self->flow) == LK_FIRST_RUN_IMPORTING &&
-         noaa->outcome != LOOKOUT_NOAA_RUNNING &&
-         noaa->outcome != LOOKOUT_NOAA_FINISHED &&
-         !lk_app_model_get_baking (self->model) &&
-         !lk_app_model_library_scanning (self->model) &&
-         lk_app_model_get_nothing_to_draw (self->model);
-}
-
-/* Whether the primary action has anything to do. */
-static gboolean
-lk_first_run_primary_ready (LkFirstRunFlow *self)
-{
-  LkNoaa *noaa = lk_app_model_get_noaa (self->model);
-
-  switch (lk_first_run_step (self->flow))
-    {
-    case LK_FIRST_RUN_COVERAGE:
-      /* Download with no region picked, and with no catalog to price it from,
-       * does nothing. */
-      return lk_noaa_state (noaa)->have_catalog && lk_noaa_picked_count (noaa) > 0;
-    case LK_FIRST_RUN_IMPORTING:
-      /* The library opens when the import finishes, so there is nothing to
-       * continue to until it has. */
-      return lk_first_run_import_finished (self);
-    default:
-      return TRUE;
-    }
-}
 
 /* The line beside the primary action. */
 static char *
@@ -273,6 +243,7 @@ void
 lk_first_run_refresh_footer (LkFirstRunFlow *self)
 {
   LkFirstRunStep step = lk_first_run_step (self->flow);
+  const lookout_setup_state *state = lk_first_run_state (self->flow);
   g_autofree char *note = lk_first_run_footnote (self);
   const char *chosen = NULL;
   g_autofree char *use = NULL;
@@ -298,7 +269,7 @@ lk_first_run_refresh_footer (LkFirstRunFlow *self)
 
   gtk_button_set_label (GTK_BUTTON (self->primary),
                         lk_first_run_primary_title (self->flow, chosen));
-  gtk_widget_set_sensitive (self->primary, lk_first_run_primary_ready (self));
+  gtk_widget_set_sensitive (self->primary, state->primary_enabled);
 
   gtk_label_set_text (GTK_LABEL (self->footnote), note != NULL ? note : "");
   gtk_widget_set_visible (self->footnote, note != NULL);
@@ -306,17 +277,12 @@ lk_first_run_refresh_footer (LkFirstRunFlow *self)
   /* Set Up Later stands on the welcome step alone: past it the mariner is
    * choosing a chart, and Back is what returns them. */
   gtk_widget_set_visible (self->later, step == LK_FIRST_RUN_WELCOME);
-  /* Stop applies while the transfer or the bake runs. After that it stood
+  /* Stop applies while the transfer or the prepare runs. After that it stood
    * beside Continue with no job to stop. */
-  gboolean stalled = lk_first_run_import_stalled (self);
-
-  gtk_widget_set_visible (self->stop,
-                          step == LK_FIRST_RUN_IMPORTING && !stalled &&
-                              !lk_first_run_import_finished (self));
-  /* Back is the only way off this step when no chart arrived. */
+  gtk_widget_set_visible (self->stop, step == LK_FIRST_RUN_IMPORTING &&
+                                          !state->import_ended && !state->primary_enabled);
   gtk_widget_set_visible (self->back,
-                          (lk_first_run_can_go_back (self->flow) || stalled) &&
-                              !gtk_widget_get_visible (self->stop));
+                          state->can_go_back && !gtk_widget_get_visible (self->stop));
 }
 
 /* ---- the card ------------------------------------------------------------ */
@@ -409,6 +375,7 @@ lk_first_run_app_moved (GtkWidget *page)
 
   if (self == NULL || gtk_widget_in_destruction (page))
     return;
+  lk_first_run_flow_note (self);
   if (!lk_first_run_showing (self->flow))
     return;
 
@@ -557,18 +524,14 @@ void
 lk_first_run_consider (GtkWidget *page)
 {
   LkFirstRunFlow *self;
-  LkChartLinks *links;
 
   g_return_if_fail (GTK_IS_WIDGET (page));
 
   self = g_object_get_data (G_OBJECT (page), "lk-first-run");
-  if (self == NULL || lk_first_run_showing (self->flow))
+  if (self == NULL)
     return;
-
-  links = lk_app_model_get_chart_links (self->model);
-  if (!lk_first_run_should_run (self->flow,
-                               lk_app_model_get_nothing_to_draw (self->model),
-                               lk_chart_links_active (links) != NULL))
+  lk_first_run_flow_note (self);
+  if (!lk_first_run_should_run (self->flow))
     return;
 
   /* Read the chart's mariner BEFORE the flow starts. Beginning it builds the

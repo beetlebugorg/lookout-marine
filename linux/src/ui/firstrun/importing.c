@@ -352,7 +352,7 @@ lk_first_run_importing_sync (GtkWidget *step)
    * once a cell arrives. A download that failed every cell, a Stop pressed
    * before the first one, and a pick the core refused all end here with the
    * phases stopped and the card saying only that it is preparing. */
-  if (lk_first_run_import_stalled (self->flow))
+  if (lk_first_run_state (self->flow->flow)->import_ended)
     {
       const char *why = noaa->error[0] != '\0'
                             ? noaa->error

@@ -1,30 +1,21 @@
 /* ui/firstrun/model.c — setup's state. See ui/firstrun/private.h. */
 #include "ui/firstrun/private.h"
 
+#include <string.h>
+
 struct _LkFirstRun {
   GObject parent_instance;
 
-  LkFirstRunStep   step;
+  /* The core's state machine, and the state it last reported. */
+  lookout_setup      *core;
+  lookout_setup_state state;
+
+  /* The source card picked on the source step. */
   LkFirstRunSource source;
-  gboolean         showing;
+  gboolean         asked_depths;
 
-  /* TRUE once the mariner has put setup away for this run. Set Up Later is
-   * "not now", not an answer, so it holds only until the app is next started
-   * with nothing to draw. */
-  gboolean put_away;
-
-  /* TRUE once this run has had a chart to draw. A mariner who removes every
-   * chart has an empty library and no way back to the page that builds one,
-   * because finishing setup put it away for the run. */
-  gboolean saw_charts;
-
-  gboolean asked_depths;
-
-  /* The NOAA download as it was ordered. */
-  char    *order_regions;
-  guint32  order_charts;
-  guint64  order_bytes;
-  gboolean ordered;
+  /* The names of the regions ordered, for the import step. */
+  char *order_regions;
 };
 
 enum {
@@ -72,11 +63,36 @@ lk_first_run_opening_step (void)
 
 /* ---- where the flow is --------------------------------------------------- */
 
+/* Read the core's state, and emit ::changed when it moved. */
+static void
+lk_first_run_read (LkFirstRun *self)
+{
+  lookout_setup_state was = self->state;
+
+  lookout_setup_read (self->core, &self->state);
+  if (memcmp (&was, &self->state, sizeof was) != 0)
+    g_signal_emit (self, signals[SIGNAL_CHANGED], 0);
+}
+
+const lookout_setup_state *
+lk_first_run_state (LkFirstRun *self)
+{
+  static const lookout_setup_state none = { 0 };
+
+  g_return_val_if_fail (LK_IS_FIRST_RUN (self), &none);
+  return &self->state;
+}
+
 LkFirstRunStep
 lk_first_run_step (LkFirstRun *self)
 {
-  g_return_val_if_fail (LK_IS_FIRST_RUN (self), LK_FIRST_RUN_WELCOME);
-  return self->step;
+  return (LkFirstRunStep) lk_first_run_state (self)->step;
+}
+
+gboolean
+lk_first_run_showing (LkFirstRun *self)
+{
+  return lk_first_run_state (self)->showing;
 }
 
 LkFirstRunSource
@@ -97,173 +113,43 @@ lk_first_run_set_source (LkFirstRun *self, LkFirstRunSource source)
   g_signal_emit (self, signals[SIGNAL_CHANGED], 0);
 }
 
-gboolean
-lk_first_run_showing (LkFirstRun *self)
+void
+lk_first_run_note (LkFirstRun *self, const lookout_setup_facts *facts)
 {
-  g_return_val_if_fail (LK_IS_FIRST_RUN (self), FALSE);
-  return self->showing;
+  g_return_if_fail (LK_IS_FIRST_RUN (self));
+
+  lookout_setup_note (self->core, facts);
+  lk_first_run_read (self);
+}
+
+int
+lk_first_run_act (LkFirstRun *self, int action, int arg)
+{
+  int source;
+
+  g_return_val_if_fail (LK_IS_FIRST_RUN (self), -1);
+
+  source = lookout_setup_act (self->core, action, arg);
+  lk_first_run_read (self);
+  return source;
 }
 
 gboolean
-lk_first_run_should_run (LkFirstRun *self, gboolean nothing_to_draw, gboolean on_a_link)
+lk_first_run_should_run (LkFirstRun *self)
 {
   const char *spec = lk_first_run_setting ();
 
   g_return_val_if_fail (LK_IS_FIRST_RUN (self), FALSE);
 
   if (spec != NULL)
-    return !g_str_equal (spec, "0");
-  if (!nothing_to_draw)
-    self->saw_charts = TRUE;
-  if (on_a_link)
-    return FALSE;
-  if (self->put_away)
-    {
-      /* A library this run had charts in and no longer does is a mariner who
-       * removed them, and the page that builds a library is the way back. A
-       * library that was empty all along is a mariner who pressed Set Up
-       * Later, so setup stays down for them. */
-      if (!self->saw_charts || !nothing_to_draw)
-        return FALSE;
-      self->put_away = FALSE;
-      self->saw_charts = FALSE;
-    }
-  return nothing_to_draw;
-}
-
-void
-lk_first_run_accept_terms (LkFirstRun *self)
-{
-  g_return_if_fail (LK_IS_FIRST_RUN (self));
-
-  if (self->step != LK_FIRST_RUN_SOURCE || self->source != LK_FIRST_RUN_NOAA)
-    return;
-  self->step = LK_FIRST_RUN_COVERAGE;
-  g_signal_emit (self, signals[SIGNAL_CHANGED], 0);
+    return !g_str_equal (spec, "0") && !self->state.showing;
+  return self->state.should_run;
 }
 
 void
 lk_first_run_begin (LkFirstRun *self)
 {
-  g_return_if_fail (LK_IS_FIRST_RUN (self));
-
-  self->step = lk_first_run_opening_step ();
-  self->showing = TRUE;
-  g_signal_emit (self, signals[SIGNAL_CHANGED], 0);
-}
-
-/* ---- moving through it --------------------------------------------------- */
-
-gboolean
-lk_first_run_advance (LkFirstRun *self, LkFirstRunSource *out_source)
-{
-  gboolean act = FALSE;
-
-  g_return_val_if_fail (LK_IS_FIRST_RUN (self), FALSE);
-
-  if (out_source != NULL)
-    *out_source = self->source;
-
-  switch (self->step)
-    {
-    case LK_FIRST_RUN_WELCOME:
-      self->step = LK_FIRST_RUN_SOURCE;
-      break;
-
-    case LK_FIRST_RUN_SOURCE:
-      switch (self->source)
-        {
-        case LK_FIRST_RUN_NOAA:
-          /* The terms are asked first, and the accept is what moves the
-           * step. The shell raises the question. */
-          break;
-        case LK_FIRST_RUN_ONLINE_CHART:
-          self->step = LK_FIRST_RUN_ONLINE;
-          break;
-        case LK_FIRST_RUN_FILES:
-          /* The app has nothing more to ask: the mariner is going to their own
-           * files, and that is the end of setup. */
-          lk_first_run_finish (self);
-          return TRUE;
-        }
-      break;
-
-    case LK_FIRST_RUN_COVERAGE:
-      self->step = LK_FIRST_RUN_IMPORTING;
-      act = TRUE;
-      break;
-
-    case LK_FIRST_RUN_ONLINE:
-      /* The chart the mariner picked is already drawing. */
-      self->step = LK_FIRST_RUN_DEPTHS;
-      break;
-
-    case LK_FIRST_RUN_IMPORTING:
-      self->step = LK_FIRST_RUN_DEPTHS;
-      break;
-
-    case LK_FIRST_RUN_DEPTHS:
-      lk_first_run_finish (self);
-      return FALSE;
-    }
-
-  g_signal_emit (self, signals[SIGNAL_CHANGED], 0);
-  return act;
-}
-
-gboolean
-lk_first_run_can_go_back (LkFirstRun *self)
-{
-  g_return_val_if_fail (LK_IS_FIRST_RUN (self), FALSE);
-
-  switch (self->step)
-    {
-    case LK_FIRST_RUN_SOURCE:
-    case LK_FIRST_RUN_COVERAGE:
-    case LK_FIRST_RUN_ONLINE:
-      return TRUE;
-    default:
-      /* The welcome step offers Set Up Later instead. The import and the depth
-       * steps have no step to return to: the charts are already arriving, and
-       * Back would offer a second import of them. */
-      return FALSE;
-    }
-}
-
-void
-lk_first_run_back (LkFirstRun *self)
-{
-  g_return_if_fail (LK_IS_FIRST_RUN (self));
-
-  switch (self->step)
-    {
-    case LK_FIRST_RUN_SOURCE:
-      self->step = LK_FIRST_RUN_WELCOME;
-      break;
-    case LK_FIRST_RUN_COVERAGE:
-    case LK_FIRST_RUN_ONLINE:
-      self->step = LK_FIRST_RUN_SOURCE;
-      break;
-    case LK_FIRST_RUN_IMPORTING:
-      /* Back from an import with no chart. The water is still picked, so the
-       * coverage step opens on it and Download runs again. */
-      self->step = LK_FIRST_RUN_COVERAGE;
-      break;
-    default:
-      return;
-    }
-  g_signal_emit (self, signals[SIGNAL_CHANGED], 0);
-}
-
-void
-lk_first_run_finish (LkFirstRun *self)
-{
-  g_return_if_fail (LK_IS_FIRST_RUN (self));
-
-  self->put_away = TRUE;
-  self->showing = FALSE;
-  self->step = LK_FIRST_RUN_WELCOME;
-  g_signal_emit (self, signals[SIGNAL_CHANGED], 0);
+  lk_first_run_act (self, LOOKOUT_SETUP_BEGIN, lk_first_run_opening_step ());
 }
 
 /* ---- what each step says ------------------------------------------------- */
@@ -273,7 +159,7 @@ lk_first_run_primary_title (LkFirstRun *self, const char *chosen)
 {
   g_return_val_if_fail (LK_IS_FIRST_RUN (self), "Continue");
 
-  switch (self->step)
+  switch (self->state.step)
     {
     case LK_FIRST_RUN_COVERAGE:
       return "Download";
@@ -309,16 +195,12 @@ lk_first_run_sheet_width (LkFirstRunStep step)
 /* ---- the order, and the import ------------------------------------------- */
 
 void
-lk_first_run_set_order (LkFirstRun *self, const char *regions, guint32 charts,
-                        guint64 bytes)
+lk_first_run_set_order_regions (LkFirstRun *self, const char *regions)
 {
   g_return_if_fail (LK_IS_FIRST_RUN (self));
 
   g_free (self->order_regions);
   self->order_regions = g_strdup (regions != NULL ? regions : "");
-  self->order_charts = charts;
-  self->order_bytes = bytes;
-  self->ordered = TRUE;
 }
 
 gboolean
@@ -327,14 +209,14 @@ lk_first_run_order (LkFirstRun *self, const char **out_regions, guint32 *out_cha
 {
   g_return_val_if_fail (LK_IS_FIRST_RUN (self), FALSE);
 
-  if (!self->ordered)
+  if (!self->state.ordered)
     return FALSE;
   if (out_regions != NULL)
-    *out_regions = self->order_regions;
+    *out_regions = self->order_regions != NULL ? self->order_regions : "";
   if (out_charts != NULL)
-    *out_charts = self->order_charts;
+    *out_charts = self->state.order_charts;
   if (out_bytes != NULL)
-    *out_bytes = self->order_bytes;
+    *out_bytes = self->state.order_bytes;
   return TRUE;
 }
 
@@ -357,6 +239,7 @@ lk_first_run_dispose (GObject *object)
   LkFirstRun *self = LK_FIRST_RUN (object);
 
   g_clear_pointer (&self->order_regions, g_free);
+  g_clear_pointer (&self->core, lookout_setup_free);
 
   G_OBJECT_CLASS (lk_first_run_parent_class)->dispose (object);
 }
@@ -379,6 +262,8 @@ lk_first_run_init (LkFirstRun *self)
   /* NOAA is the recommended source and the one the app preselects: official
    * cover for every United States waterway, at no cost. */
   self->source = LK_FIRST_RUN_NOAA;
+  self->core = lookout_setup_new ();
+  lookout_setup_read (self->core, &self->state);
 }
 
 LkFirstRun *

@@ -56,49 +56,22 @@ LkFirstRunStep   lk_first_run_step (LkFirstRun *self);
 LkFirstRunSource lk_first_run_source (LkFirstRun *self);
 void             lk_first_run_set_source (LkFirstRun *self, LkFirstRunSource source);
 
-/* TRUE while the flow is over the chart. */
+/* The core's setup state machine holds the step, the actions and whether
+ * setup runs (lookout_setup_* in include/lookout-library.h). Note the facts
+ * whenever one moves, and apply an action with lk_first_run_act. Both emit
+ * ::changed when the state moves. */
+const lookout_setup_state *lk_first_run_state (LkFirstRun *self);
 gboolean lk_first_run_showing (LkFirstRun *self);
+void     lk_first_run_note (LkFirstRun *self, const lookout_setup_facts *facts);
+int      lk_first_run_act (LkFirstRun *self, int action, int arg);
 
-/* Whether setup runs at all.
- *
- * The flow runs over an app that has settled on having NOTHING TO DRAW, on
- * every launch that finds one. Not once per device: a mariner with an empty
- * library has the same questions to answer whether this is their first launch
- * or their fiftieth, and the way back to the library they lost is the page
- * that built it.
- *
- * A linked chart IS a chart. Somebody sailing on a published style has no
- * empty library to fill, so setup stays down over one.
- *
- * `LOOKOUT_FIRST_RUN` overrides both, because a screenshot run and a test both
- * need to choose. */
-gboolean lk_first_run_should_run (LkFirstRun *self, gboolean nothing_to_draw,
-                                 gboolean on_a_link);
-
-/* NOAA's terms, answered before their charts are picked.
- *
- * The reference asks on the way out of the source step and moves to coverage
- * only from the accept, so a mariner who declines is left where they were
- * (apple/LookoutMarine/FirstRun, agreeToEncTerms and declineEncTerms). */
-void lk_first_run_accept_terms (LkFirstRun *self);
+/* Whether setup comes up now. `LOOKOUT_FIRST_RUN` overrides the core, because
+ * a screenshot run and a test both need to choose: "0" keeps it down, and a
+ * step name raises it on that step. */
+gboolean lk_first_run_should_run (LkFirstRun *self);
 
 /* Raise the flow, on the step `LOOKOUT_FIRST_RUN` names or the first one. */
 void lk_first_run_begin (LkFirstRun *self);
-
-/* The primary action for the step on screen. TRUE when the flow has finished
- * asking and the shell has work to do, with what to do in `out_source`. */
-gboolean lk_first_run_advance (LkFirstRun *self, LkFirstRunSource *out_source);
-
-/* Whether Back applies. The first step offers Set Up Later instead, and the
- * import and depth steps have no step to return to: the charts are already
- * arriving. */
-gboolean lk_first_run_can_go_back (LkFirstRun *self);
-void     lk_first_run_back (LkFirstRun *self);
-
-/* Set Up Later, and the end of a run that finished. Both put setup away for
- * the rest of this launch. A run that finished leaves a chart behind it, and a
- * chart is what keeps setup down after that. */
-void lk_first_run_finish (LkFirstRun *self);
 
 /* The primary button's words. The online chart step names the chart it keeps,
  * so the button states what the choice does; `chosen` may be NULL. */
@@ -109,11 +82,10 @@ const char *lk_first_run_primary_title (LkFirstRun *self, const char *chosen);
  * cards needs more room than a paragraph. */
 int lk_first_run_sheet_width (LkFirstRunStep step);
 
-/* What the mariner asked NOAA for, kept from the moment they asked. The
- * service's own counters are for the transfer, and the import step outlives
- * it. */
-void     lk_first_run_set_order (LkFirstRun *self, const char *regions,
-                                 guint32 charts, guint64 bytes);
+/* What the mariner asked NOAA for, kept from the moment they asked: the
+ * region names this keeps, and the core's count and size. FALSE before an
+ * order. */
+void     lk_first_run_set_order_regions (LkFirstRun *self, const char *regions);
 gboolean lk_first_run_order (LkFirstRun *self, const char **out_regions,
                             guint32 *out_charts, guint64 *out_bytes);
 
@@ -167,9 +139,6 @@ void lk_first_run_importing_sync (GtkWidget *step);
  * is resolved after Continue is pressed. */
 void lk_first_run_online_sync (GtkWidget *step);
 
-/* TRUE when the import step ended with no chart: the transfer left the
- * downloading phase, no bake ran, and the library is still empty. */
-gboolean lk_first_run_import_stalled (LkFirstRunFlow *self);
 GtkWidget *lk_first_run_depths_new (LkFirstRunFlow *flow);
 
 /* Read the footer again: the primary action's words, whether it can act, and
