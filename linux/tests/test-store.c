@@ -49,15 +49,12 @@ test_noaa_update_cadence (void)
   g_autofree char *first = lk_store_load_noaa_update_check ();
 
   g_assert_cmpstr (first, ==, "daily");
-  g_assert_cmpint (lk_store_load_noaa_update_checked (), ==, 0);
 
   lk_store_save_noaa_update_check ("startup");
-  lk_store_save_noaa_update_checked (1700000000);
 
   g_autofree char *second = lk_store_load_noaa_update_check ();
 
   g_assert_cmpstr (second, ==, "startup");
-  g_assert_cmpint (lk_store_load_noaa_update_checked (), ==, 1700000000);
 }
 
 static void

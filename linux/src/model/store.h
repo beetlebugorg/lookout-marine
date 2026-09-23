@@ -100,9 +100,6 @@ void lk_store_forget_noaa_regions (void);
 char *lk_store_load_noaa_update_check (void);
 void  lk_store_save_noaa_update_check (const char *cadence);
 
-/* When the last check ran, in unix seconds. 0 for never. */
-gint64 lk_store_load_noaa_update_checked (void);
-void   lk_store_save_noaa_update_checked (gint64 when);
 char *lk_store_load_chart_link_active (void);
 void  lk_store_save_chart_link_active (const char *url);
 

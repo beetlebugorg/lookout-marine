@@ -606,7 +606,10 @@ lk_catalog_line_sync (LkNoaa *noaa, gpointer user_data)
   GtkWidget *again = g_object_get_data (G_OBJECT (box), "lk-again");
   GtkWidget *note = g_object_get_data (G_OBJECT (box), "lk-note");
   gboolean reading = state->phase == LOOKOUT_NOAA_READING;
-  gboolean failed = !reading && state->error[0] != '\0';
+  /* An empty order and a refusal that a retry cannot clear show no error. */
+  gboolean quiet = state->outcome == LOOKOUT_NOAA_EMPTY ||
+                   (state->outcome == LOOKOUT_NOAA_REFUSED && !state->retry);
+  gboolean failed = !reading && !quiet && state->error[0] != '\0';
   /* A catalog already read outranks a failed read. The core loads the cached
    * catalog before it requests a new one, so a mariner with no network has a
    * working picker and a failed request at the same time. Showing the error

@@ -35,9 +35,6 @@ struct _LkAppModel {
    * on the catalog it reads that from. */
   guint32            noaa_outdated;
   gboolean           noaa_checking;
-  /* One check per run for the "startup" cadence. The only hook a catalog read
-   * can hang off is a chart opening, and a chart opens more than once. */
-  gboolean           noaa_checked_this_run;
   /* A folder imported and waiting for the core's scan of it. The bake reads
    * what the core lists to prepare, and that list is empty until the scan has
    * read the folder. */
@@ -313,7 +310,6 @@ static void lk_app_model_remove_progress (const LkBakeProgress *progress,
                                           gpointer user_data);
 static void lk_app_model_noaa_note_all (LkAppModel *self);
 static void lk_app_model_prepare_noaa_download (LkAppModel *self);
-static void lk_app_model_count_noaa_outdated (LkAppModel *self);
 static void lk_app_model_raise_error (LkAppModel *self, const char *message,
                                       gboolean noaa, gboolean retry);
 static void lk_app_model_order_noaa_download (LkAppModel *self, const char *ids,
@@ -429,6 +425,9 @@ lk_app_model_sets_changed (GObject *owner)
 
   if (!lk_chart_sets_scanning (self->chart_sets))
     lk_app_model_noaa_note_all (self);
+  /* The count and the check both follow the managed sets. */
+  self->noaa_outdated = lk_noaa_outdated (self->noaa);
+  lk_app_model_check_noaa_updates (self);
   lk_app_model_emit_chart_sets_changed (self);
   lk_app_model_start_import (self);
   lk_app_model_resume_prepare (self);
@@ -547,9 +546,12 @@ lk_app_model_noaa_changed (LkNoaa *noaa, gpointer user_data)
   LkAppModel *self = user_data;
   const lookout_noaa_state *state = lk_noaa_state (noaa);
 
-  /* A check waiting on the catalog it counts against. */
-  if (self->noaa_checking && state->have_catalog)
-    lk_app_model_count_noaa_outdated (self);
+  /* A check ends when its catalog read ends. */
+  if (self->noaa_checking && state->phase != LOOKOUT_NOAA_READING)
+    {
+      self->noaa_checking = FALSE;
+      self->noaa_outdated = lk_noaa_outdated (noaa);
+    }
   if (self->noaa_retry_waiting &&
       (state->have_catalog || state->phase != LOOKOUT_NOAA_READING))
     {
@@ -1054,42 +1056,13 @@ lk_app_model_noaa_outdated (LkAppModel *self)
   return self->noaa_outdated;
 }
 
-/* Count the managed charts NOAA has reissued, against the catalog in hand. */
-static void
-lk_app_model_count_noaa_outdated (LkAppModel *self)
-{
-  self->noaa_checking = FALSE;
-  lk_store_save_noaa_update_checked (g_get_real_time () / G_USEC_PER_SEC);
-  self->noaa_outdated = lk_noaa_outdated (self->noaa);
-}
-
 void
 lk_app_model_check_noaa_updates (LkAppModel *self)
 {
-  g_autofree char *cadence = NULL;
-  gint64 last, now;
-
   g_return_if_fail (LK_IS_APP_MODEL (self));
 
-  cadence = lk_store_load_noaa_update_check ();
-  if (g_str_equal (cadence, "never"))
-    return;
-  if (self->noaa_checked_this_run || self->noaa_checking)
-    return;
-
-  /* ONCE PER RUN, and for "daily" once in each 24 hours as well. NOAA
-   * publishes weekly, and a check reads a catalog of about 10 MB. */
-  now = g_get_real_time () / G_USEC_PER_SEC;
-  last = lk_store_load_noaa_update_checked ();
-  if (g_str_equal (cadence, "daily") && last > 0 && now - last < 24 * 60 * 60)
-    return;
-
-  self->noaa_checked_this_run = TRUE;
-  self->noaa_checking = TRUE;
-  if (lk_noaa_state (self->noaa)->have_catalog)
-    lk_app_model_count_noaa_outdated (self);
-  else
-    lk_noaa_refresh (self->noaa);
+  if (lk_noaa_update_due (self->noaa))
+    self->noaa_checking = TRUE;
 }
 
 void
@@ -1196,18 +1169,6 @@ lk_app_model_bake_done (const char *out_dir, guint baked, gpointer user_data)
   /* And the download that ended while this bake ran. */
   if (self->noaa_open_held && !self->scanning && !self->baking)
     lk_app_model_prepare_noaa_download (self);
-
-  /* The count the managed row states is against the editions on the disk, and
-   * this bake has changed them. Counting again needs the catalog alone, so it
-   * runs here rather than through the cadence. */
-  if (self->noaa_outdated > 0)
-    {
-      self->noaa_checked_this_run = FALSE;
-      if (lk_noaa_state (self->noaa)->have_catalog)
-        lk_app_model_count_noaa_outdated (self);
-      else
-        self->noaa_outdated = 0;
-    }
 }
 
 typedef struct {

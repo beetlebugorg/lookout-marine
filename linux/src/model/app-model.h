@@ -78,9 +78,9 @@ void lk_app_model_remove_noaa_cells (LkAppModel *self, const char *const *names)
  * a check has run. */
 guint32 lk_app_model_noaa_outdated (LkAppModel *self);
 
-/* Run the check when the cadence asks for one and the last was over a day
- * ago. The catalog read is the slow part, so the count arrives later, through
- * ::changed on the NOAA service. */
+/* Start the check when the core finds one due by the store's cadence. The
+ * count arrives when the catalog read ends, through ::changed on the NOAA
+ * service. */
 void lk_app_model_check_noaa_updates (LkAppModel *self);
 
 /* Fetch the newer editions of every managed chart the check counted. */

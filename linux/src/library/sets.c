@@ -406,53 +406,6 @@ lk_chart_sets_managed_cell_names (LkChartSets *self)
   return lk_chart_sets_names_of (self, TRUE, TRUE);
 }
 
-static void
-lk_chart_set_edition_clear (gpointer data)
-{
-  LkChartSetEdition *one = data;
-
-  g_free (one->name);
-}
-
-GArray *
-lk_chart_sets_managed_editions (LkChartSets *self)
-{
-  GArray *out = g_array_new (FALSE, FALSE, sizeof (LkChartSetEdition));
-  size_t n_sets = 0;
-  const lookout_chart_set *const *sets = lookout_chart_sets_all (self->sets, &n_sets);
-
-  g_array_set_clear_func (out, lk_chart_set_edition_clear);
-
-  for (size_t s = 0; s < n_sets; s++)
-    {
-      if (sets[s]->managed == 0)
-        continue;
-
-      size_t n_files = 0;
-      const lookout_chart_file *const *files =
-          lookout_chart_set_files (self->sets, sets[s]->path, &n_files);
-
-      for (size_t f = 0; f < n_files; f++)
-        {
-          const lookout_chart_file *file = files[f];
-          LkChartSetEdition one;
-
-          if (file->name == NULL || file->name[0] == '\0' || file->edition == 0)
-            continue;
-          one.name = g_ascii_strup (file->name, -1);
-          one.edition = file->edition;
-          one.update = file->update;
-          g_array_append_val (out, one);
-        }
-    }
-  return out;
-}
-
-char **
-lk_chart_sets_cell_names (LkChartSets *self)
-{
-  return lk_chart_sets_names_of (self, FALSE, FALSE);
-}
 
 /* Every cell name on the list, or only the ones the downloader's sets hold. */
 static char **

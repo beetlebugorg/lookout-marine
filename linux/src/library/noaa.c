@@ -6,10 +6,6 @@
 
 #include <string.h>
 
-/* The shortest gap between two reads of a transfer's progress. A piece of a
- * transfer does not wake the service, so the pieces drive these reads. */
-#define LK_NOAA_PROGRESS_MS 250
-
 struct _LkNoaa {
   GObject parent_instance;
 
@@ -17,8 +13,6 @@ struct _LkNoaa {
   LkFetcher    *fetcher;
   /* 1 while an idle is queued to read the state after a wake. */
   gint          wake_queued;
-  /* When a transfer's piece last read the state, in monotonic microseconds. */
-  gint64        progress_us;
 
   /* The region table. The core's strings are static, so the rows hold them
    * rather than copies. */
@@ -308,14 +302,9 @@ lk_noaa_respond_chunk (gpointer user_data, uint64_t req_id, const void *bytes,
                        gsize len, int status, gboolean done)
 {
   LkNoaa *self = user_data;
-  gint64 now = g_get_monotonic_time ();
 
   lookout_noaa_http_respond_chunk (self->service, req_id, bytes, len, status,
-                                       done ? 1 : 0);
-  if (done || now - self->progress_us < LK_NOAA_PROGRESS_MS * 1000)
-    return;
-  self->progress_us = now;
-  lk_noaa_sync (self);
+                                   done ? 1 : 0);
 }
 
 /* ---- reading the catalog ------------------------------------------------- */
@@ -618,6 +607,18 @@ lk_noaa_cancel (LkNoaa *self)
 
   lookout_noaa_cancel (self->service);
   lk_noaa_sync (self);
+}
+
+gboolean
+lk_noaa_update_due (LkNoaa *self)
+{
+  gboolean due;
+
+  g_return_val_if_fail (LK_IS_NOAA (self), FALSE);
+
+  due = lookout_noaa_update_due (self->service) != 0;
+  lk_noaa_sync (self);
+  return due;
 }
 
 guint32

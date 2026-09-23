@@ -110,19 +110,6 @@ gboolean lk_chart_sets_set_managed (LkChartSets *self, const char *path, gboolea
  * Transfer full. */
 char **lk_chart_sets_managed_cell_names (LkChartSets *self);
 
-/* One installed cell, with the edition the file states. */
-typedef struct {
-  char   *name;
-  guint32 edition;
-  guint32 update;
-} LkChartSetEdition;
-
-/* Every managed cell that states an edition, for the update check. A file on
- * disk does not say which edition it is until the scan has read it, so a set
- * the scan has yet to reach reports none. Transfer full: a GArray of
- * LkChartSetEdition, with the names owned by the array. */
-GArray *lk_chart_sets_managed_editions (LkChartSets *self);
-
 /* The files one set still has to prepare, as the core lists them: each file
  * that bakes before it draws and has no prepared chart, or whose prepared
  * chart is older than it. Empty until the core's scan has read the folder.
@@ -166,17 +153,6 @@ gboolean lk_chart_sets_remove (LkChartSets *self, const char *path,
  * Transfer full strv. */
 char **lk_chart_sets_compose (LkChartSets *self);
 
-/* Every survey cell this device holds, by dataset name (US5MD1MC), upper
- * cased, with no duplicates. Transfer full strv.
- *
- * What NOAA's cost and download are told, so a mariner who picks water they
- * have already downloaded fetches what is missing from it rather than all of
- * it again. Across EVERY set, on or off, and whether or not it is prepared
- * yet: the cell is on the device either way. A set added by hand therefore
- * counts the same as one this app downloaded.
- *
- * Pictures are left out. They are not cells and NOAA does not publish them. */
-char **lk_chart_sets_cell_names (LkChartSets *self);
 
 /* Every baked cell under a directory, sorted. Transfer full strv. */
 char **lk_chart_paths_in_dir (const char *dir);

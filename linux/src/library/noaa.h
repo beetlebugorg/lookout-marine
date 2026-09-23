@@ -68,8 +68,8 @@ guint    lk_noaa_picked_count (LkNoaa *self);
 char    *lk_noaa_picked_ids (LkNoaa *self);
 
 /* The core's state, borrowed. Never NULL. It is read again, and ::changed
- * emitted, when lookout_noaa_changed returns 1: after each order, on the
- * service's wake, and as the pieces of a transfer arrive. */
+ * emitted, when lookout_noaa_changed returns 1: after each order and on the
+ * service's wake. */
 const lookout_noaa_state *lk_noaa_state (LkNoaa *self);
 
 /* Read the state when lookout_noaa_changed returns 1, and emit ::changed.
@@ -158,6 +158,11 @@ void lk_noaa_cancel (LkNoaa *self);
 /* How many of the managed sets' cells NOAA has reissued, and the download
  * that replaces them. The core reads the editions off the managed sets. */
 guint32 lk_noaa_outdated (LkNoaa *self);
+
+/* Start the update check when the store's cadence says one is due. TRUE while
+ * the check runs. The count is lk_noaa_outdated once the catalog read ends. */
+gboolean lk_noaa_update_due (LkNoaa *self);
+
 void    lk_noaa_update (LkNoaa *self, const char *dest_dir);
 
 /* Where downloaded cells are staged before they bake. ONE directory, so the
