@@ -204,9 +204,9 @@ namespace winrt::LookoutMarine::implementation
         // The installed sets, each with its switch: the same list Settings >
         // Charts manages, reachable without opening Settings (the reference's
         // File > Charts submenu).
-        MenuFlyoutSubItem sets;
-        sets.Text(L"Charts");
-        for (auto const &s : chart_sets)
+        MenuFlyoutSubItem charts;
+        charts.Text(L"Charts");
+        for (auto const &s : sets.Rows())
         {
             std::string label = s.title.empty()
                                     ? std::filesystem::path(s.path).filename().string()
@@ -217,10 +217,10 @@ namespace winrt::LookoutMarine::implementation
             std::string p = s.path;
             bool now = s.on;
             it.Click([this, p, now](auto &&, auto &&) { SetChartSetOn(p, !now); });
-            sets.Items().Append(it);
+            charts.Items().Append(it);
         }
-        sets.IsEnabled(!chart_sets.empty());
-        menu.Items().Append(sets);
+        charts.IsEnabled(!sets.Rows().empty());
+        menu.Items().Append(charts);
 
         MenuFlyoutSubItem recents;
         recents.Text(L"Open Recent");

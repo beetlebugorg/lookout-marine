@@ -519,7 +519,7 @@ namespace winrt::LookoutMarine::implementation
     // chart sets, with its own fetcher.
     void MainWindow::NoaaOpen()
     {
-        noaa = lookout_noaa_open(lk_store_handle(), ChartSetsModel());
+        noaa = lookout_noaa_open(lk_store_handle(), sets.Model());
         if (noaa == nullptr)
             return;
         noaa_queue = DispatcherQueue();

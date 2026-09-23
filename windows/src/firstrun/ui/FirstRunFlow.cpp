@@ -120,7 +120,7 @@ namespace winrt::LookoutMarine::implementation
         f.picked = !noaa_region_id.empty();
         f.on_link = lk_controller_chart_link_selected(controller) != 0;
         f.nothing_to_draw = setup_nothing_to_draw;
-        f.has_charts = !ChartSetOpenPaths().empty() || !raster_paths.empty();
+        f.has_charts = !sets.Compose().empty() || !raster_paths.empty();
         f.work_running = bake_job != nullptr || noaa_state.preparing || !pending_set.empty();
         f.downloading = noaa_state.phase == LOOKOUT_NOAA_DOWNLOADING;
         f.chart_open = lk_controller_is_open(controller) && chart_has_cells;
@@ -181,7 +181,7 @@ namespace winrt::LookoutMarine::implementation
             // are opened here.
             if (lk_controller_is_open(controller) && !chart_has_cells)
             {
-                auto paths = ChartSetOpenPaths();
+                auto paths = sets.Compose();
                 if (!paths.empty())
                     OpenPaths(paths, paths.front(), lkw::AgencyForCells(paths));
             }

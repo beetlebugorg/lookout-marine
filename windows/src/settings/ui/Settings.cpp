@@ -1018,13 +1018,13 @@ namespace winrt::LookoutMarine::implementation
         std::string s;
         for (auto const &l : chart_links)
             s += l.url + "\x1e";
-        for (auto const &set : chart_sets)
+        for (auto const &set : sets.Rows())
             s += set.path + "\x1e";
         for (auto const &p : raster_paths)
             s += p + "\x1e";
         // The sections that come and go with work, and the row an empty list
         // stands in for.
-        s += chart_sets.empty() ? "empty" : "sets";
+        s += sets.Rows().empty() ? "empty" : "sets";
         s += bake_job != nullptr || noaa_state.preparing ? "|baking" : "|idle";
         // The removal line comes and goes with the job that feeds it.
         s += removal_job != nullptr ? "|removing" : "|kept";
@@ -1052,7 +1052,7 @@ namespace winrt::LookoutMarine::implementation
         std::string picked = chart_link_picked ? chart_link_pending : active_chart_link;
         std::string drawing = ActiveChartUrl();
         size_t cells = 0;
-        for (auto const &s : chart_sets)
+        for (auto const &s : sets.Rows())
             if (s.on)
                 cells += s.charts;
         for (auto const &t : chart_tile_ui)
@@ -1091,20 +1091,20 @@ namespace winrt::LookoutMarine::implementation
         // ---- the sets -----------------------------------------------------
         if (chart_sets_none != nullptr)
         {
-            chart_sets_none.Text(ChartSetsScanning() ? L"Finding charts…" : L"No chart sets");
-            chart_sets_none.Visibility(chart_sets.empty() ? Visibility::Visible
+            chart_sets_none.Text(sets.Scanning() ? L"Finding charts…" : L"No chart sets");
+            chart_sets_none.Visibility(sets.Rows().empty() ? Visibility::Visible
                                                           : Visibility::Collapsed);
         }
         if (chart_sets_total != nullptr)
         {
             size_t all_charts = 0;
             uint64_t all_bytes = 0;
-            for (auto const &s : chart_sets)
+            for (auto const &s : sets.Rows())
             {
                 all_charts += s.charts + s.pictures;
                 all_bytes += s.bytes;
             }
-            chart_sets_total.Text(chart_sets.empty()
+            chart_sets_total.Text(sets.Rows().empty()
                                       ? winrt::hstring{}
                                       : winrt::hstring{ lkw::Thousands(all_charts) +
                                                         L" charts · " +
@@ -1112,11 +1112,11 @@ namespace winrt::LookoutMarine::implementation
         }
         for (auto &row : chart_set_ui)
         {
-            auto it = std::find_if(chart_sets.begin(), chart_sets.end(),
-                                   [&](ChartSetRow const &s) { return s.path == row.path; });
-            if (it == chart_sets.end())
+            auto it = std::find_if(sets.Rows().begin(), sets.Rows().end(),
+                                   [&](lkw::ChartSetRow const &s) { return s.path == row.path; });
+            if (it == sets.Rows().end())
                 continue;
-            ChartSetRow const &set = *it;
+            lkw::ChartSetRow const &set = *it;
 
             std::string sum;
             if (set.charts != 0)
@@ -1611,7 +1611,7 @@ namespace winrt::LookoutMarine::implementation
                 // What every set holds, together, beside the heading.
                 size_t all_charts = 0;
                 uint64_t all_bytes = 0;
-                for (auto const &s : chart_sets)
+                for (auto const &s : sets.Rows())
                 {
                     all_charts += s.charts + s.pictures;
                     all_bytes += s.bytes;
@@ -1646,11 +1646,11 @@ namespace winrt::LookoutMarine::implementation
 
                 // The downloader's own set first. It is the set this app adds
                 // to and takes from, and the only row that leads to the picker.
-                std::vector<ChartSetRow const *> ordered;
-                for (auto const &set : chart_sets)
+                std::vector<lkw::ChartSetRow const *> ordered;
+                for (auto const &set : sets.Rows())
                     if (set.managed)
                         ordered.push_back(&set);
-                for (auto const &set : chart_sets)
+                for (auto const &set : sets.Rows())
                     if (!set.managed)
                         ordered.push_back(&set);
                 for (auto const *held : ordered)
@@ -2147,7 +2147,7 @@ namespace winrt::LookoutMarine::implementation
                     }
                     // The mariner stopped it. The core skips this set on resume until a
                     // scan of it finds a file to prepare that was not there before.
-                    if (lookout_chart_sets *model = ChartSetsModel(); model != nullptr &&
+                    if (lookout_chart_sets *model = sets.Model(); model != nullptr &&
                         !bake_source.empty())
                         lookout_chart_sets_note_cancel(model, bake_source.c_str());
                     bake_job->Cancel();

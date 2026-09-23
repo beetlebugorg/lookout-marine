@@ -61,8 +61,8 @@ namespace winrt::LookoutMarine::implementation
         // switched-on ones. With none saved (or none answering: a drive not
         // plugged in), fall through to the recents-based walk.
         LoadChartSets([this] {
-            auto set_paths = ChartSetOpenPaths();
-            opened_set_paths = set_paths;
+            auto set_paths = sets.Compose();
+            sets.opened = set_paths;
             if (!set_paths.empty())
             {
                 OpenPaths(set_paths, set_paths.front(), lkw::AgencyForCells(set_paths));
@@ -150,8 +150,8 @@ namespace winrt::LookoutMarine::implementation
     // whether setup comes up is whether anything at all is installed.
     void MainWindow::ReopenChartSets(std::string const &recent)
     {
-        auto paths = ChartSetOpenPaths();
-        opened_set_paths = paths;
+        auto paths = sets.Compose();
+        sets.opened = paths;
         if (!paths.empty())
         {
             OpenPaths(paths, recent.empty() ? paths.front() : recent,
@@ -214,9 +214,9 @@ namespace winrt::LookoutMarine::implementation
             // lands after an import reads this: with it empty, the poll opens
             // the library a second time, and that close ends a NOAA transfer
             // in flight.
-            auto composed = ChartSetOpenPaths();
+            auto composed = sets.Compose();
             if (!composed.empty() && paths == composed)
-                opened_set_paths = composed;
+                sets.opened = composed;
             if (!pending_plugin_install.empty())
             {
                 // The .lkplug that arrived at the empty state, now that a

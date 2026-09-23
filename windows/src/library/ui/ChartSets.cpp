@@ -27,90 +27,12 @@ using namespace Microsoft::UI::Xaml;
 
 namespace winrt::LookoutMarine::implementation
 {
-    // The model, opened on the first ask and kept for the window. It needs no
-    // chart handle: the sets exist before anything is open, and the empty
-    // state is drawn from them.
-    lookout_chart_sets *MainWindow::ChartSetsModel()
-    {
-        if (chart_sets_model == nullptr)
-        {
-            chart_sets_model =
-                lookout_chart_sets_open(lk_store_handle(), lkw::ChartLibraryDir().c_str());
-            // The library directory was the managed set before it became
-            // prepared_root. Its row stays listed as a set the mariner can
-            // remove.
-            if (chart_sets_model != nullptr)
-                lookout_chart_sets_set_managed(chart_sets_model, lkw::ChartLibraryDir().c_str(), 0);
-            // What a removal left when the app ended during its delete: in the
-            // library, and beside it where earlier builds renamed to.
-            std::thread([lib = std::filesystem::path(lkw::ChartLibraryDir())] {
-                lookout_bake_sweep(lib.string().c_str());
-                lookout_bake_sweep(lib.parent_path().string().c_str());
-            }).detach();
-        }
-        return chart_sets_model;
-    }
-
-    // Copy the list out. `then` runs at once: the list itself is there
-    // immediately and it is the metadata that arrives later, announced by
+    // Copy the list out of the model, then run `then`. The list itself is
+    // there at once, and the metadata arrives later, announced by
     // lookout_chart_sets_changed.
     void MainWindow::LoadChartSets(std::function<void()> then)
     {
-        chart_sets.clear();
-        if (lookout_chart_sets *model = ChartSetsModel())
-        {
-            size_t n = 0;
-            lookout_chart_set const *const *all = lookout_chart_sets_all(model, &n);
-            for (size_t i = 0; i < n; ++i)
-            {
-                ChartSetRow row;
-                row.path = all[i]->path;
-                row.title = all[i]->title;
-                row.on = all[i]->on != 0;
-                row.managed = all[i]->managed != 0;
-                row.scanned = all[i]->scanned != 0;
-                row.unprepared = all[i]->unprepared;
-                row.to_prepare = all[i]->to_prepare;
-                row.refused = all[i]->refused;
-                for (size_t b = 0; b < 6; ++b)
-                    row.band_todo[b] = all[i]->band_todo[b];
-                row.bytes = all[i]->bytes;
-                // What the row says it holds. The engine's own counts split a
-                // file that bakes first out of both halves, and this line has
-                // always counted a picture waiting to be baked as a picture.
-                size_t files = 0;
-                std::vector<std::string> names;
-                auto found = lookout_chart_set_files(model, all[i]->path, &files);
-                for (size_t f = 0; f < files; ++f)
-                {
-                    switch (found[f]->kind)
-                    {
-                    case LOOKOUT_FILE_RASTER:
-                    case LOOKOUT_FILE_RASTER_SOURCE: row.pictures++; break;
-                    case LOOKOUT_FILE_BAKED:
-                        row.charts++;
-                        names.push_back(found[f]->name);
-                        if (found[f]->band >= 1 && found[f]->band <= 6)
-                            ++row.bands[found[f]->band];
-                        break;
-                    default:                         break;
-                    }
-                }
-                // The office whose charts these are, when the core fell back
-                // to the folder's own name. A NOAA library baked into the
-                // app's chart folder read as "Charts", which names where the
-                // files are rather than whose they are.
-                std::string const folder =
-                    std::filesystem::path(row.path).filename().string();
-                if (row.title == folder && !names.empty())
-                {
-                    std::string agency = lkw::AgencyForCells(names);
-                    if (!agency.empty())
-                        row.title = agency;
-                }
-                chart_sets.push_back(std::move(row));
-            }
-        }
+        sets.Load();
         if (then)
             then();
     }
@@ -126,7 +48,7 @@ namespace winrt::LookoutMarine::implementation
     // False when the list is empty or the bake does not start.
     bool MainWindow::BakeSetToPrepare(std::string const &path)
     {
-        lookout_chart_sets *model = ChartSetsModel();
+        lookout_chart_sets *model = sets.Model();
         if (model == nullptr || bake_job != nullptr || path.empty())
             return false;
 
@@ -187,7 +109,7 @@ namespace winrt::LookoutMarine::implementation
     // ends. PollChartSets finishes it in FinishPendingSet.
     void MainWindow::PrepareChartSet(std::string const &path)
     {
-        lookout_chart_sets *model = ChartSetsModel();
+        lookout_chart_sets *model = sets.Model();
         if (model == nullptr || path.empty())
             return;
         if (!lookout_chart_sets_add(model, path.c_str()))
@@ -212,9 +134,9 @@ namespace winrt::LookoutMarine::implementation
     // A folder that holds no charts leaves the list.
     void MainWindow::FinishPendingSet()
     {
-        auto row = std::find_if(chart_sets.begin(), chart_sets.end(),
-                                [this](ChartSetRow const &r) { return r.path == pending_set; });
-        if (row == chart_sets.end())
+        auto row = std::find_if(sets.Rows().begin(), sets.Rows().end(),
+                                [this](lkw::ChartSetRow const &r) { return r.path == pending_set; });
+        if (row == sets.Rows().end())
         {
             pending_set.clear();
             return;
@@ -231,18 +153,18 @@ namespace winrt::LookoutMarine::implementation
 
         if (row->charts == 0 && row->pictures == 0 && row->to_prepare == 0 && !row->managed)
         {
-            if (lookout_chart_sets_remove(chart_sets_model, path.c_str()))
+            if (lookout_chart_sets_remove(sets.Handle(), path.c_str()))
                 LoadChartSets(nullptr);
             return;
         }
 
         std::vector<std::string> pictures;
         size_t n = 0;
-        auto const *files = lookout_chart_set_files(chart_sets_model, path.c_str(), &n);
+        auto const *files = lookout_chart_set_files(sets.Handle(), path.c_str(), &n);
         for (size_t i = 0; files != nullptr && i < n; ++i)
             if (files[i] != nullptr && files[i]->kind == LOOKOUT_FILE_RASTER)
                 pictures.push_back(files[i]->path);
-        auto charts = ChartSetOpenPaths();
+        auto charts = sets.Compose();
         AdoptBakedRasters(pictures, !charts.empty());
         if (!charts.empty())
             OpenPaths(charts, charts.front(), lkw::AgencyForCells(charts));
@@ -255,7 +177,7 @@ namespace winrt::LookoutMarine::implementation
     // chart links, off the readout tick.
     void MainWindow::PollChartSets()
     {
-        if (chart_sets_model == nullptr || !lookout_chart_sets_changed(chart_sets_model))
+        if (sets.Handle() == nullptr || !lookout_chart_sets_changed(sets.Handle()))
             return;
         // The core reads the editions off the sets, so the count follows them.
         NoaaConsiderUpdateCheck();
@@ -281,42 +203,10 @@ namespace winrt::LookoutMarine::implementation
                 FinishPendingSet();
                 return;
             }
-            auto composed = ChartSetOpenPaths();
-            if (!composed.empty() && composed != opened_set_paths)
+            auto composed = sets.Compose();
+            if (!composed.empty() && composed != sets.opened)
                 ReopenChartSets({});
         });
-    }
-
-    bool MainWindow::ChartSetsScanning() const
-    {
-        for (auto const &s : chart_sets)
-            if (!s.scanned)
-                return true;
-        return false;
-    }
-
-    void MainWindow::CloseChartSets()
-    {
-        if (chart_sets_model == nullptr)
-            return;
-        lookout_chart_sets_close(chart_sets_model);
-        chart_sets_model = nullptr;
-    }
-
-    // Every chart the switched-on sets carry, ready for the engine: sorted,
-    // duplicates dropped (two sets may overlap, and the same cell twice
-    // would be composed twice).
-    std::vector<std::string> MainWindow::ChartSetOpenPaths()
-    {
-        std::vector<std::string> out;
-        lookout_chart_sets *model = ChartSetsModel();
-        if (model == nullptr)
-            return out;
-        size_t n = 0;
-        char const *const *paths = lookout_chart_sets_compose(model, &n);
-        for (size_t i = 0; i < n; ++i)
-            out.push_back(paths[i]);
-        return out;
     }
 
     // Put `path` on the list (switched on; an existing entry keeps its
@@ -327,7 +217,7 @@ namespace winrt::LookoutMarine::implementation
         std::error_code ec;
         if (path.empty() || !std::filesystem::is_directory(path, ec))
             return;
-        lookout_chart_sets *model = ChartSetsModel();
+        lookout_chart_sets *model = sets.Model();
         if (model == nullptr)
             return;
         // add() scans a path new to the list and returns 0 for one already on
@@ -354,7 +244,7 @@ namespace winrt::LookoutMarine::implementation
     // drawing any more.
     void MainWindow::SetChartSetOn(std::string const &path, bool on)
     {
-        lookout_chart_sets *model = ChartSetsModel();
+        lookout_chart_sets *model = sets.Model();
         if (model == nullptr || !lookout_chart_sets_set_on(model, path.c_str(), on ? 1 : 0))
             return;
         LoadChartSets(nullptr);
@@ -494,13 +384,13 @@ namespace winrt::LookoutMarine::implementation
     // before any of that, in ConfirmRemoveChartSet.
     void MainWindow::RemoveChartSet(std::string const &path)
     {
-        lookout_chart_sets *model = ChartSetsModel();
+        lookout_chart_sets *model = sets.Model();
         if (model == nullptr)
             return;
         // What it is called, before the row that knows goes. The removal says
         // this while it runs, and by then the set is off the list.
         std::string name = std::filesystem::path(path).filename().string();
-        for (auto const &row : chart_sets)
+        for (auto const &row : sets.Rows())
             if (row.path == path && !row.title.empty())
                 name = row.title;
         if (!lookout_chart_sets_remove(model, path.c_str()))

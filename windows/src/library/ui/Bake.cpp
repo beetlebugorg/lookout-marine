@@ -150,7 +150,7 @@ namespace winrt::LookoutMarine::implementation
                 {
                     // The mariner stopped it. The core skips this set on resume until a
                     // scan of it finds a file to prepare that was not there before.
-                    if (lookout_chart_sets *model = ChartSetsModel(); model != nullptr &&
+                    if (lookout_chart_sets *model = sets.Model(); model != nullptr &&
                         !bake_source.empty())
                         lookout_chart_sets_note_cancel(model, bake_source.c_str());
                     bake_job->Cancel();
@@ -218,7 +218,7 @@ namespace winrt::LookoutMarine::implementation
         // How this bake ended, before the job is freed. A bake that ran to
         // the end records the files it did not prepare as refused, and the
         // rescan after it reads the folder with those refusals in place.
-        if (lookout_chart_sets *model = ChartSetsModel(); model != nullptr &&
+        if (lookout_chart_sets *model = sets.Model(); model != nullptr &&
             !bake_source.empty())
         {
             lookout_chart_sets_note_bake(model, bake_source.c_str(), bake_job->Handle());

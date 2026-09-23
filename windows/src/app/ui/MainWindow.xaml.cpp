@@ -170,7 +170,7 @@ namespace winrt::LookoutMarine::implementation
             // The NOAA service borrows the set model, and the set model holds
             // a scan thread and the store, so they close in that order.
             NoaaClose();
-            CloseChartSets();
+            sets.Close();
             lookout_setup_free(setup);
             setup = nullptr;
             // The store coalesces its writes, so the last of them reaches the
@@ -376,7 +376,7 @@ namespace winrt::LookoutMarine::implementation
                 // nothing to read out. The open itself is driven by layout,
                 // not by this clock, so the poll stands down until one lands,
                 // unless a picked set or a settings page is waiting on a scan.
-                if (pending_set.empty() && (!SettingsOpen() || !ChartSetsScanning()))
+                if (pending_set.empty() && (!SettingsOpen() || !sets.Scanning()))
                     readout_timer.Stop();
                 return;
             }

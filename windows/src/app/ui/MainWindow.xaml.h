@@ -3,6 +3,7 @@
 
 #include "lk_alerts.h"
 #include "lk_bake.h"
+#include "lk_chart_sets.h"
 #include "lk_coastline.h"
 #include "lk_firstrun.h"
 #include "lk_controller.h"
@@ -280,49 +281,11 @@ namespace winrt::LookoutMarine::implementation
         void ThemeSettingsPane(Microsoft::UI::Xaml::ElementTheme want); // settings/ui/Settings.cpp
 
         // ---- chart sets (the folders of installed charts) ----------------------
-        // A set is a folder, which may be the baked library, a folder of
-        // .pmtiles or a folder of pictures, with an on/off switch. What opens
-        // is the UNION of the switched-on sets. Mirrors the macOS "installed
-        // sets" model.
-        struct ChartSetRow
-        {
-            std::string path;
-            bool on{ true };
-            /* The downloader's own set rather than the mariner's: the
-             * folder NOAA charts are downloaded and prepared into. The
-             * picker states what THIS set holds, so a mariner holding an
-             * archive that merely lists cells does not read as holding
-             * every region (lookout_chart_sets_set_managed). */
-            bool managed{ false };
-            // 0 until the background scan has read the folder, and every
-            // count below is 0 until then.
-            bool scanned{ false };
-            size_t charts{ 0 };
-            size_t pictures{ 0 };
-            // Files that bake before they draw, and what the folder holds on
-            // disk. Both are the core's own figures for the set.
-            size_t unprepared{ 0 };
-            /* What the core lists to prepare for this set, and the files a
-             * finished bake did not prepare. `to_prepare` is `unprepared`
-             * less `refused`, and band_todo splits it by usage band. */
-            size_t to_prepare{ 0 };
-            size_t refused{ 0 };
-            std::array<size_t, 6> band_todo{};
-            uint64_t bytes{ 0 };
-            // How many prepared charts this set holds in each usage band,
-            // keyed 1 to 6. A set that stops at Coastal does not draw the
-            // harbour a passage ends in, so the row says which scales are in
-            // it.
-            std::map<int, size_t> bands;
-            std::string title; // the agency whose charts these are, else the folder
-        };
-        lookout_chart_sets *ChartSetsModel();
+        // The installed sets and their rows (library/lk_chart_sets.h), and
+        // the composed paths the chart was last opened from.
+        lkw::ChartSets sets;
         void LoadChartSets(std::function<void()> then);
         void PollChartSets();
-        /* True while any installed set is still waiting for its scan. */
-        bool ChartSetsScanning() const;
-        void CloseChartSets();
-        std::vector<std::string> ChartSetOpenPaths();
         /* Put a folder on the set list. `after_write` asks for a rescan of
          * one already listed, which only an open that follows a bake needs:
          * a rescan returns the row to unscanned while it reads, and every
@@ -366,13 +329,6 @@ namespace winrt::LookoutMarine::implementation
         /* Open what the switched-on sets compose, or take the chart off the
          * display when nothing is installed. */
         void ReopenChartSets(std::string const &recent);
-        /* The composed set paths the chart was last opened from. Empty when
-         * the chart draws something else: a recent, the basemap, or nothing.
-         * A scan landing is often the first moment the library composes at
-         * all, and this is how the shell knows it has yet to open it. */
-        std::vector<std::string> opened_set_paths;
-        std::vector<ChartSetRow> chart_sets;
-        lookout_chart_sets *chart_sets_model{ nullptr };
 
         // ---- charts by link (an online map AS the chart) --------------------
         // One chart added by link: a MapLibre style url. Picking it renders
