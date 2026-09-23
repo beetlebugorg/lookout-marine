@@ -1,6 +1,7 @@
 package org.beetlebug.lookout.charts
 
 import org.beetlebug.lookout.Lookout
+import org.beetlebug.lookout.hud.Chrome
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -113,17 +114,11 @@ private fun FlowLegend(ordered: List<Pair<Int, Int>>, alpha: Float) {
 }
 
 /**
- * The S-52 depth ramp, coarse to fine: the wide-area bands take the pale end
- * and a berthing chart the deep one, so a set's shape reads the way a chart's
- * water does.
+ * The core's usage band ramp, BAND1 to BAND6, coarse to fine: the wide-area
+ * bands have the pale end and a berthing chart the deep one, so a set's shape
+ * reads the way a chart's water does.
  */
-private fun bandColor(band: Int): Color = when (band) {
-    1 -> Color(0xFFEAF4FC)
-    2 -> Color(0xFFD6EAF8)
-    3 -> Color(0xFFB9DCF2)
-    4 -> Color(0xFF8FC5E8)
-    5 -> Color(0xFF5AA4D6)
-    else -> Color(0xFF2E7DB5)
-}
+@Composable
+private fun bandColor(band: Int): Color = Chrome.s52("BAND${band.coerceIn(1, 6)}")
 
 private fun bandLabel(band: Int): String = Lookout.usageBandName(band)

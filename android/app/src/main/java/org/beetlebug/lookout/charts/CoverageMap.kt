@@ -1,5 +1,7 @@
 package org.beetlebug.lookout.charts
 
+import org.beetlebug.lookout.hud.Chrome
+
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -87,10 +89,13 @@ private val MAIN_IDS = setOf("d1", "d5", "d7", "d8", "d9", "d11", "d13")
 private val ALASKA = MapWindow(-172.0, 50.5, -128.0, 72.0)
 private val HAWAII = MapWindow(-161.0, 18.3, -154.0, 22.6)
 
-/** S-52 shallow blue and GSHHG land, so the picker sits in the chart's own
+/** S-52 very shallow water and land, so the picker sits in the chart's own
  *  palette rather than the system's. */
-private val WATER = Color(0xFFADD6FF).copy(alpha = 0.55f)
-private val LAND = Color(0xFFA39654).copy(alpha = 0.55f)
+@Composable
+private fun water() = Chrome.s52("DEPVS").copy(alpha = 0.55f)
+
+@Composable
+private fun land() = Chrome.s52("LANDA").copy(alpha = 0.55f)
 
 @Composable
 fun CoverageMap(
@@ -163,10 +168,12 @@ private fun panel(
     modifier: Modifier,
 ) {
     val mine = remember(regions, ids) { regions.filter { ids.contains(it.id) } }
+    val water = water()
+    val land = land()
     Surface(
         modifier = modifier,
         shape = RoundedCornerShape(10.dp),
-        color = WATER,
+        color = water,
         border = BorderStroke(1.dp, edge),
     ) {
         Canvas(
@@ -186,7 +193,7 @@ private fun panel(
                 }
             },
         ) {
-            drawLand(rings, window)
+            drawLand(rings, window, land, water)
             for (r in mine) {
                 val on = picked.contains(r.id)
                 drawRegion(boxesOf(r, coverage), window, accent.copy(alpha = if (on) 0.5f else 0.16f))
@@ -211,7 +218,7 @@ private fun boxesOf(
  * Every ring that reaches into this window. Land and lakes are drawn in level
  * order, so a lake paints water back over the land it sits in.
  */
-private fun DrawScope.drawLand(rings: List<Coastline.Ring>, window: MapWindow) {
+private fun DrawScope.drawLand(rings: List<Coastline.Ring>, window: MapWindow, land: Color, water: Color) {
     for (level in intArrayOf(1, 2)) {
         val path = Path()
         for (ring in rings) {
@@ -224,7 +231,7 @@ private fun DrawScope.drawLand(rings: List<Coastline.Ring>, window: MapWindow) {
             }
             path.close()
         }
-        drawPath(path, if (level == 1) LAND else WATER)
+        drawPath(path, if (level == 1) land else water)
     }
 }
 

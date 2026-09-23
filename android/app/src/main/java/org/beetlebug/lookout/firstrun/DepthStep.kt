@@ -1,6 +1,7 @@
 package org.beetlebug.lookout.firstrun
 
 import org.beetlebug.lookout.Lookout
+import org.beetlebug.lookout.hud.Chrome
 import org.beetlebug.lookout.settings.DepthUnit
 import org.beetlebug.lookout.settings.MarinerState
 
@@ -248,11 +249,11 @@ private fun seabed(
     measure: (Double) -> String,
     bare: (Double) -> String,
 ) {
-    val unsafe = s52("DEPVS", Color(0xFF9BD3FF))
-    val shallow = s52("DEPMS", Color(0xFFBFE3FF))
-    val medium = s52("DEPMD", Color(0xFFDDF0FF))
-    val deep = s52("DEPDW", Color(0xFFF2F9FF))
-    val land = s52("LANDA", Color(0xFFD9CFA8))
+    val unsafe = Chrome.s52("DEPVS", 0) ?: Color(0xFF9BD3FF)
+    val shallow = Chrome.s52("DEPMS", 0) ?: Color(0xFFBFE3FF)
+    val medium = Chrome.s52("DEPMD", 0) ?: Color(0xFFDDF0FF)
+    val deep = Chrome.s52("DEPDW", 0) ?: Color(0xFFF2F9FF)
+    val land = Chrome.s52("LANDA", 0) ?: Color(0xFFD9CFA8)
 
     // The soundings are the seabed and hold still; the shading is the
     // mariner's and moves over them. Their depths are multiples of the safety
@@ -365,14 +366,6 @@ private fun DrawScope.shoal(t: Float): Path {
 private fun DrawScope.point(t: Float, u: Float): Offset {
     val wave = 0.055f * sin(u * PI.toFloat() * 1.7f + 0.4f) + 0.045f * u
     return Offset(u * size.width, size.height - size.height * t + size.height * wave)
-}
-
-/** One colour the engine draws with, or a fallback when the table has no
- *  answer, so the page draws rather than blanking. */
-private fun s52(token: String, fallback: Color): Color {
-    val rgba = FloatArray(4)
-    if (!Lookout.s52Color(token, 0, rgba)) return fallback
-    return Color(rgba[0], rgba[1], rgba[2], rgba[3])
 }
 
 private fun round1(v: Double) = kotlin.math.round(v * 10.0) / 10.0
