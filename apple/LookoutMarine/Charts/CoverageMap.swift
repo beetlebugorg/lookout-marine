@@ -4,8 +4,8 @@
 //  they span 128 degrees of longitude, and at that scale their latitude span is
 //  taller than the sheet. An atlas prints them as insets for the same reason.
 //
-//  The coastline is drawn from Coastline.bin and the boxes project through the
-//  same window, so a panel draws the same on every frame.
+//  The core projects the coastline and the boxes through the same window, so a
+//  panel draws the same on every frame.
 
 import SwiftUI
 
@@ -18,22 +18,22 @@ struct CoverageMap: View {
     var coverage: [String: [GeoBox]] = [:]
     let toggle: (String) -> Void
 
-    /// One panel: the ground it covers, and the regions drawn on it.
+    /// One panel: the ground it covers, and which regions are drawn on it.
     private struct Panel {
         let window: MapWindow
-        let ids: [String]
+        let panel: Int32
         let label: String?
     }
 
     private static let main = Panel(
         window: MapWindow(west: -132, east: -64, south: 20, north: 52),
-        ids: ["d1", "d5", "d7", "d8", "d9", "d11", "d13"], label: nil)
+        panel: LOOKOUT_NOAA_PANEL_LOWER48, label: nil)
 
     private static let insets = [
         Panel(window: MapWindow(west: -172, east: -128, south: 50.5, north: 72),
-              ids: ["d17"], label: "Alaska"),
+              panel: LOOKOUT_NOAA_PANEL_ALASKA, label: "Alaska"),
         Panel(window: MapWindow(west: -161, east: -154, south: 18.3, north: 22.6),
-              ids: ["d14"], label: "Hawaii"),
+              panel: LOOKOUT_NOAA_PANEL_HAWAII, label: "Hawaii"),
     ]
 
     /// S-52 very shallow water and land, so the picker sits in the app's own
@@ -102,9 +102,9 @@ struct CoverageMap: View {
         GeometryReader { geo in
             ZStack {
                 Self.water
-                shapes(p, level: 1, in: geo.size).fill(Self.land)
-                shapes(p, level: 2, in: geo.size).fill(Self.water)
-                ForEach(regions.filter { p.ids.contains($0.id) }) { r in
+                p.window.coast(LOOKOUT_COAST_LAND, in: geo.size).fill(Self.land)
+                p.window.coast(LOOKOUT_COAST_LAKE, in: geo.size).fill(Self.water)
+                ForEach(regions.filter { $0.panel == p.panel }) { r in
                     box(r, p, in: geo.size)
                 }
             }
@@ -112,39 +112,6 @@ struct CoverageMap: View {
             .clipped()
         }
         .background(Chrome.panel)
-    }
-
-    /// Every ring of one GSHHG level that reaches into this window, as one
-    /// path. GSHHG winds land and lakes opposite ways, so filling them
-    /// together under the non-zero rule gives water inside a lake and land
-    /// outside it.
-    private func shapes(_ p: Panel, level: UInt8, in size: CGSize) -> Path {
-        var path = Path()
-        for ring in Coastline.rings where ring.level == level {
-            guard touches(ring, p) else { continue }
-            var first = true
-            for v in ring.points {
-                let pt = p.window.point(lon: Double(v.x), lat: Double(v.y), in: size)
-                if first { path.move(to: pt); first = false } else { path.addLine(to: pt) }
-            }
-            path.closeSubpath()
-        }
-        return path
-    }
-
-    /// True when the ring's own extent reaches into the window.
-    ///
-    /// A ring spanning more than 180 degrees of longitude is one that crosses
-    /// the antimeridian, such as an Aleutian island with points at +172 and
-    /// -179. Drawn straight through it spans the width of the map as a band.
-    private func touches(_ ring: Coastline.Ring, _ p: Panel) -> Bool {
-        var w = 180.0, e = -180.0, s = 90.0, n = -90.0
-        for v in ring.points {
-            w = min(w, Double(v.x)); e = max(e, Double(v.x))
-            s = min(s, Double(v.y)); n = max(n, Double(v.y))
-        }
-        if e - w > 180 { return false }
-        return p.window.intersects(west: w, east: e, south: s, north: n)
     }
 
     private func box(_ r: NoaaRegion, _ p: Panel, in size: CGSize) -> some View {
@@ -169,6 +136,45 @@ struct CoverageMap: View {
 }
 
 
+/// A lon/lat window, and the flat rectangle it draws into, in Mercator. The
+/// core projects every point.
+struct MapWindow {
+    let west, east, south, north: Double
+
+    /// Width over height for this window.
+    var aspect: CGFloat { CGFloat(lookout_map_aspect(west, east, south, north)) }
+
+    /// Longitude and latitude pairs as points in a rectangle of `size`.
+    func points(_ lonlat: [Double], in size: CGSize) -> [CGPoint] {
+        let n = lonlat.count / 2
+        var xy = [Float](repeating: 0, count: n * 2)
+        lookout_map_project(west, east, south, north,
+                            Double(size.width), Double(size.height), lonlat, &xy, n)
+        return (0..<n).map { CGPoint(x: CGFloat(xy[$0 * 2]), y: CGFloat(xy[$0 * 2 + 1])) }
+    }
+
+    /// The coastline rings of one level that reach into this window, as one
+    /// path.
+    func coast(_ level: Int32, in size: CGSize) -> Path {
+        let w = Double(size.width), h = Double(size.height)
+        let n = lookout_coastline_rings(level, west, east, south, north, w, h, nil, 0, nil, 0)
+        var xy = [Float](repeating: 0, count: n * 2)
+        var ends = [UInt32](repeating: 0, count: n / 4)
+        lookout_coastline_rings(level, west, east, south, north, w, h, &xy, n, &ends, ends.count)
+        func pt(_ i: Int) -> CGPoint { CGPoint(x: CGFloat(xy[i * 2]), y: CGFloat(xy[i * 2 + 1])) }
+        var path = Path()
+        var start = 0
+        for end in ends.map(Int.init) where start < n {
+            path.move(to: pt(start))
+            for i in start + 1 ..< end { path.addLine(to: pt(i)) }
+            path.closeSubpath()
+            start = end
+        }
+        return path
+    }
+}
+
+
 /// One region's coverage, as the boxes the catalog states for its coarse
 /// cells. Drawn as a single path, so overlapping cells do not stack their fill.
 struct RegionShape: Shape {
@@ -177,9 +183,10 @@ struct RegionShape: Shape {
 
     func path(in rect: CGRect) -> Path {
         var p = Path()
-        for b in boxes {
-            let a = window.point(lon: b.west, lat: b.north, in: rect.size)
-            let c = window.point(lon: b.east, lat: b.south, in: rect.size)
+        let corners = window.points(boxes.flatMap { [$0.west, $0.north, $0.east, $0.south] },
+                                    in: rect.size)
+        for i in stride(from: 0, to: corners.count - 1, by: 2) {
+            let a = corners[i], c = corners[i + 1]
             p.addRect(CGRect(x: min(a.x, c.x), y: min(a.y, c.y),
                              width: max(abs(c.x - a.x), 1.5),
                              height: max(abs(c.y - a.y), 1.5)))

@@ -26,6 +26,8 @@ struct NoaaRegion: Identifiable, Hashable {
     let south: Double
     let east: Double
     let north: Double
+    /// The map panel it is drawn on, a LOOKOUT_NOAA_PANEL_ value.
+    let panel: Int32
 }
 
 /// What picking regions costs: the download, and the cells already installed.
@@ -173,7 +175,8 @@ final class NoaaModel {
                               blurb: String(cString: r.blurb),
                               district: Int(r.district),
                               west: r.west, south: r.south,
-                              east: r.east, north: r.north)
+                              east: r.east, north: r.north,
+                              panel: r.panel)
         }
     }
 
