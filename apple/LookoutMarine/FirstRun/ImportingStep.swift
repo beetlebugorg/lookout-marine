@@ -104,38 +104,12 @@ struct ImportingStep: View {
             .padding(.top, 18)
 
             if let ended = endedText {
-                HStack(spacing: 9) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Chrome.amber)
-                    Text(ended)
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(Chrome.ink)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(.vertical, 9)
-                .padding(.horizontal, 11)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Chrome.amber.opacity(0.12),
-                            in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .padding(.top, 16)
-                .accessibilityIdentifier("first-run-import-ended")
+                StepWarning(body_: ended)
+                    .padding(.top, 16)
+                    .accessibilityIdentifier("first-run-import-ended")
             } else if let refused = refusedText {
-                HStack(spacing: 9) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Chrome.amber)
-                    Text(refused)
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(Chrome.ink)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(.vertical, 9)
-                .padding(.horizontal, 11)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Chrome.amber.opacity(0.12),
-                            in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .padding(.top, 16)
+                StepWarning(body_: refused)
+                    .padding(.top, 16)
             }
 
             Spacer(minLength: 16)

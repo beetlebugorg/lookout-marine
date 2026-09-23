@@ -181,8 +181,8 @@ final class AppModel {
             chartOpen: charts.hasChart && !charts.chartIsEmpty,
             noaaOutcome: n.state.outcome.rawValue,
             noaaRun: n.state.run,
-            pickCharts: n.allInstalled ? n.held : n.cells,
-            pickBytes: n.allInstalled ? n.heldBytes : n.bytes)
+            pickCharts: n.allInstalled ? n.cost.held : n.cost.cells,
+            pickBytes: n.allInstalled ? n.cost.heldBytes : n.cost.bytes)
     }
 
     /// Note the facts, and raise setup when the core has it come up.

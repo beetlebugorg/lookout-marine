@@ -26,15 +26,15 @@ struct ChartGallery: View {
     var body: some View {
         ScrollView(.horizontal) {
             HStack(alignment: .top, spacing: Metrics.gap) {
-                ChartTile(kind: .lookout,
+                ChartCard(style: .tile,
                           name: "Lookout chart",
                           detail: lookoutDetail,
                           active: links.active == nil,
-                          picture: previews.images[""]) {
+                          picture: previews.images[""] ?? Image("WelcomeChart")) {
                     links.select(nil)
                 }
                 ForEach(links.list) { link in
-                    ChartTile(kind: .link,
+                    ChartCard(style: .tile,
                               name: link.name,
                               detail: link.url,
                               active: links.active == link.url,
@@ -97,89 +97,129 @@ struct ChartGallery: View {
 
 /// One chart: a picture of it where there is one, its name, and where it comes
 /// from.
-private struct ChartTile: View {
-    enum Kind { case lookout, link }
+///
+/// `.tile` is the gallery's fixed-width tile, with an ACTIVE badge and a menu.
+/// `.shelf` is the first-run card: a grid cell with a tick and a remove
+/// button, whose url wraps to two lines. A style link holds the publisher,
+/// the style and often a key, and those are the parts a middle ellipsis
+/// removes first.
+struct ChartCard: View {
+    enum Style { case tile, shelf }
 
-    let kind: Kind
+    let style: Style
     let name: String
     let detail: String
     let active: Bool
     /// One tile of this chart, once it has been fetched.
     var picture: Image? = nil
+    /// True while this chart's picture is drawn.
+    var drawing = false
     var onRefresh: (() -> Void)? = nil
     var onRemove: (() -> Void)? = nil
     let select: () -> Void
+
+    private var shelf: Bool { style == .shelf }
 
     var body: some View {
         Button(action: select) {
             VStack(alignment: .leading, spacing: 0) {
                 art
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(name)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Chrome.ink)
-                        .lineLimit(1)
-                    Text(detail)
-                        .font(.system(size: 11))
-                        .foregroundStyle(Chrome.muted)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 11)
-                .padding(.top, 9)
-                .padding(.bottom, 11)
+                caption
+                    .padding(.horizontal, 11)
+                    .padding(.top, 9)
+                    .padding(.bottom, 11)
             }
-            .frame(width: ChartGallery.Metrics.tile)
-            .modifier(CardSkin(picked: active, radius: 11))
+            .frame(width: shelf ? nil : ChartGallery.Metrics.tile)
+            .modifier(CardSkin(picked: active, radius: shelf ? 12 : 11))
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(active ? [.isButton, .isSelected] : .isButton)
         .accessibilityIdentifier("chart-tile-\(name)")
     }
 
-    private var art: some View {
-        chartPicture
-            .frame(width: ChartGallery.Metrics.tile, height: ChartGallery.Metrics.art)
-            .clipped()
-            // Over the clipped tile, and not inside it. A picture that fills by
-            // covering is wider than the tile, so a badge aligned inside it
-            // started left of the tile's own edge and lost its first letter.
-            .overlay(alignment: .topLeading) { badge }
-            .overlay(alignment: .topTrailing) { menu }
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(Chrome.edge.opacity(0.5)).frame(height: 1)
+    private var caption: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 7) {
+                if shelf {
+                    Image(systemName: active ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 14))
+                        .foregroundStyle(active ? Chrome.accent : Chrome.ink.opacity(0.30))
+                }
+                Text(name)
+                    .font(.system(size: shelf ? 14 : 13, weight: .semibold))
+                    .foregroundStyle(Chrome.ink)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                if shelf, let onRemove {
+                    Button(action: onRemove) {
+                        Image(systemName: "minus.circle")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Chrome.muted)
+                    .accessibilityLabel("Remove \(name)")
+                }
+            }
+            Text(detail)
+                .font(shelf ? .system(size: 10.5, design: .monospaced) : .system(size: 11))
+                .foregroundStyle(Chrome.muted)
+                .lineLimit(shelf ? 2 : 1)
+                .truncationMode(.middle)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder private var art: some View {
+        switch style {
+        case .tile:
+            chartPicture
+                .frame(width: ChartGallery.Metrics.tile, height: ChartGallery.Metrics.art)
+                .clipped()
+                // Over the clipped tile, and not inside it. A picture that fills
+                // by covering is wider than the tile, so a badge aligned inside
+                // it started left of the tile's own edge and lost its first
+                // letter.
+                .overlay(alignment: .topLeading) { badge }
+                .overlay(alignment: .topTrailing) { menu }
+                .overlay(alignment: .bottom) { rule }
+        case .shelf:
+            chartPicture
+                .frame(maxWidth: .infinity)
+                // Nearer square than a strip: a chart style is told apart by
+                // its water and its marks, and both want height.
+                .aspectRatio(4.0 / 3.0, contentMode: .fill)
+                .frame(maxHeight: 210)
+                .clipped()
+                .overlay(alignment: .bottom) { rule }
         }
     }
 
-    /// The picture at the top of the tile: this chart at the point every
-    /// tile in the row is drawn at.
+    private var rule: some View {
+        Rectangle().fill(Chrome.edge.opacity(0.5)).frame(height: 1)
+    }
+
+    /// The picture at the top of the card, or the room it will take. A style
+    /// with vector tiles has no publisher tile to show.
     @ViewBuilder private var chartPicture: some View {
-        switch kind {
-        case .lookout:
-            if let picture {
-                picture
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-            } else {
-                Image("WelcomeChart")
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-            }
-        case .link:
-            if let picture {
-                picture
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-            } else {
-                // A style with vector tiles, or a tile that has yet to land.
-                Chrome.panel
-                    .overlay(
+        if let picture {
+            picture
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+        } else {
+            Chrome.panel
+                .overlay {
+                    if drawing {
+                        VStack(spacing: 7) {
+                            ProgressView().controlSize(.small)
+                            Text("Drawing this chart…")
+                                .font(.system(size: 11.5))
+                                .foregroundStyle(Chrome.muted)
+                        }
+                    } else {
                         Image(systemName: "globe.americas")
-                            .font(.system(size: 26, weight: .light))
-                            .foregroundStyle(Chrome.accent.opacity(0.55))
-                    )
-            }
+                            .font(.system(size: shelf ? 20 : 26, weight: .light))
+                            .foregroundStyle(Chrome.accent.opacity(shelf ? 0.5 : 0.55))
+                    }
+                }
         }
     }
 

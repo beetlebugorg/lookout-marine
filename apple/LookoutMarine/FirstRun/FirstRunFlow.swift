@@ -277,7 +277,7 @@ struct FirstRunFlow: View {
             guard n.state.haveCatalog else { return nil }
             // Held counts as picked, so a region wholly installed prices as
             // that rather than reading as an empty pick.
-            guard n.cells > 0 || n.held > 0 else { return "Pick at least one region." }
+            guard n.cost.cells > 0 || n.cost.held > 0 else { return "Pick at least one region." }
             return n.costLine
         case .importing:
             return nil

@@ -38,14 +38,17 @@ struct OnlineChartStep: View {
             // between them.
             LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
                 ForEach(shelf) { link in
-                    ChartLinkCard(link: link,
-                                  picture: previews.images[link.url]
-                                      ?? ChartCatalog.art(for: link.url),
-                                  drawing: previews.drawing.contains(link.url),
-                                  picked: links.active == link.url,
-                                  onPick: { pick(link.url) },
-                                  onRemove: added(link.url)
-                                      ? { links.remove(link.url) } : nil)
+                    ChartCard(style: .shelf,
+                              name: link.name,
+                              detail: link.url,
+                              active: links.active == link.url,
+                              picture: previews.images[link.url]
+                                  ?? ChartCatalog.art(for: link.url),
+                              drawing: previews.drawing.contains(link.url),
+                              onRemove: added(link.url)
+                                  ? { links.remove(link.url) } : nil) {
+                        pick(link.url)
+                    }
                 }
             }
             .padding(.top, 20)
@@ -181,99 +184,3 @@ struct OnlineChartStep: View {
     #endif
 }
 
-
-/// One added chart: the mark, the name, and the url it came from.
-///
-/// The url wraps rather than clipping. A style link holds the publisher, the
-/// style and often a key, and those are the parts a middle ellipsis removes
-/// first.
-private struct ChartLinkCard: View {
-    let link: ChartLinksModel.ChartLink
-    /// This chart as the engine drew it, off to one side.
-    var picture: Image? = nil
-    /// True while that render is running.
-    var drawing = false
-    let picked: Bool
-    let onPick: () -> Void
-    /// Nil for a chart the app ships that the mariner has not taken yet:
-    /// there is no link of theirs to drop.
-    let onRemove: (() -> Void)?
-
-    var body: some View {
-        Button(action: onPick) {
-            VStack(alignment: .leading, spacing: 0) {
-                art
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 7) {
-                        Image(systemName: picked ? "checkmark.circle.fill" : "circle")
-                            .font(.system(size: 14))
-                            .foregroundStyle(picked ? Chrome.accent : Chrome.ink.opacity(0.30))
-                        Text(link.name)
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(Chrome.ink)
-                            .lineLimit(1)
-                        Spacer(minLength: 0)
-                        if let onRemove {
-                            Button(action: onRemove) {
-                                Image(systemName: "minus.circle")
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(Chrome.muted)
-                            .accessibilityLabel("Remove \(link.name)")
-                        }
-                    }
-                    Text(link.url)
-                        .font(.system(size: 10.5, design: .monospaced))
-                        .foregroundStyle(Chrome.muted)
-                        .lineLimit(2)
-                        .truncationMode(.middle)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .padding(.horizontal, 11)
-                .padding(.top, 9)
-                .padding(.bottom, 11)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityAddTraits(picked ? [.isButton, .isSelected] : .isButton)
-        .modifier(CardSkin(picked: picked, radius: 12))
-    }
-
-    /// The chart, or the room it will take. A style renders through the engine
-    /// and the engine draws one at a time, so a chart never picked has none.
-    private var art: some View {
-        Group {
-            if let picture {
-                picture
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-            } else {
-                Chrome.panel
-                    .overlay {
-                        if drawing {
-                            VStack(spacing: 7) {
-                                ProgressView().controlSize(.small)
-                                Text("Drawing this chart…")
-                                    .font(.system(size: 11.5))
-                                    .foregroundStyle(Chrome.muted)
-                            }
-                        } else {
-                            Image(systemName: "globe.americas")
-                                .font(.system(size: 20, weight: .light))
-                                .foregroundStyle(Chrome.accent.opacity(0.5))
-                        }
-                    }
-            }
-        }
-        .frame(maxWidth: .infinity)
-        // Nearer square than a strip: a chart style is told apart by its water
-        // and its marks, and both want height.
-        .aspectRatio(4.0 / 3.0, contentMode: .fill)
-        .frame(maxHeight: 210)
-        .clipped()
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(Chrome.edge.opacity(0.5)).frame(height: 1)
-        }
-    }
-}

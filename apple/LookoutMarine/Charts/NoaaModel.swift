@@ -139,15 +139,10 @@ final class NoaaModel {
     /// Each region's real coverage, read once the catalog is in. A region
     /// drawn as one rectangle claims water it does not cover.
     private(set) var coverage: [String: [GeoBox]] = [:]
-    /// What the current pick costs, refreshed whenever the pick changes.
-    private(set) var cells: UInt32 = 0
-    private(set) var bytes: UInt64 = 0
-    /// Cells the pick names that are already installed. The mariner is told,
-    /// so a number far under the region's size reads as a saving rather than
-    /// a mistake.
-    private(set) var held: UInt32 = 0
-    /// What fetching the installed ones again costs, for a repair.
-    private(set) var heldBytes: UInt64 = 0
+    /// What the current pick costs, refreshed whenever the pick changes. The
+    /// mariner is told the cells already installed, so a number far under
+    /// the region's size reads as a saving rather than a mistake.
+    private(set) var cost = NoaaCost()
 
     /// Callers waiting in loadCatalog for the catalog read to end.
     private var catalogWaiters: [CheckedContinuation<Void, Never>] = []
@@ -247,23 +242,10 @@ final class NoaaModel {
 
     private func recost() {
         guard let engine, state.haveCatalog else {
-            cells = 0
-            bytes = 0
-            held = 0
-            heldBytes = 0
+            cost = NoaaCost()
             return
         }
-        if let c = engine.noaaCost(regionIDs: pickedIDs) {
-            cells = c.cells
-            bytes = c.bytes
-            held = c.held
-            heldBytes = c.heldBytes
-        } else {
-            cells = 0
-            bytes = 0
-            held = 0
-            heldBytes = 0
-        }
+        cost = engine.noaaCost(regionIDs: pickedIDs) ?? NoaaCost()
     }
 
     /// Price the pick and each region again. The core reads the cells held
@@ -301,15 +283,15 @@ final class NoaaModel {
 
     /// True when every cell the pick names is already on the device. The
     /// download then repairs or refreshes them rather than adding any.
-    var allInstalled: Bool { cells == 0 && held > 0 }
+    var allInstalled: Bool { cost.cells == 0 && cost.held > 0 }
 
     /// What a pick costs, in the mariner's words.
     var costLine: String {
         if allInstalled {
-            return "\(TextFormat.count(held)) charts, all installed · \(TextFormat.bytes(heldBytes)) to fetch again"
+            return "\(TextFormat.count(cost.held)) charts, all installed · \(TextFormat.bytes(cost.heldBytes)) to fetch again"
         }
-        var s = "\(TextFormat.count(cells)) charts, \(TextFormat.bytes(bytes))"
-        if held > 0 { s += " · \(TextFormat.count(held)) already installed" }
+        var s = "\(TextFormat.count(cost.cells)) charts, \(TextFormat.bytes(cost.bytes))"
+        if cost.held > 0 { s += " · \(TextFormat.count(cost.held)) already installed" }
         return s
     }
 

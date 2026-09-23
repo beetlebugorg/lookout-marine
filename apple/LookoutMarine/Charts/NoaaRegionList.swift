@@ -146,12 +146,12 @@ struct NoaaPickerSheet: View {
     private var removing: [NoaaRegion] {
         noaa.regions.filter { held.contains($0.id) && !noaa.picked.contains($0.id) }
     }
-    private var adding: Bool { noaa.cells > 0 }
+    private var adding: Bool { noaa.cost.cells > 0 }
 
     /// What Apply is about to do, in the mariner's words.
     private var planLine: String {
         var parts: [String] = []
-        if adding { parts.append("Add \(TextFormat.count(noaa.cells)) charts, \(TextFormat.bytes(noaa.bytes))") }
+        if adding { parts.append("Add \(TextFormat.count(noaa.cost.cells)) charts, \(TextFormat.bytes(noaa.cost.bytes))") }
         let gone = removing
         if !gone.isEmpty {
             parts.append("remove \(gone.map(\.name).joined(separator: ", "))")
@@ -205,7 +205,7 @@ struct NoaaPickerSheet: View {
             }
             Divider()
             HStack(spacing: 12) {
-                if noaa.state.haveCatalog, noaa.cells > 0 || noaa.held > 0 || !removing.isEmpty {
+                if noaa.state.haveCatalog, noaa.cost.cells > 0 || noaa.cost.held > 0 || !removing.isEmpty {
                     Text(planLine)
                         .font(.system(size: 12.5))
                         .foregroundStyle(Chrome.muted)

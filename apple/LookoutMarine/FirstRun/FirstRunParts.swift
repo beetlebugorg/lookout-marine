@@ -179,11 +179,11 @@ struct CardSkin: ViewModifier {
     }
 }
 
-/// The publisher's warning, in the publisher's terms. Amber, and shaped
-/// differently from an ordinary note, so it separates from the page at a
-/// glance.
+/// A warning on a step, such as the publisher's, in the publisher's terms.
+/// Amber, and shaped differently from an ordinary note, so it separates from
+/// the page at a glance. With no lead the body is the whole warning, in ink.
 struct StepWarning: View {
-    let lead: String
+    var lead: String? = nil
     let body_: String
     var link: (title: String, url: URL)? = nil
 
@@ -195,7 +195,11 @@ struct StepWarning: View {
                 .padding(.top, 2)
             VStack(alignment: .leading, spacing: 4) {
                 Group {
-                    Text("\(Text(lead).fontWeight(.semibold).foregroundStyle(Chrome.ink)) \(Text(body_).foregroundStyle(Chrome.muted))")
+                    if let lead {
+                        Text("\(Text(lead).fontWeight(.semibold).foregroundStyle(Chrome.ink)) \(Text(body_).foregroundStyle(Chrome.muted))")
+                    } else {
+                        Text(body_).foregroundStyle(Chrome.ink)
+                    }
                 }
                 .font(.system(size: 11.5))
                 .lineSpacing(2)
