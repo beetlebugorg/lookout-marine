@@ -226,6 +226,9 @@ pub const State = extern struct {
     update_checking: u8 = 0,
     /// Unix seconds of the last update check recorded, or 0.
     update_checked_at: i64 = 0,
+    /// Why the last catalog read failed, or an empty string. `err` is the
+    /// download's.
+    catalog_error: [256]u8 = @splat(0),
 };
 
 /// The update check, as the snapshot reads it. The Handle writes it under
@@ -265,6 +268,8 @@ pub const Service = struct {
     /// catalog in hand is the cached one, which can predate a reissue.
     fresh_reads: u32 = 0,
     err: []u8 = &.{},
+    /// Why the last catalog read failed, apart from any download's error.
+    catalog_err: []u8 = &.{},
     phase: Phase = .idle,
     /// A catalog read is out. Held apart from `phase`, because a read can run
     /// beside a download and the download's end is read off the phase.
@@ -397,6 +402,7 @@ pub const Service = struct {
         if (self.cat) |*c| c.deinit();
         self.cat = null;
         self.freeStr(&self.err);
+        self.freeStr(&self.catalog_err);
         if (self.dest.len != 0) self.alloc.free(self.dest);
         self.dest = &.{};
         self.freePlan();
@@ -414,6 +420,12 @@ pub const Service = struct {
     fn setErr(self: *Service, msg: []const u8) void {
         self.freeStr(&self.err);
         self.err = self.alloc.dupe(u8, msg) catch &.{};
+        self.changed = true;
+    }
+
+    fn setCatalogErr(self: *Service, msg: []const u8) void {
+        self.freeStr(&self.catalog_err);
+        self.catalog_err = self.alloc.dupe(u8, msg) catch &.{};
         self.changed = true;
     }
 
@@ -667,18 +679,16 @@ pub const Service = struct {
         // below is in flight and after it fails.
         self.loadCachedCatalog();
         if (self.get == null) {
-            self.setErr("no network provider");
+            self.setCatalogErr("no network provider");
             return;
         }
-        if (self.phase != .downloading) {
-            self.freeStr(&self.err);
-            self.phase = .reading_catalog;
-        }
+        self.freeStr(&self.catalog_err);
+        if (self.phase != .downloading) self.phase = .reading_catalog;
         self.catalog_inflight = true;
         self.changed = true;
         if (self.issue(noaa.catalog_url, .catalog, 0) == 0) {
             self.catalogEnded();
-            self.setErr("could not start the catalog request");
+            self.setCatalogErr("could not start the catalog request");
         }
     }
 
@@ -1269,18 +1279,18 @@ pub const Service = struct {
     fn tookCatalog(self: *Service, a: Answer) void {
         if (a.status < 200 or a.status >= 300 or a.bytes.len == 0) {
             self.catalogEnded();
-            self.setErr("could not read NOAA's chart catalog");
+            self.setCatalogErr("could not read NOAA's chart catalog");
             return;
         }
         var parsed = noaa.parse(self.alloc, a.bytes) catch {
             self.catalogEnded();
-            self.setErr("NOAA's chart catalog did not parse");
+            self.setCatalogErr("NOAA's chart catalog did not parse");
             return;
         };
         if (parsed.cells.len == 0) {
             parsed.deinit();
             self.catalogEnded();
-            self.setErr("NOAA's chart catalog listed no cells");
+            self.setCatalogErr("NOAA's chart catalog listed no cells");
             return;
         }
         // A running download's plan owns copies of its names and urls, so the
@@ -1540,6 +1550,7 @@ pub const Service = struct {
             copyZ(&s.date, c.date);
         }
         copyZ(&s.err, self.err);
+        copyZ(&s.catalog_error, self.catalog_err);
         self.changed = false;
         return s;
     }
@@ -2678,7 +2689,7 @@ test "a service with no fetcher reports why and stays idle" {
 
     s.refresh();
     try testing.expectEqual(Phase.idle, s.phase);
-    try testing.expect(s.err.len != 0);
+    try testing.expect(s.catalog_err.len != 0);
     try testing.expect(!s.haveCatalog());
 
     // Pricing a selection with no catalog returns a zero cost.
@@ -2912,6 +2923,31 @@ fn testExists(path: []const u8) bool {
     const io = std.Io.Threaded.global_single_threaded.io();
     std.Io.Dir.cwd().access(io, path, .{}) catch return false;
     return true;
+}
+
+test "a catalog read that fails states its own error, apart from the download's" {
+    const alloc = testing.allocator;
+    var rec = Recorder{ .alloc = alloc };
+    defer rec.deinit();
+    var s = Service.init(alloc);
+    defer s.deinit();
+    s.setProvider(Recorder.get, null, null, &rec);
+
+    s.refresh();
+    s.respond(rec.ids.items[0], "", 500);
+    s.adopt();
+    const snap = s.snapshot();
+    try testing.expectEqualStrings("could not read NOAA's chart catalog", std.mem.sliceTo(&snap.catalog_error, 0));
+    try testing.expectEqual(@as(u8, 0), snap.err[0]);
+
+    // A download refused for want of a catalog states it as the download's.
+    s.start(&.{5}, "/tmp/lookout-noaa-test-should-not-exist", false);
+    try testing.expect(s.err.len != 0);
+    try testing.expect(s.catalog_err.len != 0);
+
+    // The next read clears the catalog's error.
+    s.refresh();
+    try testing.expectEqual(@as(usize, 0), s.catalog_err.len);
 }
 
 test "a catalog read during a download leaves the download running" {

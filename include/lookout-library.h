@@ -920,7 +920,8 @@ typedef struct {
     uint32_t failed;
     uint64_t bytes_total;
     uint64_t bytes_done;
-    /* What went wrong, or an empty string. */
+    /* What went wrong with the download, or an empty string. A catalog read
+     * states its own in `catalog_error`. */
     char error[256];
     /* A LOOKOUT_NOAA_NONE .. _REFUSED value, for the download numbered `run`. */
     uint8_t outcome;
@@ -960,6 +961,9 @@ typedef struct {
     /* Unix seconds of the last update check recorded, or 0 when none has
      * been. `checked_at` is any catalog read, this one is the check. */
     int64_t update_checked_at;
+    /* Why the last catalog read failed, or an empty string. The next read
+     * clears it. `error` is the download's. */
+    char catalog_error[256];
 } lookout_noaa_state;
 
 /* ---- The NOAA service handle ----------------------------------------------
