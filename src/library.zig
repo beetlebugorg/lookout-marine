@@ -722,7 +722,7 @@ fn readFiles(a: std.mem.Allocator, cells: []const Cell) ![]const *const File {
     const out = try a.alloc(File, cells.len);
     const by_ptr = try a.alloc(*const File, cells.len);
     for (cells, out, by_ptr) |c, *dst, *p| {
-        dst.* = try fileOf(a, c);
+        owned.fill(File, dst, try fileOf(a, c));
         p.* = dst;
     }
     return by_ptr;

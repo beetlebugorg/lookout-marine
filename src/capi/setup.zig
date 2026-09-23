@@ -42,9 +42,5 @@ export fn lookout_setup_act(s: ?*lookout_setup, action: c_int, arg: c_int) c_int
 
 export fn lookout_setup_read(s: ?*lookout_setup, out: ?*lookout_setup_state) void {
     const o = out orelse return;
-    const x = s orelse {
-        o.* = .{};
-        return;
-    };
-    o.* = x.state();
+    lookout_setup.read(s, o);
 }

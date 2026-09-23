@@ -6,6 +6,7 @@
 //! actions (Action). Everything else follows from those.
 
 const std = @import("std");
+const owned = @import("owned");
 
 pub const Step = enum(u8) { welcome, source, coverage, online, importing, depths };
 
@@ -289,6 +290,12 @@ pub const Setup = struct {
             .order_charts = self.order_charts,
             .order_bytes = self.order_bytes,
         };
+    }
+
+    /// The state, written to a shell's struct with its padding zeroed. A null
+    /// setup writes the default state.
+    pub fn read(self: ?*const Setup, out: *State) void {
+        owned.fill(State, out, if (self) |s| s.state() else .{});
     }
 };
 
@@ -630,4 +637,23 @@ test "the state layout matches lookout-library.h" {
     try testing.expectEqual(@as(usize, 24), @sizeOf(State));
     try testing.expectEqual(@as(usize, 12), @offsetOf(State, "order_charts"));
     try testing.expectEqual(@as(usize, 16), @offsetOf(State, "order_bytes"));
+}
+
+test "two reads of the same facts match byte for byte" {
+    var a: State = undefined;
+    var b: State = undefined;
+    @memset(std.mem.asBytes(&a), 0xAA);
+    @memset(std.mem.asBytes(&b), 0xAA);
+    const facts: Facts = .{ .catalog_ready = 1, .picked = 1, .nothing_to_draw = 1, .pick_charts = 3, .pick_bytes = 9000 };
+    var one: Setup = .{};
+    one.note(facts);
+    _ = one.act(.begin, @intFromEnum(Step.coverage));
+    Setup.read(&one, &a);
+    var two: Setup = .{};
+    two.note(facts);
+    _ = two.act(.begin, @intFromEnum(Step.coverage));
+    Setup.read(&two, &b);
+    try testing.expectEqualSlices(u8, std.mem.asBytes(&a), std.mem.asBytes(&b));
+    // The two bytes between saw_work and order_charts.
+    try testing.expectEqualSlices(u8, &.{ 0, 0 }, std.mem.asBytes(&a)[10..12]);
 }

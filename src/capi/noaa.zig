@@ -4,6 +4,7 @@
 //! while the shell closes and reopens its charts.
 
 const std = @import("std");
+const owned = @import("owned");
 
 const noaa = @import("../noaa.zig");
 const noaajob = @import("../noaajob.zig");
@@ -98,11 +99,7 @@ export fn lookout_noaa_changed(n: ?*lookout_noaa) c_int {
 
 export fn lookout_noaa_poll(n: ?*lookout_noaa, out: ?*lookout_noaa_state) void {
     const o = out orelse return;
-    const x = n orelse {
-        o.* = .{};
-        return;
-    };
-    o.* = x.poll();
+    lookout_noaa.read(n, o);
 }
 
 export fn lookout_noaa_refresh(n: ?*lookout_noaa) void {
@@ -132,10 +129,10 @@ export fn lookout_noaa_download(n: ?*lookout_noaa, region_ids: ?[*:0]const u8, d
 
 export fn lookout_noaa_region_state(n: ?*lookout_noaa, region_id: ?[*:0]const u8, out: ?*lookout_noaa_region_info) c_int {
     const o = out orelse return 0;
-    o.* = .{};
+    owned.fill(lookout_noaa_region_info, o, .{});
     const x = n orelse return 0;
     const id = region_id orelse return 0;
-    o.* = x.regionState(std.mem.span(id)) orelse return 0;
+    owned.fill(lookout_noaa_region_info, o, x.regionState(std.mem.span(id)) orelse return 0);
     return 1;
 }
 

@@ -13,6 +13,7 @@
 //! for the same disk, and the full NOAA library is 7,217 archives.
 
 const std = @import("std");
+const fill = @import("owned").fill;
 
 const library = @import("library.zig");
 const bake = @import("shell/bake.zig");
@@ -534,7 +535,7 @@ pub const Sets = struct {
         self.countHeldBack(held_back);
         for (self.rows.items, out, by_ptr, held_back) |r, *dst, *p, held| {
             const todo = self.countTodo(r);
-            dst.* = .{
+            fill(Set, dst, .{
                 .path = r.path.ptr,
                 .title = r.title.ptr,
                 .producer = r.producer.ptr,
@@ -551,7 +552,7 @@ pub const Sets = struct {
                 .to_prepare = todo.to_prepare,
                 .refused = todo.refused,
                 .band_todo = todo.bands,
-            };
+            });
             p.* = dst;
         }
         self.all_read = .{ .gen = self.gen, .out = by_ptr };
@@ -1113,7 +1114,7 @@ pub const Sets = struct {
                     const id = identityOf(c, scan);
                     f.edition = id.edition;
                     f.update = id.update;
-                    found.append(fa, f) catch {};
+                    fill(library.File, found.addOne(fa) catch continue, f);
                 }
             }
         }
@@ -1129,7 +1130,7 @@ pub const Sets = struct {
                 // chart made from it as well.
                 f.stale = @intFromBool(stale.contains(stem));
                 const at: u32 = @intCast(found.items.len);
-                found.append(fa, f) catch continue;
+                fill(library.File, found.addOne(fa) catch continue, f);
                 if (c.kind == .source or c.kind == .raster_source or archive) todo.append(fa, at) catch {};
             }
         }

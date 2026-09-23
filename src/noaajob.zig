@@ -15,6 +15,7 @@
 //! Request ids have bit 63 set, apart from the ids chartlinks issues.
 
 const std = @import("std");
+const owned = @import("owned");
 const noaa = @import("noaa.zig");
 const clinks = @import("chartlinks.zig");
 const lock = @import("lock.zig");
@@ -1721,6 +1722,12 @@ pub const Handle = struct {
         return self.svc.published();
     }
 
+    /// The last published state, written to a shell's struct with its padding
+    /// zeroed. A null handle writes the default state.
+    pub fn read(self: ?*Handle, out: *State) void {
+        owned.fill(State, out, if (self) |h| h.poll() else .{});
+    }
+
     pub fn refresh(self: *Handle) void {
         self.mu.lock();
         defer self.mu.unlock();
@@ -2694,6 +2701,26 @@ test "the snapshot fits a long error into its buffer" {
     try testing.expectEqual(@as(u8, 'x'), snap.err[254]);
     // Reading the snapshot clears the change flag.
     try testing.expect(!s.changed);
+}
+
+test "two reads of the same state match byte for byte" {
+    var a: State = undefined;
+    var b: State = undefined;
+    @memset(std.mem.asBytes(&a), 0xAA);
+    @memset(std.mem.asBytes(&b), 0xAA);
+    var one = Handle.init(testing.allocator);
+    defer one.deinit();
+    one.svc.setErr("no network");
+    one.svc.publish();
+    Handle.read(&one, &a);
+    var two = Handle.init(testing.allocator);
+    defer two.deinit();
+    two.svc.setErr("no network");
+    two.svc.publish();
+    Handle.read(&two, &b);
+    try testing.expectEqualSlices(u8, std.mem.asBytes(&a), std.mem.asBytes(&b));
+    // The six bytes between date and checked_at.
+    try testing.expectEqualSlices(u8, &(.{0} ** 6), std.mem.asBytes(&a)[18..24]);
 }
 
 test "copyZ terminates a value that fits and one that does not" {

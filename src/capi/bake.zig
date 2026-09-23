@@ -3,6 +3,7 @@
 //! No chart handle: a bake runs before the charts it makes are opened.
 
 const std = @import("std");
+const owned = @import("owned");
 
 const capi = @import("../capi.zig");
 const bakejob = @import("../bakejob.zig");
@@ -68,13 +69,13 @@ export fn lookout_bake_cancel(b: ?*lookout_bake) void {
 export fn lookout_bake_poll(b: ?*const lookout_bake, out: ?*lookout_bake_progress) void {
     const dst = out orelse return;
     const x = b orelse {
-        dst.* = .{
+        owned.fill(lookout_bake_progress, dst, .{
             .done = 0, .total = 0, .baked = 0, .ok = 0, .running = 0,
             .chart = @splat(0), .why = @splat(0),
-        };
+        });
         return;
     };
-    dst.* = x.poll();
+    owned.fill(lookout_bake_progress, dst, x.poll());
 }
 
 /// Join the worker and free the bake. Cancel first, or this blocks for about

@@ -2,6 +2,7 @@
 //! license manifest. None of it needs a handle.
 
 const std = @import("std");
+const owned = @import("owned");
 
 const capi = @import("../capi.zig");
 const format = @import("../shell/format.zig");
@@ -136,7 +137,7 @@ comptime {
 /// The four depth settings for a boat. See lookout-shell.h.
 export fn lookout_depth_plan(draft_m: f64, clearance_m: f64, feet: c_int, out: ?*depth.Plan) void {
     const dst = out orelse return;
-    dst.* = depth.plan(draft_m, clearance_m, feet != 0);
+    owned.fill(depth.Plan, dst, depth.plan(draft_m, clearance_m, feet != 0));
 }
 
 /// The contour ladder in the unit on screen. See lookout-shell.h.

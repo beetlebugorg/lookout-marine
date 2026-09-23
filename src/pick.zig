@@ -293,6 +293,7 @@ pub const Read = owned.Owned(Report);
 
 pub const str = owned.str;
 pub const published = owned.published;
+pub const fill = owned.fill;
 
 /// The record behind a feature a shell holds. The public struct is the
 /// record's first field, so the pointer is the record's own address.
@@ -356,7 +357,7 @@ pub fn record(
                 const depth = if (r.get("depth")) |d| (if (d == .integer) d.integer else 0) else 0;
                 const file = if (r.get("file")) |x| (x == .bool and x.bool) else false;
                 const picture = if (r.get("picture")) |x| (x == .bool and x.bool) else false;
-                try rows.append(a, .{
+                owned.fill(ReportRow, try rows.addOne(a), .{
                     .label = try str(a, label),
                     .value = try str(a, value),
                     .depth = @intCast(depth),
@@ -371,13 +372,13 @@ pub fn record(
     var fold = std.ArrayList(Row).empty;
     try foldRows(sa, &fold, raw);
     const source = try a.alloc(ReportRow, fold.items.len);
-    for (fold.items, source) |row, *dst| dst.* = .{
+    for (fold.items, source) |row, *dst| owned.fill(ReportRow, dst, .{
         .label = try str(a, row.name),
         .value = try str(a, row.value),
         .depth = row.depth,
         .file = @intFromBool(isFileRef(row.name, row.value)),
         .picture = @intFromBool(isPicture(row.value)),
-    };
+    });
 
     const subtitle = text(obj, "subtitle");
     const title = text(obj, "title");

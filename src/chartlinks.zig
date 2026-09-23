@@ -1500,14 +1500,14 @@ pub const Links = struct {
             p.* = dst;
         }
         out.links = by_ptr;
-        out.state = .{
+        owned.fill(State, &out.state, .{
             // Empty is lookout's own chart, where the JSON writes null. A url
             // is never empty.
             .active = try owned.str(a, self.active orelse ""),
             .attribution = try owned.str(a, self.attribution),
             .err = try owned.str(a, self.err),
             .busy = @intFromBool(self.rs != null),
-        };
+        });
         return out;
     }
 

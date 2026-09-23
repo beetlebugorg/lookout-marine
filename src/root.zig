@@ -3567,7 +3567,7 @@ pub const Lookout = struct {
                 break :blk "{}";
             };
             if (rep) |p| cc.tile57_free(p);
-            rec.* = try pick_rules.record(a, sa, f, raw, page);
+            pick_rules.fill(pick_rules.ReportRec, rec, try pick_rules.record(a, sa, f, raw, page));
         }
         out.rows = try pick_rules.published(pick_rules.ReportRec, "report", a, recs);
         return out;

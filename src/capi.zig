@@ -11,6 +11,7 @@ const builtin = @import("builtin");
 
 const lk = @import("root.zig");
 const cc = @import("c.zig").c;
+const owned = @import("owned");
 
 /// The plugin host, for the install surface below. Present only when the
 /// build has one; every entry point checks, so a build without plugins keeps
@@ -197,7 +198,7 @@ export fn lookout_set_cache_dir(path: [*:0]const u8) void {
 export fn lookout_fit_chart(h: ?*lookout, out: *lookout_view) void {
     const l = locked(h);
     defer l.apiUnlock();
-    out.* = fromView(l.fitChart());
+    owned.fill(lookout_view, out, fromView(l.fitChart()));
 }
 /// The view to open with when the host has NOTHING saved: the library framed,
 /// pulled back to an overview zoom. Pair with lookout_set_view; a host that has
@@ -205,7 +206,7 @@ export fn lookout_fit_chart(h: ?*lookout, out: *lookout_view) void {
 export fn lookout_default_view(h: ?*lookout, out: *lookout_view) void {
     const l = locked(h);
     defer l.apiUnlock();
-    out.* = fromView(l.defaultView());
+    owned.fill(lookout_view, out, fromView(l.defaultView()));
 }
 export fn lookout_set_view(h: ?*lookout, v: *const lookout_view) void {
     const l = locked(h);
@@ -215,7 +216,7 @@ export fn lookout_set_view(h: ?*lookout, v: *const lookout_view) void {
 export fn lookout_get_view(h: ?*lookout, out: *lookout_view) void {
     const l = locked(h);
     defer l.apiUnlock();
-    out.* = fromView(l.view());
+    owned.fill(lookout_view, out, fromView(l.view()));
 }
 export fn lookout_resize(h: ?*lookout, width: u32, height: u32) c_int {
     const l = locked(h);
@@ -280,12 +281,12 @@ export fn lookout_geo_to_screen(h: ?*lookout, lon: f64, lat: f64, x_px: *f32, y_
 
 // ---- mariner (ALL S-52 settings) -------------------------------------------
 export fn lookout_mariner_defaults(m: *cc.tile57_mariner) void {
-    m.* = lk.marinerDefaults();
+    owned.fill(cc.tile57_mariner, m, lk.marinerDefaults());
 }
 export fn lookout_get_mariner(h: ?*lookout, out: *cc.tile57_mariner) void {
     const l = locked(h);
     defer l.apiUnlock();
-    out.* = l.getMariner();
+    owned.fill(cc.tile57_mariner, out, l.getMariner());
 }
 export fn lookout_set_mariner(h: ?*lookout, m: *const cc.tile57_mariner) void {
     const l = locked(h);
@@ -595,14 +596,14 @@ pub const lookout_marker = extern struct {
 };
 
 fn fillMarker(out: *lookout_marker, m: *const @import("markers.zig").Marker) void {
-    out.* = .{
+    owned.fill(lookout_marker, out, .{
         .id = m.id,
         .lon = m.lon,
         .lat = m.lat,
         .name = m.name.ptr,
         .name_len = m.name.len,
         .dropped_ms = m.dropped_ms,
-    };
+    });
 }
 
 /// Drop a marker at a geographic point, named at once. Returns its id, or 0

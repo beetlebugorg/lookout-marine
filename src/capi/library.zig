@@ -3,6 +3,7 @@
 //! link and the NOAA region table.
 
 const std = @import("std");
+const owned = @import("owned");
 
 const lk = @import("../root.zig");
 const clinks = @import("../chartlinks.zig");
@@ -399,7 +400,7 @@ pub const lookout_noaa_region = extern struct {
 const noaa_regions = blk: {
     var out: [noaa.regions.len]lookout_noaa_region = undefined;
     for (noaa.regions, 0..) |r, i| {
-        out[i] = .{
+        owned.fill(lookout_noaa_region, &out[i], .{
             .id = r.id.ptr,
             .name = r.name.ptr,
             .blurb = r.blurb.ptr,
@@ -409,7 +410,7 @@ const noaa_regions = blk: {
             .east = r.east,
             .north = r.north,
             .panel = @intFromEnum(r.panel),
-        };
+        });
     }
     break :blk out;
 };
