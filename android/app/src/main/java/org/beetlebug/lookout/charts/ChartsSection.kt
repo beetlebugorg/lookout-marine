@@ -87,7 +87,7 @@ fun ChartsSection(
     // The library plumbing follows it, and the ways to add charts come last:
     // the order the other shells use, because it is the order the questions
     // are asked in.
-    ChartLinksSection(links, charts.chartPaths.size)
+    ChartLinksSection(links, charts.sets.filter { it.on }.sumOf { it.charts })
 
     var pickingNoaa by remember { mutableStateOf(false) }
     var browsing by remember { mutableStateOf(false) }
@@ -364,7 +364,7 @@ private fun SetsHeader(charts: ChartsModel) {
 /** Every set together: how many charts, and what they weigh. */
 private fun setsSummary(charts: ChartsModel): String? {
     if (charts.sets.isEmpty()) return null
-    val n = charts.sets.sumOf { it.charts + it.pictures }
+    val n = charts.sets.sumOf { it.charts + it.unprepared + it.pictures }
     if (n == 0) return null
     val bytes = charts.sets.sumOf { it.bytes }
     return "$n charts · ${bytes(bytes)}"
@@ -468,9 +468,18 @@ private fun ChartSetRow(set: ChartSets.Set, charts: ChartsModel) {
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.padding(start = 40.dp, end = 20.dp, bottom = 4.dp),
     )
+    // Files a finished prepare could not read, and charts another set draws
+    // in this one's place. Two sets can hold the same cell, and the chart
+    // draws one copy, so the count on the row is more than the chart shows.
+    if (set.refused > 0) {
+        RowNote(plural(set.refused, "file") + " Lookout could not read")
+    }
+    if (set.heldBack > 0) {
+        RowNote(plural(set.heldBack, "chart") + " also in another set")
+    }
     // What scales the set holds. A set that stops at Coastal does not draw the
     // harbour a passage ends in, and one line says so at a glance.
-    val bands = remember(set.path, set.scanned, set.charts) { bandCounts(set) }
+    val bands = set.bandCount.mapIndexedNotNull { i, n -> if (n > 0) (i + 1) to n else null }
     if (bands.isNotEmpty()) {
         BandRamp(
             counts = bands,
@@ -520,7 +529,7 @@ private fun summary(set: ChartSets.Set): String {
     val counts = mutableListOf<String>()
     if (set.charts > 0) counts.add(plural(set.charts, "chart"))
     if (set.pictures > 0) counts.add(plural(set.pictures, "picture"))
-    if (set.unprepared > 0) counts.add("${set.unprepared} to prepare")
+    if (set.toPrepare > 0) counts.add("${set.toPrepare} to prepare")
     if (counts.isEmpty()) counts.add("no charts")
     if (set.bytes > 0) counts.add(bytes(set.bytes))
     parts.add(counts.joinToString(", "))
@@ -530,17 +539,15 @@ private fun summary(set: ChartSets.Set): String {
 
 private fun plural(n: Int, one: String): String = if (n == 1) "$n $one" else "$n ${one}s"
 
-/**
- * How many charts sit in each band. Read off the set's own file list, which
- * the index already holds, so nothing new crosses the boundary for it.
- */
-private fun bandCounts(set: ChartSets.Set): List<Pair<Int, Int>> {
-    if (!set.scanned || set.bandLo == 0) return emptyList()
-    val byBand = HashMap<Int, Int>()
-    for (f in ChartSets.files(set.path)) {
-        if (f.band in 1..6) byBand[f.band] = (byBand[f.band] ?: 0) + 1
-    }
-    return byBand.entries.sortedBy { it.key }.map { it.key to it.value }
+/** One more line under a set's summary. */
+@Composable
+private fun RowNote(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(start = 40.dp, end = 20.dp, bottom = 4.dp),
+    )
 }
 
 /** The bands present, in the words the readouts use. */
