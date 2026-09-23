@@ -22,6 +22,7 @@ const cstyle = @import("ct/style.zig");
 const craster = @import("ct/raster.zig"); // the raster underlay's data half
 const ctprovided = @import("ct/provided.zig");
 const clinks = @import("chartlinks.zig"); // charts by link: resolve, serve, persist
+const pics = @import("pictures.zig"); // pictures of charts, for a shell's chart list
 pub const noaajob = @import("noaajob.zig"); // NOAA chart catalog and downloads
 const camera = @import("charttable").camera; // charttable's camera IS the camera
 const pick_rules = @import("pick.zig"); // what a cursor pick reports, and in what order
@@ -196,6 +197,9 @@ pub const OpenOptions = struct {
     /// input via pan/zoom/setView/resize.
     native_handle: ?*anyopaque = null,
     native_kind: cthost.NativeKind = .none,
+    /// Read and write the mariner's chart links. False for a handle that
+    /// draws pictures of charts, which keeps no list of its own.
+    link_store: bool = true,
 };
 
 pub const NativeKind = cthost.NativeKind;
@@ -769,6 +773,9 @@ pub const Lookout = struct {
     /// tiles the style names. The shell keeps one job, fetching bytes for a
     /// url. See src/chartlinks.zig.
     links: clinks.Links = undefined,
+    /// Pictures of charts for a shell's chart list, and the second handle
+    /// that renders them. See src/pictures.zig.
+    pictures: pics.Pictures = undefined,
 
     // API-entry lock (see capi.locked): serializes the C ABI between the
     // host's input thread and its render thread. Distinct from engine_mu,
@@ -962,10 +969,12 @@ pub const Lookout = struct {
         // and neither belongs to a chart. Nothing resolves until the shell
         // supplies a fetcher (setHttpProvider).
         self.links = clinks.Links.init(alloc, self.linksSink());
-        if (marks.supportDirAlloc(alloc)) |d| {
+        self.links.relay = .{ .ctx = self, .deliver = pics.Pictures.onRelay };
+        self.pictures = pics.Pictures.init(alloc);
+        if (opts.link_store) if (marks.supportDirAlloc(alloc)) |d| {
             defer alloc.free(d);
             self.links.openStore(d);
-        }
+        };
         if (dbg) {
             std.debug.print("  charttable init (Metal device+shaders+pipelines) {d} ms\n", .{clock.ticksMs() - t});
             t = clock.ticksMs();
@@ -2077,6 +2086,9 @@ pub const Lookout = struct {
         // Now that nothing else can post into them.
         self.overlay.deinit();
         self.markers.deinit();
+        // BEFORE the links: the second handle's fetches are relayed through
+        // them, and closing it cancels those.
+        self.pictures.deinit(self);
         // BEFORE the renderer: standing the link machine down answers the
         // tiles it has outstanding, and those answers go through the renderer.
         self.links.deinit();
@@ -2435,12 +2447,14 @@ pub const Lookout = struct {
         }
         // A resolve's answer stalls on the first one without this.
         self.links.adopt();
+        // After the adopt, which passes the second handle its responses.
+        const pictures_busy = self.pictures.step(self);
         // The store coalesces its writes, so something has to ask it whether
         // the window has passed. A settings file written once at startup and
         // never again would otherwise never reach the disk.
         if (self.store) |s| s.tick();
 
-        const step = frame_rules.decide(.{
+        var step = frame_rules.decide(.{
             .animating = self.cam.animating(),
             .needs_redraw = self.needsRedraw(),
             .building = self.isBuilding(),
@@ -2448,7 +2462,19 @@ pub const Lookout = struct {
             .ticks_since_change = self.ticks_since_change,
         });
         self.ticks_since_change = step.ticks_since_change;
+        step = frame_rules.withPictures(step, pictures_busy);
         return step;
+    }
+
+    /// One picture of a chart for a shell's chart list. See pictures.zig.
+    pub fn chartLinkPicture(self: *Lookout, url: []const u8, kind: pics.Kind, lon: f64, lat: f64, zoom: f64, w: u32, h: u32, dst: []u8) pics.Result {
+        const r = self.pictures.get(self, url, kind, lon, lat, zoom, w, h, dst);
+        if (r == .pending) self.ticks_since_change = 0;
+        return r;
+    }
+
+    pub fn chartLinkPicturesCancel(self: *Lookout) void {
+        self.pictures.cancel(self);
     }
 
     /// Start the loop again after a change a shell made itself.
@@ -2974,6 +3000,7 @@ pub const Lookout = struct {
         self.links.askTile(source, req_id, z, x, y);
     }
 
+    pub const PictureKind = pics.Kind;
     pub const HttpGetFn = clinks.HttpGetFn;
     pub const HttpCancelFn = clinks.HttpCancelFn;
 
@@ -3362,6 +3389,26 @@ pub const Lookout = struct {
         const px = try self.ct.snapshotRgba();
         defer self.alloc.free(px);
         try png.write(self.alloc, path, px, self.ct.width(), self.ct.height());
+    }
+
+    /// build() without the wait: one update, and back.
+    pub fn buildStep(self: *Lookout) void {
+        self.ensureAtlases();
+        self.ensureStyle();
+        self.flushSheets();
+        self.ct.update();
+    }
+
+    /// Render what is built now, offscreen, into a caller RGBA8 buffer (len
+    /// must be width*height*4). snapshotRgba waits for the build first, for
+    /// up to BUILD_SPIN_MAX spins, and this is called from the frame step.
+    pub fn snapshotNow(self: *Lookout, dst: []u8) !void {
+        self.buildStep();
+        self.updateOverlay();
+        const px = try self.ct.snapshotRgba();
+        defer self.alloc.free(px);
+        if (dst.len < px.len) return error.BufferTooSmall;
+        @memcpy(dst[0..px.len], px);
     }
 
     /// Render offscreen into a caller RGBA8 buffer (len must be width*height*4).
@@ -3860,6 +3907,8 @@ test {
     // The bake job, which needs the engine's headers and so cannot be a test
     // root of its own.
     _ = bakejob;
+    // Pictures of charts, which open a handle and so cannot be a root either.
+    _ = pics;
 }
 
 test "camera roundtrip" {

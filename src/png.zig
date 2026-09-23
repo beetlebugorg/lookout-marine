@@ -76,3 +76,39 @@ pub fn write(a: std.mem.Allocator, path: []const u8, px: []const u8, width: u32,
     const io = std.Io.Threaded.global_single_threaded.io();
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = out.items });
 }
+
+/// Encode an RGBA8 image (top-to-bottom rows) as PNG bytes, deflated at
+/// zlib's fastest level. Owned by `a`.
+pub fn encode(a: std.mem.Allocator, px: []const u8, width: u32, height: u32) ![]u8 {
+    std.debug.assert(px.len == @as(usize, width) * height * 4);
+    const flate = std.compress.flate;
+    const row = @as(usize, width) * 4;
+
+    var zl: std.Io.Writer.Allocating = try .initCapacity(a, px.len / 4 + 64);
+    defer zl.deinit();
+    const window = try a.alloc(u8, flate.max_window_len);
+    defer a.free(window);
+    var z = try flate.Compress.init(&zl.writer, window, .zlib, .level_1);
+    var y: usize = 0;
+    while (y < height) : (y += 1) {
+        try z.writer.writeByte(0); // filter: none
+        try z.writer.writeAll(px[y * row .. (y + 1) * row]);
+    }
+    try z.finish();
+
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(a);
+    try out.appendSlice(a, &.{ 137, 80, 78, 71, 13, 10, 26, 10 });
+    var ihdr: [13]u8 = undefined;
+    std.mem.writeInt(u32, ihdr[0..4], width, .big);
+    std.mem.writeInt(u32, ihdr[4..8], height, .big);
+    ihdr[8] = 8; // bit depth
+    ihdr[9] = 6; // color type RGBA
+    ihdr[10] = 0;
+    ihdr[11] = 0;
+    ihdr[12] = 0;
+    try chunk(&out, a, "IHDR", &ihdr);
+    try chunk(&out, a, "IDAT", zl.written());
+    try chunk(&out, a, "IEND", "");
+    return out.toOwnedSlice(a);
+}

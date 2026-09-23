@@ -222,6 +222,41 @@ export fn lookout_chart_link_preview_url(
     return if (built.len == 0) 0 else 1;
 }
 
+/// One picture of a chart for a shell's chart list. See lookout-library.h.
+export fn lookout_chart_link_picture(
+    h: ?*lookout,
+    url: ?[*:0]const u8,
+    kind: c_int,
+    lon: f64,
+    lat: f64,
+    zoom: f64,
+    width: c_int,
+    height: c_int,
+    dst: ?[*]u8,
+) c_int {
+    const out = dst orelse return 0;
+    if (width <= 0 or height <= 0) return 0;
+    const k: lk.Lookout.PictureKind = switch (kind) {
+        0 => .tile,
+        1 => .render,
+        else => return 0,
+    };
+    const w: u32 = @intCast(width);
+    const ht: u32 = @intCast(height);
+    const l = locked(h);
+    defer l.apiUnlock();
+    const u: []const u8 = if (url) |s| std.mem.span(s) else "";
+    const len = @as(usize, w) * ht * 4;
+    return @intFromEnum(l.chartLinkPicture(u, k, lon, lat, zoom, w, ht, out[0..len]));
+}
+
+/// Drop every picture still pending. See lookout-library.h.
+export fn lookout_chart_link_pictures_cancel(h: ?*lookout) void {
+    const l = locked(h);
+    defer l.apiUnlock();
+    l.chartLinkPicturesCancel();
+}
+
 /// Draw a style without adding it to the list. See lookout-library.h.
 export fn lookout_chart_link_draw(h: ?*lookout, url: ?[*:0]const u8) void {
     const l = locked(h);

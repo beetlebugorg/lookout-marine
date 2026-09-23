@@ -800,6 +800,61 @@ int lookout_chart_link_preview_url(lookout *h, const char *link,
                                    double lon, double lat, int zoom,
                                    char *out, size_t out_len);
 
+/* ---- chart pictures -------------------------------------------------------
+ *
+ * A picture of one chart at one point, drawn by lookout, for a chart list.
+ * lookout_chart_links_preview and lookout_chart_link_preview_url above stay
+ * for a shell that fetches and draws its own tiles.
+ *
+ * LOOKOUT_PICTURE_TILE is for a list of every chart. The chart being drawn
+ * is pictured as this handle draws it, once it has settled. `url` NULL or ""
+ * is lookout's own chart, and it has a picture only while it is the one
+ * drawn. Any other link is the one publisher tile at the point, at the zoom
+ * rounded down, for a style whose sources are all raster. A style with any
+ * other source has no picture.
+ *
+ * LOOKOUT_PICTURE_RENDER draws the link on a second handle with no window,
+ * whether or not it is the chart being drawn. Its fetches go through this
+ * handle's fetcher. One render runs at a time, in the order they were asked
+ * for, and each is kept on disk under the cache root, keyed by the link, the
+ * zoom, a quarter degree cell and the size. A style that does not resolve has
+ * no picture.
+ *
+ * The picture is scaled to cover `width` by `height` and cropped evenly off
+ * the long side. It is written into `dst`, which the shell owns and which
+ * holds width * height * 4 bytes: RGBA8, premultiplied alpha, top row first.
+ * lookout writes `dst` only on READY.
+ *
+ * PENDING: lookout is drawing it. The handle's frame loop drives the work.
+ * While any picture is pending lookout_frame_next does not return IDLE, and a
+ * WAIT is no longer than 100 ms, so a shell whose loop has stopped starts it
+ * again after PENDING.
+ * When a picture is ready or has failed, lookout_chart_links_changed returns
+ * 1, and asking again returns READY or NONE. A picture that has not settled
+ * in its time fails: a snapshot after 9 s, a tile style read after 12 s and a
+ * tile fetch after 20 s. A render stops after at most 70 ticks of 100 ms.
+ * Once no picture is pending, pictures add no wake.
+ *
+ * NONE: there is no picture. The shell draws its own art for the chart.
+ *
+ * Pictures are held in memory by link, kind, place and size, and asking
+ * again for one that is READY copies it again. */
+#define LOOKOUT_PICTURE_TILE    0
+#define LOOKOUT_PICTURE_RENDER  1
+
+#define LOOKOUT_PICTURE_NONE    0
+#define LOOKOUT_PICTURE_READY   1
+#define LOOKOUT_PICTURE_PENDING 2
+
+int lookout_chart_link_picture(lookout *h, const char *url, int kind,
+                               double lon, double lat, double zoom,
+                               int width, int height, uint8_t *dst);
+
+/* Drop every picture that is not READY and close the second handle. Call it
+ * when the list leaves the screen. A picture that failed is tried again on
+ * the next ask. */
+void lookout_chart_link_pictures_cancel(lookout *h);
+
 /* Everything the UI renders, as one transfer-full document:
  *   {"links":[{"url":…,"name":…}…],
  *    "active":…,          // null = lookout's own chart
