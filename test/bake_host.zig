@@ -266,7 +266,7 @@ test "a NOAA download of the carried cells is prepared into charts" {
             if (std.mem.startsWith(u8, c.name, stem)) break c;
         } else return error.TestUnexpectedResult;
         const entry = try std.fmt.allocPrint(aa, "ENC_ROOT/{s}/{s}", .{ stem, cell.name });
-        const zip = try lk.noaajob.testZip(aa, &.{.{ .name = entry, .data = cell.bytes }});
+        const zip = try lk.encunpack.testZip(aa, &.{.{ .name = entry, .data = cell.bytes }});
         h.respondChunk(id, zip, 200, true);
     }
 

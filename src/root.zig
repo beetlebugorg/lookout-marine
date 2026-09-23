@@ -24,6 +24,7 @@ const ctprovided = @import("ct/provided.zig");
 const clinks = @import("chartlinks.zig"); // charts by link: resolve, serve, persist
 const pics = @import("pictures.zig"); // pictures of charts, for a shell's chart list
 pub const noaajob = @import("noaajob.zig"); // NOAA chart catalog and downloads
+pub const encunpack = @import("encunpack.zig"); // an exchange set zip into an ENC_ROOT
 const camera = @import("charttable").camera; // charttable's camera IS the camera
 const pick_rules = @import("pick.zig"); // what a cursor pick reports, and in what order
 pub const library = @import("library.zig"); // what a folder of charts holds
@@ -4505,7 +4506,7 @@ test "a NOAA download on its own handle runs through two chart handles closing" 
     }
     try std.testing.expectEqual(noaajob.Outcome.running, n.svc.outcome);
 
-    const zip = try noaajob.testZip(alloc, &.{.{ .name = "ENC_ROOT/US505000/US505000.000", .data = "cell" }});
+    const zip = try encunpack.testZip(alloc, &.{.{ .name = "ENC_ROOT/US505000/US505000.000", .data = "cell" }});
     defer alloc.free(zip);
     n.respondChunk(f.ids.items[0], zip, 200, true);
     var tries: usize = 0;
