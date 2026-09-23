@@ -33,6 +33,10 @@
 //! for a bad invocation, or a chart that is missing or will not open.
 
 const std = @import("std");
+
+/// glibc places static TLS inside each thread's stack, and std's default
+/// 256 KB per-thread signal stack is static TLS.
+pub const std_options: std.Options = .{ .signal_stack_size = 64 * 1024 };
 const lk = @import("root.zig");
 const ov = @import("overlay.zig");
 const phost = @import("plugin/host.zig");

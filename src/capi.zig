@@ -7,6 +7,10 @@
 //! frame.zig, library.zig, noaa.zig, pick.zig, plugins.zig, settings.zig and
 //! setup.zig.
 const std = @import("std");
+
+/// glibc places static TLS inside each thread's stack, and std's default
+/// 256 KB per-thread signal stack is static TLS.
+pub const std_options: std.Options = .{ .signal_stack_size = 64 * 1024 };
 const builtin = @import("builtin");
 
 const lk = @import("root.zig");
