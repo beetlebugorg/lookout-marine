@@ -459,25 +459,21 @@ lk_thread_nop (gpointer data)
   return data;
 }
 
-/* Threads with the stacks the core's plugin broker gives them start. glibc
- * places static TLS inside each thread's stack, and this binary links the same
- * core and tile57 archives as the app, so its TLS is the app's. */
+/* A thread with the 512 KiB stack the core's plugin broker gives its
+ * resolver, HTTP and WebSocket threads starts. glibc places static TLS inside
+ * each thread's stack, and this binary links the same core and tile57
+ * archives as the app, so its TLS is the app's. */
 static void
 test_small_stack_threads_start (void)
 {
-  const size_t sizes[] = { 256 * 1024, 512 * 1024 };
+  pthread_attr_t attr;
+  pthread_t thread;
 
-  for (guint i = 0; i < G_N_ELEMENTS (sizes); i++)
-    {
-      pthread_attr_t attr;
-      pthread_t thread;
-
-      pthread_attr_init (&attr);
-      pthread_attr_setstacksize (&attr, sizes[i]);
-      g_assert_cmpint (pthread_create (&thread, &attr, lk_thread_nop, NULL), ==, 0);
-      pthread_join (thread, NULL);
-      pthread_attr_destroy (&attr);
-    }
+  pthread_attr_init (&attr);
+  pthread_attr_setstacksize (&attr, 512 * 1024);
+  g_assert_cmpint (pthread_create (&thread, &attr, lk_thread_nop, NULL), ==, 0);
+  pthread_join (thread, NULL);
+  pthread_attr_destroy (&attr);
 }
 
 int

@@ -7,7 +7,7 @@ const std = @import("std");
 
 /// glibc places static TLS inside each thread's stack, and std's default
 /// 256 KB per-thread signal stack is static TLS.
-pub const std_options: std.Options = .{ .signal_stack_size = 64 * 1024 };
+pub const std_options: std.Options = .{ .signal_stack_size = 128 * 1024 };
 const cc = @import("c.zig").c;
 const lk = @import("root.zig");
 const library = lk.library;
