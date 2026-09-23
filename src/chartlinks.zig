@@ -199,6 +199,9 @@ const Kind = union(enum) {
     /// response arrives and is then reused, so an index stays valid while its
     /// request is out.
     preview: usize,
+    /// A fetch made for another owner, delivered through `relay` under the
+    /// owner's token. Counts against neither budget.
+    relay: u64,
 };
 
 const Req = struct {
@@ -209,6 +212,22 @@ const Req = struct {
     fn isTile(self: Req) bool {
         return self.kind == .tile;
     }
+
+    /// A step of the resolve in flight: the requests a newer resolve cancels.
+    fn isResolve(self: Req) bool {
+        return switch (self.kind) {
+            .style, .sibling, .tilejson, .sprite_json, .sprite_png => true,
+            .tile, .preview, .relay => false,
+        };
+    }
+};
+
+/// The owner of relayed fetches, and the call that delivers each response.
+/// `status` is 0 for a transport failure and for a fetch dropped because the
+/// shell's fetcher was cleared.
+pub const Relay = struct {
+    ctx: *anyopaque,
+    deliver: *const fn (ctx: *anyopaque, token: u64, bytes: []const u8, status: c_int) void,
 };
 
 /// A tile ask waiting for a budget slot.
@@ -266,6 +285,8 @@ pub const Links = struct {
     get: ?HttpGetFn = null,
     cancel: ?HttpCancelFn = null,
     user: ?*anyopaque = null,
+    /// The owner of relayed fetches. See issueRelay.
+    relay: ?Relay = null,
 
     /// Where links.json and the kept style docs live. Null keeps the list in
     /// memory only, which is what a test and a platform with no per-user
@@ -382,6 +403,7 @@ pub const Links = struct {
             self.dropResolve();
             self.cancelResolves();
             self.cancelTiles();
+            self.failRelays();
             return;
         }
         // A fetcher arriving is what the chart the mariner left selected has
@@ -407,7 +429,11 @@ pub const Links = struct {
             self.gather.drop(id);
             return 0;
         };
-        if (kind == .tile) self.tiles_inflight += 1 else self.resolve_inflight += 1;
+        switch (kind) {
+            .tile => self.tiles_inflight += 1,
+            .relay => {},
+            else => self.resolve_inflight += 1,
+        }
         // The api lock is already held, and the shell's rule is to start the
         // fetch and return. It may answer before this call ends — respond only
         // enqueues, so that is safe.
@@ -421,10 +447,10 @@ pub const Links = struct {
         for (self.reqs.items, 0..) |r, i| {
             if (r.id != id) continue;
             const req = self.reqs.swapRemove(i);
-            if (req.isTile()) {
-                self.tiles_inflight -= 1;
-            } else {
-                self.resolve_inflight -= 1;
+            switch (req.kind) {
+                .tile => self.tiles_inflight -= 1,
+                .relay => {},
+                else => self.resolve_inflight -= 1,
             }
             if (tell_shell) {
                 self.gather.drop(id);
@@ -437,10 +463,11 @@ pub const Links = struct {
 
     /// Cancel every outstanding RESOLVE request, releasing its slot at once
     /// rather than when it answers. A superseded epoch must not hold budget.
+    /// A preview read and a relayed fetch belong to no resolve and stay out.
     fn cancelResolves(self: *Links) void {
         var i: usize = 0;
         while (i < self.reqs.items.len) {
-            if (self.reqs.items[i].isTile()) {
+            if (!self.reqs.items[i].isResolve()) {
                 i += 1;
                 continue;
             }
@@ -475,6 +502,43 @@ pub const Links = struct {
             self.sink.tileRespond(self.sink.ctx, q.provider_req, &.{}, .failed);
         }
         self.tile_queue.clearRetainingCapacity();
+    }
+
+    // ---- fetches made for somebody else --------------------------------------
+
+    /// Fetch `url` through the shell's fetcher and deliver the response to
+    /// `relay` under `token`. Returns the request id, or 0 when there is no fetcher.
+    /// For a second handle with no fetcher of its own, and for a picture's
+    /// tile, which belongs to no chart being drawn.
+    pub fn issueRelay(self: *Links, url: []const u8, allow_file: bool, token: u64) u64 {
+        if (self.relay == null) return 0;
+        return self.issue(url, allow_file, .{ .relay = token });
+    }
+
+    /// Drop the relayed fetch made under `token`, and tell the shell.
+    pub fn cancelRelay(self: *Links, token: u64) void {
+        for (self.reqs.items) |r| {
+            if (r.kind == .relay and r.kind.relay == token) {
+                _ = self.retire(r.id, true);
+                return;
+            }
+        }
+    }
+
+    /// Deliver status 0 for every relayed fetch. The fetcher is gone, and an
+    /// owner with no response keeps waiting.
+    fn failRelays(self: *Links) void {
+        var i: usize = 0;
+        while (i < self.reqs.items.len) {
+            if (self.reqs.items[i].kind != .relay) {
+                i += 1;
+                continue;
+            }
+            const r = self.reqs.swapRemove(i);
+            self.gather.drop(r.id);
+            if (self.cancel) |c| c(self.user, r.id);
+            if (self.relay) |rl| rl.deliver(rl.ctx, r.kind.relay, &.{}, 0);
+        }
     }
 
     // ---- answers -------------------------------------------------------------
@@ -554,6 +618,10 @@ pub const Links = struct {
             self.onPreview(req.kind.preview, a.bytes, ok);
             return;
         }
+        if (req.kind == .relay) {
+            if (self.relay) |rl| rl.deliver(rl.ctx, req.kind.relay, a.bytes, a.status);
+            return;
+        }
         const rs = self.rs orelse return;
         // A superseded epoch's answers are dropped: a newer add or select owns
         // the chart now.
@@ -564,7 +632,7 @@ pub const Links = struct {
             .tilejson => |i| self.onTileJson(rs, i, a.bytes, ok),
             .sprite_json => |i| self.onSprite(rs, i, a.bytes, ok, true),
             .sprite_png => |i| self.onSprite(rs, i, a.bytes, ok, false),
-            .tile, .preview => unreachable,
+            .tile, .preview, .relay => unreachable,
         }
     }
 
@@ -1127,17 +1195,39 @@ pub const Links = struct {
             if (e.tiles.len != 0 or e.no_tiles) continue;
             if (self.previewOut(e.url)) continue;
             if (self.previews_inflight >= MAX_PREVIEW_INFLIGHT) return;
-            const url = self.alloc.dupe(u8, e.url) catch return;
-            const idx = self.previewSlot(url) orelse {
-                self.alloc.free(url);
-                return;
-            };
-            if (self.issue(e.url, isLocalPath(e.url), .{ .preview = idx }) == 0) {
-                self.freePreviewSlot(idx);
-                continue;
-            }
-            self.previews_inflight += 1;
+            _ = self.previewOne(e.url);
         }
+    }
+
+    /// Read one link's style for its tile template. True when the read went
+    /// out now or was already out. False when the budget is full, when there
+    /// is no fetcher, or when the template is known already.
+    pub fn previewOne(self: *Links, link: []const u8) bool {
+        const e = self.find(link) orelse return false;
+        if (e.tiles.len != 0 or e.no_tiles) return false;
+        if (self.previewOut(e.url)) return true;
+        if (self.previews_inflight >= MAX_PREVIEW_INFLIGHT) return false;
+        const url = self.alloc.dupe(u8, e.url) catch return false;
+        const idx = self.previewSlot(url) orelse {
+            self.alloc.free(url);
+            return false;
+        };
+        if (self.issue(e.url, isLocalPath(e.url), .{ .preview = idx }) == 0) {
+            self.freePreviewSlot(idx);
+            return false;
+        }
+        self.previews_inflight += 1;
+        return true;
+    }
+
+    /// What is known about the tile that pictures `link`.
+    pub const TileKnown = enum { unknown, tiles, none, not_a_link };
+
+    pub fn tileKnown(self: *Links, link: []const u8) TileKnown {
+        const e = self.find(link) orelse return .not_a_link;
+        if (e.tiles.len != 0) return .tiles;
+        if (e.no_tiles) return .none;
+        return .unknown;
     }
 
     /// True while a preview read for this url is out.
@@ -3102,4 +3192,76 @@ test "chartlinks: a preview read that fails is tried again, and its slot is free
     try testing.expect(f.links.previewUrl("https://t.example/style.json", 0, 0, 1, &buf) != null);
     // The three reads used the same slot in turn.
     try testing.expectEqual(@as(usize, 1), f.links.preview_jobs.items.len);
+}
+
+test "chartlinks: a relayed fetch is delivered to its owner, counts against no budget, and fails when the fetcher is cleared" {
+    const Owner = struct {
+        got: std.ArrayList(struct { token: u64, len: usize, status: c_int }) = .empty,
+        fn deliver(ctx: *anyopaque, token: u64, bytes: []const u8, status: c_int) void {
+            const o: *@This() = @ptrCast(@alignCast(ctx));
+            o.got.append(testing.allocator, .{ .token = token, .len = bytes.len, .status = status }) catch {};
+        }
+    };
+    var o: Owner = .{};
+    defer o.got.deinit(testing.allocator);
+    const f = try Fake.open(testing.allocator);
+    defer f.close();
+    // With no owner set, no request is issued.
+    try testing.expectEqual(@as(u64, 0), f.links.issueRelay("https://r.example/a", false, 7));
+    f.links.relay = .{ .ctx = &o, .deliver = Owner.deliver };
+
+    const a = f.links.issueRelay("https://r.example/a", true, 7);
+    const b = f.links.issueRelay("https://r.example/b", false, 8);
+    try testing.expect(a != 0 and b != 0);
+    try testing.expect(try f.allowOf("r.example/a"));
+    try testing.expectEqual(@as(usize, 0), f.links.resolve_inflight);
+    try testing.expectEqual(@as(usize, 0), f.links.tiles_inflight);
+
+    // A resolve starting leaves them out.
+    f.links.add("https://t.example/style.json");
+    try testing.expectEqual(@as(usize, 0), f.cancelled.items.len);
+
+    try f.answer("r.example/a", "abc", 200);
+    try testing.expectEqual(@as(usize, 1), o.got.items.len);
+    try testing.expectEqual(@as(u64, 7), o.got.items[0].token);
+    try testing.expectEqual(@as(usize, 3), o.got.items[0].len);
+    try testing.expectEqual(@as(c_int, 200), o.got.items[0].status);
+
+    const c = f.links.issueRelay("https://r.example/c", false, 9);
+    f.links.cancelRelay(9);
+    try testing.expectEqual(@as(usize, 1), f.cancelled.items.len);
+    try testing.expectEqual(c, f.cancelled.items[0]);
+
+    // Clearing the fetcher delivers status 0 for what is still out.
+    f.links.setProvider(null, null, null);
+    try testing.expectEqual(@as(usize, 2), o.got.items.len);
+    try testing.expectEqual(@as(u64, 8), o.got.items[1].token);
+    try testing.expectEqual(@as(c_int, 0), o.got.items[1].status);
+}
+
+test "chartlinks: a resolve starting leaves a preview read out" {
+    const raster =
+        \\{"version":8,"sources":{"sea":{"type":"raster",
+        \\ "tiles":["https://t.example/{z}/{x}/{y}.png"]}},"layers":[]}
+    ;
+    const f = try Fake.open(testing.allocator);
+    defer f.close();
+    f.links.add("https://t.example/style.json");
+    try f.answer("style.json", raster, 200);
+    const e = f.links.find("https://t.example/style.json") orelse return error.NotKept;
+    testing.allocator.free(e.tiles);
+    e.tiles = &.{};
+    try testing.expectEqual(Links.TileKnown.unknown, f.links.tileKnown("https://t.example/style.json"));
+    try testing.expect(f.links.previewOne("https://t.example/style.json"));
+
+    // Picking lookout's own chart cancels the resolve's requests. The
+    // preview read is not one of them, and its response still sets the
+    // template.
+    f.links.select(null);
+    try testing.expectEqual(@as(usize, 1), f.links.previewJobsOut());
+    try f.answer("style.json", raster, 200);
+    try testing.expectEqual(@as(usize, 0), f.links.previewJobsOut());
+    try testing.expectEqual(@as(usize, 0), f.links.previews_inflight);
+    try testing.expectEqual(Links.TileKnown.tiles, f.links.tileKnown("https://t.example/style.json"));
+    try testing.expectEqual(Links.TileKnown.not_a_link, f.links.tileKnown("https://u.example/style.json"));
 }
