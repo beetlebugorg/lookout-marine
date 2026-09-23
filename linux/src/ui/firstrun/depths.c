@@ -251,8 +251,7 @@ lk_depth_rebuild (LkDepthStep *step)
   lk_depth_fill_pills (step);
   lk_depth_fill_derived (step);
   if (step->water != NULL)
-    lk_depth_water_set (step->water, plan.safety_depth, plan.safety_contour,
-                        plan.deep_contour, feet,
+    lk_depth_water_set (step->water, &plan, feet,
                         lk_mariner_raw (step->flow->mariner)->scheme);
   lk_first_run_refresh_footer (step->flow);
 }
