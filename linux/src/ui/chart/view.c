@@ -1054,7 +1054,7 @@ lk_chart_view_zoom_changed (GtkGestureZoom *gesture, double scale, gpointer user
       cx = gtk_widget_get_width (GTK_WIDGET (self)) / 2.0;
       cy = gtk_widget_get_height (GTK_WIDGET (self)) / 2.0;
     }
-  lk_chart_controller_zoom_at (self->controller, dz, cx, cy);
+  lk_chart_controller_zoom_about (self->controller, dz, cx, cy);
 }
 
 static void

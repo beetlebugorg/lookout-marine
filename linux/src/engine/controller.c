@@ -1231,6 +1231,19 @@ lk_chart_controller_zoom_at (LkChartController *self, double dzoom, double x, do
   lk_chart_controller_kick (self);
 }
 
+/* With no ease, for a pinch. The chart follows the fingers frame for frame. */
+void
+lk_chart_controller_zoom_about (LkChartController *self, double dzoom, double x, double y)
+{
+  g_return_if_fail (LK_IS_CHART_CONTROLLER (self));
+
+  if (self->handle == NULL)
+    return;
+  lookout_zoom_about_logical (self->handle, dzoom, (float) x, (float) y);
+  lk_chart_controller_retire_pick (self);
+  lk_chart_controller_kick (self);
+}
+
 void
 lk_chart_controller_zoom_centered (LkChartController *self, double dzoom)
 {

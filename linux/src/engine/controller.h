@@ -69,6 +69,7 @@ void         lk_chart_controller_set_scale (LkChartController *self, int scale);
 
 void lk_chart_controller_pan (LkChartController *self, double dx, double dy);
 void lk_chart_controller_zoom_at (LkChartController *self, double dzoom, double x, double y);
+void lk_chart_controller_zoom_about (LkChartController *self, double dzoom, double x, double y);
 void lk_chart_controller_zoom_centered (LkChartController *self, double dzoom);
 void lk_chart_controller_rotate_drag (LkChartController *self,
                                       double x0, double y0, double x1, double y1);
