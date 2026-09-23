@@ -269,10 +269,9 @@
              A card over the chart rather than a page replacing it, because the
              basemap draws from the first frame at whole-world zoom and seeing
              it behind the card is what tells a mariner the app is working
-             before any chart exists. The steps themselves are built in code
-             (firstrun/ui/, a file per step) the way the settings pages are: they are
-             mostly prose and a list, and XAML per step runs about four times
-             the length. -->
+             before any chart exists. The steps themselves are built in code,
+             a file per step in firstrun/ui/. The reason is at the top of
+             FirstRunFlow.cpp. -->
         <Grid x:Name="FirstRunPane" Background="{ThemeResource LkScrimBrush}"
               Visibility="Collapsed">
             <!-- A floor under the height as well as a ceiling. The steps

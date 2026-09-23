@@ -1,14 +1,13 @@
 // Setup, on screen: the six steps and NOAA's terms.
 //
-// The model is firstrun/lk_firstrun.h. It holds which step is on screen, what
-// the buttons say, when the terms are asked, and what the Preparing page keeps
-// after the two services reset. This file draws what the model reports and
-// passes back what the mariner did. New rules belong in the model, where a test
-// can reach them.
+// The core's setup handle (lookout_setup) holds which step is on screen, what
+// Back and the primary action do, and when setup comes up. firstrun/lk_firstrun.h
+// holds the words and what the Preparing page keeps after the two services
+// reset. This file draws both and passes back what the mariner did.
 //
-// The steps are built in code rather than in XAML, the way the settings pages
-// are. Each step is mostly prose and a list, and XAML per step runs about four
-// times the length.
+// The steps are built in code. Each reads and writes the window's state, and
+// the depth step drafted as a UserControl came to 154 lines of XAML for its
+// 193 lines of layout code, before the control's own .idl, .h and .cpp.
 #include "pch.h"
 #include "MainWindow.xaml.h"
 
