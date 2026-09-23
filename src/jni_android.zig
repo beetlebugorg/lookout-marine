@@ -74,7 +74,6 @@ extern fn lookout_memory_warning(h: ?*anyopaque) void;
 extern fn lookout_get_mariner(h: ?*anyopaque, out: *cc.tile57_mariner) void;
 extern fn lookout_set_mariner(h: ?*anyopaque, m: *const cc.tile57_mariner) void;
 extern fn lookout_pick(h: ?*anyopaque, lon: f64, lat: f64, cb: *const cc.tile57_query_cb) void;
-extern fn lookout_pick_ranked(h: ?*anyopaque, lon: f64, lat: f64, cb: *const cc.tile57_query_cb) void;
 
 const LOOKOUT_NATIVE_ANDROID_WINDOW: c_int = 7;
 
@@ -699,78 +698,6 @@ export fn Java_org_beetlebug_lookout_Lookout_nSetMariner(env: [*c]j.JNIEnv, cls:
     lookout_set_mariner(h.l, &m);
 }
 
-// ---- pick (tap to identify) ------------------------------------------------
-
-/// Features are collected into plain Zig memory FIRST and turned into Java
-/// strings only after lookout_pick returns: the callback fires from inside the
-/// engine while it holds the api lock, and calling back into the JVM there
-/// invites reentrancy for nothing.
-const PickCtx = struct {
-    items: std.ArrayList([]u8) = .empty,
-    ok: bool = true,
-};
-
-fn pickAppend(p: *PickCtx, s: [*c]const u8, n: usize) void {
-    const src: []const u8 = if (s != null and n > 0) s[0..n] else "";
-    const dup = gpa.dupe(u8, src) catch {
-        p.ok = false;
-        return;
-    };
-    p.items.append(gpa, dup) catch {
-        gpa.free(dup);
-        p.ok = false;
-    };
-}
-
-fn pickFeature(
-    ctx: ?*anyopaque,
-    cls: [*c]const u8,
-    cls_len: usize,
-    s57: [*c]const u8,
-    s57_len: usize,
-    chart: [*c]const u8,
-    chart_len: usize,
-) callconv(.c) void {
-    const p: *PickCtx = @ptrCast(@alignCast(ctx orelse return));
-    pickAppend(p, cls, cls_len);
-    pickAppend(p, s57, s57_len);
-    pickAppend(p, chart, chart_len);
-}
-
-/// String[] nPick(long h, double lon, double lat) -- flat (cls, s57, chart)
-/// triples, one per feature under the point. null on failure.
-export fn Java_org_beetlebug_lookout_Lookout_nPick(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, lon: j.jdouble, lat: j.jdouble) j.jobjectArray {
-    _ = cls;
-    const h = fromLong(hl) orelse return null;
-
-    var ctx = PickCtx{};
-    defer {
-        for (ctx.items.items) |it| gpa.free(it);
-        ctx.items.deinit(gpa);
-    }
-    const cb = cc.tile57_query_cb{ .ctx = &ctx, .feature = pickFeature };
-    // The RANKED pick, as the other shells use: it drops the objects a report
-    // must not lead with, ranks the rest, and composes the decoded report into
-    // the payload. lookout_pick is the engine's own raw pick, which emits bare
-    // attributes and no report.
-    lookout_pick_ranked(h.l, lon, lat, &cb);
-    if (!ctx.ok) return null;
-
-    const string_cls = env_(env).FindClass.?(env, "java/lang/String") orelse return null;
-    const arr = env_(env).NewObjectArray.?(env, @intCast(ctx.items.items.len), string_cls, null) orelse return null;
-    for (ctx.items.items, 0..) |it, i| {
-        // NewStringUTF needs a NUL terminator; the engine hands out ptr+len.
-        const z = gpa.allocSentinel(u8, it.len, 0) catch return null;
-        defer gpa.free(z);
-        @memcpy(z, it);
-        const js = env_(env).NewStringUTF.?(env, z.ptr) orelse return null;
-        env_(env).SetObjectArrayElement.?(env, arr, @intCast(i), js);
-        // The default local-ref table is small; a dense pick would exhaust it.
-        env_(env).DeleteLocalRef.?(env, js);
-    }
-    return arr;
-}
-
 // ---- raster charts -------------------------------------------------------
 //
 // The mariner's own pictures under the ENC: satellite imagery as MBTiles, or
@@ -953,7 +880,6 @@ export fn Java_org_beetlebug_lookout_Lookout_nPluginsActive(env: [*c]j.JNIEnv, c
     return if (lookout_plugins_active(h.l) != 0) 1 else 0;
 }
 
-/// String nPluginsJson(long h) -- every loaded plugin with its settings schema
 /// int nPluginsConnectionState(long h) -- what the source plugins' connection
 /// rows say between them, as two bits: 1 = a session is open to a gateway,
 /// 2 = one is open or being dialled.
@@ -1035,14 +961,6 @@ export fn Java_org_beetlebug_lookout_Lookout_nPluginsConnectionState(env: [*c]j.
     return (if (live) @as(j.jint, 1) else 0) | (if (trying) @as(j.jint, 2) else 0);
 }
 
-/// and the values in force. null when no layer is up.
-export fn Java_org_beetlebug_lookout_Lookout_nPluginsJson(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) j.jstring {
-    _ = cls;
-    const h = fromLong(hl) orelse return null;
-    var len: usize = 0;
-    return jstringFromSlice(env, lookout_plugins_json(h.l, &len), len);
-}
-
 /// String nPluginConfigGet(long h, String id) -- one plugin's settings object.
 export fn Java_org_beetlebug_lookout_Lookout_nPluginConfigGet(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, id: j.jstring) j.jstring {
     _ = cls;
@@ -1060,23 +978,8 @@ export fn Java_org_beetlebug_lookout_Lookout_nPluginConfigGet(env: [*c]j.JNIEnv,
 // the oldest) and hands it over as JSON; the shell shows it, sounds the alarms
 // and acknowledges one when the mariner silences it. include/lookout.h carries
 // the JSON shape, PluginAlerts.kt what severity means on screen.
-//
-// The whole set crosses in one string rather than a call per field. It is
-// small, and the shell samples it on a schedule of its own with nothing else to
-// batch it with.
 
-extern fn lookout_plugin_alerts_json(h: ?*anyopaque, out_len: ?*usize) ?[*]const u8;
 extern fn lookout_plugin_alert_ack(h: ?*anyopaque, id: u64) c_int;
-
-/// String nPluginAlertsJson(long h) -- every live alert with its severity,
-/// title, body and acknowledged flag, under the `seq` that moves whenever the
-/// set does. null when no plugin layer is up.
-export fn Java_org_beetlebug_lookout_Lookout_nPluginAlertsJson(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) j.jstring {
-    _ = cls;
-    const h = fromLong(hl) orelse return null;
-    var len: usize = 0;
-    return jstringFromSlice(env, lookout_plugin_alerts_json(h.l, &len), len);
-}
 
 /// boolean nPluginAlertAck(long h, long id) -- silence ONE alert.
 ///
@@ -1524,8 +1427,6 @@ export fn Java_org_beetlebug_lookout_Lookout_nBakeFree(env: [*c]j.JNIEnv, cls: j
 // mariner installed comes back at every open like the other shells' does.
 
 extern fn lookout_plugins_install_root(h: ?*anyopaque, path: [*:0]const u8) c_int;
-extern fn lookout_plugin_tables_json(h: ?*anyopaque, out_len: ?*usize) [*c]const u8;
-extern fn lookout_plugin_table_rows(h: ?*anyopaque, id: [*:0]const u8, key: [*:0]const u8, sort_key: ?[*:0]const u8, ascending: c_int, out_len: ?*usize) [*c]const u8;
 extern fn lookout_plugin_table_open(h: ?*anyopaque, id: [*:0]const u8, key: [*:0]const u8, open: c_int) c_int;
 extern fn lookout_plugins_load_installed(h: ?*anyopaque) c_int;
 extern fn lookout_plugin_inspect(h: ?*anyopaque, path: [*:0]const u8, out_len: ?*usize) [*c]const u8;
@@ -1578,41 +1479,6 @@ export fn Java_org_beetlebug_lookout_Lookout_nPluginInstall(env: [*c]j.JNIEnv, c
     const msg = lookout_plugin_install(h.l, @ptrCast(cpath));
     if (msg == null) return null;
     return env_(env).NewStringUTF.?(env, msg);
-}
-
-/// String nPluginTables(long h) -- every table the loaded plugins declare,
-/// or null when no layer is up. Borrowed, so copied out here.
-export fn Java_org_beetlebug_lookout_Lookout_nPluginTables(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong) j.jstring {
-    _ = cls;
-    const h = fromLong(hl) orelse return null;
-    var len: usize = 0;
-    const json = lookout_plugin_tables_json(h.l, &len);
-    if (json == null or len == 0) return null;
-    const copy = gpa.allocSentinel(u8, len, 0) catch return null;
-    defer gpa.free(copy);
-    @memcpy(copy[0..len], json[0..len]);
-    return env_(env).NewStringUTF.?(env, copy.ptr);
-}
-
-/// String nPluginTableRows(long h, String id, String key, String sortKey,
-/// boolean ascending) -- one table's rows, already in shown order; null when
-/// the plugin or the table is unknown.
-export fn Java_org_beetlebug_lookout_Lookout_nPluginTableRows(env: [*c]j.JNIEnv, cls: j.jclass, hl: j.jlong, id: j.jstring, key: j.jstring, sort_key: j.jstring, ascending: j.jboolean) j.jstring {
-    _ = cls;
-    const h = fromLong(hl) orelse return null;
-    const cid = env_(env).GetStringUTFChars.?(env, id, null) orelse return null;
-    defer env_(env).ReleaseStringUTFChars.?(env, id, cid);
-    const ckey = env_(env).GetStringUTFChars.?(env, key, null) orelse return null;
-    defer env_(env).ReleaseStringUTFChars.?(env, key, ckey);
-    const csort = if (sort_key != null) env_(env).GetStringUTFChars.?(env, sort_key, null) else null;
-    defer if (csort) |s| env_(env).ReleaseStringUTFChars.?(env, sort_key, s);
-    var len: usize = 0;
-    const json = lookout_plugin_table_rows(h.l, @ptrCast(cid), @ptrCast(ckey), @ptrCast(csort), if (ascending != 0) 1 else 0, &len);
-    if (json == null or len == 0) return null;
-    const copy = gpa.allocSentinel(u8, len, 0) catch return null;
-    defer gpa.free(copy);
-    @memcpy(copy[0..len], json[0..len]);
-    return env_(env).NewStringUTF.?(env, copy.ptr);
 }
 
 /// boolean nPluginTableOpen(long h, String id, String key, boolean open) --
@@ -2120,9 +1986,6 @@ export fn Java_org_beetlebug_lookout_Lookout_nOpenFile(env: [*c]j.JNIEnv, cls: j
     return lookout_open_file(h.l, @ptrCast(cpath));
 }
 
-// ---- licenses ---------------------------------------------------------------
-
-extern fn lookout_licenses_json(out_len: ?*usize) [*:0]const u8;
 extern fn lookout_fmt_coord_dm(value: f64, is_lat: c_int, out: [*]u8, cap: usize) usize;
 extern fn lookout_fmt_position(lat: f64, lon: f64, out: [*]u8, cap: usize) usize;
 extern fn lookout_fmt_scale(denominator: f64, out: [*]u8, cap: usize) usize;
@@ -2272,14 +2135,6 @@ export fn Java_org_beetlebug_lookout_Lookout_nDepthPlan(env: [*c]j.JNIEnv, cls: 
     const arr = env_(env).NewDoubleArray.?(env, depth_plan_len) orelse return null;
     env_(env).SetDoubleArrayRegion.?(env, arr, 0, depth_plan_len, &plan);
     return arr;
-}
-
-/// String nLicensesJson() -- this app's terms and every component it is built
-/// from, as the JSON the licenses screen decodes. Baked into the binary, so it
-/// needs no chart open and no handle.
-export fn Java_org_beetlebug_lookout_Lookout_nLicensesJson(env: [*c]j.JNIEnv, cls: j.jclass) j.jstring {
-    _ = cls;
-    return env_(env).NewStringUTF.?(env, lookout_licenses_json(null));
 }
 
 // ---- the plugin registry, read typed ----------------------------------------
