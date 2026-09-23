@@ -314,14 +314,14 @@ namespace winrt::LookoutMarine::implementation
                     says += L", catalog dated " + std::wstring{ winrt::to_hstring(st.date) };
                 body.Children().Append(Muted(says + L".", 12));
             }
-            if (st.error[0] != '\0')
+            if (st.catalog_error[0] != '\0')
             {
                 StackPanel failed;
                 failed.Orientation(Orientation::Horizontal);
                 failed.Spacing(10);
                 // Under the summary, and smaller than it: the catalog on this
                 // device is the fact, and the failed read is the caption.
-                auto why = Muted(winrt::to_hstring(st.error).c_str(),
+                auto why = Muted(winrt::to_hstring(st.catalog_error).c_str(),
                                  st.have_catalog ? 11 : 12);
                 why.VerticalAlignment(VerticalAlignment::Center);
                 failed.Children().Append(why);

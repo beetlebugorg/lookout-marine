@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace lkw
 {
@@ -39,6 +40,9 @@ namespace lkw
         /* An empty pick orders no run. Returns how many directories left
          * the library. */
         uint32_t Apply(std::string const &picked, bool again, std::string const &dest);
+        /* The region ids an apply of `picked` gives back, as the core names
+         * them. */
+        std::vector<std::string> GivesBack(std::string const &picked) const;
         /* Repeat the last order into `dest`. With no catalog loaded this
          * reads the catalog first, and TakeRetry returns true when it ends. */
         void Retry(std::string const &dest);

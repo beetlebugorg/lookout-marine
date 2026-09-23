@@ -278,21 +278,6 @@ void TestFirstRun()
         LK_EQ(At(FirstRunStep::Source).Footnote(link), std::wstring(L""));
         LK_EQ(At(FirstRunStep::Importing).Footnote(link), std::wstring(L""));
 
-        /* The picker's other half: water given back. There was no way to
-         * unpick water once it was downloaded except by removing a whole
-         * chart set. */
-        Case("what was held and is no longer ticked");
-        LK_EQ(Removed("d1,d7", "d7").size(), 1u);
-        LK_EQ(Removed("d1,d7", "d7")[0], std::string("d1"));
-        LK_EQ(Removed("d1,d7", "d1,d7").size(), 0u);
-        LK_EQ(Removed("", "d5").size(), 0u);
-
-        /* Unticking water that was never on the device is a mariner changing
-         * their mind, not a removal. */
-        Case("a region never here is not a removal");
-        LK_EQ(Removed("d7", "d7,d5").size(), 0u);
-        LK_EQ(Removed("d7", "d5").size(), 1u);
-
         Case("what Apply has to do");
         LK_EQ(ApplyEnabled(true, 930, 0), true);
         LK_EQ(ApplyEnabled(true, 0, 1), true);

@@ -59,22 +59,6 @@ namespace lkw
         return hold.Complete() ? L"installed" : L"";
     }
 
-    std::vector<std::string> Removed(std::string const &held, std::string const &picked)
-    {
-        std::vector<std::string> out;
-        for (size_t at = 0; at < held.size();)
-        {
-            size_t end = held.find(',', at);
-            if (end == std::string::npos)
-                end = held.size();
-            std::string one = held.substr(at, end - at);
-            at = end + 1;
-            if (!one.empty() && !RegionPicked(picked, one))
-                out.push_back(one);
-        }
-        return out;
-    }
-
     bool ApplyEnabled(bool have_catalog, uint32_t cells, size_t removing)
     {
         return have_catalog && (cells > 0 || removing > 0);

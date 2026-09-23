@@ -1,6 +1,7 @@
 // Model code: no WinRT. See lk_noaa.h.
 #include "lk_noaa.h"
 
+#include <algorithm>
 #include <filesystem>
 
 namespace lkw
@@ -84,6 +85,16 @@ namespace lkw
         retry_waiting_ = false;
         watch_run_ = picked.empty() ? 0 : state_.run + 1;
         return lookout_noaa_apply(h_, picked.c_str(), dest.c_str(), again ? 1 : 0);
+    }
+
+    std::vector<std::string> NoaaService::GivesBack(std::string const &picked) const
+    {
+        if (h_ == nullptr)
+            return {};
+        char const *ids[64] = {};
+        size_t const n = std::min(lookout_noaa_gives_back(h_, picked.c_str(), ids, 64),
+                                  size_t{ 64 });
+        return { ids, ids + n };
     }
 
     void NoaaService::Retry(std::string const &dest)

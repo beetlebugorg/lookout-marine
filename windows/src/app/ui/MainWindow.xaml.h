@@ -469,8 +469,7 @@ namespace winrt::LookoutMarine::implementation
          * downloaded, in that order, so a mariner swapping one region for
          * another never holds both on the disk at once. */
         void FirstRunApply();
-        fire_and_forget FirstRunConfirmRemoval(std::vector<std::string> gone,
-                                               std::wstring title);
+        fire_and_forget FirstRunConfirmRemoval(std::wstring title, bool whole);
         /* One line about a removal, when there is something to say: nothing
          * matched, or something stayed on the disk. */
         fire_and_forget FirstRunSayRemoval(std::wstring says);

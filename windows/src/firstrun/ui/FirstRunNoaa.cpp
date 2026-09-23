@@ -231,12 +231,12 @@ namespace winrt::LookoutMarine::implementation
 
     // ---- the picker's two halves ------------------------------------------
 
-    // The regions ticked when the picker opened and unticked since.
+    // The regions Apply gives back, as the core names them.
     std::vector<std::string> MainWindow::NoaaRemoving()
     {
         if (!first_run.picker_only())
             return {};
-        return lkw::Removed(noaa_held_at_open, noaa_region_id);
+        return noaa.GivesBack(noaa_region_id);
     }
 
     std::vector<std::wstring> MainWindow::NoaaRegionNames(std::vector<std::string> const &ids)
@@ -255,26 +255,41 @@ namespace winrt::LookoutMarine::implementation
     void MainWindow::FirstRunApply()
     {
         auto const gone = NoaaRemoving();
-        if (gone.empty())
+        // An empty pick gives back the whole download, cells in no region
+        // included.
+        bool const whole = noaa_region_id.empty();
+        if (gone.empty() && !whole)
         {
             FirstRunPrimary(); // adding only, which is the flow's own path
             return;
         }
         // Deleting charts is asked about. Adding them is not: it costs time
         // and disk, and the line beside the button says how much of both.
-        FirstRunConfirmRemoval(gone, lkw::RemovalTitle(NoaaRegionNames(gone)));
+        FirstRunConfirmRemoval(whole ? std::wstring{ L"Remove all NOAA charts?" }
+                                     : lkw::RemovalTitle(NoaaRegionNames(gone)),
+                               whole);
     }
 
-    fire_and_forget MainWindow::FirstRunConfirmRemoval(std::vector<std::string> gone,
-                                                       std::wstring title)
+    fire_and_forget MainWindow::FirstRunConfirmRemoval(std::wstring title, bool whole)
     {
         auto lifetime = get_strong();
+        // The whole download is counted as the core's scan found it: the
+        // catalog counts what a district names, and this removal is also of
+        // the cells it does not.
+        size_t charts = 0;
+        for (auto const &s : sets.Rows())
+            if (s.managed)
+                charts = s.charts + s.unprepared;
         Controls::ContentDialog dialog;
         dialog.XamlRoot(DialogRoot());
         dialog.Title(box_value(winrt::hstring{ title }));
+        std::wstring const says =
+            whole ? L"Lookout deletes all " + lkw::Thousands(charts) +
+                        L" charts it downloaded, and the folder they are in."
+                  : std::wstring{ L"Lookout deletes the charts it downloaded for this water." };
         dialog.Content(box_value(winrt::hstring{
-            L"Lookout deletes the charts it downloaded for this water. Charts you added "
-            L"yourself stay where they are, and you can download this water again." }));
+            says + L" Charts you added yourself stay where they are, and you can download "
+                   L"this water again." }));
         dialog.PrimaryButtonText(L"Remove");
         dialog.CloseButtonText(L"Cancel");
         auto result = co_await dialog.ShowAsync();
@@ -327,7 +342,6 @@ namespace winrt::LookoutMarine::implementation
             removal_from_noaa = true;
         }
         NoaaChanged();
-        noaa_held_at_open = picked; // the removal has run
         FirstRunRepriceRegions();
         if (!gone.empty())
             ReopenChartSets({});
@@ -352,7 +366,7 @@ namespace winrt::LookoutMarine::implementation
     {
         lookout_noaa_state const &st = noaa.state();
         return std::to_string(st.phase) + "|" + std::to_string(st.have_catalog) + "|" +
-               std::to_string(st.catalog_cells) + "|" + st.date + "|" + st.error;
+               std::to_string(st.catalog_cells) + "|" + st.date + "|" + st.catalog_error;
     }
 
     // What of each region the download holds, for the pills, and the regions

@@ -170,11 +170,6 @@ namespace lkw
     // back, and Apply does both halves at once. There was no way to give water
     // back before except by removing a whole chart set.
 
-    // The regions ticked when the picker opened and unticked since, in the
-    // order they were held. These are the removals. A region that was never
-    // here and is unticked again is a mariner changing their mind.
-    std::vector<std::string> Removed(std::string const &held, std::string const &picked);
-
     // What Apply is about to do, in the mariner's words. `removing` names the
     // regions being given back. With nothing to do either way it states what
     // the pick holds instead.
