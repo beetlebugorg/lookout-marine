@@ -83,6 +83,14 @@ struct NoaaState: Equatable {
     var removing = false
     var removeDone: UInt32 = 0
     var removeTotal: UInt32 = 0
+    /// True while the core prepares the downloaded charts. See
+    /// lookout_noaa_state.preparing.
+    var preparing = false
+    var prepared: UInt32 = 0
+    var toPrepare: UInt32 = 0
+    /// Band 1 first.
+    var bandDone: [UInt32] = []
+    var bandTotal: [UInt32] = []
 
     /// True once the download numbered `run` has stopped for any reason.
     var ended: Bool { outcome != .none && outcome != .running }

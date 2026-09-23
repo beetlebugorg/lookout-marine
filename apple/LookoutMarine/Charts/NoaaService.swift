@@ -61,6 +61,11 @@ final class NoaaService: NoaaEngine {
         s.removing = raw.removing != 0
         s.removeDone = raw.remove_done
         s.removeTotal = raw.remove_total
+        s.preparing = raw.preparing != 0
+        s.prepared = raw.prepared
+        s.toPrepare = raw.to_prepare
+        s.bandDone = withUnsafeBytes(of: raw.band_done) { Array($0.bindMemory(to: UInt32.self)) }
+        s.bandTotal = withUnsafeBytes(of: raw.band_total) { Array($0.bindMemory(to: UInt32.self)) }
         return s
     }
 

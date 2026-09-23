@@ -448,13 +448,6 @@ enum ChartSetStore {
         path.withCString { lookout_chart_sets_note_cancel(h, $0) }
     }
 
-    /// The managed set whose prepare is unfinished and was not stopped since
-    /// it last changed, or nil.
-    static func resume() -> String? {
-        guard let h = handle, let p = lookout_chart_sets_resume(h) else { return nil }
-        return String(cString: p)
-    }
-
     static func savedPaths() -> [String] { all().map(\.path) }
     static func savedOff() -> Set<String> { Set(all().filter { !$0.on }.map(\.path)) }
 

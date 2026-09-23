@@ -38,9 +38,9 @@ final class AppModel {
     /// The core's NOAA service. It has no chart handle under it, so a chart
     /// reopening leaves its download running.
     private var noaaService: NoaaService?
-    /// The download being followed to its end: its run number, where it
-    /// writes, and how to order it again. A new order replaces it.
-    private var noaaWatch: (run: UInt32, dest: String, order: () -> Void)?
+    /// The download being followed to its end: its run number, and how to
+    /// order it again. A new order replaces it.
+    private var noaaWatch: (run: UInt32, order: () -> Void)?
     let raster = RasterModel()
     let plugins = PluginsModel()
     let overlay = OverlayModel()
@@ -66,10 +66,8 @@ final class AppModel {
         plugins.begin(path)
     }
 
-    /// Download the picked NOAA regions, then bake what arrives.
-    ///
-    /// The core writes one zip per cell into a single directory, so the whole
-    /// download bakes as one chart set once the transfers finish.
+    /// Download the picked NOAA regions. The core prepares what arrives into
+    /// the managed set.
     func startNoaaDownload(again: Bool = false) {
         guard let dest = NoaaModel.downloadDirectory else {
             charts.openError = "Couldn't find a place to download charts to."
@@ -77,7 +75,7 @@ final class AppModel {
         }
         let before = noaa.state.run
         noaa.download(to: dest, again: again)
-        watchNoaaDownload(dest, after: before) { [weak self] in
+        watchNoaaDownload(after: before) { [weak self] in
             self?.startNoaaDownload(again: again)
         }
     }
@@ -96,18 +94,14 @@ final class AppModel {
         if whole { noaaWatch = nil }
         let before = noaa.state.run
         let moved = noaa.apply(to: dest)
-        watchNoaaDownload(dest, after: before) { [weak self] in
+        watchNoaaDownload(after: before) { [weak self] in
             self?.startNoaaDownload()
         }
         if givesBack { charts.noaaApplied(moved: moved, whole: whole) }
     }
 
-    /// Fetch the reissued editions of every installed cell, and prepare what
-    /// lands.
-    ///
-    /// The same path as a download. The Update button called the NOAA model
-    /// straight, which started the fetch and no watcher, so the new editions
-    /// arrived as raw cells that never baked and the count on screen stood.
+    /// Fetch the reissued editions of every installed cell. The core prepares
+    /// them as it does a download.
     func startNoaaUpdate() {
         guard let dest = NoaaModel.downloadDirectory else {
             charts.openError = "Couldn't find a place to download charts to."
@@ -115,39 +109,42 @@ final class AppModel {
         }
         let before = noaa.state.run
         noaa.update(to: dest)
-        watchNoaaDownload(dest, after: before) { [weak self] in
+        watchNoaaDownload(after: before) { [weak self] in
             self?.startNoaaUpdate()
         }
     }
 
-    /// Follow the download just ordered to its end, and bake the directory
-    /// it filled. noaaChanged checks it each time the state changes. `before`
-    /// is the run number read before ordering: an order the model did not
-    /// pass on leaves it as it was, and there is no download to follow.
-    private func watchNoaaDownload(_ dest: String, after before: UInt32,
-                                   order: @escaping () -> Void) {
+    /// Follow the download just ordered to its end, which comes once the
+    /// core has prepared what arrived. noaaChanged checks it each time the
+    /// state changes. `before` is the run number read before ordering: an
+    /// order the model did not pass on leaves it as it was, and there is no
+    /// download to follow.
+    private func watchNoaaDownload(after before: UInt32, order: @escaping () -> Void) {
         guard noaa.state.run != before else { return }
-        noaaWatch = (noaa.state.run, dest, order)
+        noaaWatch = (noaa.state.run, order)
         noaaChanged()
     }
 
-    /// The NOAA state changed. End the watched download if it has ended.
+    /// The NOAA state changed. Open what a prepare made, and end the watched
+    /// download if it has ended.
     private func noaaChanged() {
-        charts.noteNoaaRemoval(noaa.state)
-        guard let w = noaaWatch else { return }
         let st = noaa.state
-        guard st.run == w.run, st.ended else { return }
+        charts.noteNoaaRemoval(st)
+        // True when a prepare has just ended. One the core resumed has no
+        // download to watch, so its end opens the charts as well.
+        var open = charts.noteNoaaPrepare(st)
+        defer { if open { charts.adoptNoaaPrepare() } }
+        guard let w = noaaWatch, st.run == w.run, st.ended else { return }
         noaaWatch = nil
         switch st.outcome {
         case .finished:
-            charts.openChartDirectory(w.dest)
+            open = true
         case .cancelled:
             // A stop is the mariner's own. What arrived before it is kept.
-            if st.done > 0 { charts.openChartDirectory(w.dest) }
+            if st.done > 0 { open = true }
         case .failed, .refused:
-            // No bake runs, so the Charts pane reports the end here. Setup
-            // reports it in its own step. A refusal a retry cannot clear
-            // raises no alert.
+            // The Charts pane shows the end here. Setup shows it in its own
+            // step. A refusal a retry cannot clear raises no alert.
             if !firstRun.showing, st.outcome == .failed || st.retry {
                 charts.openError = st.error.isEmpty
                     ? "The download stopped before any chart arrived." : st.error
@@ -218,6 +215,8 @@ final class AppModel {
         // the core store. Once, before anything reads a setting.
         Store.shared.importDefaults()
         charts = ChartsModel(raster: raster)
+        // The core prepares a download, so its Stop is the NOAA service's.
+        charts.cancelNoaaPrepare = { [weak self] in self?.noaa.cancel() }
         // Setup returns over a library that went empty only if it recorded
         // the library with charts in it. considerFirstRun runs when
         // nothingToDraw changes, and nothingToDraw never changes while a set

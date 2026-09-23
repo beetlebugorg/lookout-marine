@@ -78,7 +78,7 @@ final class ChartsModel {
     /// such a library and the first-run page never appeared.
     var nothingToDraw: Bool {
         (!hasChart || chartIsEmpty) && !isOpening && openRequest == nil
-            && !scanning && bake == nil
+            && !scanning && bake == nil && noaaPrepare == nil
             && raster.paths.isEmpty
             && !sets.contains { $0.on && $0.hasSomethingToDraw }
     }
@@ -160,6 +160,12 @@ final class ChartsModel {
 
     /// The bake running now, if any. The HUD pill watches this.
     var bake: BakeProgress?
+    /// The core's prepare of a NOAA download, as the NOAA state counts it.
+    var noaaPrepare: BakeProgress?
+    private var noaaPrepareStart: Date?
+    /// Stops the core's prepare. AppModel sets it to the NOAA service's
+    /// cancel.
+    var cancelNoaaPrepare: (() -> Void)?
     private var bakeJob: ChartBakeJob?
     /// The folder or archive the running bake is preparing, so that removing
     /// that set can stop it and disown what it produces.
@@ -424,7 +430,6 @@ final class ChartsModel {
         // adopt syncs the pictures and opens the chart itself.
         if finishPick(rows) { return }
         syncRasterFromSets()
-        resumePrepare()
         // The launch walk cannot see a library of pictures: it looks for
         // cells, and finds none. Open what the scan found once it knows, or a
         // mariner carrying only imagery gets the first-run page every time
@@ -445,16 +450,6 @@ final class ChartsModel {
             // and leaves it set, so an empty open holds one for good.
             requestOpen(openPaths)
         }
-    }
-
-    /// Prepare the set the core names to resume. That is the downloader's
-    /// set when a bake of it ended with the app, or when an update wrote new
-    /// cells into it. The core skips a set whose prepare the mariner stopped
-    /// and the cells a finished bake refused.
-    private func resumePrepare() {
-        guard bake == nil, bakeJob == nil, pendingPick == nil, !scanning,
-              let path = ChartSetStore.resume() else { return }
-        beginBake(path)
     }
 
     /// Prepare or adopt the picked set once the core has scanned it. True when
@@ -484,12 +479,12 @@ final class ChartsModel {
         // One at a time. A second bake started while the first runs gets its
         // own job, and then Cancel stops only the one the pill happens to
         // hold: the mariner presses stop and the machine keeps working.
-        guard bake == nil, !scanning else {
+        guard bake == nil, noaaPrepare == nil, !scanning else {
             // Queue the pick. It runs once the work in front of it ends. The
             // scan at launch has no name to report: it reads everything saved,
             // and not one folder the mariner just picked.
             queuedPick = path
-            let busy = bake?.name ?? scanningName
+            let busy = bake?.name ?? noaaPrepare?.name ?? scanningName
             emptyPick = busy.isEmpty
                 ? "Still looking through the charts already installed. Yours starts next."
                 : "Still working on \(busy). Yours starts next."
@@ -536,9 +531,6 @@ final class ChartsModel {
                     self.emptyPick = "Could not add \(self.scanningName) to the chart list."
                     return
                 }
-                if set.path == NoaaModel.downloadDirectory {
-                    ChartSetStore.setManaged(set.path, true)
-                }
                 self.pendingPick = set.path
                 self.watchLibraryUntilOpen()
             }
@@ -552,7 +544,7 @@ final class ChartsModel {
     private func runQueuedPick() {
         guard queuedPick != nil else { return }
         DispatchQueue.main.async { [weak self] in
-            guard let self, self.bake == nil, !self.scanning,
+            guard let self, self.bake == nil, self.noaaPrepare == nil, !self.scanning,
                   let next = self.queuedPick else { return }
             self.queuedPick = nil
             self.emptyPick = nil
@@ -578,12 +570,6 @@ final class ChartsModel {
         // them.
         let rereading = register
             && !ChartSetStore.add(set.path) && ChartSetStore.rescan(set.path)
-        // The NOAA downloader writes to one directory, and the set at that path
-        // is the one it owns. The core keeps the mark, so the row says so on
-        // every later launch without this running again.
-        if set.path == NoaaModel.downloadDirectory {
-            ChartSetStore.setManaged(set.path, true)
-        }
         let heldBefore = Set(raster.paths)
         syncRasterFromSets()
         if reopen {
@@ -648,6 +634,7 @@ final class ChartsModel {
 
     var chartWork: BakeProgress? {
         if let b = bake { return b }
+        if let p = noaaPrepare { return p }
         // Freeing the disk after a set is removed. It is not the mariner's
         // work and they are not waiting on it, but it is the app doing
         // something to their charts, so it says so.
@@ -764,6 +751,7 @@ final class ChartsModel {
     /// Stop the bake. What has already been baked is kept and opened. The
     /// core records the stop, so the set does not resume on its own.
     func cancelBake() {
+        if noaaPrepare != nil { cancelNoaaPrepare?() }
         if let bakeSource { ChartSetStore.noteCancel(bakeSource) }
         bakeJob?.cancel()
     }
@@ -859,6 +847,46 @@ final class ChartsModel {
             noaaRemovalStart = nil
             removing = nil
         }
+    }
+
+    /// Follow the core's prepare of a NOAA download. chartWork returns it as
+    /// it returns a bake, so the pill, the Charts pane and setup draw
+    /// the same bars and bands. True when a prepare has just ended.
+    func noteNoaaPrepare(_ st: NoaaState) -> Bool {
+        guard st.preparing else {
+            guard noaaPrepare != nil else { return false }
+            noaaPrepare = nil
+            noaaPrepareStart = nil
+            return true
+        }
+        if noaaPrepareStart == nil { noaaPrepareStart = Date() }
+        // The bake runs coarse band first (lookout_bake_order), and
+        // BakeProgress.bandProgress walks the count down the bands in that
+        // order.
+        let bands: [BandTotal] = st.bandTotal.enumerated().compactMap { i, n in
+            n == 0 ? nil : BandTotal(band: i + 1, name: ChartSet.bandName(i + 1), total: Int(n))
+        }
+        // By the agency that made them, as the row names the set.
+        let name = sets.first(where: \.managed)?.title
+            ?? NoaaModel.downloadDirectory.map { ($0 as NSString).lastPathComponent } ?? "NOAA"
+        // No count yet reads as finding charts, as the scan before a bake did.
+        noaaPrepare = BakeProgress(
+            kind: st.toPrepare > 0 ? .importing : .finding,
+            done: Int(st.prepared), total: Int(st.toPrepare), name: name,
+            elapsed: Date().timeIntervalSince(noaaPrepareStart ?? Date()),
+            bands: bands)
+        return false
+    }
+
+    /// Open what the core prepared from a NOAA download. The core has read
+    /// the set again by the time its prepare ends.
+    func adoptNoaaPrepare() {
+        pullChartSets()
+        if let row = sets.first(where: \.managed), row.refused > 0 { lastBakeRefused = row.refused }
+        // pullChartSets opens a library that had no chart. One that was
+        // drawing is opened again with the new charts in it.
+        if hasChart, !chartIsEmpty, !isOpening { requestOpen(openPaths) }
+        runQueuedPick()
     }
 
     /// Read the library again after a NOAA pick took charts out of it.
