@@ -7,7 +7,7 @@
  */
 #include "ui/dev-hooks.h"
 
-#include "library/links.h"
+#include "model/links.h"
 
 #include <stdio.h>
 #include <string.h>

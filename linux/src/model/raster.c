@@ -1,4 +1,4 @@
-#include "library/raster.h"
+#include "model/raster.h"
 
 #include "engine/controller.h"
 #include "library/scan.h"

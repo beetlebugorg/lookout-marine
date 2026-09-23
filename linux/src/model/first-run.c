@@ -1,5 +1,5 @@
-/* ui/firstrun/model.c — setup's state. See ui/firstrun/private.h. */
-#include "ui/firstrun/private.h"
+/* model/first-run.c: setup's state. See model/first-run.h. */
+#include "model/first-run.h"
 
 #include <string.h>
 

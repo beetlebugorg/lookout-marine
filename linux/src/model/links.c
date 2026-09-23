@@ -1,5 +1,5 @@
-/* library/links.c: charts by link. See library/links.h. */
-#include "library/links.h"
+/* model/links.c: charts by link. See model/links.h. */
+#include "model/links.h"
 
 #include "library/fetch.h"
 #include "model/store.h"

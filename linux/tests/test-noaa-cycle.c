@@ -12,7 +12,7 @@
 
 #include "lk-test.h"
 
-#include "library/noaa.h"
+#include "model/noaa.h"
 #include "model/app-model.h"
 #include "model/store.h"
 #include "ui/charts/coverage-map.h"

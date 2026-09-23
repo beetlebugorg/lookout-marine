@@ -21,7 +21,7 @@
 #include "library/bake.h"
 #include "ui/charts/band-ramp.h"
 #include "library/sets.h"
-#include "library/noaa.h"
+#include "model/noaa.h"
 #include "ui/work-panel.h"
 
 /* The left column, in the reference's proportion: the phases beside the bands

@@ -1,5 +1,5 @@
-/* library/preview.c — see library/preview.h. */
-#include "library/preview.h"
+/* ui/charts/preview.c: see ui/charts/preview.h. */
+#include "ui/charts/preview.h"
 
 #include "library/agent.h"
 #include "library/preview-engine.h"
@@ -682,8 +682,9 @@ lk_chart_previews_new (LkChartController *controller)
   LkChartPreviews *self = g_object_new (LK_TYPE_CHART_PREVIEWS, NULL);
 
   self->controller = controller != NULL ? g_object_ref (controller) : NULL;
-  /* A session of the shell's own. The one in library/links.c answers what the
-   * CORE asks for, and a tile fetched for a picture is the shell's own ask. */
+  /* A session of the shell's own. The one in model/links.c fetches what the
+   * CORE requests, and a tile fetched for a picture is the shell's own
+   * request. */
   self->session = soup_session_new_with_options ("user-agent", LK_USER_AGENT, NULL);
   soup_session_set_timeout (self->session, 20);
   return self;

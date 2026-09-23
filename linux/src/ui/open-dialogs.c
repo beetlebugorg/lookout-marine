@@ -8,7 +8,7 @@
 #include "ui/open-dialogs.h"
 #include "ui/window-private.h"
 
-#include "library/raster.h"
+#include "model/raster.h"
 #include "plugins/install.h"
 #include "plugins/registry.h"
 

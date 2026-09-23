@@ -12,7 +12,7 @@
 
 #include "library/bake.h"
 #include "library/scan.h"
-#include "library/noaa.h"
+#include "model/noaa.h"
 #include "library/sets.h"
 #include "model/app-model.h"
 

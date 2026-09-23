@@ -8,7 +8,7 @@
  * is everything that does not.
  */
 
-#include "library/noaa.h"
+#include "model/noaa.h"
 #include "library/sets.h"
 #include "model/app-model.h"
 #include "model/store.h"

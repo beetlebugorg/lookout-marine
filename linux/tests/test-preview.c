@@ -13,7 +13,7 @@
 
 #include "library/fetch.h"
 #include "library/preview-engine.h"
-#include "library/preview.h"
+#include "ui/charts/preview.h"
 
 /* The tile a point falls in, as every tile server counts them. */
 static void

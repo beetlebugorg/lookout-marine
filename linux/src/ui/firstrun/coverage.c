@@ -10,7 +10,7 @@
  */
 #include "ui/firstrun/private.h"
 
-#include "library/noaa.h"
+#include "model/noaa.h"
 #include "ui/charts/coverage-map.h"
 
 GtkWidget *

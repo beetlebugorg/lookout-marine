@@ -1,4 +1,4 @@
-/* library/preview.h — a picture of every chart on a list.
+/* ui/charts/preview.h: a picture of every chart on a list.
  *
  * A chart list wants a picture of each chart on it, and the engine draws one
  * chart at a time. Three sources fill one cache, cheapest first:

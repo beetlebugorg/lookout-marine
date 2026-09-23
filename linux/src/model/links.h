@@ -1,4 +1,4 @@
-/* library/links.h: an online map AS the chart.
+/* model/links.h: an online map AS the chart.
  *
  * lookout owns the whole feature: it probes the link, inlines TileJSON
  * sources, generates a wrapper style for bare tiles, fetches the sprite packs,

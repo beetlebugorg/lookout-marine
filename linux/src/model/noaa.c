@@ -1,5 +1,5 @@
-/* library/noaa.c — NOAA's charts. See library/noaa.h. */
-#include "library/noaa.h"
+/* model/noaa.c: NOAA's charts. See model/noaa.h. */
+#include "model/noaa.h"
 
 #include "library/fetch.h"
 

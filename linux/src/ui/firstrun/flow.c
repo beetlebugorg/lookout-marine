@@ -6,7 +6,7 @@
 #include "ui/firstrun/flow.h"
 #include "ui/firstrun/private.h"
 
-#include "library/noaa.h"
+#include "model/noaa.h"
 #include "ui/open-dialogs.h"
 
 /* The view setup frames behind itself: the lower 48, the ground the coverage

@@ -1,7 +1,7 @@
 /* ui/charts/gallery.c — see ui/charts/gallery.h. */
 #include "ui/charts/gallery.h"
 
-#include "library/preview.h"
+#include "ui/charts/preview.h"
 #include "ui/charts/catalog.h"
 
 /* The design's tile. A picture narrower than this cannot be told from another

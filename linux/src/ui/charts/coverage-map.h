@@ -11,7 +11,7 @@
  */
 #pragma once
 
-#include "library/noaa.h"
+#include "model/noaa.h"
 #include "ui/charts/coastline.h"
 
 #include <gtk/gtk.h>

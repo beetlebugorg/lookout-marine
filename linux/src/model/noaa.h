@@ -1,4 +1,4 @@
-/* library/noaa.h — NOAA's charts, as the shell sees them.
+/* model/noaa.h: NOAA's charts, as the shell sees them.
  *
  * NOAA publishes an ENC for every United States waterway at no cost. The core
  * owns the whole feature: it reads the product catalog, decides which cells a

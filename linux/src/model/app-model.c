@@ -1,6 +1,6 @@
 #include "model/app-model.h"
 
-#include "library/noaa.h"
+#include "model/noaa.h"
 #include "library/scan.h"
 #include "library/sets.h"
 #include "model/store.h"

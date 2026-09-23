@@ -9,9 +9,9 @@
 #include <gtk/gtk.h>
 
 #include "engine/controller.h"
-#include "library/links.h"
-#include "library/noaa.h"
-#include "library/raster.h"
+#include "model/links.h"
+#include "model/noaa.h"
+#include "model/raster.h"
 
 G_BEGIN_DECLS
 
@@ -199,7 +199,7 @@ void lk_app_model_poll_chart_links (LkAppModel *self);
 
 /* NOAA's catalog, the regions a mariner picks, and the downloads run from
  * them. Owned here so the picker, the Charts page and setup read one object.
- * See library/noaa.h for what a region selects. */
+ * See model/noaa.h for what a region selects. */
 LkNoaa *lk_app_model_get_noaa (LkAppModel *self);
 
 /* Download the regions the mariner picked, then prepare what arrives.
