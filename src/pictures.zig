@@ -768,7 +768,11 @@ fn openForTest(tmp: *std.testing.TmpDir, f: *TestFetch) !?*Lookout {
     marks.test_support_dir = try testing.allocator.dupe(u8, home);
     cachedir.setRoot(home);
     const main = Lookout.openCharts(std.heap.c_allocator, &.{}, .{ .width = 64, .height = 64 }) catch |e| switch (e) {
-        error.SurfaceFailed => return null,
+        error.SurfaceFailed => {
+            testing.allocator.free(marks.test_support_dir.?);
+            marks.test_support_dir = null;
+            return null;
+        },
         else => return e,
     };
     main.setHttpProvider(TestFetch.get, TestFetch.cancel, f);
