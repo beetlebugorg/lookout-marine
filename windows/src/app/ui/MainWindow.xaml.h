@@ -629,8 +629,17 @@ namespace winrt::LookoutMarine::implementation
         /* Adopt the service's responses and, when its state changed, read it
          * and pass it to setup and the Charts page. */
         void NoaaChanged();
-        /* Order a download into the download set and follow it to its end. */
+        /* Order a download into the download set and follow it to its end.
+         * Empty `regions` orders an update of the downloaded cells. */
         void NoaaDownload(std::string const &regions, bool again);
+        /* Start the update check when lookout_noaa_update_due starts one.
+         * Called when a chart opens and when the chart sets change. */
+        void NoaaConsiderUpdateCheck();
+        /* The update check's catalog read is running, the check has run at
+         * least once this launch, and the count of reissued cells. */
+        bool noaa_checking{ false };
+        bool noaa_checked{ false };
+        uint32_t noaa_outdated{ 0 };
         /* The run number of the download being followed, 0 for none, and
          * the order to repeat on Retry. */
         uint32_t noaa_watch_run{ 0 };

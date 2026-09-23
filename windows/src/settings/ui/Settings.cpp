@@ -998,6 +998,9 @@ namespace winrt::LookoutMarine::implementation
         s += bake_job != nullptr ? "|baking" : "|idle";
         // The removal line comes and goes with the job that feeds it.
         s += removal_job != nullptr ? "|removing" : "|kept";
+        // The update check's line and the Update button follow its result.
+        s += "|" + std::to_string(noaa_checking) + std::to_string(noaa_checked) + "|" +
+             std::to_string(noaa_outdated);
         s += noaa_state.phase == LOOKOUT_NOAA_DOWNLOADING ? "|downloading" : "|quiet";
         return s;
     }
@@ -1762,6 +1765,32 @@ namespace winrt::LookoutMarine::implementation
                     Controls::StackPanel body;
                     body.Spacing(10);
                     body.Children().Append(srow);
+
+                    // What NOAA reissued since the download, on the set the
+                    // update writes into. Disabled while other chart work runs.
+                    if (set.managed && noaa_outdated > 0)
+                    {
+                        Controls::StackPanel upd;
+                        upd.Orientation(Controls::Orientation::Horizontal);
+                        upd.Spacing(8);
+                        upd.Margin({ 30, 0, 0, 0 });
+                        Controls::TextBlock newer;
+                        newer.Text(lkw::Thousands(noaa_outdated) + L" charts have newer editions");
+                        newer.FontSize(12);
+                        newer.Foreground(lkw::Brush(lkw::chrome::Accent(DarkChrome())));
+                        newer.VerticalAlignment(VerticalAlignment::Center);
+                        upd.Children().Append(newer);
+                        Controls::Button go;
+                        go.Content(winrt::box_value(L"Update"));
+                        go.IsEnabled(noaa_state.phase != LOOKOUT_NOAA_DOWNLOADING &&
+                                     bake_job == nullptr);
+                        go.Click([this](auto &&, auto &&) {
+                            NoaaDownload({}, false);
+                            BuildSettingsPage();
+                        });
+                        upd.Children().Append(go);
+                        body.Children().Append(upd);
+                    }
                     body.Children().Append(ramp_host);
                     auto card = Card(DarkChrome());
                     card.Child(body);
@@ -2248,6 +2277,36 @@ namespace winrt::LookoutMarine::implementation
                 auto card = Card(dark);
                 card.Child(rows);
                 stack.Children().Append(card);
+
+                // How often to look for newer editions of the downloaded
+                // charts. The core reads the cadence from the store.
+                static char const *const cadences[] = { "never", "startup", "daily" };
+                char const *raw = lookout_store_text(lk_store_handle(), LOOKOUT_STORE_CHARTSETS,
+                                                     "noaa-update-check");
+                std::string const cadence = raw != nullptr ? raw : "";
+                Controls::ComboBox check;
+                check.Header(winrt::box_value(L"Check for NOAA chart updates"));
+                for (auto label : { L"Never", L"At startup", L"Daily" })
+                    check.Items().Append(winrt::box_value(winrt::hstring{ label }));
+                check.SelectedIndex(cadence == "never" ? 0 : cadence == "startup" ? 1 : 2);
+                check.Margin({ 0, 10, 0, 0 });
+                check.SelectionChanged([](auto &&s, auto &&) {
+                    int const i = s.template as<Controls::ComboBox>().SelectedIndex();
+                    if (i >= 0 && i < 3)
+                        lookout_store_set_text(lk_store_handle(), LOOKOUT_STORE_CHARTSETS,
+                                               "noaa-update-check", cadences[i]);
+                });
+                stack.Children().Append(check);
+                Controls::TextBlock found;
+                found.FontSize(11);
+                found.Opacity(0.7);
+                found.Text(noaa_checking   ? winrt::hstring{ L"Checking NOAA for newer editions\x2026" }
+                           : !noaa_checked ? winrt::hstring{ L"Not checked this session" }
+                           : noaa_outdated == 0
+                               ? winrt::hstring{ L"Every downloaded chart is current" }
+                               : winrt::hstring{ lkw::Thousands(noaa_outdated) +
+                                                 L" charts have newer editions" });
+                stack.Children().Append(found);
             }
 
 

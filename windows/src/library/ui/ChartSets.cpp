@@ -279,6 +279,8 @@ namespace winrt::LookoutMarine::implementation
     {
         if (chart_sets_model == nullptr || !lookout_chart_sets_changed(chart_sets_model))
             return;
+        // The core reads the editions off the sets, so the count follows them.
+        NoaaConsiderUpdateCheck();
         LoadChartSets([this] {
             // Only when a row on the page changed. A rescan that finds what it
             // found before raises the same flag.

@@ -200,6 +200,7 @@ namespace winrt::LookoutMarine::implementation
             chart_has_cells = !paths.empty();
             InstallStoredRasters(); // the open destroyed the handle they rode on
             RestoreRasterShown();   // which sets were drawn, and the ENC-hidden switch
+            NoaaConsiderUpdateCheck();
             StartAlertWatch();      // a collision alarm must not need a pane open
             // A folder the mariner opened joins the set list
             // (an existing entry keeps its switch). A single file or a cell

@@ -692,10 +692,24 @@ namespace winrt::LookoutMarine::implementation
     // state only when lookout_noaa_changed returns 1.
     void MainWindow::NoaaChanged()
     {
-        if (noaa == nullptr || !lookout_noaa_changed(noaa))
+        if (noaa == nullptr)
             return;
-        lookout_noaa_poll(noaa, &noaa_state);
+        bool const changed = lookout_noaa_changed(noaa) != 0;
+        if (changed)
+            lookout_noaa_poll(noaa, &noaa_state);
         lookout_noaa_state const &st = noaa_state;
+
+        // The update check ends with its catalog read. A check that uses a
+        // read under a day old ends at once.
+        if (noaa_checking && st.phase != LOOKOUT_NOAA_READING)
+        {
+            noaa_checking = false;
+            noaa_checked = true;
+            noaa_outdated = lookout_noaa_outdated(noaa);
+            RefreshChartsPageOnChange();
+        }
+        if (!changed)
+            return;
 
         // Retry of an order refused with no catalog, once the catalog read it
         // started has ended. A read that ended with no catalog clears the
@@ -746,7 +760,7 @@ namespace winrt::LookoutMarine::implementation
     // run it starts. The run number moves by one for each order.
     void MainWindow::NoaaDownload(std::string const &regions, bool again)
     {
-        if (noaa == nullptr || regions.empty())
+        if (noaa == nullptr)
             return;
         std::string const dest = lkw::NoaaDownloadDir();
         std::error_code ec;
@@ -755,7 +769,20 @@ namespace winrt::LookoutMarine::implementation
         noaa_watch_again = again;
         noaa_retry_waiting = false;
         noaa_watch_run = noaa_state.run + 1;
-        lookout_noaa_download(noaa, regions.c_str(), dest.c_str(), again ? 1 : 0);
+        if (regions.empty())
+            lookout_noaa_update(noaa, dest.c_str());
+        else
+            lookout_noaa_download(noaa, regions.c_str(), dest.c_str(), again ? 1 : 0);
+        NoaaChanged();
+    }
+
+    void MainWindow::NoaaConsiderUpdateCheck()
+    {
+        if (noaa_checked)
+            noaa_outdated = lookout_noaa_outdated(noaa);
+        if (noaa_checking || !lookout_noaa_update_due(noaa))
+            return;
+        noaa_checking = true;
         NoaaChanged();
     }
 
