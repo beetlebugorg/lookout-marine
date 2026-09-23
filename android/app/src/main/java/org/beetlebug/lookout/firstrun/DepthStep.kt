@@ -82,9 +82,8 @@ fun DepthStep(m: MarinerState) {
     val safetyContour = plan.safetyContour
     val deepContour = plan.deepContour
 
-    // A depth in the unit on screen, with its unit and without.
+    // A depth in the unit on screen, with its unit.
     fun measure(v: Double) = Lookout.fmtDepth(v * plan.metresPerUnit, feet, false)
-    fun bare(v: Double) = Lookout.fmtDepth(v * plan.metresPerUnit, feet, true)
 
     // Every change goes to the engine, so the chart behind the page is already
     // drawn the mariner's way when the page closes.
@@ -164,7 +163,7 @@ fun DepthStep(m: MarinerState) {
         derived("Deep contour", measure(deepContour),
                 "Water deeper than this draws in the lightest shade. Twice the safety contour, up the same ladder the safety contour came off.")
 
-        seabed(safetyDepth, safetyContour, deepContour, ::measure, ::bare)
+        seabed(safetyDepth, safetyContour, deepContour, ::measure)
         StepWarning(
             lead = "Shading is not a depth sounder.",
             body = "Soundings are not corrected for tide, surge or squat, and a survey can be decades old. Keep your own margin.",
@@ -247,7 +246,6 @@ private fun seabed(
     safetyContour: Double,
     deepContour: Double,
     measure: (Double) -> String,
-    bare: (Double) -> String,
 ) {
     val unsafe = Chrome.s52("DEPVS", 0) ?: Color(0xFF9BD3FF)
     val shallow = Chrome.s52("DEPMS", 0) ?: Color(0xFFBFE3FF)
@@ -313,10 +311,10 @@ private fun seabed(
         }
         Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            key(unsafe, "Unsafe", "0 – ${measure(safetyContour)}", Modifier.weight(1f))
-            key(shallow, "Shallow", "${bare(safetyContour)} – ${measure(deepContour)}", Modifier.weight(1f))
-            key(medium, "Medium", "${measure(deepContour)} +", Modifier.weight(1f))
-            key(deep, "Deep", "open water", Modifier.weight(1f))
+            key(unsafe, "Unsafe", "0 – ${measure(safetyDepth)}", Modifier.weight(1f))
+            key(shallow, "Shallow", "${measure(safetyDepth)} – ${measure(safetyContour)}", Modifier.weight(1f))
+            key(medium, "Medium", "${measure(safetyContour)} – ${measure(deepContour)}", Modifier.weight(1f))
+            key(deep, "Deep", "${measure(deepContour)} +", Modifier.weight(1f))
         }
     }
 }
