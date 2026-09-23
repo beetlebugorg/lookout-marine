@@ -2,7 +2,6 @@
 #include "library/noaa.h"
 
 #include "library/fetch.h"
-#include "model/store.h"
 
 #include <string.h>
 
@@ -32,14 +31,8 @@ struct _LkNoaa {
   guint32 cells, held;
   guint64 bytes, held_bytes;
 
-  /* How much of each region is already installed, indexed as `regions`. Read
-   * when the catalog lands and when what is installed changes, because each
-   * region costs a walk of the catalog and the pick does not move it. */
-  guint32 *region_cells;
-  guint32 *region_held;
-  gboolean regions_costed;
-  /* The dataset names the downloader's own set holds. */
-  GHashTable *managed;
+  /* Each region as the core counts it, indexed as `regions`. */
+  lookout_noaa_region_info *infos;
 };
 
 enum {
@@ -52,7 +45,7 @@ static guint signals[N_SIGNALS];
 G_DEFINE_FINAL_TYPE (LkNoaa, lk_noaa, G_TYPE_OBJECT)
 
 static void lk_noaa_recost (LkNoaa *self);
-static void lk_noaa_recost_regions (LkNoaa *self);
+static void lk_noaa_read_infos (LkNoaa *self);
 
 /* ---- the region table ---------------------------------------------------- */
 
@@ -66,6 +59,7 @@ lk_noaa_read_regions (LkNoaa *self)
     return;
 
   self->regions = g_new0 (LkNoaaRegion, n);
+  self->infos = g_new0 (lookout_noaa_region_info, n);
   self->n_regions = (guint) n;
   for (size_t i = 0; i < n; i++)
     {
@@ -245,8 +239,8 @@ lk_noaa_sync (LkNoaa *self)
   lookout_noaa_poll (self->service, &self->state);
   if (self->state.have_catalog && !had_catalog)
     {
-      lk_noaa_recost_regions (self);
       lk_noaa_recost (self);
+      lk_noaa_read_infos (self);
       lk_noaa_load_coverage (self);
     }
   g_signal_emit (self, signals[SIGNAL_CHANGED], 0);
@@ -311,79 +305,34 @@ lk_noaa_refresh (LkNoaa *self)
 
 /* ---- what a pick costs --------------------------------------------------- */
 
-/* What each region holds, counted against the downloader's own set. */
+/* The core walks the catalog for each region, so the map reads this copy. */
 static void
-lk_noaa_recost_regions (LkNoaa *self)
+lk_noaa_read_infos (LkNoaa *self)
 {
-  self->regions_costed = FALSE;
-  if (self->regions == NULL || self->n_regions == 0)
-    return;
-
-  if (self->region_cells == NULL)
-    {
-      self->region_cells = g_new0 (guint32, self->n_regions);
-      self->region_held = g_new0 (guint32, self->n_regions);
-    }
-  memset (self->region_cells, 0, self->n_regions * sizeof *self->region_cells);
-  memset (self->region_held, 0, self->n_regions * sizeof *self->region_held);
-
-  if (!self->state.have_catalog || self->managed == NULL)
-    return;
-
   for (guint i = 0; i < self->n_regions; i++)
-    {
-      g_auto (GStrv) cells = lk_noaa_region_cells (self, self->regions[i].id);
+    lookout_noaa_region_state (self->service, self->regions[i].id, &self->infos[i]);
+}
 
-      for (guint c = 0; cells != NULL && cells[c] != NULL; c++)
-        {
-          self->region_cells[i]++;
-          if (g_hash_table_contains (self->managed, cells[c]))
-            self->region_held[i]++;
-        }
-    }
-  self->regions_costed = TRUE;
+const lookout_noaa_region_info *
+lk_noaa_region_info (LkNoaa *self, const char *id)
+{
+  static const lookout_noaa_region_info none = { 0 };
+  const LkNoaaRegion *region;
+
+  g_return_val_if_fail (LK_IS_NOAA (self), &none);
+
+  region = lk_noaa_region (self, id);
+  return region != NULL ? &self->infos[region - self->regions] : &none;
 }
 
 void
-lk_noaa_note_managed (LkNoaa *self, const char *const *names)
+lk_noaa_reprice (LkNoaa *self)
 {
   g_return_if_fail (LK_IS_NOAA (self));
 
-  if (self->managed == NULL)
-    self->managed = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
-  g_hash_table_remove_all (self->managed);
-  for (guint i = 0; names != NULL && names[i] != NULL; i++)
-    g_hash_table_add (self->managed, g_strdup (names[i]));
-
-  lk_noaa_recost_regions (self);
   lk_noaa_recost (self);
+  lk_noaa_read_infos (self);
   g_signal_emit (self, signals[SIGNAL_CHANGED], 0);
-}
-
-gboolean
-lk_noaa_region_held (LkNoaa *self, const char *id, guint32 *out_cells, guint32 *out_held)
-{
-  if (out_cells != NULL)
-    *out_cells = 0;
-  if (out_held != NULL)
-    *out_held = 0;
-
-  g_return_val_if_fail (LK_IS_NOAA (self), FALSE);
-
-  if (!self->regions_costed || id == NULL)
-    return FALSE;
-
-  for (guint i = 0; i < self->n_regions; i++)
-    {
-      if (g_strcmp0 (self->regions[i].id, id) != 0)
-        continue;
-      if (out_cells != NULL)
-        *out_cells = self->region_cells[i];
-      if (out_held != NULL)
-        *out_held = self->region_held[i];
-      return TRUE;
-    }
-  return FALSE;
 }
 
 static void
@@ -434,28 +383,6 @@ lk_noaa_cost_words (guint32 cells, guint64 bytes, guint32 held, guint64 held_byt
   return g_strdup_printf ("%u charts, %s", cells, size);
 }
 
-char **
-lk_noaa_region_cells (LkNoaa *self, const char *region_ids)
-{
-  size_t n;
-  char **out;
-
-  g_return_val_if_fail (LK_IS_NOAA (self), g_new0 (char *, 1));
-
-  if (region_ids == NULL || region_ids[0] == '\0')
-    return g_new0 (char *, 1);
-  n = lookout_noaa_region_cells (self->service, region_ids, NULL, 0);
-  if (n == 0)
-    return g_new0 (char *, 1);
-
-  g_autofree const char **raw = g_new0 (const char *, n);
-  n = lookout_noaa_region_cells (self->service, region_ids, raw, n);
-  out = g_new0 (char *, n + 1);
-  for (size_t i = 0; i < n; i++)
-    out[i] = g_strdup (raw[i]);
-  return out;
-}
-
 char *
 lk_noaa_cost_line (LkNoaa *self)
 {
@@ -465,116 +392,6 @@ lk_noaa_cost_line (LkNoaa *self)
 }
 
 /* ---- downloading --------------------------------------------------------- */
-
-char **
-lk_noaa_downloaded_regions (LkNoaa *self)
-{
-  g_return_val_if_fail (LK_IS_NOAA (self), g_new0 (char *, 1));
-  return lk_store_load_noaa_regions ();
-}
-
-void
-lk_noaa_forget_downloaded (LkNoaa *self, const char *const *ids)
-{
-  g_auto (GStrv) was = NULL;
-  g_autoptr (GPtrArray) now = g_ptr_array_new ();
-
-  g_return_if_fail (LK_IS_NOAA (self));
-  if (ids == NULL || ids[0] == NULL)
-    return;
-
-  was = lk_store_load_noaa_regions ();
-  for (guint i = 0; was != NULL && was[i] != NULL; i++)
-    if (!g_strv_contains (ids, was[i]))
-      g_ptr_array_add (now, was[i]);
-
-  g_ptr_array_add (now, NULL);
-  lk_store_save_noaa_regions ((const char *const *) now->pdata);
-}
-
-void
-lk_noaa_prune_downloaded (LkNoaa *self)
-{
-  g_auto (GStrv) was = NULL;
-  g_autoptr (GPtrArray) now = g_ptr_array_new ();
-  gboolean dropped = FALSE;
-
-  g_return_if_fail (LK_IS_NOAA (self));
-  if (!self->regions_costed)
-    return;
-
-  was = lk_store_load_noaa_regions ();
-  for (guint i = 0; was != NULL && was[i] != NULL; i++)
-    {
-      guint32 cells = 0, held = 0;
-
-      lk_noaa_region_held (self, was[i], &cells, &held);
-      /* WHOLE, the same test that adopts one. A download that finished leaves
-       * the region complete, and what is left of a removed one is its
-       * neighbour's cells spilling over a district line: 22 of 891 is not a
-       * region the mariner holds. */
-      if (cells > 0 && held >= cells)
-        g_ptr_array_add (now, was[i]);
-      else
-        dropped = TRUE;
-    }
-
-  if (!dropped)
-    return;
-  g_ptr_array_add (now, NULL);
-  lk_store_save_noaa_regions ((const char *const *) now->pdata);
-}
-
-gboolean
-lk_noaa_adopt_downloaded (LkNoaa *self)
-{
-  g_auto (GStrv) was = NULL;
-  g_autoptr (GPtrArray) whole = g_ptr_array_new ();
-
-  g_return_val_if_fail (LK_IS_NOAA (self), FALSE);
-
-  was = lk_store_load_noaa_regions ();
-  if (was != NULL && was[0] != NULL)
-    return FALSE;
-  /* An empty record still counts as a record. A mariner who gave back the
-   * only region they held leaves one. Adopting every whole region then ticks
-   * that water again on the next open. */
-  if (lk_store_noaa_regions_recorded ())
-    return FALSE;
-  if (!self->regions_costed)
-    return FALSE;
-
-  /* A region held WHOLE is one the mariner downloaded. A region they hold part
-   * of is their neighbour's cells spilling over a district line. */
-  for (guint i = 0; i < self->n_regions; i++)
-    if (self->region_cells[i] > 0 && self->region_held[i] >= self->region_cells[i])
-      g_ptr_array_add (whole, (gpointer) self->regions[i].id);
-
-  if (whole->len == 0)
-    return FALSE;
-  g_ptr_array_add (whole, NULL);
-  lk_store_save_noaa_regions ((const char *const *) whole->pdata);
-  return TRUE;
-}
-
-/* Add `region_ids` to what this device has downloaded. */
-static void
-lk_noaa_note_downloaded (const char *region_ids)
-{
-  g_auto (GStrv) was = lk_store_load_noaa_regions ();
-  g_auto (GStrv) ids = g_strsplit (region_ids, ",", -1);
-  g_autoptr (GHashTable) seen = g_hash_table_new (g_str_hash, g_str_equal);
-  g_autoptr (GPtrArray) now = g_ptr_array_new ();
-
-  for (guint i = 0; was != NULL && was[i] != NULL; i++)
-    if (g_hash_table_add (seen, was[i]))
-      g_ptr_array_add (now, was[i]);
-  for (guint i = 0; ids[i] != NULL; i++)
-    if (g_hash_table_add (seen, ids[i]))
-      g_ptr_array_add (now, ids[i]);
-  g_ptr_array_add (now, NULL);
-  lk_store_save_noaa_regions ((const char *const *) now->pdata);
-}
 
 void
 lk_noaa_download (LkNoaa *self, const char *region_ids, const char *dest_dir,
@@ -586,9 +403,25 @@ lk_noaa_download (LkNoaa *self, const char *region_ids, const char *dest_dir,
   if (region_ids == NULL || region_ids[0] == '\0')
     return;
 
-  lk_noaa_note_downloaded (region_ids);
   lookout_noaa_download (self->service, region_ids, dest_dir, again ? 1 : 0);
+  lk_noaa_read_infos (self);
   lk_noaa_sync (self);
+}
+
+guint32
+lk_noaa_apply (LkNoaa *self, const char *dest_dir, gboolean again)
+{
+  g_autofree char *ids = NULL;
+  guint32 moved;
+
+  g_return_val_if_fail (LK_IS_NOAA (self), 0);
+  g_return_val_if_fail (dest_dir != NULL, 0);
+
+  ids = lk_noaa_picked_ids (self);
+  moved = lookout_noaa_apply (self->service, ids, dest_dir, again ? 1 : 0);
+  lk_noaa_read_infos (self);
+  lk_noaa_sync (self);
+  return moved;
 }
 
 void
@@ -652,9 +485,7 @@ lk_noaa_dispose (GObject *object)
   g_clear_pointer (&self->picked, g_hash_table_unref);
   g_clear_pointer (&self->coverage, g_hash_table_unref);
   g_clear_pointer (&self->regions, g_free);
-  g_clear_pointer (&self->region_cells, g_free);
-  g_clear_pointer (&self->region_held, g_free);
-  g_clear_pointer (&self->managed, g_hash_table_unref);
+  g_clear_pointer (&self->infos, g_free);
   self->n_regions = 0;
 
   G_OBJECT_CLASS (lk_noaa_parent_class)->dispose (object);

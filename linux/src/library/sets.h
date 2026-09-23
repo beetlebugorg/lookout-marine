@@ -106,10 +106,6 @@ gboolean lk_chart_sets_note (LkChartSets *self, const char *path);
  * reads an archive the mariner merely lists as water they can delete. */
 gboolean lk_chart_sets_set_managed (LkChartSets *self, const char *path, gboolean on);
 
-/* The dataset names the MANAGED sets hold, uppercased and deduplicated.
- * Transfer full. */
-char **lk_chart_sets_managed_cell_names (LkChartSets *self);
-
 /* The files one set still has to prepare, as the core lists them: each file
  * that bakes before it draws and has no prepared chart, or whose prepared
  * chart is older than it. Empty until the core's scan has read the folder.

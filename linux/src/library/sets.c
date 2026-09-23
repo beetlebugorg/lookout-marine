@@ -31,8 +31,6 @@ struct _LkChartSets {
 #define LK_SETS_POLL_MS 200
 
 static void lk_chart_sets_sync_paths (LkChartSets *self);
-static char **lk_chart_sets_names_of (LkChartSets *self, gboolean managed_only,
-                                      gboolean baked_only);
 static void lk_chart_sets_watch_scans (LkChartSets *self);
 
 /* ---- the walk over what is on disk --------------------------------------- */
@@ -393,60 +391,6 @@ lk_chart_sets_set_managed (LkChartSets *self, const char *path, gboolean on)
 {
   return path != NULL &&
          lookout_chart_sets_set_managed (self->sets, path, on ? 1 : 0) != 0;
-}
-
-
-char **
-lk_chart_sets_managed_cell_names (LkChartSets *self)
-{
-  /* PREPARED CHARTS ONLY. A downloaded cell that has not been prepared is a
-   * file, and the picker states what the mariner can draw. Counting the raw
-   * cell read a library whose charts had been deleted as still installed: the
-   * pills opened ticked on water that was gone. */
-  return lk_chart_sets_names_of (self, TRUE, TRUE);
-}
-
-
-/* Every cell name on the list, or only the ones the downloader's sets hold. */
-static char **
-lk_chart_sets_names_of (LkChartSets *self, gboolean managed_only, gboolean baked_only)
-{
-  size_t n_sets = 0;
-  const lookout_chart_set *const *sets = lookout_chart_sets_all (self->sets, &n_sets);
-  g_autoptr (GHashTable) seen = g_hash_table_new (g_str_hash, g_str_equal);
-  GPtrArray *names = g_ptr_array_new ();
-
-  for (size_t s = 0; s < n_sets; s++)
-    {
-      if (managed_only && sets[s]->managed == 0)
-        continue;
-      size_t n_files = 0;
-      const lookout_chart_file *const *files =
-          lookout_chart_set_files (self->sets, sets[s]->path, &n_files);
-
-      for (size_t f = 0; f < n_files; f++)
-        {
-          const lookout_chart_file *file = files[f];
-
-          if (file->name == NULL || file->name[0] == '\0')
-            continue;
-          if (baked_only && file->kind != LOOKOUT_FILE_BAKED)
-            continue;
-          /* An update carries its base cell's name, so it dedups into it. */
-          if (file->kind != LOOKOUT_FILE_BAKED && file->kind != LOOKOUT_FILE_SOURCE &&
-              file->kind != LOOKOUT_FILE_UPDATE)
-            continue;
-
-          char *upper = g_ascii_strup (file->name, -1);
-          if (g_hash_table_add (seen, upper))
-            g_ptr_array_add (names, upper);
-          else
-            g_free (upper);
-        }
-    }
-
-  g_ptr_array_add (names, NULL);
-  return (char **) g_ptr_array_free (names, FALSE);
 }
 
 /* ---- watching for a scan to land ------------------------------------------ */

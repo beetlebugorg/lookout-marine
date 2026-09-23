@@ -94,50 +94,13 @@ guint64 lk_noaa_held_bytes (LkNoaa *self);
  * then repairs or refreshes them rather than adding any. */
 gboolean lk_noaa_all_installed (LkNoaa *self);
 
-/* How much of ONE region this device already holds: `out_cells` is every cell
- * covering its water and `out_held` the ones installed. FALSE before the
- * catalog is in, with both set to 0.
- *
- * Region totals overlap, as the header says, so this reports how far one
- * region is covered and never feeds a sum. Each region costs a walk of the
- * catalog, so it is read when the catalog lands and when the installed list
- * changes. */
-gboolean lk_noaa_region_held (LkNoaa *self, const char *id, guint32 *out_cells,
-                              guint32 *out_held);
+/* Price the pick and read each region again, and emit ::changed. The core
+ * reads what the chart sets hold, so the owner calls this when they change. */
+void lk_noaa_reprice (LkNoaa *self);
 
-/* The cells THE DOWNLOADER holds. The pills read this, and only this: counting
- * every installed cell reads an archive the mariner merely lists as water they
- * can delete, so unticking asked to remove cells no download ever wrote. The
- * core prices a download against every installed cell, read off the chart
- * sets. This also prices the pick again, because the sets have changed. */
-void lk_noaa_note_managed (LkNoaa *self, const char *const *names);
-
-/* The regions this device has downloaded, as the picker opens them. Written
- * when a download starts and read when the picker opens. */
-char **lk_noaa_downloaded_regions (LkNoaa *self);
-
-/* Take regions out of that record, when the mariner has removed their charts.
- * Without this the picker opens them ticked again and reads as holding water
- * it has just deleted. */
-void lk_noaa_forget_downloaded (LkNoaa *self, const char *const *ids);
-
-/* Drop recorded regions the downloader no longer holds whole. Charts removed
- * by other means leave the record naming water that is gone. Does nothing
- * before the per-region counts are in. */
-void lk_noaa_prune_downloaded (LkNoaa *self);
-
-/* Write the regions this device holds whole into that record, once, for a
- * library downloaded before the record existed. FALSE when the catalog is not
- * in yet, or when the record already has something in it. */
-gboolean lk_noaa_adopt_downloaded (LkNoaa *self);
-
-/* The dataset names of every cell covering `region_ids`, a comma separated
- * list. Transfer full, NULL-terminated, empty before the catalog is read.
- *
- * Regions overlap, because NOAA files a cell under one district that covers
- * another's. The cells a shell removes are the unpicked regions' minus every
- * region still picked. */
-char **lk_noaa_region_cells (LkNoaa *self, const char *region_ids);
+/* One region as lookout_noaa_region_state last read it. Zeroed before the
+ * catalog is read and for an unknown id. Never NULL. */
+const lookout_noaa_region_info *lk_noaa_region_info (LkNoaa *self, const char *id);
 
 /* What the pick costs, in the mariner's words. Free with g_free. */
 char *lk_noaa_cost_line (LkNoaa *self);
@@ -151,6 +114,11 @@ char *lk_noaa_cost_words (guint32 cells, guint64 bytes, guint32 held, guint64 he
  * fetches the cells already held as well. An empty list orders no download. */
 void lk_noaa_download (LkNoaa *self, const char *region_ids, const char *dest_dir,
                        gboolean again);
+
+/* Make the download at `dest_dir` hold the pick, through lookout_noaa_apply:
+ * record it, delete the water it gives back, and download what it lacks.
+ * Returns how many directories left the library. */
+guint32 lk_noaa_apply (LkNoaa *self, const char *dest_dir, gboolean again);
 
 /* Stop the download that is running. The cells already written stay. */
 void lk_noaa_cancel (LkNoaa *self);

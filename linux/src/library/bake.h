@@ -117,47 +117,6 @@ gboolean lk_chart_bake_is_derived (const char *path);
  * Free with g_free. */
 char *lk_chart_bake_prepared_dir (const char *source);
 
-/* Which of `names` this device actually holds under `prepared` or `source`.
- * Transfer full, NULL-terminated. The count a warning states has to be the
- * count a removal deletes, so both read this. */
-char **lk_chart_bake_cells_present (const char        *prepared,
-                                    const char        *source,
-                                    const char *const *names);
-
-/* Delete named cells from a prepared directory and from the folder they were
- * prepared out of, saying where it has got to.
- *
- * `prepared` holds a directory per chart, and `source` the exchange set they
- * were made from. Both go, because a source left behind is baked again on the
- * next launch. Reports as lk_chart_bake_delete_derived does. */
-gboolean lk_chart_bake_delete_cells (const char        *prepared,
-                                     const char        *source,
-                                     const char *const *names,
-                                     const char        *label,
-                                     LkBakeProgressFunc on_progress,
-                                     GObject           *owner);
-
-/* Every cell the download at `source` holds, by name: what its exchange set
- * holds, and what was prepared from it.
- *
- * The catalog cannot answer this. A device holds cells no recorded district
- * claims, and cells the catalog no longer lists at all, and a removal counted
- * from the catalog leaves those behind. Transfer full, NULL-terminated. */
-char **lk_chart_bake_cells_held (const char *prepared, const char *source);
-
-/* Delete a download whole: the exchange set and the charts prepared from it.
- *
- * `source` must be under this app's downloads directory, so a mariner's own
- * folder can never be deleted through this. The prepared charts report where
- * the removal has got to, as lk_chart_bake_delete_derived does. The exchange
- * set goes without a report, because the two run together and one panel
- * cannot show both. */
-gboolean lk_chart_bake_delete_download (const char        *prepared,
-                                        const char        *source,
-                                        const char        *name,
-                                        LkBakeProgressFunc on_progress,
-                                        GObject           *owner);
-
 /* Delete charts this app prepared. Refuses any path it did not make, so a
  * mariner's own folder can never be deleted by removing a set. */
 /* Delete the charts Lookout prepared, saying where it has got to.
@@ -178,9 +137,5 @@ gboolean lk_chart_bake_delete_derived (const char        *path,
                                        const char        *name,
                                        LkBakeProgressFunc on_progress,
                                        GObject           *owner);
-
-/* Throw away what a previous run renamed but did not finish deleting. Without
- * this, quitting mid-delete leaves gigabytes that nothing will mention again. */
-void lk_chart_bake_sweep_trash (void);
 
 #endif /* LK_CHART_BAKE_H */

@@ -164,13 +164,7 @@ lk_remove_tree (const char *path)
 /* One removal running behind the app. The worker writes the counts, the main
  * thread reads them and draws them. */
 typedef struct {
-  char              *path;  /* the renamed directory being emptied, or NULL */
-  /* An explicit list instead, one entry per chart. `mates` is the same length
-   * and holds the second path a chart goes with, or NULL: a cell removed on
-   * its own has a prepared directory and a source directory, and both count
-   * as the one chart the mariner is removing. */
-  GStrv              paths;
-  GStrv              mates;
+  char              *path;  /* the renamed directory being emptied */
   char              *name; /* the set the mariner removed, for the report */
   LkBakeProgressFunc on_progress;
   /* REFFED. A removal is thousands of files and outlives the window that
@@ -193,8 +187,6 @@ lk_trash_unref (LkTrash *self)
     return;
   g_mutex_clear (&self->mu);
   g_free (self->path);
-  g_strfreev (self->paths);
-  g_strfreev (self->mates);
   g_free (self->name);
   g_clear_object (&self->owner);
   g_free (self);
@@ -251,26 +243,18 @@ lk_trash_worker (gpointer data)
   LkTrash *self = data;
   g_autoptr (GPtrArray) charts = g_ptr_array_new_with_free_func (g_free);
 
-  if (self->paths != NULL)
-    {
-      for (guint i = 0; self->paths[i] != NULL; i++)
-        g_ptr_array_add (charts, g_strdup (self->paths[i]));
-    }
-  else
-    {
-      GDir *dir = g_dir_open (self->path, 0, NULL);
+  GDir *dir = g_dir_open (self->path, 0, NULL);
 
-      /* ONE LISTING, not a walk. The bake writes a directory per chart, so a
-       * chart gone is one of these gone: the same unit the import counted,
-       * and found without reading all thirty thousand files first. */
-      if (dir != NULL)
-        {
-          const char *name;
+  /* ONE LISTING of the top level. The bake writes a directory per chart, so
+   * each entry is one chart, the unit the import counted. The count needs no
+   * read of the thirty thousand files below. */
+  if (dir != NULL)
+    {
+      const char *name;
 
-          while ((name = g_dir_read_name (dir)) != NULL)
-            g_ptr_array_add (charts, g_build_filename (self->path, name, NULL));
-          g_dir_close (dir);
-        }
+      while ((name = g_dir_read_name (dir)) != NULL)
+        g_ptr_array_add (charts, g_build_filename (self->path, name, NULL));
+      g_dir_close (dir);
     }
 
   g_mutex_lock (&self->mu);
@@ -282,12 +266,7 @@ lk_trash_worker (gpointer data)
     {
       const char *chart = g_ptr_array_index (charts, i);
 
-      /* An empty entry is a cell whose chart was never prepared. Its source
-       * still goes. */
-      if (chart[0] != '\0')
-        lk_remove_tree (chart);
-      if (self->mates != NULL && self->mates[i] != NULL && self->mates[i][0] != '\0')
-        lk_remove_tree (self->mates[i]);
+      lk_remove_tree (chart);
       g_mutex_lock (&self->mu);
       self->done = (int) (i + 1);
       g_mutex_unlock (&self->mu);
@@ -295,8 +274,7 @@ lk_trash_worker (gpointer data)
     }
 
   /* Whatever the listing missed, and the directory itself. */
-  if (self->path != NULL)
-    lk_remove_tree (self->path);
+  lk_remove_tree (self->path);
 
   g_mutex_lock (&self->mu);
   self->over = TRUE;
@@ -305,27 +283,6 @@ lk_trash_worker (gpointer data)
 
   lk_trash_unref (self);
   return NULL;
-}
-
-/* Start one, on a thread of its own. Takes `paths` and `mates`. */
-static void
-lk_trash_start_paths (char **paths, char **mates, const char *name,
-                      LkBakeProgressFunc on_progress, GObject *owner)
-{
-  LkTrash *self = g_new0 (LkTrash, 1);
-  GThread *thread;
-
-  g_mutex_init (&self->mu);
-  self->paths = paths;
-  self->mates = mates;
-  self->name = g_strdup (name != NULL ? name : "");
-  self->on_progress = on_progress;
-  self->owner = owner != NULL ? g_object_ref (owner) : NULL;
-  self->started_us = g_get_monotonic_time ();
-  self->refs = 1;
-
-  thread = g_thread_new ("lk-trash", lk_trash_worker, self);
-  g_thread_unref (thread);
 }
 
 /* Start one, on a thread of its own. Takes `path`. */
@@ -346,158 +303,6 @@ lk_trash_start (char *path, const char *name, LkBakeProgressFunc on_progress,
 
   thread = g_thread_new ("lk-trash", lk_trash_worker, self);
   g_thread_unref (thread);
-}
-
-/* Where a downloaded exchange set keeps its cells. NOAA publishes ENC_ROOT and
- * the bake reads it from there; a folder without one keeps them at the top. */
-static char *
-lk_cell_source_dir (const char *source, const char *name)
-{
-  g_autofree char *root = g_build_filename (source, "ENC_ROOT", name, NULL);
-
-  if (g_file_test (root, G_FILE_TEST_IS_DIR))
-    return g_steal_pointer (&root);
-  return g_build_filename (source, name, NULL);
-}
-
-char **
-lk_chart_bake_cells_present (const char *prepared, const char *source,
-                             const char *const *names)
-{
-  GPtrArray *out = g_ptr_array_new ();
-
-  for (guint i = 0; prepared != NULL && names != NULL && names[i] != NULL; i++)
-    {
-      g_autofree char *chart = g_build_filename (prepared, names[i], NULL);
-      g_autofree char *cell = source != NULL ? lk_cell_source_dir (source, names[i])
-                                             : NULL;
-
-      if (g_file_test (chart, G_FILE_TEST_EXISTS) ||
-          (cell != NULL && g_file_test (cell, G_FILE_TEST_EXISTS)))
-        g_ptr_array_add (out, g_strdup (names[i]));
-    }
-  g_ptr_array_add (out, NULL);
-  return (char **) g_ptr_array_free (out, FALSE);
-}
-
-gboolean
-lk_chart_bake_delete_cells (const char *prepared, const char *source,
-                            const char *const *names, const char *label,
-                            LkBakeProgressFunc on_progress, GObject *owner)
-{
-  g_autoptr (GPtrArray) made = g_ptr_array_new_with_free_func (g_free);
-  g_autoptr (GPtrArray) raw = g_ptr_array_new_with_free_func (g_free);
-
-  if (prepared == NULL || names == NULL)
-    return FALSE;
-  /* The prepared root is this app's. A path it did not make is never touched,
-   * the same rule lk_chart_bake_delete_derived holds to. */
-  if (!lk_chart_bake_is_derived (prepared))
-    return FALSE;
-
-  for (guint i = 0; names[i] != NULL; i++)
-    {
-      g_autofree char *chart = g_build_filename (prepared, names[i], NULL);
-      g_autofree char *cell = source != NULL ? lk_cell_source_dir (source, names[i])
-                                             : NULL;
-      gboolean have_chart = g_file_test (chart, G_FILE_TEST_EXISTS);
-      gboolean have_cell = cell != NULL && g_file_test (cell, G_FILE_TEST_EXISTS);
-
-      if (!have_chart && !have_cell)
-        continue;
-      g_ptr_array_add (made, have_chart ? g_steal_pointer (&chart) : g_strdup (""));
-      /* An empty string for a cell with no source directory. A NULL here ends
-       * the list, and g_strfreev then stopped at the gap and leaked every
-       * path after it. */
-      g_ptr_array_add (raw, have_cell ? g_steal_pointer (&cell) : g_strdup (""));
-    }
-
-  if (made->len == 0)
-    return FALSE;
-
-  g_ptr_array_add (made, NULL);
-  g_ptr_array_add (raw, NULL);
-  lk_trash_start_paths ((char **) g_ptr_array_free (g_steal_pointer (&made), FALSE),
-                        (char **) g_ptr_array_free (g_steal_pointer (&raw), FALSE),
-                        label, on_progress, owner);
-  return TRUE;
-}
-
-/* The cell directories one directory holds. A cell is a directory, so a file
- * beside them is the exchange set's own paperwork. */
-static void
-lk_chart_bake_add_cell_dirs (GHashTable *into, const char *dir)
-{
-  g_autoptr (GDir) open = dir != NULL ? g_dir_open (dir, 0, NULL) : NULL;
-  const char *name;
-
-  if (open == NULL)
-    return;
-  while ((name = g_dir_read_name (open)) != NULL)
-    {
-      g_autofree char *path = g_build_filename (dir, name, NULL);
-
-      if (g_file_test (path, G_FILE_TEST_IS_DIR))
-        g_hash_table_add (into, g_strdup (name));
-    }
-}
-
-char **
-lk_chart_bake_cells_held (const char *prepared, const char *source)
-{
-  g_autoptr (GHashTable) seen = g_hash_table_new_full (g_str_hash, g_str_equal,
-                                                       g_free, NULL);
-  GPtrArray *out = g_ptr_array_new ();
-
-  if (source != NULL)
-    {
-      g_autofree char *root = g_build_filename (source, "ENC_ROOT", NULL);
-
-      lk_chart_bake_add_cell_dirs (seen, g_file_test (root, G_FILE_TEST_IS_DIR)
-                                             ? root
-                                             : source);
-    }
-  lk_chart_bake_add_cell_dirs (seen, prepared);
-
-  GHashTableIter iter;
-  gpointer key;
-
-  g_hash_table_iter_init (&iter, seen);
-  while (g_hash_table_iter_next (&iter, &key, NULL))
-    g_ptr_array_add (out, g_strdup (key));
-  g_ptr_array_add (out, NULL);
-  return (char **) g_ptr_array_free (out, FALSE);
-}
-
-gboolean
-lk_chart_bake_delete_download (const char *prepared, const char *source,
-                               const char *name, LkBakeProgressFunc on_progress,
-                               GObject *owner)
-{
-  const char *root = lk_chart_bake_root ();
-  g_autofree char *downloads = g_build_filename (g_get_user_data_dir (),
-                                                 "lookout-marine", "downloads", NULL);
-
-  if (source == NULL || !g_str_has_prefix (source, downloads))
-    return FALSE;
-
-  /* The exchange set goes to the trash root. The rename puts it out of reach
-   * at once, and the delete runs behind it. */
-  if (g_file_test (source, G_FILE_TEST_IS_DIR))
-    {
-      g_autofree char *uuid = g_uuid_string_random ();
-      g_autofree char *leaf = g_strconcat (lookout_bake_trash_prefix (), uuid, NULL);
-      g_autofree char *trash = g_build_filename (root, leaf, NULL);
-
-      if (g_rename (source, trash) == 0)
-        lk_trash_start (g_steal_pointer (&trash), NULL, NULL, NULL);
-      else
-        lk_trash_start (g_strdup (source), NULL, NULL, NULL);
-    }
-
-  if (prepared != NULL && g_file_test (prepared, G_FILE_TEST_EXISTS))
-    return lk_chart_bake_delete_derived (prepared, name, on_progress, owner);
-  return TRUE;
 }
 
 gboolean
@@ -531,26 +336,6 @@ lk_chart_bake_delete_derived (const char *path, const char *name,
 
   lk_trash_start (g_steal_pointer (&trash), name, on_progress, owner);
   return TRUE;
-}
-
-void
-lk_chart_bake_sweep_trash (void)
-{
-  const char *root = lk_chart_bake_root ();
-  g_autoptr (GDir) dir = g_dir_open (root, 0, NULL);
-
-  if (dir == NULL)
-    return;
-
-  const char *name;
-  while ((name = g_dir_read_name (dir)) != NULL)
-    {
-      if (!lookout_bake_is_trash (name))
-        continue;
-      /* A removal a previous run did not finish. Nobody asked for it, so
-       * nobody is watching it either. */
-      lk_trash_start (g_build_filename (root, name, NULL), NULL, NULL, NULL);
-    }
 }
 
 /* ---- the bake ------------------------------------------------------------ */

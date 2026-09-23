@@ -547,6 +547,13 @@ lk_app_startup (GtkApplication *app, gpointer user_data)
     gtk_application_set_accels_for_action (app, accels[i].action, accels[i].accels);
 }
 
+static gpointer
+lk_sweep_trash (gpointer data)
+{
+  lookout_bake_sweep (lk_chart_bake_root ());
+  return NULL;
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -559,9 +566,8 @@ main (int argc, char *argv[])
   gtk_window_set_default_icon_name (LK_APP_ID);
 
   /* Throw away what a previous run renamed but did not finish deleting.
-     Without this, quitting mid-delete leaves gigabytes on the disk that
-     nothing will ever mention again. */
-  lk_chart_bake_sweep_trash ();
+     lookout_bake_sweep blocks, so it runs on a thread of its own. */
+  g_thread_unref (g_thread_new ("lk-sweep", lk_sweep_trash, NULL));
 
   /* One instance is the rule, a dock click focuses the chart already
    * sailing. LOOKOUT_MULTI is the development escape hatch every shell keeps:

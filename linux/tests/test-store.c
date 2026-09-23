@@ -8,39 +8,6 @@
 
 #include "model/store.h"
 
-/* An emptied record still counts as a record.
- *
- * The picker adopts every whole region a library holds when this device has
- * recorded none. A mariner who gives back the only region they held leaves an
- * empty record. The store drops a key set to an empty list, so the list alone
- * cannot distinguish the two cases. Without the flag the picker ticked that
- * water again on the next open. */
-static void
-test_noaa_regions_record (void)
-{
-  static const char *const one[] = { "d1", NULL };
-  static const char *const none[] = { NULL };
-
-  g_assert_false (lk_store_noaa_regions_recorded ());
-
-  lk_store_save_noaa_regions (one);
-  g_assert_true (lk_store_noaa_regions_recorded ());
-
-  g_auto (GStrv) held = lk_store_load_noaa_regions ();
-  g_assert_cmpuint (g_strv_length (held), ==, 1);
-  g_assert_cmpstr (held[0], ==, "d1");
-
-  /* Given back. The list is empty and the flag remains set. */
-  lk_store_save_noaa_regions (none);
-  g_auto (GStrv) after = lk_store_load_noaa_regions ();
-  g_assert_cmpuint (g_strv_length (after), ==, 0);
-  g_assert_true (lk_store_noaa_regions_recorded ());
-
-  /* And back to a device that has never downloaded anything. */
-  lk_store_forget_noaa_regions ();
-  g_assert_false (lk_store_noaa_regions_recorded ());
-}
-
 /* The NOAA update cadence, as the Charts page saves it. Daily on a device
  * that has never said. */
 static void
@@ -177,7 +144,6 @@ main (int argc, char *argv[])
 
   g_test_init (&argc, &argv, NULL);
 
-  g_test_add_func ("/store/noaa-regions", test_noaa_regions_record);
   g_test_add_func ("/store/noaa-update-cadence", test_noaa_update_cadence);
   g_test_add_func ("/store/recents", test_recents_order_and_cap);
   g_test_add_func ("/store/raster", test_raster_roundtrip);

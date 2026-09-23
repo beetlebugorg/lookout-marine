@@ -216,12 +216,12 @@ lk_panel_draw (GtkDrawingArea *area, cairo_t *cr, int width, int height, gpointe
         }
       else
         {
-          guint32 cells = 0, held = 0;
+          const lookout_noaa_region_info *info = lk_noaa_region_info (state->noaa,
+                                                                      region->id);
 
-          lk_noaa_region_held (state->noaa, region->id, &cells, &held);
-          if (held > 0 && cells > 0)
+          if (info->held > 0 && info->cells > 0)
             {
-              alpha = 0.18 + (0.28 * (double) held / (double) cells);
+              alpha = 0.18 + (0.28 * (double) info->held / (double) info->cells);
               cairo_set_source_rgba (cr, LK_HELD_R, LK_HELD_G, LK_HELD_B, alpha);
             }
           else
@@ -484,9 +484,7 @@ lk_pill_mark_held (GtkWidget *pill, LkNoaa *noaa, const char *id)
   GtkWidget *mark = g_object_get_data (G_OBJECT (pill), "lk-held-mark");
   const char *blurb = g_object_get_data (G_OBJECT (pill), "lk-blurb");
   const char *name = g_object_get_data (G_OBJECT (pill), "lk-name");
-  guint32 cells = 0, held = 0;
-  gboolean known = lk_noaa_region_held (noaa, id, &cells, &held);
-  gboolean all = known && cells > 0 && held >= cells;
+  gboolean all = lk_noaa_region_info (noaa, id)->all_held != 0;
 
   /* WHOLE REGIONS ONLY. NOAA files cells across district lines, so downloading
    * one region installs some of its neighbour's, and "42 of 1045" on a pill

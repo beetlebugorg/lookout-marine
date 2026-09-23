@@ -54,20 +54,6 @@ void lk_app_model_set_chart_set_on (LkAppModel *self, const char *path, gboolean
  * be made again, and the mariner's own folder is never touched. */
 void lk_app_model_remove_chart_set (LkAppModel *self, const char *path);
 
-/* The cells the downloader's own set holds. The NOAA picker ticks from this
- * and nothing else. Transfer full. */
-char **lk_app_model_managed_cell_names (LkAppModel *self);
-
-/* Which of `names` the download set actually holds. Transfer full. The count a
- * warning states is the count the removal below deletes, so both read this. */
-char **lk_app_model_noaa_cells_present (LkAppModel *self, const char *const *names);
-
-/* Delete named NOAA cells from the download set: the charts prepared from them
- * and the cells themselves. A source left behind is prepared again on the next
- * launch. Reports through ::removing, and the chart drops them once the set has
- * been read again. */
-void lk_app_model_remove_noaa_cells (LkAppModel *self, const char *const *names);
-
 /* ---- NOAA chart updates ----------------------------------------------------
  *
  * NOAA reissues a cell when its survey changes, and a mariner sailing on last
@@ -85,17 +71,6 @@ void lk_app_model_check_noaa_updates (LkAppModel *self);
 
 /* Fetch the newer editions of every managed chart the check counted. */
 void lk_app_model_download_noaa_updates (LkAppModel *self);
-
-/* Every cell the downloader's own directory holds, by name. A removal of the
- * whole download deletes these, and its warning states the count. Transfer
- * full. */
-char **lk_app_model_noaa_cells_held (LkAppModel *self);
-
-/* Give the whole download back: the exchange set, the charts prepared from it,
- * and the set's place on the list. A mariner who unticks every region is left
- * with no NOAA charts and no folder holding the paperwork of the ones that
- * went. */
-void lk_app_model_remove_noaa_download (LkAppModel *self);
 
 /* TRUE when sets ARE installed and every one of them is switched off.
  *
@@ -234,6 +209,12 @@ LkNoaa *lk_app_model_get_noaa (LkAppModel *self);
  * A download that failed every cell bakes nothing: an empty directory would
  * join the library as a set that never fills. */
 void lk_app_model_start_noaa_download (LkAppModel *self, gboolean again);
+
+/* Make the download hold the picker's pick, through lookout_noaa_apply. The
+ * water the pick gives back leaves the library at once and is deleted behind
+ * the app, reported through ::removing. What the pick lacks is downloaded and
+ * followed to its end. */
+void lk_app_model_apply_noaa_pick (LkAppModel *self);
 
 /* TRUE while the open error reports the end of a NOAA download.
  * `out_retry` is TRUE when ordering again can clear the cause. */

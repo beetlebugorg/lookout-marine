@@ -63,10 +63,9 @@ struct _LkAppModel {
   LkBakeProgress remove_progress;
   char          *remove_name;
   gboolean       removing;
-  /* The set to read again once the removal is over. Cells deleted out of a
-   * prepared directory stay in the composed chart until its folder is read
-   * again, and the read costs a walk, so it waits for the last chart to go. */
-  char          *remove_rescan;
+  /* The NOAA service's removal, from its state. */
+  LkBakeProgress noaa_remove_progress;
+  gboolean       noaa_removing;
   GStrv    recents;
 
   gboolean is_opening;
@@ -179,7 +178,9 @@ lk_app_model_get_property (GObject *object, guint prop_id, GValue *value, GParam
     case PROP_SCHEME:              g_value_set_int (value, self->scheme); break;
     case PROP_BUILDING:            g_value_set_boolean (value, self->building); break;
     case PROP_BAKING:              g_value_set_boolean (value, self->baking); break;
-    case PROP_REMOVING:            g_value_set_boolean (value, self->removing); break;
+    case PROP_REMOVING:
+      g_value_set_boolean (value, self->removing || self->noaa_removing);
+      break;
     case PROP_VIEW_WIDTH:          g_value_set_int (value, self->view_width); break;
     case PROP_VIEW_HEIGHT:         g_value_set_int (value, self->view_height); break;
     case PROP_FOLLOW:              g_value_set_int (value, self->follow); break;
@@ -218,7 +219,6 @@ lk_app_model_dispose (GObject *object)
   g_clear_pointer (&self->pending_open_source, g_free);
   g_clear_pointer (&self->bake_name, g_free);
   g_clear_pointer (&self->remove_name, g_free);
-  g_clear_pointer (&self->remove_rescan, g_free);
   g_clear_pointer (&self->noaa_dest, g_free);
   g_clear_pointer (&self->noaa_order_ids, g_free);
   g_clear_pointer (&self->recents, g_strfreev);
@@ -559,6 +559,19 @@ lk_app_model_noaa_changed (LkNoaa *noaa, gpointer user_data)
       lk_app_model_noaa_reorder (self);
     }
   lk_app_model_noaa_follow (self);
+
+  /* A removal an apply started. Each change notifies, so the panel moves. */
+  if (state->removing || self->noaa_removing)
+    {
+      self->noaa_removing = state->removing != 0;
+      self->noaa_remove_progress = (LkBakeProgress) {
+        .kind = LK_BAKE_REMOVE,
+        .done = (int) state->remove_done,
+        .total = (int) state->remove_total,
+        .name = state->removing ? "NOAA charts" : "",
+      };
+      g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_REMOVING]);
+    }
 }
 
 /* Prepare what the download left. Refused while a scan or a bake runs, so the
@@ -660,20 +673,12 @@ lk_app_model_get_noaa (LkAppModel *self)
   return self->noaa;
 }
 
-char **
-lk_app_model_managed_cell_names (LkAppModel *self)
-{
-  g_return_val_if_fail (LK_IS_APP_MODEL (self), g_new0 (char *, 1));
-  return lk_chart_sets_managed_cell_names (self->chart_sets);
-}
-
-/* The downloader's own cells, which the pills state. */
+/* The core reads what the sets hold, so the pick and the pills are read
+ * again when the sets change. */
 static void
 lk_app_model_noaa_note_all (LkAppModel *self)
 {
-  g_auto (GStrv) mine = lk_app_model_managed_cell_names (self);
-
-  lk_noaa_note_managed (self->noaa, (const char *const *) mine);
+  lk_noaa_reprice (self->noaa);
 }
 
 void
@@ -685,6 +690,35 @@ lk_app_model_start_noaa_download (LkAppModel *self, gboolean again)
 
   ids = lk_noaa_picked_ids (self->noaa);
   lk_app_model_order_noaa_download (self, ids, again);
+}
+
+void
+lk_app_model_apply_noaa_pick (LkAppModel *self)
+{
+  g_autofree char *dest = NULL;
+  guint32 before;
+
+  g_return_if_fail (LK_IS_APP_MODEL (self));
+
+  dest = lk_noaa_download_dir ();
+  if (g_mkdir_with_parents (dest, 0700) != 0)
+    {
+      lk_app_model_set_open_error (self, "Couldn't make a place to download charts to.");
+      return;
+    }
+
+  g_free (self->noaa_order_ids);
+  self->noaa_order_ids = lk_noaa_picked_ids (self->noaa);
+  self->noaa_order_again = FALSE;
+  before = lk_noaa_state (self->noaa)->run;
+  /* The charts it gives back are out of the library when it returns, so the
+   * chart opens again on what is left. */
+  if (lk_noaa_apply (self->noaa, dest, FALSE) > 0)
+    {
+      lk_app_model_recompose_library (self);
+      lk_app_model_emit_chart_sets_changed (self);
+    }
+  lk_app_model_noaa_ordered (self, dest, before);
 }
 
 static void
@@ -989,62 +1023,11 @@ lk_app_model_remove_progress (const LkBakeProgress *progress, gpointer user_data
   self->remove_progress.bands = NULL;
   self->remove_progress.n_bands = 0;
 
-  if (over && self->remove_rescan != NULL)
-    {
-      g_autofree char *path = g_steal_pointer (&self->remove_rescan);
-
-      lk_chart_sets_rescan (self->chart_sets, path);
-      lk_app_model_recompose_library (self);
-      lk_app_model_emit_chart_sets_changed (self);
-    }
-
   /* EVERY REPORT, as the bake's progress does. Notifying on the flip alone
    * left the panel drawing the first count until the removal ended: a set of
    * 7,000 charts read "1 of 36000" for the whole 3.7 s and then vanished. */
   self->removing = !over;
   g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_REMOVING]);
-}
-
-char **
-lk_app_model_noaa_cells_present (LkAppModel *self, const char *const *names)
-{
-  g_autofree char *source = NULL;
-  g_autofree char *prepared = NULL;
-
-  g_return_val_if_fail (LK_IS_APP_MODEL (self), g_new0 (char *, 1));
-
-  source = lk_noaa_download_dir ();
-  prepared = lk_chart_bake_prepared_dir (source);
-  return lk_chart_bake_cells_present (prepared, source, names);
-}
-
-void
-lk_app_model_remove_noaa_cells (LkAppModel *self, const char *const *names)
-{
-  g_autofree char *source = NULL;
-  g_autofree char *prepared = NULL;
-
-  g_return_if_fail (LK_IS_APP_MODEL (self));
-  g_return_if_fail (names != NULL && names[0] != NULL);
-
-  source = lk_noaa_download_dir ();
-  prepared = lk_chart_bake_prepared_dir (source);
-  if (prepared == NULL)
-    return;
-
-  g_free (self->remove_rescan);
-  self->remove_rescan = g_strdup (source);
-
-  /* Say so when the removal matched nothing. A silent no-op reads as the app
-   * ignoring the press. */
-  if (!lk_chart_bake_delete_cells (prepared, source, names, "NOAA charts",
-                                   lk_app_model_remove_progress, G_OBJECT (self)))
-    {
-      g_clear_pointer (&self->remove_rescan, g_free);
-      lk_app_model_set_open_error (self, "None of those charts are in the folder "
-                                         "this app downloaded them to, so nothing "
-                                         "was removed.");
-    }
 }
 
 /* ---- NOAA chart updates --------------------------------------------------- */
@@ -1084,43 +1067,6 @@ lk_app_model_download_noaa_updates (LkAppModel *self)
   before = lk_noaa_state (self->noaa)->run;
   lk_noaa_update (self->noaa, dest);
   lk_app_model_noaa_ordered (self, dest, before);
-}
-
-char **
-lk_app_model_noaa_cells_held (LkAppModel *self)
-{
-  g_autofree char *source = NULL;
-  g_autofree char *prepared = NULL;
-
-  g_return_val_if_fail (LK_IS_APP_MODEL (self), g_new0 (char *, 1));
-
-  source = lk_noaa_download_dir ();
-  prepared = lk_chart_bake_prepared_dir (source);
-  return lk_chart_bake_cells_held (prepared, source);
-}
-
-void
-lk_app_model_remove_noaa_download (LkAppModel *self)
-{
-  g_autofree char *source = NULL;
-  g_autofree char *prepared = NULL;
-
-  g_return_if_fail (LK_IS_APP_MODEL (self));
-
-  source = lk_noaa_download_dir ();
-  prepared = lk_chart_bake_prepared_dir (source);
-
-  /* Off the list before the files go, so the library recomposes without it
-   * and the chart closes on what is left. */
-  lk_chart_sets_remove (self->chart_sets, source, NULL);
-  lk_chart_bake_delete_download (prepared, source, "NOAA charts",
-                                 lk_app_model_remove_progress, G_OBJECT (self));
-  /* Nothing to rescan: the folder itself is going. */
-  g_clear_pointer (&self->remove_rescan, g_free);
-
-  lk_app_model_recompose_library (self);
-  lk_app_model_emit_chart_sets_changed (self);
-  lk_app_model_noaa_note_all (self);
 }
 
 static void
@@ -2047,7 +1993,9 @@ const LkBakeProgress *
 lk_app_model_get_remove_progress (LkAppModel *self)
 {
   g_return_val_if_fail (LK_IS_APP_MODEL (self), NULL);
-  return self->removing ? &self->remove_progress : NULL;
+  if (self->removing)
+    return &self->remove_progress;
+  return self->noaa_removing ? &self->noaa_remove_progress : NULL;
 }
 
 void
