@@ -1,6 +1,7 @@
 package org.beetlebug.lookout.firstrun
 
 import org.beetlebug.lookout.chart.ChartController
+import org.beetlebug.lookout.charts.ChartLinkController
 import org.beetlebug.lookout.charts.ChartsModel
 import org.beetlebug.lookout.charts.NoaaController
 
@@ -41,11 +42,9 @@ fun FirstRunSetup(
 
     FirstRunFlow(
         flow = flow,
-        // The online step keeps Skip: continuing with no chart picked
-        // finishes setup over the basemap.
-        canContinue = flow.step == FirstRunModel.Step.ONLINE_CHART || flow.primaryEnabled,
+        canContinue = flow.primaryEnabled,
         chartName = links.chartLinks.firstOrNull { it.url == links.activeChartLink }?.name,
-        footnote = footnote(flow, noaa),
+        footnote = footnote(flow, noaa, links, charts),
         onPrimary = {
             when (flow.advance()) {
                 FirstRunModel.Source.FILES -> onOpenCharts()
@@ -81,12 +80,24 @@ fun FirstRunSetup(
 }
 
 /** The line beside the action: what the pick costs, or what to do next. */
-private fun footnote(flow: FirstRunModel, noaa: NoaaController): String? = when (flow.step) {
+private fun footnote(
+    flow: FirstRunModel,
+    noaa: NoaaController,
+    links: ChartLinkController,
+    charts: ChartsModel,
+): String? = when (flow.step) {
     FirstRunModel.Step.COVERAGE -> {
         if (!noaa.haveCatalog) null
         else if (noaa.cells == 0 && noaa.held == 0) "Pick at least one region."
         else costLine(noaa)
     }
     FirstRunModel.Step.DEPTHS -> "Change any of this later in Mariner settings, in Depths."
+    // The publisher's credit, and what a mariner about to pick a link most
+    // wants to know: their own charts are still there. An install with no
+    // charts has none to reassure them about.
+    FirstRunModel.Step.ONLINE_CHART -> listOfNotNull(
+        links.chartLinkAttribution?.ifEmpty { null },
+        if (charts.chartPaths.isEmpty()) null else "installed charts stay installed",
+    ).joinToString(" · ").ifEmpty { null }
     else -> null
 }

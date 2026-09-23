@@ -148,11 +148,11 @@ class FirstRunModel {
         Step.DEPTHS -> "Depths"
     }
 
-    /** The primary button's words. The last step names what it keeps. */
+    /** The primary button's words. The online step names the picked chart. */
     fun primaryTitle(chartName: String?): String = when (step) {
         Step.WELCOME, Step.SOURCE -> "Continue"
         Step.COVERAGE -> "Download"
-        Step.ONLINE_CHART -> if (chartName != null) "Continue" else "Skip"
+        Step.ONLINE_CHART -> chartName?.let { "Use $it" } ?: "Continue"
         Step.IMPORTING -> "Continue"
         Step.DEPTHS -> "Start Sailing"
     }
