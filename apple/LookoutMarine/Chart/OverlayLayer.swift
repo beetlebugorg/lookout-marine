@@ -94,7 +94,7 @@ struct OverlayLayer: View {
                 }
                 // Bottom left: the scale bar.
                 .overlay(alignment: .bottomLeading) {
-                    if model.charts.hasChart {
+                    if model.chartOpen.hasChart {
                         ScaleBarView(scaleDenominator: model.readouts.scaleDenominator,
                                      credit: model.chartLinks.attribution)
                             .padding(.leading, Chrome.margin + sideInset)
@@ -116,7 +116,7 @@ struct OverlayLayer: View {
                                 .chromeHitRegion("scale-entry")
                                 .transition(.opacity.combined(with: .move(edge: .bottom)))
                         }
-                        if model.charts.hasChart {
+                        if model.chartOpen.hasChart {
                             ReadoutsCapsule(model: model, compact: compact,
                                             onScaleTap: toggleScaleEntry)
                                 .measureSize { capsuleHeight = $0.height }
@@ -231,9 +231,9 @@ struct OverlayLayer: View {
                 }
                 .overlay {
                     if model.charts.showStartupLoader {
-                        StartupLoader(phase: model.charts.loadingPhase, cells: model.charts.openingCells)
+                        StartupLoader(phase: model.chartOpen.loadingPhase, cells: model.chartOpen.openingCells)
                             .transition(.opacity)
-                    } else if !model.charts.hasChart {
+                    } else if !model.chartOpen.hasChart {
                         // The Metal layer keeps the last frame it presented, so
                         // a closed chart stays on screen with nothing drawing
                         // it. Cover it here rather than hiding the layer: the
@@ -263,21 +263,21 @@ struct OverlayLayer: View {
                 // something the eye can follow.
                 // The NOAA download, where the bake panel stands. Setup closes
                 // when it starts, so this is the only report of it.
-                .overlay(alignment: model.charts.hasChart ? .top : .center) {
+                .overlay(alignment: model.chartOpen.hasChart ? .top : .center) {
                     // Setup reports the download in its own step, so this is
                     // for a download started from the Charts pane.
                     if model.noaa.state.phase == .downloading, !model.firstRun.showing {
-                        NoaaDownloadPanel(model: model, compact: model.charts.hasChart)
-                            .padding(.top, model.charts.hasChart ? 10 : 0)
+                        NoaaDownloadPanel(model: model, compact: model.chartOpen.hasChart)
+                            .padding(.top, model.chartOpen.hasChart ? 10 : 0)
                             .chromeHitRegion("noaa-download")
                             .transition(.opacity)
                     }
                 }
-                .overlay(alignment: model.charts.hasChart ? .top : .center) {
+                .overlay(alignment: model.chartOpen.hasChart ? .top : .center) {
                     if let b = model.charts.chartWork {
-                        ChartWorkPanel(progress: b, compact: model.charts.hasChart,
+                        ChartWorkPanel(progress: b, compact: model.chartOpen.hasChart,
                                        onCancel: { model.charts.cancelBake() })
-                            .padding(.top, model.charts.hasChart ? 10 : 0)
+                            .padding(.top, model.chartOpen.hasChart ? 10 : 0)
                             .chromeHitRegion("chart-work")
                             .transition(.opacity)
                     }
@@ -286,7 +286,7 @@ struct OverlayLayer: View {
                 // where it stands.
                 .onChange(of: model.setupFacts, initial: true) { model.noteSetup() }
                 .animation(.easeInOut(duration: 0.3), value: model.firstRun.showing)
-                .animation(.easeInOut(duration: 0.5), value: model.charts.hasChart)
+                .animation(.easeInOut(duration: 0.5), value: model.chartOpen.hasChart)
                 .animation(.easeInOut(duration: 0.25), value: model.charts.chartWork == nil)
                 // The overlay hover tooltip, clear of the pointer. Padding,
                 // not an offset, for the reason above. No chrome hit region:

@@ -1,4 +1,4 @@
-//  ChartsModelTests.swift — the state the first-run page is drawn from.
+//  ChartLibraryTests.swift: the state the first-run page is drawn from.
 //
 //  The first-run page is drawn from one test: has the app established that
 //  there is nothing to draw. Reading `hasChart` alone told a mariner with a
@@ -10,14 +10,15 @@ import XCTest
 @testable import LookoutMarine
 
 @MainActor
-final class ChartsModelTests: ShellTestCase {
+final class ChartLibraryTests: ShellTestCase {
 
     private var engine = FakeEngine()
 
-    private func model() -> ChartsModel {
+    private func model() -> ChartLibrary {
         engine = FakeEngine()
-        let m = ChartsModel(raster: RasterModel())
-        m.engine = engine
+        let raster = RasterModel()
+        let m = ChartLibrary(raster: raster, chartOpen: ChartOpen(raster: raster))
+        m.chartOpen.engine = engine
         return m
     }
 
@@ -66,7 +67,7 @@ final class ChartsModelTests: ShellTestCase {
     /// services it.
     func testAPendingOpenIsNeverAnEmptyLibrary() {
         let m = model()
-        m.openRequest = OpenRequest(id: 1, paths: ["/charts/a/US5MD1MC.pmtiles"])
+        m.chartOpen.openRequest = OpenRequest(id: 1, paths: ["/charts/a/US5MD1MC.pmtiles"])
         XCTAssertFalse(m.nothingToDraw)
     }
 
@@ -113,8 +114,8 @@ final class ChartsModelTests: ShellTestCase {
     /// ends it.
     func testADrawingChartHasNoLoader() {
         let m = model()
-        m.hasChart = true
-        m.firstBuildDone = true
+        m.chartOpen.hasChart = true
+        m.chartOpen.firstBuildDone = true
         XCTAssertFalse(m.showStartupLoader)
         XCTAssertFalse(m.nothingToDraw)
     }

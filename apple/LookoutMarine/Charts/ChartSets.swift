@@ -463,15 +463,6 @@ enum ChartSetStore {
         return path.withCString { lookout_chart_sets_remove(h, $0) != 0 }
     }
 
-    /// Mark a set as the NOAA downloader's. The core keeps the mark across
-    /// launches and gives a managed set precedence for a cell name two sets
-    /// hold.
-    @discardableResult
-    static func setManaged(_ path: String, _ managed: Bool) -> Bool {
-        guard let h = handle else { return false }
-        return path.withCString { lookout_chart_sets_set_managed(h, $0, managed ? 1 : 0) != 0 }
-    }
-
     static func setOff(_ path: String, _ off: Bool) {
         guard let h = handle else { return }
         _ = path.withCString { lookout_chart_sets_set_on(h, $0, off ? 0 : 1) }

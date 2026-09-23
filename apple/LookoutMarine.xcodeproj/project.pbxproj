@@ -52,7 +52,7 @@
 		2CAAB96A58BB675F015568F5 /* ChartController+Markers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3679C3C6EF257BD3E89496F0 /* ChartController+Markers.swift */; };
 		2D18C3C1548A171547BCD515 /* ChartEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25170EA011726656A1803B82 /* ChartEngine.swift */; };
 		2D9C44E2619F9A689AC51BC3 /* NoaaRegionList.swift in Sources */ = {isa = PBXBuildFile; fileRef = A84D161B86E9E858C398FE6C /* NoaaRegionList.swift */; };
-		2DC7389F6E864FFE3AC46042 /* ChartsModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C73EED5D81CE4D0D4A578E1A /* ChartsModelTests.swift */; };
+		2DC7389F6E864FFE3AC46042 /* ChartLibraryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C73EED5D81CE4D0D4A578E1A /* ChartLibraryTests.swift */; };
 		2F2F0D553B726EE55BDAB483 /* SourceStep.swift in Sources */ = {isa = PBXBuildFile; fileRef = 573750B823F6706B68397BCF /* SourceStep.swift */; };
 		2F80D13D42F2990D89CB26E5 /* ChartSetStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52541E0740AE0F9E3BBC236D /* ChartSetStoreTests.swift */; };
 		2FE63BAE429B166A470E7312 /* ChartBakeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B2641D4DD30D574228F9033 /* ChartBakeTests.swift */; };
@@ -90,7 +90,7 @@
 		50C214AAD062B26FCB84D7BE /* RasterChartTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3F841BB92E185C6D2C47A7A /* RasterChartTests.swift */; };
 		52AFAE4BCB8FA4AFBD4C103D /* PlacementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1C44341E0A9C0B713D97E32 /* PlacementTests.swift */; };
 		52E4163448CFFE05D94E59F4 /* PluginTableTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2FC4787E7CFF2D99B0290ED1 /* PluginTableTests.swift */; };
-		5324562FED0A44AAAFB56AC8 /* ChartsModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C73EED5D81CE4D0D4A578E1A /* ChartsModelTests.swift */; };
+		5324562FED0A44AAAFB56AC8 /* ChartLibraryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C73EED5D81CE4D0D4A578E1A /* ChartLibraryTests.swift */; };
 		5396D82AF2680CB6CA36DC9F /* RasterPillTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9CB7F2EE01F7A2521E623AD /* RasterPillTests.swift */; };
 		56953BE7D9D4CF249C438ABE /* ViewStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A1AE666034E0F470280B7AD /* ViewStateTests.swift */; };
 		58AC131857390A27742AD81A /* TextSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2BA1B3F8DF89EE3D756BCD9A /* TextSection.swift */; };
@@ -207,7 +207,8 @@
 		C1DBF078241EB0244413102D /* ChartController+Display.swift in Sources */ = {isa = PBXBuildFile; fileRef = 195564232B25BB7EBBBB93CB /* ChartController+Display.swift */; };
 		C2A7920E23D12CA2B606E75C /* LookoutMarineApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A03D3BC7A7816F10B65863B0 /* LookoutMarineApp.swift */; };
 		C3450AC507D00557B103B1FD /* ShellTestCase.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39FCF4CF9169327DF0FA8FBB /* ShellTestCase.swift */; };
-		C38965268BE7F1EAE9AB48A6 /* ChartsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59206D279B28F48EC767ADEA /* ChartsModel.swift */; };
+		C38965268BE7F1EAE9AB48A6 /* ChartLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59206D279B28F48EC767ADEA /* ChartLibrary.swift */; };
+		03EA209A233A9CCC002357DC /* ChartOpen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09D4C43C3DB74DE9E42A78DB /* ChartOpen.swift */; };
 		C421AD4A79AEEB0C60360EC1 /* PluginSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D899CA81B7494096C3F930C /* PluginSettings.swift */; };
 		C4C543D94D4D8ED21A52DA07 /* FirstRunParts.swift in Sources */ = {isa = PBXBuildFile; fileRef = F14DA28C776E9CBFF5B0BE23 /* FirstRunParts.swift */; };
 		C6F97FFA28713DC7A7A41AB4 /* PluginTableModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E04C1A7E97E0DA615380347A /* PluginTableModel.swift */; };
@@ -234,7 +235,8 @@
 		D30AB6E8AA67FF3FD87B7E3A /* NoaaModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD1265AA04161741811A5390 /* NoaaModelTests.swift */; };
 		D4053EFD7BBC6FD277438F1D /* CoordFormatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80A6678722FC01CA46E10CE0 /* CoordFormatTests.swift */; };
 		D592C74889CB79128A0A81C5 /* PluginTableView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B7482797128261B463A8277 /* PluginTableView.swift */; };
-		D77E6462A28F0B1C63856A12 /* ChartsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59206D279B28F48EC767ADEA /* ChartsModel.swift */; };
+		D77E6462A28F0B1C63856A12 /* ChartLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59206D279B28F48EC767ADEA /* ChartLibrary.swift */; };
+		DF75A1292A6A04D59E2D7D6A /* ChartOpen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09D4C43C3DB74DE9E42A78DB /* ChartOpen.swift */; };
 		D8B07B8A647C1B9C9EC398BA /* ReadoutsCapsule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02618015841FF6935C44305E /* ReadoutsCapsule.swift */; };
 		D8DE92A54522E48CF85722DE /* Instruments.swift in Sources */ = {isa = PBXBuildFile; fileRef = E99E812450B1710B0945A9EE /* Instruments.swift */; };
 		D98D644F63B6A27A5BA219F7 /* LicenseManifestTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6473AB9A6EC7604E642EB8B9 /* LicenseManifestTests.swift */; };
@@ -382,7 +384,8 @@
 		5771B481220434E34EA6F794 /* ScaleParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScaleParser.swift; sourceTree = "<group>"; };
 		58C86FCD4EE381351EDD9D9E /* PluginInstallTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginInstallTests.swift; sourceTree = "<group>"; };
 		58CA6572430DD9F43DEA85E3 /* OverlayModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverlayModel.swift; sourceTree = "<group>"; };
-		59206D279B28F48EC767ADEA /* ChartsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartsModel.swift; sourceTree = "<group>"; };
+		59206D279B28F48EC767ADEA /* ChartLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartLibrary.swift; sourceTree = "<group>"; };
+		09D4C43C3DB74DE9E42A78DB /* ChartOpen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartOpen.swift; sourceTree = "<group>"; };
 		5A0B8C7B273A6E8D538848ED /* ChartSets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartSets.swift; sourceTree = "<group>"; };
 		5E856FD037203427CE8B9E9C /* CompactHudTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompactHudTests.swift; sourceTree = "<group>"; };
 		5EBE7ED9891268BB429691A0 /* ChartValues.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartValues.swift; sourceTree = "<group>"; };
@@ -447,7 +450,7 @@
 		C440A0CF1A4AE2740ACEFF2F /* ChartBake.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartBake.swift; sourceTree = "<group>"; };
 		C47A753C575320AC1BB4A44C /* FirstRunModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirstRunModel.swift; sourceTree = "<group>"; };
 		C662FFE95992970B22324BF0 /* OverlayModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverlayModelTests.swift; sourceTree = "<group>"; };
-		C73EED5D81CE4D0D4A578E1A /* ChartsModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartsModelTests.swift; sourceTree = "<group>"; };
+		C73EED5D81CE4D0D4A578E1A /* ChartLibraryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartLibraryTests.swift; sourceTree = "<group>"; };
 		C92108B96F87BAE129BE6656 /* FakeEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FakeEngine.swift; sourceTree = "<group>"; };
 		CB8AD6DFED21DF30B2636C6C /* ChartMenuPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartMenuPanel.swift; sourceTree = "<group>"; };
 		D234494177794FA934BAB596 /* ChromeModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromeModel.swift; sourceTree = "<group>"; };
@@ -618,7 +621,7 @@
 				7A6C878008109734E6888D48 /* ChartLinksModelTests.swift */,
 				1A443DE42C30306D7110F731 /* ChartScanTests.swift */,
 				52541E0740AE0F9E3BBC236D /* ChartSetStoreTests.swift */,
-				C73EED5D81CE4D0D4A578E1A /* ChartsModelTests.swift */,
+				C73EED5D81CE4D0D4A578E1A /* ChartLibraryTests.swift */,
 				80A6678722FC01CA46E10CE0 /* CoordFormatTests.swift */,
 				BB4DB25833426EC809E14055 /* CoordinateParserTests.swift */,
 				C92108B96F87BAE129BE6656 /* FakeEngine.swift */,
@@ -735,7 +738,8 @@
 				68828190C8B7D95B175B2ED1 /* ChartLinksModel.swift */,
 				15839E0805A8858A9BE1B7E8 /* ChartPreviews.swift */,
 				5A0B8C7B273A6E8D538848ED /* ChartSets.swift */,
-				59206D279B28F48EC767ADEA /* ChartsModel.swift */,
+				59206D279B28F48EC767ADEA /* ChartLibrary.swift */,
+				09D4C43C3DB74DE9E42A78DB /* ChartOpen.swift */,
 				21D746F565B07FFB055106D0 /* ChartsSection.swift */,
 				3171D7FE76E08E0699495D45 /* CoverageMap.swift */,
 				6B4B9BB999CB71B57595C57F /* NoaaDownloadPanel.swift */,
@@ -1092,7 +1096,8 @@
 				C0F12C9177AB56898D1EDFBD /* ChartUIView.swift in Sources */,
 				F56FFB5B0B4315E5CAB193E8 /* ChartValues.swift in Sources */,
 				AC156DBF801B9FDB7048420A /* ChartWorkPanel.swift in Sources */,
-				D77E6462A28F0B1C63856A12 /* ChartsModel.swift in Sources */,
+				D77E6462A28F0B1C63856A12 /* ChartLibrary.swift in Sources */,
+				DF75A1292A6A04D59E2D7D6A /* ChartOpen.swift in Sources */,
 				20661EFE0AE890B1C97DEBA8 /* ChartsSection.swift in Sources */,
 				02BEB8DB1EBC2B61CC1CEB36 /* Chrome.swift in Sources */,
 				340BAA0AB5066CB75B4DB2B8 /* ChromeHitRegion.swift in Sources */,
@@ -1171,7 +1176,7 @@
 				44106C96DB481F899311829B /* ChartLinksModelTests.swift in Sources */,
 				304A739310B89E36ADDF3A21 /* ChartScanTests.swift in Sources */,
 				975D7A97AEDE359E19292148 /* ChartSetStoreTests.swift in Sources */,
-				5324562FED0A44AAAFB56AC8 /* ChartsModelTests.swift in Sources */,
+				5324562FED0A44AAAFB56AC8 /* ChartLibraryTests.swift in Sources */,
 				315E261DE0454FB6293200D0 /* CoordFormatTests.swift in Sources */,
 				99E0F6FB645D764E1D573BF8 /* CoordinateParserTests.swift in Sources */,
 				A2B1831C4109BB26076FE692 /* FakeEngine.swift in Sources */,
@@ -1235,7 +1240,8 @@
 				D140C3EBA8F42641232C0369 /* ChartUIView.swift in Sources */,
 				F5B4B871DD276DE2066E2E68 /* ChartValues.swift in Sources */,
 				F5ACE48CDAAC757EA7F003E9 /* ChartWorkPanel.swift in Sources */,
-				C38965268BE7F1EAE9AB48A6 /* ChartsModel.swift in Sources */,
+				C38965268BE7F1EAE9AB48A6 /* ChartLibrary.swift in Sources */,
+				03EA209A233A9CCC002357DC /* ChartOpen.swift in Sources */,
 				DE59CBC001F2C93EFEEFB316 /* ChartsSection.swift in Sources */,
 				B82495034138B87BEB0D8619 /* Chrome.swift in Sources */,
 				9B5D5B30A13DEA2CAA3AA35F /* ChromeHitRegion.swift in Sources */,
@@ -1333,7 +1339,7 @@
 				138A4F680ACD73391F8D9340 /* ChartLinksModelTests.swift in Sources */,
 				7E88421B782228FB3E978EC7 /* ChartScanTests.swift in Sources */,
 				2F80D13D42F2990D89CB26E5 /* ChartSetStoreTests.swift in Sources */,
-				2DC7389F6E864FFE3AC46042 /* ChartsModelTests.swift in Sources */,
+				2DC7389F6E864FFE3AC46042 /* ChartLibraryTests.swift in Sources */,
 				D4053EFD7BBC6FD277438F1D /* CoordFormatTests.swift in Sources */,
 				B90762606839663FBE4F1600 /* CoordinateParserTests.swift in Sources */,
 				AAEAA11652744E72897F0250 /* FakeEngine.swift in Sources */,

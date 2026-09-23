@@ -18,7 +18,7 @@ final class AppModel {
         didSet {
             // Each model gets the one seam it uses, not the controller. See
             // ChartEngine.swift.
-            charts.engine = controller
+            chartOpen.engine = controller
             chartLinks.engine = controller
             raster.engine = controller
             readouts.engine = controller
@@ -35,12 +35,6 @@ final class AppModel {
     /// NOAA's catalog, the regions a mariner picks, and the downloads run from
     /// them. See src/noaa.zig for what a region selects.
     let noaa = NoaaModel()
-    /// The core's NOAA service. It has no chart handle under it, so a chart
-    /// reopening leaves its download running.
-    private var noaaService: NoaaService?
-    /// The download being followed to its end: its run number, and how to
-    /// order it again. A new order replaces it.
-    private var noaaWatch: (run: UInt32, order: () -> Void)?
     let raster = RasterModel()
     let plugins = PluginsModel()
     let overlay = OverlayModel()
@@ -49,9 +43,11 @@ final class AppModel {
     /// Setup. It runs over an app that has settled on having no chart to
     /// draw, on every launch that finds one. See lookout_setup_note.
     let firstRun = FirstRunModel()
-    /// Adding a set installs the pictures it carries, so this one is built
-    /// with the raster model rather than beside it.
-    let charts: ChartsModel
+    /// The chart being drawn, or opening.
+    let chartOpen: ChartOpen
+    /// The installed sets. Adding a set installs the pictures in it, so
+    /// this one is built with the raster model rather than beside it.
+    let charts: ChartLibrary
 
     // MARK: Across two areas
 
@@ -59,112 +55,19 @@ final class AppModel {
     /// front of the mariner. Every entry point lands here — Finder, a drop on
     /// the window, and Settings > Plugins > Install Plugin….
     func beginPluginInstall(_ path: String) {
-        guard charts.hasChart else {
+        guard chartOpen.hasChart else {
             plugins.pendingInstallPath = path
             return
         }
         plugins.begin(path)
     }
 
-    /// Download the picked NOAA regions. The core prepares what arrives into
-    /// the managed set.
-    func startNoaaDownload(again: Bool = false) {
-        guard let dest = NoaaModel.downloadDirectory else {
-            charts.openError = "Couldn't find a place to download charts to."
-            return
-        }
-        let before = noaa.state.run
-        noaa.download(to: dest, again: again)
-        watchNoaaDownload(after: before) { [weak self] in
-            self?.startNoaaDownload(again: again)
-        }
-    }
-
-    /// Apply the picker's pick: the core deletes the water given back and
-    /// fetches what is missing, and what arrives is prepared as a download is.
-    /// `givesBack` is true when the pick unticks water that was held.
+    /// Apply the picker's pick. `givesBack` is true when the pick unticks
+    /// water that was held, and the library is read again after it.
     func applyNoaaPick(givesBack: Bool) {
-        guard let dest = NoaaModel.downloadDirectory else {
-            charts.openError = "Couldn't find a place to download charts to."
-            return
-        }
-        // An empty pick deletes the whole download. A stopped download's end
-        // must not add the folder back.
         let whole = noaa.picked.isEmpty
-        if whole { noaaWatch = nil }
-        let before = noaa.state.run
-        let moved = noaa.apply(to: dest)
-        watchNoaaDownload(after: before) { [weak self] in
-            self?.startNoaaDownload()
-        }
-        if givesBack { charts.noaaApplied(moved: moved, whole: whole) }
-    }
-
-    /// Fetch the reissued editions of every installed cell. The core prepares
-    /// them as it does a download.
-    func startNoaaUpdate() {
-        guard let dest = NoaaModel.downloadDirectory else {
-            charts.openError = "Couldn't find a place to download charts to."
-            return
-        }
-        let before = noaa.state.run
-        noaa.update(to: dest)
-        watchNoaaDownload(after: before) { [weak self] in
-            self?.startNoaaUpdate()
-        }
-    }
-
-    /// Follow the download just ordered to its end, which comes once the
-    /// core has prepared what arrived. noaaChanged checks it each time the
-    /// state changes. `before` is the run number read before ordering: an
-    /// order the model did not pass on leaves it as it was, and there is no
-    /// download to follow.
-    private func watchNoaaDownload(after before: UInt32, order: @escaping () -> Void) {
-        guard noaa.state.run != before else { return }
-        noaaWatch = (noaa.state.run, order)
-        noaaChanged()
-    }
-
-    /// The NOAA state changed. Open what a prepare made, and end the watched
-    /// download if it has ended.
-    private func noaaChanged() {
-        let st = noaa.state
-        charts.noteNoaaRemoval(st)
-        // True when a prepare has just ended. One the core resumed has no
-        // download to watch, so its end opens the charts as well.
-        var open = charts.noteNoaaPrepare(st)
-        defer { if open { charts.adoptNoaaPrepare() } }
-        guard let w = noaaWatch, st.run == w.run, st.ended else { return }
-        noaaWatch = nil
-        switch st.outcome {
-        case .finished:
-            open = true
-        case .cancelled:
-            // A stop is the mariner's own. What arrived before it is kept.
-            if st.done > 0 { open = true }
-        case .failed, .refused:
-            // The Charts pane shows the end here. Setup shows it in its own
-            // step. A refusal a retry cannot clear raises no alert.
-            if !firstRun.showing, st.outcome == .failed || st.retry {
-                charts.openError = st.error.isEmpty
-                    ? "The download stopped before any chart arrived." : st.error
-                if st.retry {
-                    let order = w.order
-                    charts.openRetry = { [weak self] in self?.retryNoaa(order) }
-                }
-            }
-        case .empty, .none, .running:
-            break
-        }
-    }
-
-    /// Order a download again. With no catalog loaded, read it first.
-    private func retryNoaa(_ order: @escaping () -> Void) {
-        guard !noaa.state.haveCatalog else { return order() }
-        Task {
-            await noaa.loadCatalog()
-            order()
-        }
+        guard let moved = noaa.apply(), givesBack else { return }
+        charts.noaaApplied(moved: moved, whole: whole)
     }
 
     /// What setup reads from the app. The overlay notes it on every change.
@@ -178,7 +81,7 @@ final class AppModel {
             hasCharts: charts.sets.contains { $0.on && $0.hasSomethingToDraw },
             workRunning: charts.chartWork != nil,
             downloading: n.state.phase == .downloading,
-            chartOpen: charts.hasChart && !charts.chartIsEmpty,
+            chartOpen: chartOpen.hasChart && !chartOpen.chartIsEmpty,
             noaaOutcome: n.state.outcome.rawValue,
             noaaRun: n.state.run,
             pickCharts: n.allInstalled ? n.cost.held : n.cost.cells,
@@ -217,7 +120,7 @@ final class AppModel {
 
     /// A .lkplug that arrived before the chart did, now that the chart is up.
     func drainPendingInstall() {
-        guard charts.hasChart, let path = plugins.pendingInstallPath else { return }
+        guard chartOpen.hasChart, let path = plugins.pendingInstallPath else { return }
         plugins.pendingInstallPath = nil
         plugins.begin(path)
     }
@@ -226,7 +129,8 @@ final class AppModel {
         // What the mariner already has, out of the defaults domain and into
         // the core store. Once, before anything reads a setting.
         Store.shared.importDefaults()
-        charts = ChartsModel(raster: raster)
+        chartOpen = ChartOpen(raster: raster)
+        charts = ChartLibrary(raster: raster, chartOpen: chartOpen)
         // The core prepares a download, so its Stop is the NOAA service's.
         charts.cancelNoaaPrepare = { [weak self] in self?.noaa.cancel() }
         charts.onSetsChanged = { [weak self] in
@@ -248,13 +152,24 @@ final class AppModel {
         // Every chart-link call goes through a lookout handle, which exists
         // only while a chart is open. Open a chart of no cells so a link
         // picked with no charts installed has a core to run through.
-        chartLinks.openChartForLink = { [weak self] in self?.charts.openEmpty() }
-        // NOAA's service needs no chart, so setup reads the catalog before
-        // the mariner has one.
-        let service = NoaaService { [weak self] in self?.noaa.pull() }
-        noaaService = service
-        noaa.engine = service
-        noaa.onChange = { [weak self] in self?.noaaChanged() }
+        chartLinks.openChartForLink = { [weak self] in self?.chartOpen.openEmpty() }
+        noaa.useService()
+        noaa.onChange = { [weak self] ended in
+            guard let self else { return }
+            let st = self.noaa.state
+            self.charts.noteNoaaRemoval(st)
+            // A prepare the core resumed has no download to watch, so its end
+            // opens the charts as well.
+            if self.charts.noteNoaaPrepare(st) || ended { self.charts.adoptNoaaPrepare() }
+        }
+        noaa.onError = { [weak self] in self?.chartOpen.openError = $0 }
+        noaa.onFailed = { [weak self] message, retry in
+            // The Charts pane shows the end here. Setup shows it in its own
+            // step.
+            guard let self, !self.firstRun.showing else { return }
+            self.chartOpen.openError = message
+            if let retry { self.chartOpen.openRetry = retry }
+        }
     }
 
     /// A chart handle has just been created. The core reads its chart-link
@@ -291,7 +206,7 @@ final class AppModel {
     /// Install the raster charts the mariner chose. What would not open is
     /// reported as a chart error, which is the alert the shell already has.
     func addRasterCharts(_ picked: [String]) {
-        if let err = raster.add(picked) { charts.openError = err }
+        if let err = raster.add(picked) { chartOpen.openError = err }
     }
 
     /// Step to the next picture. Nothing installed: the cycle has nowhere to

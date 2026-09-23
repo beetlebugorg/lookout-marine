@@ -137,7 +137,7 @@ final class ChartController: NSObject {
     func open(charts paths: [String], in view: PlatformView) -> Bool {
         close()
         self.view = view
-        model?.charts.firstBuildDone = false
+        model?.chartOpen.firstBuildDone = false
 
         let (wPt, hPt) = Self.pointSize(of: view)
         // Both platforms: lookout renders via Metal straight into the view's
@@ -145,7 +145,7 @@ final class ChartController: NSObject {
         // its device and presents drawables.
         guard let layer = Platform.metalLayer(of: view) else {
             lkLog("open FAILED — the chart view has no CAMetalLayer backing")
-            model?.charts.openError = "The chart view has no Metal layer."
+            model?.chartOpen.openError = "The chart view has no Metal layer."
             return false
         }
         let kind = LOOKOUT_NATIVE_METAL_LAYER
@@ -163,11 +163,11 @@ final class ChartController: NSObject {
         }
         guard let h = opened else {
             lkLog("open FAILED (lookout_open_in_window returned null — GPU device or chart file?)")
-            model?.charts.openError = "Couldn't open the chart.\nThe file may be unreadable, or the Metal device couldn't be created."
+            model?.chartOpen.openError = "Couldn't open the chart.\nThe file may be unreadable, or the Metal device couldn't be created."
             return false
         }
         lkLog("open OK")
-        model?.charts.openError = nil
+        model?.chartOpen.openError = nil
         handle = h
         // The fetch door, before anything can ask through it. Installing it
         // also resolves whatever chart link the mariner left selected: the core
@@ -279,14 +279,14 @@ final class ChartController: NSObject {
 
         startDisplayLink()
         pushReadouts()
-        model?.charts.hasChart = true
-        model?.charts.chartIsEmpty = paths.isEmpty
-        model?.charts.chartPath = chartPath
+        model?.chartOpen.hasChart = true
+        model?.chartOpen.chartIsEmpty = paths.isEmpty
+        model?.chartOpen.chartPath = chartPath
         // What the open library states about its labels. On the model rather
         // than read once by whoever asks: the Settings window may be up while
         // charts are imported, and a list taken at appear would still describe
         // the library that was open then.
-        model?.charts.chartLanguages = chartLanguages()
+        model?.chartOpen.chartLanguages = chartLanguages()
         // A .lkplug opened before the chart was up waited for the plugin
         // layer; it can go to its consent sheet now.
         model?.drainPendingInstall()
@@ -301,9 +301,6 @@ final class ChartController: NSObject {
     func attachView(_ v: PlatformView) {
         if view == nil { view = v }
     }
-
-    /// True once a chart is open, so a caller can tell adding from opening.
-    var hasHandle: Bool { handle != nil }
 
     /// Add charts to the library that is already open, keeping the view and
     /// what is drawn. Answers how many opened.
@@ -529,13 +526,13 @@ final class ChartController: NSObject {
             // The first scene is up once a frame has gone out with no build
             // outstanding. Own ship moves between fixes, so with plugins
             // running the loop may never stop.
-            if !building, model?.charts.firstBuildDone == false { model?.charts.firstBuildDone = true }
+            if !building, model?.chartOpen.firstBuildDone == false { model?.chartOpen.firstBuildDone = true }
             return
         }
 
         // The verdict is not RENDER, so a frame has already gone out. Retire
         // the startup loader.
-        if model?.charts.firstBuildDone == false { model?.charts.firstBuildDone = true }
+        if model?.chartOpen.firstBuildDone == false { model?.chartOpen.firstBuildDone = true }
 
         // A chart picture finishing raises the chart-link flag with no frame
         // to draw, so pushReadouts does not run for it.

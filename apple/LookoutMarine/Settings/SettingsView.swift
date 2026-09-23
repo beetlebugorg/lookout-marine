@@ -299,7 +299,7 @@ struct SettingsView: View {
             switch id {
             case "display": DisplaySections(m: m)
             case "depths": DepthsSections(m: m)
-            case "text": SymbolsSections(m: m, languages: model.charts.chartLanguages)
+            case "text": SymbolsSections(m: m, languages: model.chartOpen.chartLanguages)
             case "charts": ChartsSections(model: model)
             case "plugins": PluginsManageSections(p: p, model: model)
             case "advanced": AdvancedSections(m: m)

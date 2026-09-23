@@ -316,7 +316,7 @@ struct FirstRunFlow: View {
             let n = model.noaa
             flow.orderRegions = n.regions.filter { n.picked.contains($0.id) }
                 .map(\.name).joined(separator: ", ")
-            model.startNoaaDownload(again: n.allInstalled)
+            model.noaa.download(again: n.allInstalled)
         }
     }
 }

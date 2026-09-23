@@ -199,17 +199,17 @@ final class ChartUIView: UIView, UIGestureRecognizerDelegate {
         // under an empty library, which is what a mariner picking their first
         // chart should be looking at; returning here left the window grey
         // until something else asked for a chart.
-        let paths = model?.charts.openRequest?.paths ?? model?.charts.initialChartPaths() ?? []
+        let paths = model?.chartOpen.openRequest?.paths ?? model?.charts.initialChartPaths() ?? []
         didAutoOpen = true
         lastSizePt = bounds.size
-        model?.charts.openingCells = paths.count
-        model?.charts.isOpening = true // loader up before the (synchronous) open runs
-        model?.charts.preparingSymbols = (lookout_atlas_cache_ready() == 0) // first run?
+        model?.chartOpen.openingCells = paths.count
+        model?.chartOpen.isOpening = true // loader up before the (synchronous) open runs
+        model?.chartOpen.preparingSymbols = (lookout_atlas_cache_ready() == 0) // first run?
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            defer { self.model?.charts.isOpening = false; self.model?.charts.preparingSymbols = false }
+            defer { self.model?.chartOpen.isOpening = false; self.model?.chartOpen.preparingSymbols = false }
             guard self.controller?.handle == nil else { return }
-            self.controller?.lastOpenId = self.model?.charts.openRequest?.id ?? 0
+            self.controller?.lastOpenId = self.model?.chartOpen.openRequest?.id ?? 0
             _ = self.controller?.open(charts: paths, in: self)
             self.hostWindowAboveChart()
         }

@@ -49,7 +49,7 @@ struct ImportingStep: View {
         .padding(.bottom, 22)
         .onChange(of: model.charts.chartWork) { _, now in
             guard let now else { return }
-            // Keep the bake's own reports. ChartsModel rescans the set once
+            // Keep the bake's own progress. ChartLibrary rescans the set once
             // the bake finishes, and that scan reports through chartWork with
             // no total and no bands, which emptied the panel at the end.
             guard now.total > 0, !now.bands.isEmpty else { return }

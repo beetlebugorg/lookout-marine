@@ -134,8 +134,15 @@ final class NoaaModel {
     /// Which regions the mariner picked, by id.
     var picked: Set<String> = []
     private(set) var state = NoaaState()
-    /// Called after every read that changed `state`.
-    var onChange: (() -> Void)?
+    /// Called after every read that changed `state`, and after an order.
+    /// The flag is true when the watched download has just ended with charts
+    /// to open.
+    var onChange: ((Bool) -> Void)?
+    /// Shows an error that stops an order before it reaches the core.
+    var onError: ((String) -> Void)?
+    /// Shows how a watched download failed. The closure orders it again, and
+    /// is nil when ordering again cannot clear the cause.
+    var onFailed: ((String, (() -> Void)?) -> Void)?
     /// Each region's real coverage, read once the catalog is in. A region
     /// drawn as one rectangle claims water it does not cover.
     private(set) var coverage: [String: [GeoBox]] = [:]
@@ -146,6 +153,12 @@ final class NoaaModel {
 
     /// Callers waiting in loadCatalog for the catalog read to end.
     private var catalogWaiters: [CheckedContinuation<Void, Never>] = []
+    /// The core's NOAA service, once `useService` has run. It has no chart
+    /// handle under it, so a chart reopening leaves its download running.
+    private var service: NoaaService?
+    /// The download being followed to its end: its run number, and how to
+    /// order it again. A new order replaces it.
+    private var watch: (run: UInt32, order: () -> Void)?
 
     weak var engine: (any NoaaEngine)? {
         didSet {
@@ -156,6 +169,14 @@ final class NoaaModel {
 
     init() {
         regions = NoaaModel.readRegions()
+    }
+
+    /// Run on the core's NOAA service. It needs no chart, so setup reads the
+    /// catalog before the mariner has one.
+    func useService() {
+        let service = NoaaService { [weak self] in self?.pull() }
+        self.service = service
+        engine = service
     }
 
     /// The region table from the core. Static for the life of the process.
@@ -228,7 +249,7 @@ final class NoaaModel {
         }
         finishCheck()
         if reread { recount() }
-        onChange?()
+        onChange?(endWatch())
     }
 
     /// Read every region's coverage. The catalog holds it and does not change
@@ -295,20 +316,33 @@ final class NoaaModel {
         return s
     }
 
+    // MARK: - Downloads
+
     /// Download the picked regions into `destination`. The core adds them to
-    /// its record.
-    func download(to destination: String, again: Bool = false) {
-        guard !picked.isEmpty else { return }
-        engine?.noaaDownload(regionIDs: pickedIDs, destination: destination, again: again)
+    /// its record, and prepares what arrives into the managed set.
+    func download(to destination: String? = NoaaModel.downloadDirectory,
+                  again: Bool = false) {
+        guard let dest = resolved(destination), !picked.isEmpty else { return }
+        let before = state.run
+        engine?.noaaDownload(regionIDs: pickedIDs, destination: dest, again: again)
         pull()
+        watch(after: before) { [weak self] in self?.download(to: dest, again: again) }
     }
 
-    /// Make the download at `destination` hold the pick. Returns how many
-    /// directories the core took out of the library.
-    func apply(to destination: String) -> UInt32 {
-        let moved = engine?.noaaApply(regionIDs: pickedIDs, destination: destination,
+    /// Make the download at `destination` hold the pick: the core deletes the
+    /// water given back and fetches what is missing, and what arrives is
+    /// prepared as a download is. Returns how many directories the core took
+    /// out of the library, or nil when there is no destination.
+    func apply(to destination: String? = NoaaModel.downloadDirectory) -> UInt32? {
+        guard let dest = resolved(destination) else { return nil }
+        // An empty pick deletes the whole download. A stopped download's end
+        // must not add the folder back.
+        if picked.isEmpty { watch = nil }
+        let before = state.run
+        let moved = engine?.noaaApply(regionIDs: pickedIDs, destination: dest,
                                       again: false) ?? 0
         pull()
+        watch(after: before) { [weak self] in self?.download(to: dest) }
         return moved
     }
 
@@ -317,10 +351,62 @@ final class NoaaModel {
         pull()
     }
 
-    /// Download the reissues of the cells this app downloaded.
-    func update(to destination: String) {
-        engine?.noaaUpdate(destination: destination)
+    /// Download the reissues of the cells this app downloaded. The core
+    /// prepares them as it does a download.
+    func update(to destination: String? = NoaaModel.downloadDirectory) {
+        guard let dest = resolved(destination) else { return }
+        let before = state.run
+        engine?.noaaUpdate(destination: dest)
         pull()
+        watch(after: before) { [weak self] in self?.update(to: dest) }
+    }
+
+    /// The destination, or nil after showing that there is none.
+    private func resolved(_ destination: String?) -> String? {
+        if destination == nil { onError?("Couldn't find a place to download charts to.") }
+        return destination
+    }
+
+    /// Follow the download just ordered to its end, which comes once the core
+    /// has prepared what arrived. `before` is the run number read before
+    /// ordering: an order the core did not take leaves it as it was, and
+    /// there is no download to follow.
+    private func watch(after before: UInt32, order: @escaping () -> Void) {
+        guard state.run != before else { return }
+        watch = (state.run, order)
+        onChange?(endWatch())
+    }
+
+    /// End the watched download if it has ended. True when it ended with
+    /// charts to open.
+    private func endWatch() -> Bool {
+        guard let w = watch, state.run == w.run, state.ended else { return false }
+        watch = nil
+        switch state.outcome {
+        case .finished:
+            return true
+        case .cancelled:
+            // A stop is the mariner's own. What arrived before it is kept.
+            return state.done > 0
+        case .failed, .refused:
+            // A refusal a retry cannot clear raises no alert.
+            guard state.outcome == .failed || state.retry else { return false }
+            let message = state.error.isEmpty
+                ? "The download stopped before any chart arrived." : state.error
+            onFailed?(message, state.retry ? { [weak self] in self?.retry(w.order) } : nil)
+            return false
+        case .empty, .none, .running:
+            return false
+        }
+    }
+
+    /// Order a download again. With no catalog loaded, read it first.
+    private func retry(_ order: @escaping () -> Void) {
+        guard !state.haveCatalog else { return order() }
+        Task {
+            await loadCatalog()
+            order()
+        }
     }
 
     // MARK: - Checking for reissued charts

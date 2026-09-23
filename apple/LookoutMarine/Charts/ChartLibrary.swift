@@ -1,58 +1,17 @@
-//  ChartsModel.swift — the installed charts, and the one being drawn.
+//  ChartLibrary.swift: the installed charts.
 //
 //  Which paths open at launch, the sets the mariner added, the bake that turns
-//  raw cells into charts this app can draw, and the state of the open itself. A
-//  folder joins the list only after the core has looked through it and found
-//  charts, so a set on the list always opens.
+//  raw cells into charts this app can draw, and removal. A folder joins the
+//  list only after the core has looked through it and found charts, so a set
+//  on the list always opens. ChartOpen holds the open itself.
 
 import Foundation
 
-/// A request to (re)open one or more chart paths, carried to the chart view.
-struct OpenRequest: Equatable {
-    let id: Int
-    let paths: [String]
-}
-
 @MainActor
 @Observable
-final class ChartsModel {
-    // MARK: The chart that is open, or opening
-
-    var hasChart = false
-    /// True when the chart that is open holds no charts: the engine draws the
-    /// basemap and the library behind it is empty. An install with nothing in
-    /// it still opens, so `hasChart` alone no longer says a chart is drawn.
-    var chartIsEmpty = false
-    var chartPath: String?
-    /// The label languages the OPEN charts state, as ISO 639-2 codes, from
-    /// lookout_chart_languages. Empty when nothing is open, or when every
-    /// chart names its features in English. Settings offers these and nothing
-    /// else: a language the charts do not state draws the portrayed name, so a
-    /// menu of the rest would be a row of settings that do nothing.
-    var chartLanguages: [String] = []
-    var openRequest: OpenRequest?
-    var openError: String? {
-        didSet { if openError == nil { openRetry = nil } }
-    }
-    /// Offered as a Retry button beside openError. Cleared with it.
-    var openRetry: (() -> Void)?
-    private var openSeq = 0
-
-    /// True from the moment an open is scheduled until lookout_open returns —
-    /// covers the synchronous open (a 7k-cell library takes seconds).
-    var isOpening = false
-    /// True while the FIRST-run one-time symbol/font atlas bake runs (the app
-    /// cache is empty). Drives a distinct "Preparing chart symbols" message.
-    var preparingSymbols = false
-    /// False until the first scene after an open has actually rendered; with
-    /// isOpening it drives the big startup loader (later rebuilds only show
-    /// the small BuildingPill).
-    var firstBuildDone = false
-    /// The number of cells the open is mapping. The loader states it.
-    var openingCells = 0
-
+final class ChartLibrary {
     var showStartupLoader: Bool {
-        if isOpening || (hasChart && !firstBuildDone) { return true }
+        if chartOpen.isOpening || (chartOpen.hasChart && !chartOpen.firstBuildDone) { return true }
         // Charts are installed and none is drawing yet, because the scan is
         // still reading them or an open is on its way. The loader fills that
         // gap. An import has a panel of its own with the more specific report
@@ -61,7 +20,7 @@ final class ChartsModel {
         // A library that has been read and holds no drawable chart is a
         // finished wait. The loader used to stay up over one, and the
         // first-run page never appeared.
-        return !hasChart && !nothingToDraw && chartWork == nil
+        return !chartOpen.hasChart && !nothingToDraw && chartWork == nil
     }
 
     /// True once the app has established that it has no chart to draw and no
@@ -77,49 +36,11 @@ final class ChartsModel {
     /// asked only whether a set was installed, so the loader stayed up over
     /// such a library and the first-run page never appeared.
     var nothingToDraw: Bool {
-        (!hasChart || chartIsEmpty) && !isOpening && openRequest == nil
+        (!chartOpen.hasChart || chartOpen.chartIsEmpty)
+            && !chartOpen.isOpening && chartOpen.openRequest == nil
             && !scanning && bake == nil && noaaPrepare == nil
             && raster.paths.isEmpty
             && !sets.contains { $0.on && $0.hasSomethingToDraw }
-    }
-
-    /// The phase the startup loader shows. Each phase is a different wait: the
-    /// first-run atlas bake, the scan, the library open, and the first
-    /// tessellation.
-    enum LoadPhase: Equatable {
-        case bakingAtlas
-        case finding
-        case mapping(cells: Int)
-        case tessellating
-
-        var title: String {
-            switch self {
-            case .bakingAtlas:
-                return "Baking the symbol atlas"
-            case .finding:
-                return "Finding your charts"
-            case .mapping(let cells):
-                return cells > 1 ? "Mapping \(cells.formatted(.number)) cells" : "Mapping the chart"
-            case .tessellating:
-                return "Tessellating the first scene"
-            }
-        }
-
-        var note: String? {
-            switch self {
-            case .bakingAtlas: return "First launch only. The atlas is cached."
-            default: return nil
-            }
-        }
-    }
-
-    var loadingPhase: LoadPhase {
-        if preparingSymbols { return .bakingAtlas }
-        if isOpening { return .mapping(cells: openingCells) }
-        // No chart is open and none is opening, so this is the wait for the
-        // scan result.
-        if !hasChart { return .finding }
-        return .tessellating
     }
 
     // MARK: The installed sets
@@ -180,15 +101,16 @@ final class ChartsModel {
     /// question.
     var pendingRemoval: ChartSet?
 
-    weak var engine: (any ChartOpenEngine)?
-
     /// The pictures a set carries are installed as raster charts, so adding
     /// and removing a set writes there too. One direction only: the raster
     /// model knows nothing about sets.
     private let raster: RasterModel
+    /// The open these sets feed. A change to the list reopens the chart.
+    let chartOpen: ChartOpen
 
-    init(raster: RasterModel) {
+    init(raster: RasterModel, chartOpen: ChartOpen) {
         self.raster = raster
+        self.chartOpen = chartOpen
     }
 
     // MARK: - Opening charts
@@ -271,72 +193,6 @@ final class ChartsModel {
         return FileManager.default.fileExists(atPath: p) ? p : nil
     }
 
-    /// Request opening a chart path: one `.pmtiles` file, or a folder of cells.
-    /// The path becomes a set, so opening a chart and adding it to the library
-    /// are one act.
-    func openChart(_ path: String) {
-        addChartSet(path)
-    }
-
-    /// Request opening every `.pmtiles` under a directory (compose a library).
-    func openChartDirectory(_ dir: String) {
-        addChartSet(dir)
-    }
-
-    /// Open with no cells. A library of pictures alone opens this way too.
-    ///
-    /// The core draws a chart link, and the core exists only while something
-    /// is open, so picking a link with no charts installed needs a chart of no
-    /// cells under it.
-    func openEmpty() {
-        guard !hasChart, !isOpening else { return }
-        requestOpen([], evenWithNothingToDraw: true)
-    }
-
-    private func requestOpen(_ paths: [String], evenWithNothingToDraw: Bool = false) {
-        // Nothing left to draw at all. Switching off the last set, or removing
-        // it, has to take the chart off the display: leaving the old one up
-        // says the charts are still installed when they are not.
-        //
-        // A set of pictures with no survey in it still draws, so the test is
-        // whether anything is installed, rather than whether any CELL is.
-        guard evenWithNothingToDraw || !paths.isEmpty || !raster.paths.isEmpty else {
-            closeChart()
-            return
-        }
-        openSeq += 1
-        let id = openSeq
-        openRequest = OpenRequest(id: id, paths: paths)
-        // Show the loader BEFORE the (synchronous, possibly seconds-long) open
-        // runs: flag now, open on the next runloop turn so SwiftUI paints.
-        openingCells = paths.count
-        isOpening = true
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            // Drive the controller DIRECTLY rather than relying on the SwiftUI
-            // update cycle: once the chart view is live the hosting content
-            // view stops receiving updates, so a published request would sit
-            // unserviced. The update path remains only as the fallback for a
-            // request racing the first layout.
-            if let e = self.engine, e.reopen(charts: paths, requestID: id) {
-                self.openRequest = nil
-            }
-            self.isOpening = false
-        }
-    }
-
-    /// Close the chart and go back to the panel that offers to add some.
-    /// The files are untouched; only the display and the engine handle go.
-    func closeChart() {
-        engine?.close()
-        openRequest = nil
-        chartPath = nil
-        hasChart = false
-        chartIsEmpty = false
-        firstBuildDone = false
-        isOpening = false
-    }
-
     // MARK: - The installed sets
 
     /// Every chart the switched-on sets hold, ready to hand to the engine.
@@ -374,7 +230,7 @@ final class ChartsModel {
     /// A pick waiting on the core's scan keeps this running with a chart
     /// open too, so the pick does not depend on the frame loop's poll.
     private func watchLibraryUntilOpen() {
-        guard !watchingLibrary, !hasChart || chartIsEmpty || pendingPick != nil, scanning
+        guard !watchingLibrary, !chartOpen.hasChart || chartOpen.chartIsEmpty || pendingPick != nil, scanning
         else { return }
         watchingLibrary = true
         tickLibraryWatch()
@@ -389,7 +245,7 @@ final class ChartsModel {
         // A chart of NO cells keeps this running. The frame loop polls the
         // same flag once per frame, and an empty chart over a picture goes
         // idle, so the scan result stays unread until this timer reads it.
-        guard !hasChart || chartIsEmpty || pendingPick != nil, scanning else {
+        guard !chartOpen.hasChart || chartOpen.chartIsEmpty || pendingPick != nil, scanning else {
             watchingLibrary = false
             return
         }
@@ -434,9 +290,10 @@ final class ChartsModel {
         // cells, and finds none. Open what the scan found once it knows, or a
         // mariner carrying only imagery gets the first-run page every time
         // with their charts sitting on the list.
-        if !hasChart, !openPaths.isEmpty || !raster.paths.isEmpty {
-            requestOpen(openPaths)
-        } else if chartIsEmpty, !isOpening, !openPaths.isEmpty, openRequest?.paths != openPaths {
+        if !chartOpen.hasChart, !openPaths.isEmpty || !raster.paths.isEmpty {
+            chartOpen.requestOpen(openPaths)
+        } else if chartOpen.chartIsEmpty, !chartOpen.isOpening, !openPaths.isEmpty,
+                  chartOpen.openRequest?.paths != openPaths {
             // The chart that opened holds no cells. pullChartSets runs at
             // launch before the background scan finishes, so compose is empty,
             // and a picture in the library passes that empty open through
@@ -448,7 +305,7 @@ final class ChartsModel {
             // clears it only when the engine serves it, and at launch there is
             // no engine yet: the chart view reads the request when it is built
             // and leaves it set, so an empty open holds one for good.
-            requestOpen(openPaths)
+            chartOpen.requestOpen(openPaths)
         }
     }
 
@@ -584,10 +441,10 @@ final class ChartsModel {
             // into a live handle, so reopening remapped the whole library to
             // add one .mbtiles: the startup loader came up over a chart that
             // was already drawing and every cell was read again.
-            if hasChart, !isOpening, set.openablePaths.isEmpty {
+            if chartOpen.hasChart, !chartOpen.isOpening, set.openablePaths.isEmpty {
                 raster.attach(raster.paths.filter { !heldBefore.contains($0) })
             } else {
-                requestOpen(paths.sorted())
+                chartOpen.requestOpen(paths.sorted())
             }
         }
         // The rescan runs on a worker. With no chart open there is no frame
@@ -646,11 +503,6 @@ final class ChartsModel {
         if scanning && scanRequested { return BakeProgress(kind: .finding, name: scanningName) }
         return nil
     }
-
-    /// The work to show in place of the first-run picker: a scan or a bake,
-    /// while there is still no chart to draw. Nil once a chart is up, because
-    /// from then on the pill carries it and the chart is the thing to look at.
-    var firstRunWork: BakeProgress? { chartWork }
 
     /// Prepare what the core lists for the set at `sourceDir` into the app's
     /// own chart directory, then add the result as the set. The mariner keeps
@@ -763,7 +615,7 @@ final class ChartsModel {
         sets[i].on = on
         ChartSetStore.setOff(path, !on)
         syncRasterFromSets()
-        requestOpen(openPaths)
+        chartOpen.requestOpen(openPaths)
     }
 
     /// About how long re-importing a set would take, from what it holds. The
@@ -828,7 +680,7 @@ final class ChartsModel {
                     kind: .removing, done: p.done, total: p.total, name: name, elapsed: p.elapsed)
             }
         }
-        requestOpen(openPaths)
+        chartOpen.requestOpen(openPaths)
     }
 
     /// Follow the core's delete of the charts a NOAA pick gave back. The
@@ -883,7 +735,9 @@ final class ChartsModel {
         if let row = sets.first(where: \.managed), row.refused > 0 { lastBakeRefused = row.refused }
         // pullChartSets opens a library that had no chart. One that was
         // drawing is opened again with the new charts in it.
-        if hasChart, !chartIsEmpty, !isOpening { requestOpen(openPaths) }
+        if chartOpen.hasChart, !chartOpen.chartIsEmpty, !chartOpen.isOpening {
+            chartOpen.requestOpen(openPaths)
+        }
         runQueuedPick()
     }
 
@@ -893,13 +747,13 @@ final class ChartsModel {
     /// back and moved none found no download to delete from.
     func noaaApplied(moved: UInt32, whole: Bool) {
         guard moved > 0 else {
-            openError = whole ? "Lookout found no downloaded charts to remove."
+            chartOpen.openError = whole ? "Lookout found no downloaded charts to remove."
                 : "Lookout found no downloaded charts for that water."
             return
         }
         pullChartSets()
         syncRasterFromSets()
-        requestOpen(openPaths)
+        chartOpen.requestOpen(openPaths)
     }
 
 }

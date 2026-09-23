@@ -218,7 +218,7 @@ struct NoaaPickerSheet: View {
                 // forcing the current editions still needs a way to fetch it.
                 if noaa.allInstalled, removing.isEmpty {
                     Button("Download Again") {
-                        model.startNoaaDownload(again: true)
+                        model.noaa.download(again: true)
                         shut()
                     }
                     .accessibilityIdentifier("noaa-download-again")

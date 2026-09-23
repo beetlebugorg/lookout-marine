@@ -124,7 +124,7 @@ protocol ReadoutEngine: AnyObject {
     func ownShip() -> (state: FixState, lat: Double, lon: Double)?
 }
 
-/// What ChartsModel asks the chart for: open a library, and put it away.
+/// The calls ChartOpen makes on the chart: open a library, and put it away.
 @MainActor
 protocol ChartOpenEngine: AnyObject {
     @discardableResult func reopen(charts: [String], requestID: Int) -> Bool

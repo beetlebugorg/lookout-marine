@@ -38,7 +38,7 @@ struct ChartView: NSViewRepresentable {
         // usable size and the engine is handed the fallback 1280x800. The
         // chart then draws to an aspect the window never has. maybeAutoOpen
         // runs at the first real size, so the request waits for it.
-        if let req = model.charts.openRequest, req.id != controller.lastOpenId,
+        if let req = model.chartOpen.openRequest, req.id != controller.lastOpenId,
            ChartController.hasRealSize(v) {
             controller.lastOpenId = req.id
             _ = controller.open(charts: req.paths, in: v)
@@ -256,7 +256,7 @@ final class ChartNSView: NSView {
         // disk and had them all along. The chart then opened with no cells, at
         // the fallback size this view reports before layout, and the picture
         // drew alone and stretched to an aspect the window never had.
-        let requested = model?.charts.openRequest?.paths ?? []
+        let requested = model?.chartOpen.openRequest?.paths ?? []
         let paths = requested.isEmpty ? (model?.charts.initialChartPaths() ?? []) : requested
         didAutoOpen = true
         // No frame restoration for this window: the chart reopens from our own
@@ -264,14 +264,14 @@ final class ChartNSView: NSView {
         // resize the deferral above is dodging.
         window?.isRestorable = false
         model?.overlay.pickCentreHint = CGPoint(x: bounds.midX, y: bounds.midY)
-        model?.charts.openingCells = paths.count
-        model?.charts.isOpening = true // loader up before the (synchronous) open runs
-        model?.charts.preparingSymbols = (lookout_atlas_cache_ready() == 0) // first run?
+        model?.chartOpen.openingCells = paths.count
+        model?.chartOpen.isOpening = true // loader up before the (synchronous) open runs
+        model?.chartOpen.preparingSymbols = (lookout_atlas_cache_ready() == 0) // first run?
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            defer { self.model?.charts.isOpening = false; self.model?.charts.preparingSymbols = false }
+            defer { self.model?.chartOpen.isOpening = false; self.model?.chartOpen.preparingSymbols = false }
             guard self.controller?.handle == nil else { return }
-            self.controller?.lastOpenId = self.model?.charts.openRequest?.id ?? 0
+            self.controller?.lastOpenId = self.model?.chartOpen.openRequest?.id ?? 0
             _ = self.controller?.open(charts: paths, in: self)
             self.raiseOverlay()
             self.syncMetalLayerScale()
