@@ -156,29 +156,6 @@ lk_chart_sets_paths (LkChartSets *self)
 }
 
 static char *lk_chart_set_detail (const lookout_chart_set *row);
-static const char *lk_chart_set_agency (const char *producer);
-
-/* The cells one set holds, by usage band. The scan has already read every
- * file, so this counts what it found rather than walking the folder again. */
-static void
-lk_chart_set_count_bands (LkChartSets *self, const char *path, guint bands[7])
-{
-  size_t n = 0;
-  const lookout_chart_file *const *files = lookout_chart_set_files (self->sets, path, &n);
-
-  for (size_t i = 0; i < n; i++)
-    {
-      const lookout_chart_file *file = files[i];
-      int band;
-
-      /* Surveys only. A picture covers water rather than sitting on a scale,
-       * and an update bakes into its base cell. */
-      if (file->kind != LOOKOUT_FILE_BAKED && file->kind != LOOKOUT_FILE_SOURCE)
-        continue;
-      band = file->band >= 1 && file->band <= 6 ? file->band : 0;
-      bands[band]++;
-    }
-}
 
 GPtrArray *
 lk_chart_sets_rows (LkChartSets *self)
@@ -190,7 +167,6 @@ lk_chart_sets_rows (LkChartSets *self)
   for (size_t i = 0; i < count; i++)
     {
       const lookout_chart_set *set = all[i];
-      const char *agency = lk_chart_set_agency (set->producer);
       LkChartSetRow *row;
       size_t n_files = 0;
 
@@ -208,10 +184,7 @@ lk_chart_sets_rows (LkChartSets *self)
       row = g_new0 (LkChartSetRow, 1);
 
       row->path = g_strdup (set->path);
-      /* The core names a set by its folder. An office the app knows is the
-       * better name, and a producer code the app does not know keeps the
-       * folder: a wrong agency on a chart set is worse than a dull one. */
-      row->title = agency != NULL ? g_strdup (agency) : g_strdup (set->title);
+      row->title = g_strdup (set->title);
       row->name = g_path_get_basename (set->path);
       row->detail = lk_chart_set_detail (set);
       row->charts = (guint) set->charts;
@@ -237,7 +210,8 @@ lk_chart_sets_rows (LkChartSets *self)
       row->managed = set->managed != 0;
       row->held_back = (guint) set->held_back;
       row->on = set->on != 0;
-      lk_chart_set_count_bands (self, set->path, row->bands);
+      for (guint b = 0; b < G_N_ELEMENTS (set->band_count); b++)
+        row->bands[b + 1] = (guint) set->band_count[b];
       g_ptr_array_add (rows, row);
     }
   return rows;
@@ -448,39 +422,6 @@ lk_chart_set_row_free (LkChartSetRow *row)
   g_free (row->name);
   g_free (row->detail);
   g_free (row);
-}
-
-/* The hydrographic office a producer code belongs to. The code is the
- * country's, and for these that is the office a mariner would name. An office
- * not listed keeps the folder name rather than being given a title invented
- * here: a wrong agency on a chart set is worse than a dull one. The same
- * table every shell carries (ChartSets.swift). */
-static const char *
-lk_chart_set_agency (const char *producer)
-{
-  static const struct { const char *code, *name; } offices[] = {
-    { "US", "NOAA" },
-    { "GB", "UKHO" },
-    { "CA", "CHS" },
-    { "AU", "AHO" },
-    { "NZ", "LINZ" },
-    { "NL", "Netherlands Hydrographic Office" },
-    { "DE", "BSH" },
-    { "FR", "Shom" },
-    { "NO", "Norwegian Hydrographic Service" },
-    { "DK", "Danish Geodata Agency" },
-    { "SE", "Swedish Maritime Administration" },
-    { "FI", "Finnish Transport Agency" },
-    { "IE", "INFOMAR" },
-    { "JP", "Japan Hydrographic Association" },
-    { "BR", "DHN" },
-    { "ZA", "SANHO" },
-  };
-
-  for (gsize i = 0; producer != NULL && i < G_N_ELEMENTS (offices); i++)
-    if (g_ascii_strcasecmp (producer, offices[i].code) == 0)
-      return offices[i].name;
-  return NULL;
 }
 
 /* "512 charts · 3 pictures · Coastal to Harbor · 1.2 GB": what a settings row

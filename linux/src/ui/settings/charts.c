@@ -618,6 +618,19 @@ lk_set_row_column (LkSettings *settings, const LkChartSetRow *set, GtkWidget *co
         gtk_box_append (GTK_BOX (column), caption);
       }
 
+    /* Files a finished prepare could not read. */
+    if (set->refused > 0)
+      {
+        g_autofree char *refused =
+            g_strdup_printf (set->refused == 1
+                                 ? "1 file Lookout could not read"
+                                 : "%u files Lookout could not read",
+                             set->refused);
+        GtkWidget *caption = lk_caption (refused);
+
+        gtk_box_append (GTK_BOX (column), caption);
+      }
+
     /* What this set holds that another set draws in its place. Two sets can
      * hold the same cell, and the chart draws one copy, so the count on the
      * row is more than the chart shows. */

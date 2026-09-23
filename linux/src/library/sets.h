@@ -51,9 +51,9 @@ typedef struct {
    * place, because both hold the same cell and the other copy is newer or is
    * the downloader's. They stay installed. 0 for a set switched off. */
   guint    held_back;
-  /* Cells per usage band, 1 to 6. Index 0 holds the cells whose name states no
-   * band, which is every S-101 dataset: those have no place on a scale ramp
-   * and the ramp leaves them out. */
+  /* Cells per usage band, 1 to 6, from the core's band_count. Index 0 is
+   * always 0. A cell whose name states no band has no place on a scale ramp,
+   * and no S-101 dataset name states one. */
   guint    bands[7];
 } LkChartSetRow;
 
