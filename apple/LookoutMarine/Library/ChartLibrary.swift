@@ -275,7 +275,13 @@ final class ChartLibrary {
                 on: row.on,
                 managed: row.managed,
                 toPrepareCount: row.toPrepare,
-                refused: row.refused)
+                refused: row.refused,
+                coreTitle: row.title,
+                charts: row.charts,
+                pictures: row.pictures,
+                unprepared: row.unprepared,
+                bandCount: row.bandCount,
+                heldBack: row.heldBack)
         }
         // The downloader's set draws first. It is the set the mariner adds
         // and removes in another window, so the row leading the list is where

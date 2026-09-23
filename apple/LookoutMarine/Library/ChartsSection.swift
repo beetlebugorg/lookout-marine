@@ -184,11 +184,11 @@ struct ChartsSections: View {
     private var setsSummary: String? {
         let sets = model.charts.sets
         guard !sets.isEmpty else { return nil }
-        let cells = sets.reduce(0) { $0 + $1.cells.count + $1.rasters.count }
+        let charts = sets.reduce(0) { $0 + $1.charts + $1.unprepared + $1.pictures }
         let bytes = sets.reduce(Int64(0)) { sum, s in
             sum + s.cells.reduce(0) { $0 + $1.bytes } + s.rasters.reduce(0) { $0 + $1.bytes }
         }
-        return "\(cells) charts · \(TextFormat.bytes(UInt64(max(bytes, 0))))"
+        return "\(charts) charts · \(TextFormat.bytes(UInt64(max(bytes, 0))))"
     }
 
     /// What the last update check found, and when it ran.
@@ -468,6 +468,16 @@ private struct ChartSetRow: View {
             if set.refused > 0 {
                 Label("\(set.refused) file\(set.refused == 1 ? "" : "s") Lookout could not read",
                       systemImage: "exclamationmark.triangle")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .padding(.leading, 30)
+            }
+            // What this set holds that another set draws in its place. Two
+            // sets can hold the same cell, and the chart draws one copy, so
+            // the count on the row is more than the chart shows.
+            if set.heldBack > 0 {
+                Label(set.heldBack == 1 ? "1 chart also in another set"
+                                        : "\(set.heldBack) charts also in another set",
+                      systemImage: "square.on.square")
                     .font(.caption).foregroundStyle(.secondary)
                     .padding(.leading, 30)
             }

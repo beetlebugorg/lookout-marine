@@ -127,6 +127,17 @@ struct ChartSet: Identifiable, Hashable {
     /// Files a finished prepare of this set did not prepare, as the core
     /// counts them.
     var refused: Int = 0
+    /// The core's name for the set: the agency when the charts agree on one,
+    /// else the folder name. Nil for a set read without the core.
+    var coreTitle: String? = nil
+    /// The core's counts: charts ready to draw, pictures, files still to
+    /// prepare, and the vector charts by usage band with band 1 first.
+    var charts: Int = 0
+    var pictures: Int = 0
+    var unprepared: Int = 0
+    var bandCount: [Int] = []
+    /// The charts this set holds that another switched-on set draws instead.
+    var heldBack: Int = 0
 
     var id: String { path }
     /// What the folder or archive is called. The identity, and the fallback
@@ -138,35 +149,8 @@ struct ChartSet: Identifiable, Hashable {
     /// download happened to be called and say nothing about what is in it.
     /// The folder name stays in the line underneath, so two sets from the same
     /// office are still told apart.
-    var title: String { ChartSet.agency(producer) ?? name }
+    var title: String { coreTitle ?? name }
 
-    /// The hydrographic office a producer code belongs to.
-    ///
-    /// The code is the country's, and for these that is the office a mariner
-    /// would name. An office not listed keeps the folder name rather than
-    /// being given a title invented here: a wrong agency on a chart set is
-    /// worse than a dull one.
-    static func agency(_ code: String?) -> String? {
-        switch code?.uppercased() {
-        case "US": return "NOAA"
-        case "GB": return "UKHO"
-        case "CA": return "CHS"
-        case "AU": return "AHO"
-        case "NZ": return "LINZ"
-        case "NL": return "Netherlands Hydrographic Office"
-        case "DE": return "BSH"
-        case "FR": return "Shom"
-        case "NO": return "Norwegian Hydrographic Service"
-        case "DK": return "Danish Geodata Agency"
-        case "SE": return "Swedish Maritime Administration"
-        case "FI": return "Finnish Transport Agency"
-        case "IE": return "INFOMAR"
-        case "JP": return "Japan Hydrographic Association"
-        case "BR": return "DHN"
-        case "ZA": return "SANHO"
-        default: return nil
-        }
-    }
     /// True when Lookout prepared part of this set. Those files can be made
     /// again, so removing the set deletes them. The mariner's own folder is
     /// never deleted.
@@ -217,13 +201,12 @@ struct ChartSet: Identifiable, Hashable {
         return parts.joined(separator: " · ")
     }
 
-    /// How many cells sit in each band, coarse to fine. The row draws this as
-    /// a ladder, so a mariner sees at a glance whether a set carries the
-    /// harbor detail or stops at the coast.
+    /// How many cells sit in each band, coarse to fine, as the core counts
+    /// them. The row draws this as a ladder, so a mariner sees at a glance
+    /// whether a set has the harbor detail or stops at the coast.
     var bandCounts: [(band: Int, name: String, count: Int)] {
-        (1...6).compactMap { b in
-            let n = cells.filter { $0.band == b }.count
-            return n == 0 ? nil : (b, TextFormat.usageBand(b), n)
+        bandCount.enumerated().compactMap { i, n in
+            n == 0 ? nil : (i + 1, TextFormat.usageBand(i + 1), n)
         }
     }
 }
@@ -514,6 +497,11 @@ struct CoreChartSet: Identifiable, Hashable {
     let refused: Int
     /// `toPrepare` by usage band: bandTodo[0] is band 1.
     let bandTodo: [Int]
+    /// The vector charts by usage band, prepared or not: bandCount[0] is
+    /// band 1.
+    let bandCount: [Int]
+    /// The charts this set holds that another switched-on set draws instead.
+    let heldBack: Int
 
     var id: String { path }
 
@@ -533,5 +521,7 @@ struct CoreChartSet: Identifiable, Hashable {
         toPrepare = s.to_prepare
         refused = s.refused
         bandTodo = withUnsafeBytes(of: s.band_todo) { Array($0.bindMemory(to: Int.self)) }
+        bandCount = withUnsafeBytes(of: s.band_count) { Array($0.bindMemory(to: Int.self)) }
+        heldBack = s.held_back
     }
 }

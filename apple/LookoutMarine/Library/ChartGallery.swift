@@ -74,7 +74,7 @@ struct ChartGallery: View {
 
     /// What Lookout's own chart is built from.
     private var lookoutDetail: String {
-        let cells = model.charts.sets.filter(\.on).reduce(0) { $0 + $1.cells.count }
+        let cells = model.charts.sets.filter(\.on).reduce(0) { $0 + $1.charts }
         if cells == 0 { return "From your chart sets" }
         return "From your chart sets · \(cells) cells"
     }

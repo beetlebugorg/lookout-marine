@@ -50,13 +50,11 @@ final class ChartScanTests: XCTestCase {
         XCTAssertFalse(set.isDerived)
     }
 
-    /// The producer code comes from the charts, not the folder name, and names
-    /// the office in the row.
-    func testTheProducerNamesTheOffice() throws {
+    /// The producer code comes from the cell names in the folder.
+    func testTheProducerComesFromTheCharts() throws {
         let dir = try bakedChartDirectory()
         let set = try XCTUnwrap(ChartScan.scan(dir))
         XCTAssertEqual(set.producer, "US")
-        XCTAssertEqual(set.title, "NOAA")
         XCTAssertEqual(set.name, "charts")
     }
 
@@ -64,9 +62,6 @@ final class ChartScanTests: XCTestCase {
         let dir = try bakedChartDirectory()
         let set = try XCTUnwrap(ChartScan.scan(dir))
         XCTAssertTrue(set.summary.hasPrefix("1 chart · Harbor · "), set.summary)
-        XCTAssertEqual(set.bandCounts.map(\.band), [5])
-        XCTAssertEqual(set.bandCounts.map(\.name), ["Harbor"])
-        XCTAssertEqual(set.bandCounts.map(\.count), [1])
     }
 
     func testAFolderWithNoChartsIsNotASet() throws {
@@ -113,21 +108,23 @@ final class ChartSetTests: XCTestCase {
                     band: band, bytes: bytes, archived: archived)
     }
 
-    /// An office not listed keeps the folder name. A wrong agency on a chart
-    /// set is worse than a dull one.
-    func testTheOfficeForEachProducerCode() {
-        XCTAssertEqual(ChartSet.agency("US"), "NOAA")
-        XCTAssertEqual(ChartSet.agency("us"), "NOAA")
-        XCTAssertEqual(ChartSet.agency("GB"), "UKHO")
-        XCTAssertEqual(ChartSet.agency("NZ"), "LINZ")
-        XCTAssertNil(ChartSet.agency("XX"))
-        XCTAssertNil(ChartSet.agency(nil))
+    /// The core names the set. A set read without the core keeps its folder
+    /// name.
+    func testTheTitleIsTheCoresElseTheFolderName() {
+        var s = set(producer: "US")
+        XCTAssertEqual(s.title, "ENC_ROOT")
+        s.coreTitle = "NOAA"
+        XCTAssertEqual(s.title, "NOAA")
     }
 
-    func testAnUnlistedProducerKeepsTheFolderName() {
-        XCTAssertEqual(set(producer: "XX").title, "ENC_ROOT")
-        XCTAssertEqual(set(producer: nil).title, "ENC_ROOT")
-        XCTAssertEqual(set(producer: "US").title, "NOAA")
+    /// The ramp reads the core's counts, coarse to fine, and skips an empty
+    /// band.
+    func testTheBandCountsAreTheCores() {
+        var s = set()
+        s.bandCount = [0, 2, 0, 0, 7, 0]
+        XCTAssertEqual(s.bandCounts.map(\.band), [2, 5])
+        XCTAssertEqual(s.bandCounts.map(\.name), ["General", "Harbor"])
+        XCTAssertEqual(s.bandCounts.map(\.count), [2, 7])
     }
 
     func testTheSummaryCountsBothKindsAndTheBandRange() {
@@ -139,14 +136,6 @@ final class ChartSetTests: XCTestCase {
 
     func testTheSummaryOfOneChart() {
         XCTAssertTrue(set(cells: [cell("US5BB")]).summary.hasPrefix("1 chart · Harbor · "))
-    }
-
-    /// The ladder says whether a set reaches the harbour a passage ends in.
-    func testTheBandLadderIsCoarseToFine() {
-        let s = set(cells: [cell("a", band: 5), cell("b", band: 2), cell("c", band: 5)])
-        XCTAssertEqual(s.bandCounts.map(\.band), [2, 5])
-        XCTAssertEqual(s.bandCounts.map(\.count), [1, 2])
-        XCTAssertEqual(s.bandCounts.map(\.name), ["General", "Harbor"])
     }
 
     func testEveryBandName() {

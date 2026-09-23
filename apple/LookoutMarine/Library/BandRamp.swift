@@ -7,7 +7,7 @@
 import SwiftUI
 
 struct BandRamp: View {
-    /// Coarse to fine, as ChartSet.bandCounts reports it.
+    /// Coarse to fine, as ChartSet.bandCounts reports it from the core.
     let counts: [(band: Int, name: String, count: Int)]
 
     /// Finest first, matching the ramp from deep color to pale.
