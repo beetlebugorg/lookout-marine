@@ -7,6 +7,7 @@ const std = @import("std");
 const capi = @import("../capi.zig");
 const bakejob = @import("../bakejob.zig");
 const rules = @import("../shell/bake.zig");
+const trash = @import("../trash.zig");
 
 const gpa = capi.gpa;
 
@@ -174,4 +175,10 @@ export fn lookout_bake_trash_prefix() [*:0]const u8 {
 export fn lookout_bake_is_trash(name: ?[*:0]const u8) c_int {
     const n = name orelse return 0;
     return @intFromBool(rules.isTrash(std.mem.span(n)));
+}
+
+/// Delete what removals left under `root`. See lookout-library.h.
+export fn lookout_bake_sweep(root: ?[*:0]const u8) usize {
+    const r = root orelse return 0;
+    return trash.sweep(gpa, std.mem.span(r));
 }

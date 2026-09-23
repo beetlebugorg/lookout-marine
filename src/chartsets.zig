@@ -304,6 +304,13 @@ pub const Sets = struct {
         return was;
     }
 
+    /// Raise the flag takeChanged reads, for a change made outside a scan.
+    pub fn noteChanged(self: *Sets) void {
+        self.mu.lock();
+        defer self.mu.unlock();
+        self.dirty = true;
+    }
+
     /// Free everything a read handed out, and what landing scans replaced.
     /// Called with `mu` held, by each call that changes the list.
     fn resetReads(self: *Sets) void {
@@ -663,6 +670,9 @@ pub const Sets = struct {
         /// with no edition cannot be compared with the catalog: 0 is lower than
         /// every edition the catalog lists.
         editions,
+        /// The managed sets' charts that draw now. A cell that still has to be
+        /// prepared is left out. Edition and update are the chart's.
+        charts,
     };
 
     /// The survey cells the sets hold, one per dataset name, upper case and
@@ -682,29 +692,15 @@ pub const Sets = struct {
             self.mu.lock();
             defer self.mu.unlock();
             for (self.rows.items) |r| {
-                if (of == .editions and !r.managed) continue;
+                if (of != .names and !r.managed) continue;
+                if (of == .charts) {
+                    for (r.openable) |o| try putHeld(alloc, &by_name, o.name, o.edition, o.update);
+                    continue;
+                }
                 for (r.files) |f| {
                     if (f.kind != .baked and f.kind != .source) continue;
                     if (of == .editions and f.edition == 0) continue;
-                    const stem = library.stemOf(std.mem.span(f.name));
-                    var buf: [64]u8 = undefined;
-                    if (stem.len == 0 or stem.len > buf.len) continue;
-                    const upper = std.ascii.upperString(&buf, stem);
-                    const gop = try by_name.getOrPut(alloc, upper);
-                    if (gop.found_existing) {
-                        const had = gop.value_ptr;
-                        if (f.edition > had.edition or (f.edition == had.edition and f.update > had.update)) {
-                            had.edition = f.edition;
-                            had.update = f.update;
-                        }
-                        continue;
-                    }
-                    const name = alloc.dupe(u8, upper) catch |e| {
-                        by_name.removeByPtr(gop.key_ptr);
-                        return e;
-                    };
-                    gop.key_ptr.* = name;
-                    gop.value_ptr.* = .{ .name = name, .edition = f.edition, .update = f.update };
+                    try putHeld(alloc, &by_name, library.stemOf(std.mem.span(f.name)), f.edition, f.update);
                 }
             }
         }
@@ -718,6 +714,29 @@ pub const Sets = struct {
             }
         }.lt);
         return out;
+    }
+
+    /// Add one cell to a heldCells map by its upper case name, keeping the
+    /// higher edition and update.
+    fn putHeld(alloc: std.mem.Allocator, by_name: *std.StringHashMapUnmanaged(Held), stem: []const u8, edition: u32, update: u32) !void {
+        var buf: [64]u8 = undefined;
+        if (stem.len == 0 or stem.len > buf.len) return;
+        const upper = std.ascii.upperString(&buf, stem);
+        const gop = try by_name.getOrPut(alloc, upper);
+        if (gop.found_existing) {
+            const had = gop.value_ptr;
+            if (edition > had.edition or (edition == had.edition and update > had.update)) {
+                had.edition = edition;
+                had.update = update;
+            }
+            return;
+        }
+        const name = alloc.dupe(u8, upper) catch |e| {
+            by_name.removeByPtr(gop.key_ptr);
+            return e;
+        };
+        gop.key_ptr.* = name;
+        gop.value_ptr.* = .{ .name = name, .edition = edition, .update = update };
     }
 
     pub fn freeHeld(alloc: std.mem.Allocator, cells: []Held) void {

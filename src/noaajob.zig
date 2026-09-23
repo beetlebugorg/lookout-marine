@@ -23,6 +23,8 @@ const httpgather = @import("httpgather.zig");
 const cachedir = @import("cachedir.zig");
 const chartsets = @import("chartsets.zig");
 const settings = @import("settings.zig");
+const bake = @import("shell/bake.zig");
+const trash = @import("trash.zig");
 
 /// Set on every request id this service issues.
 pub const id_mark: u64 = @as(u64, 1) << 63;
@@ -169,6 +171,19 @@ const Unpacker = struct {
     skip: [][]u8 = &.{},
 };
 
+/// One bin of removed charts and the thread deleting it.
+const Remover = struct {
+    thread: std.Thread = undefined,
+    /// Owned.
+    bin: []u8,
+    total: std.atomic.Value(u32) = .init(0),
+    done: std.atomic.Value(u32) = .init(0),
+    /// Set at close. The thread stops after the directory it is on, and the
+    /// launch sweep deletes the rest.
+    stop: std.atomic.Value(bool) = .init(false),
+    exited: std.atomic.Value(bool) = .init(false),
+};
+
 /// The snapshot a shell renders. Plain data, copied out under the api lock.
 pub const State = extern struct {
     phase: u8 = 0,
@@ -195,6 +210,11 @@ pub const State = extern struct {
     /// 1 when ordering again can clear the cause of a failed or refused
     /// download.
     retry: u8 = 0,
+    /// 1 while charts an apply took out of the library are being deleted.
+    removing: u8 = 0,
+    /// The directories being deleted, and how many are gone.
+    remove_done: u32 = 0,
+    remove_total: u32 = 0,
 };
 
 /// The catalog, the plan, and the transfer.
@@ -239,6 +259,16 @@ pub const Service = struct {
     bytes_done: u64 = 0,
     bytes_total: u64 = 0,
     dest: []u8 = &.{},
+    /// The districts the download is fetching, so an apply can stop one whose
+    /// water was given back. `run_update` marks an update, which fetches by
+    /// cell.
+    run_districts: [noaa.regions.len]u8 = @splat(0),
+    run_district_n: usize = 0,
+    run_update: bool = false,
+
+    /// The threads deleting what applies took out of the library. Joined by
+    /// adopt once each ends.
+    removers: std.ArrayList(*Remover) = .empty,
 
     /// The staging directory and the cell behind each outstanding request, as
     /// the fetch threads read them.
@@ -319,6 +349,7 @@ pub const Service = struct {
         // After cancelAll, which clears it.
         self.gather.deinit();
         self.stopUnpacker();
+        self.stopRemovers();
         self.reap.deinit(self.alloc);
         self.freeStr(&self.stage_dest);
         self.stage.deinit(self.alloc);
@@ -746,6 +777,9 @@ pub const Service = struct {
         self.beginRun();
         self.freePlan();
         self.again = again;
+        self.run_update = false;
+        self.run_district_n = @min(districts.len, self.run_districts.len);
+        @memcpy(self.run_districts[0..self.run_district_n], districts[0..self.run_district_n]);
         self.next_job = 0;
         self.done = 0;
         self.failed = 0;
@@ -793,6 +827,8 @@ pub const Service = struct {
         self.cancelAll();
         self.beginRun();
         self.freePlan();
+        self.run_update = true;
+        self.run_district_n = 0;
         self.next_job = 0;
         self.done = 0;
         self.failed = 0;
@@ -1141,6 +1177,7 @@ pub const Service = struct {
             // No answer arrived. The api side may still have changed the
             // state since the last frame, and bytes may have arrived.
             self.idleUnpacker();
+            self.idleRemovers();
             if (self.changed or moved) self.publish();
             return;
         }
@@ -1167,6 +1204,7 @@ pub const Service = struct {
         }
         if (self.phase == .downloading) self.pump();
         self.idleUnpacker();
+        self.idleRemovers();
         self.publish();
     }
 
@@ -1319,6 +1357,111 @@ pub const Service = struct {
         for (cells.items) |c| try dir.deleteTree(io, c);
     }
 
+    // ---- removing ---------------------------------------------------------
+
+    /// True when the download running fetches a district outside `keep`, or
+    /// is an update.
+    pub fn runReaches(self: *const Service, keep: []const u8) bool {
+        if (self.phase != .downloading) return false;
+        if (self.run_update) return true;
+        for (self.run_districts[0..self.run_district_n]) |d| {
+            if (std.mem.indexOfScalar(u8, keep, d) == null) return true;
+        }
+        return false;
+    }
+
+    /// Stop the download and its unpack thread. The thread ends after the
+    /// transfer it is on, which it unpacks holding `unpack_work`.
+    pub fn stopRun(self: *Service) void {
+        self.cancelAll();
+        self.retireUnpacker();
+    }
+
+    /// Delete `bin` on a thread of its own, reporting through the snapshot.
+    /// Takes ownership of `bin`. Deletes it here when no thread starts.
+    pub fn startRemover(self: *Service, bin: []u8, total: u32) void {
+        const r = self.alloc.create(Remover) catch {
+            deleteNow(bin);
+            self.alloc.free(bin);
+            return;
+        };
+        r.* = .{ .bin = bin };
+        r.total.store(total, .release);
+        self.removers.append(self.alloc, r) catch {
+            deleteNow(bin);
+            self.freeRemover(r);
+            return;
+        };
+        r.thread = std.Thread.spawn(.{}, removerMain, .{ self, r }) catch {
+            _ = self.removers.pop();
+            deleteNow(bin);
+            self.freeRemover(r);
+            return;
+        };
+        self.changed = true;
+    }
+
+    fn deleteNow(path: []const u8) void {
+        std.Io.Dir.cwd().deleteTree(std.Io.Threaded.global_single_threaded.io(), path) catch {};
+    }
+
+    /// Delete a bin one entry at a time, counting each. Each entry is a
+    /// chart's directory, or a whole set's.
+    fn removerMain(self: *Service, r: *Remover) void {
+        defer {
+            r.exited.store(true, .release);
+            self.progress.store(true, .release);
+            if (self.wake) |w| w(self.user);
+        }
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const names = trash.childDirs(self.alloc, r.bin) catch &.{};
+        defer {
+            for (names) |n| self.alloc.free(n);
+            self.alloc.free(names);
+        }
+        if (names.len != 0) r.total.store(@intCast(names.len), .release);
+        var d = std.Io.Dir.cwd().openDir(io, r.bin, .{}) catch return;
+        defer d.close(io);
+        for (names) |n| {
+            if (r.stop.load(.acquire)) return;
+            d.deleteTree(io, n) catch {};
+            _ = r.done.fetchAdd(1, .acq_rel);
+            self.noteProgress(1);
+        }
+        deleteNow(r.bin);
+    }
+
+    fn freeRemover(self: *Service, r: *Remover) void {
+        self.alloc.free(r.bin);
+        self.alloc.destroy(r);
+    }
+
+    /// Join the removers that have ended.
+    fn idleRemovers(self: *Service) void {
+        var i: usize = 0;
+        while (i < self.removers.items.len) {
+            const r = self.removers.items[i];
+            if (!r.exited.load(.acquire)) {
+                i += 1;
+                continue;
+            }
+            _ = self.removers.swapRemove(i);
+            r.thread.join();
+            self.freeRemover(r);
+            self.changed = true;
+        }
+    }
+
+    /// Stop every remover and wait for each. For deinit.
+    fn stopRemovers(self: *Service) void {
+        for (self.removers.items) |r| r.stop.store(true, .release);
+        for (self.removers.items) |r| {
+            r.thread.join();
+            self.freeRemover(r);
+        }
+        self.removers.deinit(self.alloc);
+    }
+
     // ---- the snapshot -----------------------------------------------------
 
     /// Copy the state where a shell can read it without the api lock. Called
@@ -1399,6 +1542,11 @@ pub const Service = struct {
             .run = self.run,
             .retry = @intFromBool(self.retry),
         };
+        for (self.removers.items) |r| {
+            s.removing = 1;
+            s.remove_done +|= r.done.load(.acquire);
+            s.remove_total +|= r.total.load(.acquire);
+        }
         if (self.cat) |*c| {
             s.catalog_cells = @intCast(c.cells.len);
             copyZ(&s.date, c.date);
@@ -1407,6 +1555,16 @@ pub const Service = struct {
         self.changed = false;
         return s;
     }
+};
+
+/// What one region covers and how much of it the managed sets hold.
+pub const RegionInfo = extern struct {
+    cells: u32 = 0,
+    held: u32 = 0,
+    bytes: u64 = 0,
+    held_bytes: u64 = 0,
+    all_held: u8 = 0,
+    recorded: u8 = 0,
 };
 
 /// One box of a region's coverage, in degrees.
@@ -1441,6 +1599,11 @@ pub const Handle = struct {
     checked_run: bool = false,
     /// The last check, for a handle with no store.
     last_check: i64 = 0,
+
+    /// The regions the mariner asked for, a bit per entry of noaa.regions.
+    /// Null before any is recorded. Read from the store on first use.
+    record: ?u64 = null,
+    record_read: bool = false,
 
     pub fn init(alloc: std.mem.Allocator) Handle {
         return .{ .svc = Service.init(alloc) };
@@ -1590,9 +1753,305 @@ pub const Handle = struct {
     pub fn download(self: *Handle, districts: []const u8, dest: []const u8, again: bool) void {
         self.mu.lock();
         defer self.mu.unlock();
+        const add = maskOf(districts);
+        if (add != 0) self.writeRecord((self.readRecord() orelse 0) | add);
         self.syncHeld();
         self.svc.start(districts, dest, again);
         self.svc.publish();
+    }
+
+    // ---- the record and the pick ------------------------------------------
+
+    /// The store key for the record: the region ids, comma separated. Text
+    /// rather than a list, because the store clears a key set to an empty
+    /// list, and an empty record differs from none.
+    pub const record_key = "noaa-picked";
+    /// The keys the shells kept the record under before the core did. Each
+    /// is a list of ids and a flag set once the list was written.
+    const old_records = [_][2][]const u8{
+        .{ "noaa-regions", "noaa-regions-kept" },
+        .{ "noaa_regions", "noaa_regions_kept" },
+    };
+
+    /// The record, read once. An old key is copied to the new one on the
+    /// first read. The first is deleted after. The second stays, because a
+    /// shell that has not moved to the core's record still reads it.
+    fn readRecord(self: *Handle) ?u64 {
+        if (self.record_read) return self.record;
+        self.record_read = true;
+        const st = self.store orelse return null;
+        const g = settings.group_chartsets;
+        if (st.text(g, record_key)) |t| {
+            self.record = maskOfIds(t);
+            return self.record;
+        }
+        for (old_records, 0..) |k, i| {
+            if (!st.has(g, k[0]) and !st.flag(g, k[1], false)) continue;
+            var m: u64 = 0;
+            for (st.list(g, k[0])) |id| m |= maskOfIds(id);
+            self.writeRecord(m);
+            if (i == 0) {
+                st.remove(g, k[0]);
+                st.remove(g, k[1]);
+                st.flush();
+            }
+            return m;
+        }
+        return null;
+    }
+
+    fn writeRecord(self: *Handle, mask: u64) void {
+        self.record = mask;
+        self.record_read = true;
+        const st = self.store orelse return;
+        var buf: [noaa.regions.len * 8]u8 = undefined;
+        var n: usize = 0;
+        for (noaa.regions, 0..) |r, i| {
+            if (mask & bit(i) == 0) continue;
+            if (n != 0) {
+                buf[n] = ',';
+                n += 1;
+            }
+            @memcpy(buf[n..][0..r.id.len], r.id);
+            n += r.id.len;
+        }
+        st.setText(settings.group_chartsets, record_key, buf[0..n]);
+        st.flush();
+    }
+
+    /// The managed sets' charts that draw now. Free with
+    /// chartsets.Sets.freeHeld.
+    fn heldCharts(self: *Handle) ![]chartsets.Sets.Held {
+        const sets = self.sets orelse return self.svc.alloc.alloc(chartsets.Sets.Held, 0);
+        return sets.heldCells(self.svc.alloc, .charts);
+    }
+
+    const Holding = struct { cells: u32 = 0, held: u32 = 0, held_bytes: u64 = 0 };
+
+    /// How much of one district's water `charts` holds.
+    fn holding(self: *Handle, cat: *const noaa.Catalog, district: u8, charts: []const chartsets.Sets.Held) Holding {
+        const picked = noaa.selectRegions(self.svc.alloc, cat, &.{district}) catch return .{};
+        defer self.svc.alloc.free(picked);
+        var h: Holding = .{ .cells = @intCast(picked.len) };
+        for (picked) |i| {
+            if (heldIndex(charts, cat.cells[i].name) == null) continue;
+            h.held += 1;
+            h.held_bytes += cat.cells[i].zip_bytes;
+        }
+        return h;
+    }
+
+    /// The regions the picker ticks: the recorded ones the managed sets hold
+    /// whole. With no record, every region held whole, so a library
+    /// downloaded before the record existed opens ticked.
+    fn recordedMask(self: *Handle, cat: *const noaa.Catalog, charts: []const chartsets.Sets.Held) u64 {
+        const rec = self.readRecord();
+        var m: u64 = 0;
+        for (noaa.regions, 0..) |r, i| {
+            if (rec) |x| if (x & bit(i) == 0) continue;
+            const h = self.holding(cat, r.district, charts);
+            if (h.cells != 0 and h.held == h.cells) m |= bit(i);
+        }
+        return m;
+    }
+
+    /// One region's cells and how many the managed sets hold. Null before a
+    /// catalog is read, or for an id no region has.
+    pub fn regionState(self: *Handle, region_id: []const u8) ?RegionInfo {
+        self.mu.lock();
+        defer self.mu.unlock();
+        const cat = &(self.svc.cat orelse return null);
+        const at = regionIndex(region_id) orelse return null;
+        const district = noaa.regions[at].district;
+        self.syncHeld();
+        const alloc = self.svc.alloc;
+        const charts = self.heldCharts() catch return null;
+        defer chartsets.Sets.freeHeld(alloc, charts);
+        const h = self.holding(cat, district, charts);
+        const whole = h.cells != 0 and h.held == h.cells;
+        const rec = self.readRecord();
+        return .{
+            .cells = h.cells,
+            .held = h.held,
+            .bytes = self.svc.costOf(&.{district}).bytes,
+            .held_bytes = h.held_bytes,
+            .all_held = @intFromBool(whole),
+            .recorded = @intFromBool(whole and (rec == null or rec.? & bit(at) != 0)),
+        };
+    }
+
+    /// Make the managed download at `dest` hold the water in `districts`.
+    ///
+    /// The pick is recorded. A download fetching water no longer picked is
+    /// stopped. The cells of the regions given back that no picked region
+    /// covers are deleted, source and prepared. An empty pick deletes the
+    /// whole download and removes its set from the list. What the pick lacks
+    /// is downloaded, and all of it with `again`.
+    ///
+    /// Returns how many directories left the library.
+    pub fn apply(self: *Handle, districts: []const u8, dest: []const u8, again: bool) u32 {
+        self.mu.lock();
+        defer self.mu.unlock();
+        defer self.svc.publish();
+        const alloc = self.svc.alloc;
+        self.syncHeld();
+
+        const picked = maskOf(districts);
+        var prior: u64 = 0;
+        if (self.svc.cat) |*cat| {
+            if (self.heldCharts()) |charts| {
+                defer chartsets.Sets.freeHeld(alloc, charts);
+                prior = self.recordedMask(cat, charts);
+            } else |_| {}
+        }
+        self.writeRecord(picked);
+
+        var doomed: std.ArrayList([]const u8) = .empty;
+        defer doomed.deinit(alloc);
+        if (picked != 0) self.cellsToRemove(prior & ~picked, districts, &doomed);
+
+        // The unpack thread of a stopped download may still be writing a
+        // cell. Holding `unpack_work` over the renames waits for it.
+        const stopped = self.svc.runReaches(districts) and (picked == 0 or !self.svc.run_update or doomed.items.len != 0);
+        if (stopped) self.svc.stopRun();
+
+        var moved: u32 = 0;
+        if (picked == 0) {
+            moved = self.removeWhole(dest, stopped);
+        } else if (doomed.items.len != 0) {
+            moved = self.removeCells(dest, doomed.items, stopped);
+        }
+
+        if (picked != 0 and (again or self.svc.costOf(districts).cells != 0))
+            self.svc.start(districts, dest, again);
+        return moved;
+    }
+
+    /// The cells of the regions in `gone` that no region in `keep` covers.
+    /// Borrowed from the catalog.
+    fn cellsToRemove(self: *Handle, gone: u64, keep: []const u8, out: *std.ArrayList([]const u8)) void {
+        if (gone == 0) return;
+        const alloc = self.svc.alloc;
+        var buf: [noaa.regions.len]u8 = undefined;
+        var names: std.ArrayList([]const u8) = .empty;
+        defer names.deinit(alloc);
+        self.svc.cellsOf(districtsOf(gone, &buf), &names);
+        var kept: std.ArrayList([]const u8) = .empty;
+        defer kept.deinit(alloc);
+        self.svc.cellsOf(keep, &kept);
+        for (names.items) |n| {
+            for (kept.items) |k| {
+                if (std.mem.eql(u8, n, k)) break;
+            } else out.append(alloc, n) catch return;
+        }
+    }
+
+    /// True when `dest` is this service's to delete from: a managed set, or
+    /// the directory it last downloaded into.
+    fn owns(self: *Handle, dest: []const u8) bool {
+        if (dest.len == 0) return false;
+        if (std.mem.eql(u8, self.svc.dest, dest)) return true;
+        const sets = self.sets orelse return false;
+        return sets.isManaged(dest);
+    }
+
+    /// Where the charts prepared from `dest` are, or null. The caller frees
+    /// it.
+    fn preparedDir(self: *Handle, dest: []const u8) ?[]u8 {
+        const sets = self.sets orelse return null;
+        if (sets.prepared_root.len == 0) return null;
+        return std.fs.path.join(self.svc.alloc, &.{ sets.prepared_root, bake.preparedName(dest) }) catch null;
+    }
+
+    /// Delete the download and what was prepared from it, and take its set
+    /// off the list.
+    fn removeWhole(self: *Handle, dest: []const u8, wait: bool) u32 {
+        if (!self.owns(dest)) return 0;
+        const alloc = self.svc.alloc;
+        var targets: std.ArrayList([]const u8) = .empty;
+        defer targets.deinit(alloc);
+        const prepared = self.preparedDir(dest);
+        defer if (prepared) |p| alloc.free(p);
+        if (prepared) |p| if (trash.isDir(p)) targets.append(alloc, p) catch {};
+        if (trash.isDir(dest)) targets.append(alloc, dest) catch {};
+        const moved = self.trashAll(dest, targets.items, wait);
+        if (self.sets) |sets| {
+            _ = sets.remove(dest);
+            sets.noteChanged();
+        }
+        return moved;
+    }
+
+    /// Delete these cells from the download at `dest`, both where each was
+    /// unpacked and where it was prepared, and read the set again.
+    fn removeCells(self: *Handle, dest: []const u8, names: []const []const u8, wait: bool) u32 {
+        if (!self.owns(dest)) return 0;
+        const alloc = self.svc.alloc;
+        var arena = std.heap.ArenaAllocator.init(alloc);
+        defer arena.deinit();
+        const a = arena.allocator();
+
+        // An exchange set unpacks under its own ENC_ROOT, so a cell is a
+        // level down. Both levels are read.
+        var parents: std.ArrayList([]const u8) = .empty;
+        parents.append(a, dest) catch return 0;
+        const kids = trash.childDirs(a, dest) catch &.{};
+        for (kids) |k| parents.append(a, std.fs.path.join(a, &.{ dest, k }) catch continue) catch {};
+        const prepared = self.preparedDir(dest);
+        defer if (prepared) |p| alloc.free(p);
+
+        var targets: std.ArrayList([]const u8) = .empty;
+        for (names) |n| {
+            if (prepared) |p| {
+                const dir = std.fs.path.join(a, &.{ p, n }) catch continue;
+                if (trash.isDir(dir)) targets.append(a, dir) catch {};
+            }
+            for (parents.items) |parent| {
+                const dir = std.fs.path.join(a, &.{ parent, n }) catch continue;
+                if (trash.isDir(dir)) targets.append(a, dir) catch {};
+            }
+        }
+        const moved = self.trashAll(dest, targets.items, wait);
+        if (moved != 0) if (self.sets) |sets| {
+            _ = sets.rescan(dest);
+        };
+        return moved;
+    }
+
+    /// Rename each target into one new bin and delete the bin behind. The
+    /// bin goes in the prepared root, or beside `dest` with none. A target
+    /// that does not rename, as across volumes, is deleted where it is.
+    /// Returns how many targets left the library.
+    fn trashAll(self: *Handle, dest: []const u8, targets: []const []const u8, wait: bool) u32 {
+        if (targets.len == 0) return 0;
+        const alloc = self.svc.alloc;
+        const root = blk: {
+            if (self.sets) |sets| if (sets.prepared_root.len != 0) break :blk sets.prepared_root;
+            break :blk std.fs.path.dirname(dest) orelse ".";
+        };
+        const bin: ?[]u8 = trash.makeBin(alloc, root, clock.wallMs()) catch null;
+        if (wait) self.svc.unpack_work.lock();
+        defer if (wait) self.svc.unpack_work.unlock();
+        var moved: u32 = 0;
+        var binned: u32 = 0;
+        for (targets, 0..) |t, i| {
+            if (bin) |b| if (trash.move(b, i, t)) {
+                moved += 1;
+                binned += 1;
+                continue;
+            };
+            std.Io.Dir.cwd().deleteTree(std.Io.Threaded.global_single_threaded.io(), t) catch continue;
+            moved += 1;
+        }
+        if (bin) |b| {
+            if (binned != 0) {
+                self.svc.startRemover(b, binned);
+            } else {
+                Service.deleteNow(b);
+                alloc.free(b);
+            }
+        }
+        return moved;
     }
 
     /// How many of the managed sets' cells the catalog has reissued. 0 until
@@ -1705,6 +2164,47 @@ pub const Handle = struct {
         self.svc.publish();
     }
 };
+
+fn bit(i: usize) u64 {
+    return @as(u64, 1) << @intCast(i);
+}
+
+fn regionIndex(id: []const u8) ?usize {
+    for (noaa.regions, 0..) |r, i| {
+        if (std.mem.eql(u8, r.id, id)) return i;
+    }
+    return null;
+}
+
+/// The districts as a mask over noaa.regions.
+fn maskOf(districts: []const u8) u64 {
+    var m: u64 = 0;
+    for (noaa.regions, 0..) |r, i| {
+        if (std.mem.indexOfScalar(u8, districts, r.district) != null) m |= bit(i);
+    }
+    return m;
+}
+
+fn maskOfIds(ids: []const u8) u64 {
+    var buf: [noaa.regions.len]u8 = undefined;
+    return maskOf(noaa.districtsFromIds(&buf, ids));
+}
+
+/// The districts of a mask, written into `buf`.
+fn districtsOf(mask: u64, buf: *[noaa.regions.len]u8) []const u8 {
+    var n: usize = 0;
+    for (noaa.regions, 0..) |r, i| {
+        if (mask & bit(i) == 0) continue;
+        buf[n] = r.district;
+        n += 1;
+    }
+    return buf[0..n];
+}
+
+comptime {
+    // A mask holds a bit per region.
+    std.debug.assert(noaa.regions.len <= 64);
+}
 
 /// The index of `name` in `have`, sorted by name, or null.
 fn heldIndex(have: []const chartsets.Sets.Held, name: []const u8) ?usize {
@@ -2973,4 +3473,266 @@ test "a streamed transfer wakes the shell as its bytes arrive, and an idle servi
     lock.sleepMs(Service.progress_every_ms + 10);
     try testing.expect(!h.changed());
     try testing.expectEqual(woke, f.wakes.load(.monotonic));
+}
+
+// ---- applying a pick ----------------------------------------------------------
+
+/// Four cells. District 5 files 1 and 2, district 7 files 3 and 4, and 3
+/// overlaps 2, so each district selects the other's. District 5 selects 1, 2
+/// and 3. District 7 selects 2, 3 and 4.
+const apply_xml =
+    \\<ENC_Product_Catalog><date_valid>20250903</date_valid>
+++ applyCell("US500001", 5, "1.0", "1.4") ++ applyCell("US500002", 5, "2.0", "2.4") ++
+    applyCell("US500003", 7, "2.1", "2.5") ++ applyCell("US500004", 7, "5.0", "5.4") ++
+    \\</ENC_Product_Catalog>
+;
+
+fn applyCell(comptime name: []const u8, comptime district: u8, comptime south: []const u8, comptime north: []const u8) []const u8 {
+    return "<cell><name>" ++ name ++ "</name><lname>Cell</lname><cscale>20000</cscale>" ++
+        "<edtn>1</edtn><updn>0</updn>" ++
+        "<zipfile_location>https://charts.noaa.gov/ENCs/" ++ name ++ ".zip</zipfile_location>" ++
+        "<zipfile_size>1000</zipfile_size>" ++
+        std.fmt.comptimePrint("<coast_guard_district>{d}</coast_guard_district>", .{district}) ++
+        "<panel><vertex><lat>" ++ south ++ "</lat><long>-70.00</long></vertex>" ++
+        "<vertex><lat>" ++ north ++ "</lat><long>-69.60</long></vertex></panel></cell>";
+}
+
+/// A managed NOAA download with its prepared root, and a service over it.
+const ApplyFixture = struct {
+    tmp: std.testing.TmpDir,
+    dir: []u8,
+    dest: []u8,
+    prepared: []u8,
+    store: *settings.Store,
+    sets: *chartsets.Sets,
+    rec: Recorder,
+    h: Handle,
+
+    const io = std.Io.Threaded.global_single_threaded.io();
+
+    /// `unpacked` cells get a source cell under dest, `baked` ones a
+    /// prepared chart as well.
+    fn init(self: *ApplyFixture, unpacked: []const []const u8, baked: []const []const u8) !void {
+        const alloc = testing.allocator;
+        self.tmp = testing.tmpDir(.{ .iterate = true });
+        self.dir = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{self.tmp.sub_path});
+        self.dest = try std.fmt.allocPrint(alloc, "{s}/NOAA", .{self.dir});
+        self.prepared = try std.fmt.allocPrint(alloc, "{s}/Charts", .{self.dir});
+        try self.tmp.dir.createDirPath(io, "NOAA");
+        try self.tmp.dir.createDirPath(io, "Charts");
+        for (unpacked) |c| try self.put("NOAA/ENC_ROOT", c, "000");
+        for (baked) |c| try self.put("Charts/NOAA", c, "pmtiles");
+
+        self.store = try settings.Store.open(alloc, io, self.dir);
+        self.sets = try chartsets.Sets.open(alloc, io, self.store, self.prepared, null);
+        _ = self.sets.add(self.dest);
+        _ = self.sets.setManaged(self.dest, true);
+        self.settle();
+
+        self.rec = .{ .alloc = alloc };
+        self.h = Handle.init(alloc);
+        self.h.store = self.store;
+        self.h.sets = self.sets;
+        self.h.svc.cat = try noaa.parse(alloc, apply_xml);
+        self.h.svc.phase = .ready;
+        self.h.setProvider(Recorder.get, null, null, &self.rec);
+    }
+
+    fn deinit(self: *ApplyFixture) void {
+        const alloc = testing.allocator;
+        self.h.deinit();
+        self.rec.deinit();
+        self.sets.close();
+        self.store.close();
+        alloc.free(self.prepared);
+        alloc.free(self.dest);
+        alloc.free(self.dir);
+        self.tmp.cleanup();
+    }
+
+    /// A cell directory holding one file of the cell's name.
+    fn put(self: *ApplyFixture, parent: []const u8, cell: []const u8, ext: []const u8) !void {
+        var buf: [256]u8 = undefined;
+        try self.tmp.dir.createDirPath(io, try std.fmt.bufPrint(&buf, "{s}/{s}", .{ parent, cell }));
+        const file = try std.fmt.bufPrint(&buf, "{s}/{s}/{s}.{s}", .{ parent, cell, cell, ext });
+        try self.tmp.dir.writeFile(io, .{ .sub_path = file, .data = "x" });
+    }
+
+    fn has(self: *ApplyFixture, sub: []const u8) bool {
+        self.tmp.dir.access(io, sub, .{}) catch return false;
+        return true;
+    }
+
+    fn settle(self: *ApplyFixture) void {
+        for (0..2000) |_| {
+            self.sets.mu.lock();
+            const idle = !self.sets.running and self.sets.queue.items.len == 0;
+            self.sets.mu.unlock();
+            if (idle) return;
+            lock.sleepMs(1);
+        }
+    }
+
+    /// Wait for the removers to end and adopt their end.
+    fn removed(self: *ApplyFixture) void {
+        for (0..2000) |_| {
+            self.h.adopt();
+            if (self.h.svc.removers.items.len == 0) return;
+            lock.sleepMs(1);
+        }
+    }
+
+    fn record(self: *ApplyFixture) []const u8 {
+        return self.store.text(settings.group_chartsets, Handle.record_key) orelse "(none)";
+    }
+};
+
+test "an apply gives one region back and fetches another" {
+    var f: ApplyFixture = undefined;
+    const all = [_][]const u8{ "US500001", "US500002", "US500003" };
+    try f.init(&all, &all);
+    defer f.deinit();
+    f.store.setText(settings.group_chartsets, Handle.record_key, "d5");
+
+    const moved = f.h.apply(&.{7}, f.dest, false);
+
+    // Cell 1 is district 5's alone: its source and its chart go. District 7
+    // selects 2 and 3, so they stay.
+    try testing.expectEqual(@as(u32, 2), moved);
+    try testing.expect(!f.has("NOAA/ENC_ROOT/US500001"));
+    try testing.expect(!f.has("Charts/NOAA/US500001"));
+    for ([_][]const u8{ "NOAA/ENC_ROOT/US500002", "Charts/NOAA/US500002", "NOAA/ENC_ROOT/US500003", "Charts/NOAA/US500003" }) |p|
+        try testing.expect(f.has(p));
+    try testing.expectEqualStrings("d7", f.record());
+
+    // Cell 4 is fetched.
+    var st = f.h.poll();
+    try testing.expectEqual(@intFromEnum(Phase.downloading), st.phase);
+    try testing.expectEqual(@as(u32, 1), st.total);
+    try testing.expectEqual(@as(usize, 1), f.rec.urls.items.len);
+    try testing.expect(std.mem.endsWith(u8, f.rec.urls.items[0], "US500004.zip"));
+    try testing.expectEqual(@as(u8, 1), st.removing);
+    try testing.expectEqual(@as(u32, 2), st.remove_total);
+
+    f.removed();
+    st = f.h.poll();
+    try testing.expectEqual(@as(u8, 0), st.removing);
+    try testing.expectEqual(@as(usize, 0), trash.sweep(testing.allocator, f.prepared));
+
+    // The set was read again without cell 1.
+    f.settle();
+    const d7 = f.h.regionState("d7").?;
+    try testing.expectEqual(@as(u32, 3), d7.cells);
+    try testing.expectEqual(@as(u32, 2), d7.held);
+}
+
+test "an empty pick during a download stops it and deletes the whole download" {
+    var f: ApplyFixture = undefined;
+    try f.init(&.{}, &.{});
+    defer f.deinit();
+
+    _ = f.h.apply(&.{5}, f.dest, false);
+    try testing.expectEqual(@intFromEnum(Phase.downloading), f.h.poll().phase);
+    const run = f.h.poll().run;
+    // What arrived before the stop.
+    try f.put("NOAA/ENC_ROOT", "US500001", "000");
+    try f.put("Charts/NOAA", "US500001", "pmtiles");
+    _ = f.sets.takeChanged();
+
+    const moved = f.h.apply(&.{}, f.dest, false);
+
+    const st = f.h.poll();
+    try testing.expectEqual(@intFromEnum(Outcome.cancelled), st.outcome);
+    try testing.expectEqual(@intFromEnum(Phase.ready), st.phase);
+    try testing.expectEqual(run, st.run);
+    try testing.expectEqual(@as(u32, 2), moved);
+    try testing.expect(!f.has("NOAA"));
+    try testing.expect(!f.has("Charts/NOAA"));
+    try testing.expectEqual(@as(usize, 0), f.sets.all().len);
+    try testing.expect(f.sets.takeChanged());
+    try testing.expectEqualStrings("", f.record());
+    f.removed();
+}
+
+test "a cell a kept region shares stays when the other region goes" {
+    var f: ApplyFixture = undefined;
+    const all = [_][]const u8{ "US500001", "US500002", "US500003", "US500004" };
+    try f.init(&all, &all);
+    defer f.deinit();
+    f.store.setText(settings.group_chartsets, Handle.record_key, "d5,d7");
+
+    const moved = f.h.apply(&.{5}, f.dest, false);
+
+    // District 7 goes. Cells 2 and 3 are district 5's as well.
+    try testing.expectEqual(@as(u32, 2), moved);
+    try testing.expect(!f.has("NOAA/ENC_ROOT/US500004"));
+    try testing.expect(!f.has("Charts/NOAA/US500004"));
+    for ([_][]const u8{ "US500001", "US500002", "US500003" }) |c| {
+        var buf: [64]u8 = undefined;
+        try testing.expect(f.has(try std.fmt.bufPrint(&buf, "Charts/NOAA/{s}", .{c})));
+        try testing.expect(f.has(try std.fmt.bufPrint(&buf, "NOAA/ENC_ROOT/{s}", .{c})));
+    }
+    // District 5 is all here, so no download is ordered.
+    try testing.expectEqual(@as(u32, 0), f.h.poll().run);
+    try testing.expectEqual(@as(usize, 0), f.rec.urls.items.len);
+    try testing.expectEqualStrings("d5", f.record());
+    f.removed();
+}
+
+test "the region state counts the charts a partial download has prepared" {
+    var f: ApplyFixture = undefined;
+    // Cell 1 is prepared. Cell 2 arrived and is not prepared yet.
+    try f.init(&.{ "US500001", "US500002" }, &.{"US500001"});
+    defer f.deinit();
+
+    const d5 = f.h.regionState("d5").?;
+    try testing.expectEqual(@as(u32, 3), d5.cells);
+    try testing.expectEqual(@as(u32, 1), d5.held);
+    try testing.expectEqual(@as(u64, 1000), d5.held_bytes);
+    // Only cell 3 is on no set.
+    try testing.expectEqual(@as(u64, 1000), d5.bytes);
+    try testing.expectEqual(@as(u8, 0), d5.all_held);
+    try testing.expectEqual(@as(u8, 0), d5.recorded);
+    try testing.expect(f.h.regionState("zz") == null);
+
+    // The rest prepared. With no record, water held whole reads as recorded.
+    try f.put("Charts/NOAA", "US500002", "pmtiles");
+    try f.put("Charts/NOAA", "US500003", "pmtiles");
+    _ = f.sets.rescan(f.dest);
+    f.settle();
+    const whole = f.h.regionState("d5").?;
+    try testing.expectEqual(@as(u8, 1), whole.all_held);
+    try testing.expectEqual(@as(u8, 1), whole.recorded);
+
+    // A record naming other water leaves it unticked.
+    f.h.download(&.{7}, f.dest, false);
+    try testing.expectEqualStrings("d7", f.record());
+    try testing.expectEqual(@as(u8, 0), f.h.regionState("d5").?.recorded);
+}
+
+test "a record under an old key is read into the core's key" {
+    var f: ApplyFixture = undefined;
+    try f.init(&.{}, &.{});
+    defer f.deinit();
+    const g = settings.group_chartsets;
+    f.store.setList(g, "noaa-regions", &.{ "d5", "d7" });
+    f.store.setFlag(g, "noaa-regions-kept", true);
+    f.store.setList(g, "noaa_regions", &.{"d1"});
+
+    try testing.expectEqual(maskOf(&.{ 5, 7 }), f.h.readRecord().?);
+    try testing.expectEqualStrings("d5,d7", f.record());
+    try testing.expect(!f.store.has(g, "noaa-regions"));
+    try testing.expect(!f.store.has(g, "noaa-regions-kept"));
+    // The other key stays for the shell that still reads it.
+    try testing.expect(f.store.has(g, "noaa_regions"));
+
+    // An emptied record is still a record.
+    var h = Handle.init(testing.allocator);
+    defer h.deinit();
+    h.store = f.store;
+    h.writeRecord(0);
+    var again = Handle.init(testing.allocator);
+    defer again.deinit();
+    again.store = f.store;
+    try testing.expectEqual(@as(?u64, 0), again.readRecord());
 }

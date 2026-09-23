@@ -16,6 +16,7 @@ const gpa = capi.gpa;
 pub const lookout_noaa = noaajob.Handle;
 pub const lookout_noaa_state = noaajob.State;
 pub const lookout_noaa_box = noaajob.Box;
+pub const lookout_noaa_region_info = noaajob.RegionInfo;
 
 // ---- argument conversion ------------------------------------------------------
 
@@ -51,6 +52,12 @@ fn download(n: *noaajob.Handle, region_ids: ?[*:0]const u8, dest_dir: ?[*:0]cons
     const dest = dest_dir orelse return;
     var buf: [noaa.regions.len]u8 = undefined;
     n.download(noaa.districtsFromIds(&buf, span(region_ids)), std.mem.span(dest), again != 0);
+}
+
+fn apply(n: *noaajob.Handle, picked_ids: ?[*:0]const u8, dest_dir: ?[*:0]const u8, again: c_int) u32 {
+    var buf: [noaa.regions.len]u8 = undefined;
+    const dest = if (dest_dir) |d| std.mem.span(d) else "";
+    return n.apply(noaa.districtsFromIds(&buf, span(picked_ids)), dest, again != 0);
 }
 
 // ---- lookout_noaa ------------------------------------------------------------
@@ -128,6 +135,20 @@ export fn lookout_noaa_region_coverage(n: ?*lookout_noaa, region_id: ?[*:0]const
 
 export fn lookout_noaa_download(n: ?*lookout_noaa, region_ids: ?[*:0]const u8, dest_dir: ?[*:0]const u8, again: c_int) void {
     if (n) |x| download(x, region_ids, dest_dir, again);
+}
+
+export fn lookout_noaa_region_state(n: ?*lookout_noaa, region_id: ?[*:0]const u8, out: ?*lookout_noaa_region_info) c_int {
+    const o = out orelse return 0;
+    o.* = .{};
+    const x = n orelse return 0;
+    const id = region_id orelse return 0;
+    o.* = x.regionState(std.mem.span(id)) orelse return 0;
+    return 1;
+}
+
+export fn lookout_noaa_apply(n: ?*lookout_noaa, picked_ids: ?[*:0]const u8, dest_dir: ?[*:0]const u8, again: c_int) u32 {
+    const x = n orelse return 0;
+    return apply(x, picked_ids, dest_dir, again);
 }
 
 export fn lookout_noaa_outdated(n: ?*lookout_noaa) u32 {

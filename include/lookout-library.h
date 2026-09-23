@@ -221,6 +221,12 @@ int lookout_bake_is_derived(const char *root, const char *path);
 const char *lookout_bake_trash_prefix(void);
 int         lookout_bake_is_trash(const char *name);
 
+/* Delete every directory directly under `root` whose name has the trash
+ * prefix: what a removal left when the process ended during its delete.
+ * Returns how many went. Blocks while it deletes, so call it off the main
+ * thread, once at launch. */
+size_t lookout_bake_sweep(const char *root);
+
 /* ---- reading a scan --------------------------------------------------------
  *
  * The same walk, as structs. A read is a copy, so it needs no serializing: two
@@ -966,6 +972,13 @@ typedef struct {
      * no catalog, where the shell refreshes the catalog and then orders again,
      * and for a download where a transfer failed on the network. */
     uint8_t retry;
+    /* 1 while the charts a lookout_noaa_apply took out of the library are
+     * being deleted. They are out of the library before the call returns. */
+    uint8_t removing;
+    /* The directories being deleted, and how many are gone. A prepared
+     * chart and the cell it was prepared from are two. */
+    uint32_t remove_done;
+    uint32_t remove_total;
 } lookout_noaa_state;
 
 /* ---- The NOAA service handle ----------------------------------------------
@@ -1085,9 +1098,71 @@ size_t lookout_noaa_region_coverage(lookout_noaa *n, const char *region_id,
  * repair or refresh charts they already hold. A downloaded cell replaces the
  * copy of it already in `dest_dir`.
  *
- * A catalog read through lookout_noaa_refresh does not end a download. */
+ * A catalog read through lookout_noaa_refresh does not end a download. The
+ * regions are added to the record lookout_noaa_region_state reads. */
 void lookout_noaa_download(lookout_noaa *n, const char *region_ids,
                            const char *dest_dir, int again);
+
+/* One region: what it covers, and how much of it the managed sets hold. */
+typedef struct {
+    /* The cells the region selects. */
+    uint32_t cells;
+    /* Of those, the ones a managed set draws now. These are the charts
+     * lookout_noaa_apply deletes when the region is given back. A cell that
+     * still has to be prepared is not counted. */
+    uint32_t held;
+    /* What fetching the cells no set holds costs, as lookout_noaa_cost
+     * sizes it. */
+    uint64_t bytes;
+    /* What fetching the `held` cells again costs. */
+    uint64_t held_bytes;
+    /* 1 when `held` is `cells` and both are above 0. */
+    uint8_t all_held;
+    /* 1 when the region is in the record of downloaded water and `all_held`
+     * is 1. This is what a picker ticks. Before any record is written, every
+     * region held whole reads 1, so a library downloaded before the record
+     * existed opens ticked. */
+    uint8_t recorded;
+} lookout_noaa_region_info;
+
+/* Fill `out` for the region `region_id` ("d5"). Returns 1, or 0 with `out`
+ * zeroed when no catalog is loaded or no region has that id.
+ *
+ * The record of downloaded water is kept in the store, in the chart sets
+ * group under "noaa-picked": the region ids, comma separated. The
+ * record written under "noaa-regions" is moved there on the first read, and
+ * one under "noaa_regions" is copied. */
+int lookout_noaa_region_state(lookout_noaa *n, const char *region_id,
+                              lookout_noaa_region_info *out);
+
+/* Make the download at `dest_dir` hold the water in `picked_ids` ("d5,d8"),
+ * as a picker's Apply does. In order:
+ *
+ * - The pick becomes the record.
+ * - A download fetching water outside the pick is stopped. An update is
+ *   stopped when this deletes charts.
+ * - The regions the picker ticked (see lookout_noaa_region_info.recorded)
+ *   and the pick leaves out are given back. Their cells that no picked
+ *   region selects are deleted: the cell directory under `dest_dir`, and the
+ *   chart prepared from it, lookout_bake_prepared_name(dest_dir) under the
+ *   chart sets' prepared root. Regions overlap, so a cell a picked region
+ *   shares stays. The set at `dest_dir` is read again.
+ * - An empty pick deletes the whole download and what was prepared from
+ *   it, whatever the catalog lists, and removes the set from the list.
+ *   lookout_chart_sets_changed then returns 1.
+ * - What the pick lacks is downloaded, as lookout_noaa_download does. When
+ *   the pick lacks no cell and `again` is 0, no download is ordered and `run`
+ *   stays.
+ *
+ * A delete renames into one directory with the trash prefix, in the prepared
+ * root, and a thread of the service's own deletes it behind. The charts are
+ * out of the library when this returns. Progress surfaces through
+ * lookout_noaa_poll. Only `dest_dir` as a managed set, or as the directory
+ * the service last downloaded into, is deleted from.
+ *
+ * Returns how many directories left the library. */
+uint32_t lookout_noaa_apply(lookout_noaa *n, const char *picked_ids,
+                            const char *dest_dir, int again);
 
 /* How many of the managed sets' cells NOAA has reissued: the catalog lists a
  * higher edition, or the same edition with a higher update number. A cell the
