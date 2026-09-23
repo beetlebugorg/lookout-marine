@@ -28,12 +28,6 @@ struct _LkChartController {
   gboolean pending_empty_open;
 
   gint64 last_readouts_us;
-
-  /* What the last frame said. A snapshot BUILDS the scene before it reads the
-   * frame back, so whatever wants a picture of the chart has to know when the
-   * chart has nothing left to build. */
-  gboolean last_building;
-  gboolean last_render;
 };
 
 G_DEFINE_FINAL_TYPE (LkChartController, lk_chart_controller, G_TYPE_OBJECT)
@@ -175,8 +169,6 @@ lk_chart_controller_tick (GtkWidget     *widget,
 
   lookout_frame_next (self->handle, &frame);
 
-  self->last_building = frame.building != 0;
-  self->last_render = frame.verdict == LOOKOUT_FRAME_RENDER;
 
   if (self->model != NULL)
     {
@@ -1092,70 +1084,32 @@ lk_chart_controller_chart_links_read (LkChartController *self)
 
 /* ---- pictures of charts -------------------------------------------------- */
 
-gboolean
-lk_chart_controller_settled (LkChartController *self)
+int
+lk_chart_controller_chart_link_picture (LkChartController *self, const char *url, int kind,
+                                        double lon, double lat, double zoom, int width,
+                                        int height, guint8 *dst)
 {
-  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), FALSE);
+  int got;
 
-  return self->handle != NULL && !self->last_building && !self->last_render;
-}
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), LOOKOUT_PICTURE_NONE);
 
-GdkTexture *
-lk_chart_controller_snapshot (LkChartController *self)
-{
-  int width = 0, height = 0, scale = 1;
-  gsize len;
-
-  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), NULL);
-
-  if (self->handle == NULL || self->view == NULL)
-    return NULL;
-
-  lk_chart_view_get_point_size (LK_CHART_VIEW (self->view), &width, &height);
-  scale = gtk_widget_get_scale_factor (self->view);
-  width *= scale;
-  height *= scale;
-  if (width <= 0 || height <= 0)
-    return NULL;
-
-  len = (gsize) width * height * 4;
-  g_autofree guint8 *pixels = g_malloc0 (len);
-  /* 0 is success here, unlike the rest of this ABI. */
-  if (lookout_snapshot_rgba (self->handle, pixels, len) != 0)
-    return NULL;
-
-  g_autoptr (GBytes) bytes = g_bytes_new_take (g_steal_pointer (&pixels), len);
-  return gdk_memory_texture_new (width, height, GDK_MEMORY_R8G8B8A8,
-                                 bytes, (gsize) width * 4);
+  if (self->handle == NULL)
+    return LOOKOUT_PICTURE_NONE;
+  got = lookout_chart_link_picture (self->handle, url, kind, lon, lat, zoom, width, height,
+                                    dst);
+  /* The core draws a pending picture inside the frame loop. */
+  if (got == LOOKOUT_PICTURE_PENDING)
+    lk_chart_controller_kick (self);
+  return got;
 }
 
 void
-lk_chart_controller_chart_links_preview (LkChartController *self)
+lk_chart_controller_chart_link_pictures_cancel (LkChartController *self)
 {
   g_return_if_fail (LK_IS_CHART_CONTROLLER (self));
 
-  if (self->handle == NULL)
-    return;
-  lookout_chart_links_preview (self->handle);
-  /* The style reads go out through the fetcher, and the core adopts each
-   * answer at the top of a frame. */
-  lk_chart_controller_kick (self);
-}
-
-char *
-lk_chart_controller_chart_link_preview_url (LkChartController *self, const char *link,
-                                            double lon, double lat, int zoom)
-{
-  char url[2048];
-
-  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), NULL);
-
-  if (self->handle == NULL || link == NULL)
-    return NULL;
-  if (!lookout_chart_link_preview_url (self->handle, link, lon, lat, zoom,
-                                       url, sizeof url))
-    return NULL;
-  return g_strdup (url);
+  if (self->handle != NULL)
+    lookout_chart_link_pictures_cancel (self->handle);
 }
 
 gboolean

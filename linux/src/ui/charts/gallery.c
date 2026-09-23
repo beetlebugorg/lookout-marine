@@ -18,12 +18,6 @@ typedef struct {
   LkChartGalleryAdd  on_add;
   gpointer           on_add_data;
 
-  /* The chart that was drawing when this row was last built. A change means a
-   * new chart to watch as it settles. `known` guards the first pass, where
-   * NULL is a real answer rather than "not asked yet". */
-  char              *drawing;
-  gboolean           known;
-
   /* The row as it stands: the tile buttons in order, and the urls they were
    * built for. A report that changes neither is lettered into these. */
   GPtrArray         *tiles;  /* borrowed GtkWidget*, owned by the row */
@@ -54,12 +48,8 @@ lk_gallery_free (gpointer data)
 {
   LkGallery *self = data;
 
-  /* The row is going. Nothing is left to draw a picture that lands after
-   * this, and a fetch in flight holds the controller. */
-  if (self->previews != NULL)
-    lk_chart_previews_shutdown (self->previews);
+  /* The row is going. The core stops drawing its pictures. */
   g_clear_object (&self->previews);
-  g_free (self->drawing);
   g_free (self->shape);
   g_ptr_array_unref (self->tiles);
   g_clear_handle_id (&self->pending_id, g_source_remove);
@@ -441,7 +431,6 @@ static void
 lk_gallery_ask_for_pictures (LkGallery *self, GPtrArray *mine,
                              const LkChartCatalogEntry *catalog, guint n_catalog)
 {
-  LkChartLinks *links = lk_app_model_get_chart_links (self->model);
   g_autoptr (GPtrArray) urls = g_ptr_array_new ();
 
   /* Lookout's own chart is first, under the empty url. */
@@ -457,19 +446,12 @@ lk_gallery_ask_for_pictures (LkGallery *self, GPtrArray *mine,
     }
   g_ptr_array_add (urls, NULL);
 
-  lk_chart_previews_want (self->previews, (const char *const *) urls->pdata);
+  /* In device pixels: the core's second handle draws at no density of its
+   * own. */
+  int scale = gtk_widget_get_scale_factor (self->row);
 
-  /* And the chart on the screen, as the engine draws it. Only when the chart
-   * has CHANGED: a capture keeps a picture, which rebuilds this row, and
-   * capturing from here on every rebuild would never stop. */
-  const char *active = lk_chart_links_active (links);
-  if (!self->known || g_strcmp0 (self->drawing, active) != 0)
-    {
-      self->known = TRUE;
-      g_free (self->drawing);
-      self->drawing = g_strdup (active);
-      lk_chart_previews_watch (self->previews, active);
-    }
+  lk_chart_previews_want (self->previews, (const char *const *) urls->pdata,
+                          LK_TILE_WIDTH * scale, LK_TILE_ART * scale);
 }
 
 
@@ -482,6 +464,9 @@ lk_gallery_fill (LkGallery *self)
   g_autoptr (GArray) plan = g_array_new (FALSE, TRUE, sizeof (LkTilePlan));
   guint n_catalog = 0;
   const LkChartCatalogEntry *catalog = lk_chart_catalog_entries (&n_catalog);
+
+  /* First, so the tiles below show what the core has drawn by now. */
+  lk_gallery_ask_for_pictures (self, mine, catalog, n_catalog);
 
   /* A chart being read is the one the mariner picked, whatever the core still
    * reports as active, and its line says what is happening. */
@@ -592,7 +577,6 @@ lk_gallery_fill (LkGallery *self)
     lk_tile_apply (g_ptr_array_index (self->tiles, i),
                    &g_array_index (plan, LkTilePlan, i));
 
-  lk_gallery_ask_for_pictures (self, mine, catalog, n_catalog);
 }
 
 static void
@@ -644,9 +628,6 @@ lk_chart_gallery_new (LkAppModel *model, LkChartGalleryAdd on_add, gpointer user
   g_signal_connect_object (lk_app_model_get_chart_links (model), "changed",
                            G_CALLBACK (lk_gallery_changed), self->row, 0);
   g_signal_connect_object (model, "chart-sets-changed",
-                           G_CALLBACK (lk_gallery_changed), self->row, 0);
-  /* A picture landing is a tile to redraw. */
-  g_signal_connect_object (self->previews, "changed",
                            G_CALLBACK (lk_gallery_changed), self->row, 0);
 
   lk_gallery_fill (self);

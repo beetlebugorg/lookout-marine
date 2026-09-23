@@ -177,38 +177,16 @@ lookout_links *lk_chart_controller_chart_links_read (LkChartController *self);
 
 /* ---- pictures of charts -------------------------------------------------- */
 
-/* TRUE when the chart has nothing left to build and no frame pending.
- *
- * A SNAPSHOT IS NOT CHEAP WHILE THE CHART IS STILL COMING TOGETHER:
- * lookout_snapshot_rgba builds the whole scene before it reads the frame back,
- * and on a linked style that is still fetching its sprite packs one call has
- * been measured at eleven seconds on the main thread. Anything that wants a
- * picture asks this first, and waits.
- *
- * Read from the last frame, so it answers after the loop has gone idle. */
-gboolean lk_chart_controller_settled (LkChartController *self);
+/* A picture of one chart link at a point, `width` by `height` device pixels,
+ * into `dst` (RGBA8, premultiplied, width * height * 4 bytes). A
+ * LOOKOUT_PICTURE_ value, and NONE with no chart open. See
+ * lookout_chart_link_picture. */
+int lk_chart_controller_chart_link_picture (LkChartController *self, const char *url,
+                                            int kind, double lon, double lat, double zoom,
+                                            int width, int height, guint8 *dst);
 
-/* The chart as it is drawing, as a picture, or NULL with no chart open.
- *
- * The engine draws ONE chart at a time, so this is the only true picture of a
- * publisher's portrayal: their own style, rendered by the engine, at the water
- * the mariner is on. A style that layers its own work over somebody else's
- * raster base otherwise previews as that base, which is another map under this
- * publisher's name. */
-GdkTexture *lk_chart_controller_snapshot (LkChartController *self);
-
-/* Read the style of every link whose tile template is not known yet, and keep
- * the template with the link. Nothing here touches the chart being drawn.
- * Call it when a list of charts goes on screen. */
-void lk_chart_controller_chart_links_preview (LkChartController *self);
-
-/* The url of the tile that pictures `link` at a point, or NULL when the style
- * names no raster tiles. A vector style draws no single-tile picture, and one
- * whose style has not been read yet has no template to ask about. Free with
- * g_free. */
-char *lk_chart_controller_chart_link_preview_url (LkChartController *self,
-                                                  const char *link,
-                                                  double lon, double lat, int zoom);
+/* Drop the pictures still being drawn. */
+void lk_chart_controller_chart_link_pictures_cancel (LkChartController *self);
 
 /* Where the camera is looking, for a picture of every chart at one point.
  * FALSE with no chart open. */

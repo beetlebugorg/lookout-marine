@@ -129,7 +129,6 @@ sources = files(
   'src/engine/surface.c',
   'src/library/bake.c',
   'src/library/fetch.c',
-  'src/library/preview-engine.c',
   'src/library/scan.c',
   'src/library/sets.c',
   'src/model/app-model.c',
