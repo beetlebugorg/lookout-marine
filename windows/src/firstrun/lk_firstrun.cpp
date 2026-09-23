@@ -224,18 +224,6 @@ namespace lkw
         return s + L". " + Thousands(hold.Total()) + L" charts, none installed.";
     }
 
-    std::string PickedFromHeld(std::vector<std::pair<std::string, RegionHold>> const &holds)
-    {
-        std::string out;
-        for (auto const &one : holds)
-        {
-            if (!one.second.Complete())
-                continue;
-            out += (out.empty() ? "" : ",") + one.first;
-        }
-        return out;
-    }
-
     std::wstring CostLine(uint32_t cells, uint64_t bytes, uint32_t held, uint64_t held_bytes)
     {
         if (cells == 0 && held > 0)

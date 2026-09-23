@@ -323,12 +323,6 @@ namespace winrt::LookoutMarine::implementation
         bool ChartSetsScanning() const;
         void CloseChartSets();
         std::vector<std::string> ChartSetOpenPaths();
-        /* The cells the downloader's own set holds, by dataset name. The
-         * picker's ticks come from this. */
-        std::set<std::string> ManagedCells();
-        /* What an interrupted removal left beside the library. Swept once a
-         * session, off the UI thread. */
-        void SweepRemovedCharts();
         /* Put a folder on the set list. `after_write` asks for a rescan of
          * one already listed, which only an open that follows a bake needs:
          * a rescan returns the row to unscanned while it reads, and every
@@ -363,29 +357,14 @@ namespace winrt::LookoutMarine::implementation
          * files open, and Windows refuses to rename a directory under one. */
         void DeletePreparedCharts(std::string const &path, std::string const &name);
         int remove_seq{ 0 };
-        /* Give back the water a mariner unticked in the picker, and what that
-         * took out.
-         *
-         * BOTH HALVES of a cell: the prepared chart in the library and the
-         * source it was made from under the download directory. A prepared
-         * chart stands in for its source in a set's file list, so deleting
-         * only the prepared one leaves the .000 for the next scan to read
-         * back. The handle is closed first, because the core holds every
-         * chart in the library open. */
-        struct NoaaRemoval
-        {
-            size_t prepared{ 0 };
-            size_t sources{ 0 };
-            size_t failed{ 0 };
-        };
-        NoaaRemoval RemoveNoaaCells(std::set<std::string> const &names,
-                                    std::string const &water);
-        /* Open what the switched-on sets compose, or take the chart off the
-         * display when nothing is installed. */
         /* The removal running now, and what the last one left to say. The
          * delete thread writes it and the page reads it, so it outlives the
-         * call that started it. */
+         * call that started it. `removal_from_noaa` marks one that
+         * NoaaChanged follows through the NOAA state. */
         std::shared_ptr<lkw::RemovalJob> removal_job;
+        bool removal_from_noaa{ false };
+        /* Open what the switched-on sets compose, or take the chart off the
+         * display when nothing is installed. */
         void ReopenChartSets(std::string const &recent);
         /* The composed set paths the chart was last opened from. Empty when
          * the chart draws something else: a recent, the basemap, or nothing.
@@ -463,9 +442,9 @@ namespace winrt::LookoutMarine::implementation
         // decides what survives their resetting.
         /* Price each region on its own, into noaa_region_hold. The pick's own
          * total is what a download costs; these are what the device already
-         * holds, which the pills state. One cost call per region, answered off
-         * the catalog the core holds. */
-        void FirstRunRepriceRegions();
+         * holds, which the pills state. Returns the regions the core recorded
+         * as downloaded, which the picker opens ticked. */
+        std::string FirstRunRepriceRegions();
         void FirstRunPollStart();
         /* Start or stop that poll by what there is to watch: a bake, a set
          * scan, or an ended bake still to be handed over. */
@@ -532,9 +511,11 @@ namespace winrt::LookoutMarine::implementation
         fire_and_forget FirstRunSayRemoval(std::wstring says);
         /* The regions ticked when the picker opened, as the core's list. */
         std::string noaa_held_at_open;
-        /* Which regions are being given back, and the cells that means. */
+        /* Which regions are being given back. */
         std::vector<std::string> NoaaRemoving();
-        std::set<std::string> NoaaCellsToRemove(std::vector<std::string> const &gone);
+        /* Apply the picker's pick through lookout_noaa_apply. Returns how
+         * many directories left the library. */
+        uint32_t NoaaApply(std::string const &picked, bool again);
         /* Those regions by name, for a line a mariner reads. */
         std::vector<std::wstring> NoaaRegionNames(std::vector<std::string> const &ids);
 

@@ -695,28 +695,6 @@ void TestFirstRun()
         LK_EQ(RegionLabel(L"Alaska", L"Dixon Entrance to the Beaufort Sea", blank),
               std::wstring(L"Alaska. Dixon Entrance to the Beaufort Sea"));
 
-        /* Opening the picker with nothing ticked stated that the mariner held
-         * nothing. */
-        Case("the picker opens on the water already here");
-        std::vector<std::pair<std::string, RegionHold>> holds{
-            { "d1", RegionHold{ 0, 44 } },
-            { "d5", RegionHold{ 9, 3 } },
-            { "d7", RegionHold{ 0, 930 } },
-            { "d17", RegionHold{ 412, 0 } },
-        };
-        LK_EQ(PickedFromHeld(holds), std::string("d1,d7"));
-
-        Case("held nothing, ticked nothing");
-        LK_EQ(PickedFromHeld({ { "d5", RegionHold{ 9, 0 } } }), std::string(""));
-        LK_EQ(PickedFromHeld({}), std::string(""));
-
-        /* The pick it opens with is the list the toggle and the cost call
-         * read, so it has to be their format. */
-        Case("that pick is a list the rest of the step understands");
-        LK_EQ(RegionPicked(PickedFromHeld(holds), "d7"), true);
-        LK_EQ(RegionPicked(PickedFromHeld(holds), "d5"), false);
-        LK_EQ(RegionToggle(PickedFromHeld(holds), "d1"), std::string("d7"));
-
         /* The line beside the primary action. It stated the price of a pick
          * at the end of the step, where the footer bar covered it. */
         Case("what a pick costs, in the mariner's words");

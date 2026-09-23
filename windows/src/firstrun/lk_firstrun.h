@@ -191,11 +191,6 @@ namespace lkw
     std::wstring RegionLabel(std::wstring const &name, std::wstring const &blurb,
                              RegionHold const &hold);
 
-    // The pick a picker opens with: every region whose water is wholly here.
-    // Opening with nothing ticked said the mariner held nothing, and ticking
-    // water they had already downloaded read as a second download of it.
-    std::string PickedFromHeld(std::vector<std::pair<std::string, RegionHold>> const &holds);
-
     // What a pick costs, in the mariner's words. Water already here is left
     // out of the price, so a pick wholly installed costs nothing and states
     // what fetching it again would move instead.

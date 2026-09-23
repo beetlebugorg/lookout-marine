@@ -47,7 +47,12 @@ namespace winrt::LookoutMarine::implementation
                 lookout_chart_sets_set_managed(chart_sets_model, lkw::NoaaDownloadDir().c_str(), 1);
                 lookout_chart_sets_set_managed(chart_sets_model, lkw::ChartLibraryDir().c_str(), 0);
             }
-            SweepRemovedCharts();
+            // What a removal left when the app ended during its delete: in the
+            // library, and beside it where earlier builds renamed to.
+            std::thread([lib = std::filesystem::path(lkw::ChartLibraryDir())] {
+                lookout_bake_sweep(lib.string().c_str());
+                lookout_bake_sweep(lib.parent_path().string().c_str());
+            }).detach();
         }
         return chart_sets_model;
     }
@@ -332,72 +337,6 @@ namespace winrt::LookoutMarine::implementation
         chart_sets_model = nullptr;
     }
 
-    // What an interrupted removal left behind.
-    //
-    // A removal renames the charts into a holding directory beside the library
-    // and deletes behind the rename on a thread of its own. An app that goes
-    // down before that thread finishes leaves the directory on the disk, with
-    // every chart still in it. Nothing else would ever take it out.
-    //
-    // Once a session, off the UI thread, and only names this app writes.
-    void MainWindow::SweepRemovedCharts()
-    {
-        std::error_code ec;
-        std::filesystem::path lib = lkw::ChartLibraryDir();
-        std::filesystem::path const holding =
-            lib.has_parent_path() ? lib.parent_path() : lib;
-        std::vector<std::filesystem::path> old;
-        for (auto const &entry : std::filesystem::directory_iterator(holding, ec))
-        {
-            std::error_code one;
-            if (!entry.is_directory(one))
-                continue;
-            if (lookout_bake_is_trash(entry.path().filename().string().c_str()))
-                old.push_back(entry.path());
-        }
-        if (old.empty())
-            return;
-        std::thread([old] {
-            for (auto const &dir : old)
-            {
-                std::error_code done;
-                std::filesystem::remove_all(dir, done);
-            }
-        }).detach();
-    }
-
-    // The cells the downloader's own set holds, by dataset name: the folder
-    // NOAA charts are downloaded into. The picker's ticks come from this.
-    //
-    // A prepared chart stands in for the cell it was made from here, so this
-    // reads one entry per cell whether or not the source .000 is still beside
-    // it (lookout_chart_set_files).
-    std::set<std::string> MainWindow::ManagedCells()
-    {
-        std::set<std::string> out;
-        lookout_chart_sets *model = ChartSetsModel();
-        if (model == nullptr)
-            return out;
-        for (auto const &row : chart_sets)
-        {
-            if (!row.managed)
-                continue;
-            size_t files = 0;
-            auto found = lookout_chart_set_files(model, row.path.c_str(), &files);
-            for (size_t f = 0; found != nullptr && f < files; ++f)
-            {
-                if (found[f] == nullptr || found[f]->kind != LOOKOUT_FILE_BAKED)
-                    continue;
-                std::string name = std::filesystem::path(found[f]->name).stem().string();
-                for (auto &ch : name)
-                    ch = (char)std::toupper((unsigned char)ch);
-                if (!name.empty())
-                    out.insert(name);
-            }
-        }
-        return out;
-    }
-
     // Every chart the switched-on sets carry, ready for the engine: sorted,
     // duplicates dropped (two sets may overlap, and the same cell twice
     // would be composed twice).
@@ -579,132 +518,6 @@ namespace winrt::LookoutMarine::implementation
         // Behind the rename, off this thread. Nothing waits for it: every
         // chart it holds is already out of the library.
         std::thread(EmptyAndRemove, trash, removal_job, refused).detach();
-    }
-
-    // Give back the water a mariner unticked in the NOAA picker.
-    //
-    // Only what this app downloaded and prepared, and only inside its own two
-    // directories: a mariner's own folders are their files, and a set they
-    // added is removed a set at a time in the Charts pane.
-    //
-    // BOTH HALVES of every cell, resolved by name:
-    //   <prepared>/<CELL>           the prepared chart, under PreparedDirFor
-    //                               the download directory
-    //   <downloads>/**/<CELL>       the cell it was made from, a level down
-    //                               under ENC_ROOT
-    // A prepared chart stands in for its source in a set's file list, so a
-    // loop over that list deletes the chart, leaves the .000 beside it and the
-    // next scan reads the cell straight back.
-    //
-    // Both halves are renamed into ONE trash directory and deleted behind it,
-    // off the UI thread. The library is correct the moment the rename returns.
-    MainWindow::NoaaRemoval MainWindow::RemoveNoaaCells(std::set<std::string> const &names,
-                                                        std::string const &water)
-    {
-        NoaaRemoval took;
-        if (names.empty())
-            return took;
-        std::error_code ec;
-        std::filesystem::path lib = lkw::ChartLibraryDir();
-        std::string const downloads = lkw::NoaaDownloadDir();
-        std::filesystem::path const prepared = PreparedDirFor(downloads);
-        if (!std::filesystem::is_directory(lib, ec))
-            return took;
-
-        // The core holds every chart in the library open, and Windows refuses
-        // to move a directory out from under an open file. Nothing is drawn
-        // while this runs; the reopen at the end puts the rest back up.
-        CloseChartHandle();
-
-        std::string const prefix = lookout_bake_trash_prefix();
-        // BESIDE the library, not in it. A rename is instant and the delete
-        // behind it takes a while; with the trash inside the library the scan
-        // asked for below counted every chart still sitting in it, so the pane
-        // read 935 charts with 5 on disk.
-        std::filesystem::path const holding =
-            lib.has_parent_path() ? lib.parent_path() : lib;
-        std::filesystem::path trash =
-            holding / (prefix + std::to_string(GetCurrentProcessId()) + "-" +
-                       std::to_string(++remove_seq));
-        std::filesystem::create_directories(trash, ec);
-        if (ec)
-            return took;
-
-        // `into` keeps the two halves of one cell apart inside the trash.
-        auto take = [&](std::filesystem::path const &what, std::string const &into) {
-            std::error_code one;
-            std::filesystem::rename(what, trash / into, one);
-            if (one)
-            {
-                ++took.failed;
-                return false;
-            }
-            return true;
-        };
-        auto cell_of = [&names](std::filesystem::directory_entry const &entry) {
-            std::error_code one;
-            std::string stem = entry.is_directory(one) ? entry.path().filename().string()
-                                                       : entry.path().stem().string();
-            for (auto &ch : stem)
-                ch = (char)std::toupper((unsigned char)ch);
-            return names.find(stem) != names.end() ? stem : std::string{};
-        };
-
-        // The prepared half: one directory per cell, named after it.
-        for (auto const &entry : std::filesystem::directory_iterator(prepared, ec))
-        {
-            std::string const cell = cell_of(entry);
-            if (cell.empty())
-                continue;
-            if (take(entry.path(), cell))
-                ++took.prepared;
-        }
-
-        // The source half, under the download directory. NOAA's zips unpack to
-        // ENC_ROOT/<CELL>/, so this walks rather than assuming the depth.
-        ec.clear();
-        if (std::filesystem::is_directory(downloads, ec))
-        {
-            std::vector<std::filesystem::path> hits;
-            for (auto it = std::filesystem::recursive_directory_iterator(downloads, ec);
-                 !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec))
-            {
-                std::error_code one;
-                if (!it->is_directory(one))
-                    continue;
-                std::string const cell = cell_of(*it);
-                if (cell.empty())
-                    continue;
-                hits.push_back(it->path());
-                // Its own children are this cell's as well, and the walk must
-                // not follow a directory that is about to be renamed away.
-                it.disable_recursion_pending();
-            }
-            for (auto const &hit : hits)
-            {
-                std::string cell = hit.filename().string();
-                for (auto &ch : cell)
-                    ch = (char)std::toupper((unsigned char)ch);
-                if (take(hit, "src-" + cell))
-                    ++took.sources;
-            }
-        }
-
-        // Report it while it runs, in the panel an import reports in.
-        removal_job = std::make_shared<lkw::RemovalJob>();
-        removal_job->Begin(water, 0);
-
-        // Behind the rename, off this thread. Every chart it holds is already
-        // out of the library.
-        std::thread(EmptyAndRemove, trash, removal_job, took.failed).detach();
-
-        // PollChartSets copies the row's counts when the rescan ends. The
-        // rescan frees the file lists a copy made here reads.
-        if (took.prepared != 0 || took.sources != 0)
-            if (lookout_chart_sets *model = ChartSetsModel())
-                lookout_chart_sets_rescan(model, downloads.c_str());
-        ReopenChartSets({});
-        return took;
     }
 
     // Take a set off the list.
