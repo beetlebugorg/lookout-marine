@@ -155,6 +155,16 @@ final class ChartSetTests: XCTestCase {
         XCTAssertEqual(TextFormat.usageBand(0), "Unknown")
     }
 
+    /// The band ramp reads the core's palette, in every scheme.
+    func testEveryBandHasAPaletteColour() {
+        for band in 1...6 {
+            for scheme: UInt32 in 0...2 {
+                XCTAssertNotNil(Chrome.s52("BAND\(band)", scheme: scheme), "BAND\(band) in \(scheme)")
+            }
+        }
+        XCTAssertNil(Chrome.s52("BAND7", scheme: 0))
+    }
+
     /// A chart still inside an archive is not a path the engine can open.
     func testAnArchivedCellIsNotOpenable() {
         let s = set(cells: [cell("a"), cell("b", archived: true)])

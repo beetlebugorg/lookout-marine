@@ -36,10 +36,10 @@ struct CoverageMap: View {
               ids: ["d14"], label: "Hawaii"),
     ]
 
-    /// S-52 shallow blue and GSHHG land, so the picker sits in the app's own
+    /// S-52 very shallow water and land, so the picker sits in the app's own
     /// palette.
-    private static let water = Color(red: 0.68, green: 0.84, blue: 1.0).opacity(0.55)
-    private static let land = Color(red: 0.64, green: 0.59, blue: 0.33).opacity(0.55)
+    private static let water = Chrome.s52("DEPVS").opacity(0.55)
+    private static let land = Chrome.s52("LANDA").opacity(0.55)
 
     var body: some View {
         #if os(macOS)

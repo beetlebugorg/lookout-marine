@@ -88,18 +88,14 @@ struct BandRamp: View {
         ordered.map { "\($0.name) \($0.count)" }.joined(separator: ", ")
     }
 
-    /// The S-52 depth ramp, deep to shallow, read as fine to coarse. Band 6 is
+    /// The core's usage band ramp, BAND1 to BAND6. In the day palette it is
+    /// the S-52 depth ramp, deep to shallow, read as fine to coarse. Band 6 is
     /// berthing detail and band 1 is an overview.
     static func color(_ band: Int) -> Color {
-        switch band {
-        case 6: return Color(red: 0.184, green: 0.561, blue: 0.878)  // #2F8FE0
-        case 5: return Color(red: 0.380, green: 0.718, blue: 1.000)  // #61B7FF
-        case 4: return Color(red: 0.510, green: 0.792, blue: 1.000)  // #82CAFF
-        case 3: return Color(red: 0.655, green: 0.851, blue: 0.984)  // #A7D9FB
-        case 2: return Color(red: 0.788, green: 0.929, blue: 1.000)  // #C9EDFF
-        default: return Color(red: 0.894, green: 0.961, blue: 1.000) // #E4F5FF
-        }
+        ramp[min(max(band, 1), 6) - 1]
     }
+
+    private static let ramp: [Color] = (1...6).map { Chrome.s52("BAND\($0)") }
 }
 
 

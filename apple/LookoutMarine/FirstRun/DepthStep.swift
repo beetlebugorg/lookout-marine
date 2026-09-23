@@ -259,27 +259,14 @@ struct DepthStep: View {
 
     /// The S-52 tokens the engine shades four-shade water with, deepest last,
     /// and the land under them.
-    private var unsafeShade: Color { s52("DEPVS", fallback: .init(red: 0.38, green: 0.72, blue: 1)) }
-    private var shallowShade: Color { s52("DEPMS", fallback: .init(red: 0.51, green: 0.79, blue: 1)) }
-    private var mediumShade: Color { s52("DEPMD", fallback: .init(red: 0.65, green: 0.85, blue: 0.98)) }
-    private var deepShade: Color { s52("DEPDW", fallback: .init(red: 0.79, green: 0.93, blue: 1)) }
-    private var shore: Color { s52("LANDA", fallback: .init(red: 0.75, green: 0.75, blue: 0.56)) }
-    private var contourInk: Color { s52("DEPCN", fallback: .init(red: 0.46, green: 0.55, blue: 0.59)) }
-    private var soundingInk: Color { s52("SNDG2", fallback: .black) }
-
-    /// One colour out of the engine's own palette, in the scheme on screen.
-    /// The legend and the chart then cannot drift apart.
-    private func s52(_ token: String, fallback: Color) -> Color {
-        var rgba: [Float] = [0, 0, 0, 1]
-        let ok = token.withCString { t in
-            rgba.withUnsafeMutableBufferPointer {
-                lookout_s52_color(t, UInt32(m.scheme.rawValue), $0.baseAddress)
-            }
-        }
-        guard ok != 0 else { return fallback }
-        return Color(.sRGB, red: Double(rgba[0]), green: Double(rgba[1]),
-                     blue: Double(rgba[2]), opacity: Double(rgba[3]))
-    }
+    private var scheme: UInt32 { UInt32(m.scheme.rawValue) }
+    private var unsafeShade: Color { Chrome.s52("DEPVS", scheme: scheme) ?? .init(red: 0.38, green: 0.72, blue: 1) }
+    private var shallowShade: Color { Chrome.s52("DEPMS", scheme: scheme) ?? .init(red: 0.51, green: 0.79, blue: 1) }
+    private var mediumShade: Color { Chrome.s52("DEPMD", scheme: scheme) ?? .init(red: 0.65, green: 0.85, blue: 0.98) }
+    private var deepShade: Color { Chrome.s52("DEPDW", scheme: scheme) ?? .init(red: 0.79, green: 0.93, blue: 1) }
+    private var shore: Color { Chrome.s52("LANDA", scheme: scheme) ?? .init(red: 0.75, green: 0.75, blue: 0.56) }
+    private var contourInk: Color { Chrome.s52("DEPCN", scheme: scheme) ?? .init(red: 0.46, green: 0.55, blue: 0.59) }
+    private var soundingInk: Color { Chrome.s52("SNDG2", scheme: scheme) ?? .black }
 
     /// The seabed, as a fixed slope measured in safety contours.
     ///

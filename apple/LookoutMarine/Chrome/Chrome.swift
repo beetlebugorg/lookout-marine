@@ -40,6 +40,35 @@ enum Chrome {
         #endif
     }
 
+    /// One colour out of the engine's own palette, by S-52 token, in a chart
+    /// scheme (0 day, 1 dusk, 2 night). Nil when the token is not in it.
+    /// A legend drawn from it and the chart cannot drift apart.
+    static func s52(_ token: String, scheme: UInt32) -> Color? {
+        guard let c = s52RGBA(token, scheme: scheme) else { return nil }
+        return Color(.sRGB, red: c.0, green: c.1, blue: c.2, opacity: c.3)
+    }
+
+    /// A palette token that follows the view's colour scheme: the day
+    /// palette in a light view, dusk in a dark one. Clear when the token is
+    /// not in the palette.
+    static func s52(_ token: String) -> Color {
+        let clear = (0.0, 0.0, 0.0, 0.0)
+        return dyn(light: s52RGBA(token, scheme: 0) ?? clear,
+                   dark: s52RGBA(token, scheme: 1) ?? clear)
+    }
+
+    private static func s52RGBA(_ token: String,
+                                scheme: UInt32) -> (Double, Double, Double, Double)? {
+        var rgba: [Float] = [0, 0, 0, 1]
+        let ok = token.withCString { t in
+            rgba.withUnsafeMutableBufferPointer {
+                lookout_s52_color(t, scheme, $0.baseAddress)
+            }
+        }
+        guard ok != 0 else { return nil }
+        return (Double(rgba[0]), Double(rgba[1]), Double(rgba[2]), Double(rgba[3]))
+    }
+
     static let ink = dyn(light: (0.102, 0.102, 0.102, 1),      // #1A1A1A
                          dark: (0.839, 0.824, 0.784, 1))       // #D6D2C8
     static let muted = dyn(light: (0.420, 0.420, 0.420, 1),    // #6B6B6B
