@@ -1204,10 +1204,20 @@ pub const Sets = struct {
             r.scanned = true;
             r.last_scan = number;
             // The agency when the charts agree on one, else the folder name.
+            // A title that has not changed keeps its pointer, so a list read
+            // before a rescan still matches one read after it.
             if (scan.producer) |p| {
                 if (self.gpa.dupeZ(u8, &p)) |owned| {
                     old.producer = r.producer;
                     r.producer = owned;
+                } else |_| {}
+            }
+            const office = if (scan.producer) |p| library.agency(&p) else null;
+            const title = office orelse library.baseName(path);
+            if (!std.mem.eql(u8, r.title, title)) {
+                if (self.gpa.dupeZ(u8, title)) |owned| {
+                    old.title = r.title;
+                    r.title = owned;
                 } else |_| {}
             }
             self.retired.append(self.gpa, old) catch old.free(self.gpa);
@@ -1271,11 +1281,13 @@ const Retired = struct {
     arena: ?std.heap.ArenaAllocator = null,
     openable: []Openable = &.{},
     producer: ?[:0]u8 = null,
+    title: ?[:0]u8 = null,
 
     fn free(self: *Retired, gpa: std.mem.Allocator) void {
         if (self.arena) |*a| a.deinit();
         freeOpenable(gpa, self.openable);
         if (self.producer) |p| gpa.free(p);
+        if (self.title) |p| gpa.free(p);
     }
 };
 
@@ -1991,6 +2003,25 @@ test "the list stays valid across a file read after a scan lands" {
         try t.expectEqual(w.band_hi, r.band_hi);
     }
     try t.expectEqualStrings(b, std.mem.span(rows[1].path));
+}
+
+test "a set is titled by its agency when its charts agree on one" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const noaa = try f.folderNamed("ENC_ROOT", &.{ "US5MD1MC.pmtiles", "US4MD1MC.pmtiles" });
+    defer t.allocator.free(noaa);
+    const mixed = try f.folderNamed("Mixed", &.{ "US5MD1MC.pmtiles", "GB5X01NE.pmtiles" });
+    defer t.allocator.free(mixed);
+
+    const s = try f.open();
+    defer s.close();
+    try t.expect(s.add(noaa));
+    try t.expect(s.add(mixed));
+    settle(s);
+
+    const rows = s.all();
+    try t.expectEqualStrings("NOAA", std.mem.span(rows[0].title));
+    try t.expectEqualStrings("Mixed", std.mem.span(rows[1].title));
 }
 
 test "a list held across a finished scan keeps its producer" {

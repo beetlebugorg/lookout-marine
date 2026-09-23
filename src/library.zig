@@ -97,6 +97,34 @@ pub fn producerCode(stem: []const u8) ?[]const u8 {
     return null;
 }
 
+/// The hydrographic office a producer code belongs to. The code is the
+/// country's, and for these that is the office a mariner names. A code not
+/// listed returns null, and the set keeps its folder name.
+pub fn agency(code: []const u8) ?[:0]const u8 {
+    const offices = [_]struct { []const u8, [:0]const u8 }{
+        .{ "US", "NOAA" },
+        .{ "GB", "UKHO" },
+        .{ "CA", "CHS" },
+        .{ "AU", "AHO" },
+        .{ "NZ", "LINZ" },
+        .{ "NL", "Netherlands Hydrographic Office" },
+        .{ "DE", "BSH" },
+        .{ "FR", "Shom" },
+        .{ "NO", "Norwegian Hydrographic Service" },
+        .{ "DK", "Danish Geodata Agency" },
+        .{ "SE", "Swedish Maritime Administration" },
+        .{ "FI", "Finnish Transport Agency" },
+        .{ "IE", "INFOMAR" },
+        .{ "JP", "Japan Hydrographic Association" },
+        .{ "BR", "DHN" },
+        .{ "ZA", "SANHO" },
+    };
+    for (offices) |o| {
+        if (std.ascii.eqlIgnoreCase(code, o[0])) return o[1];
+    }
+    return null;
+}
+
 /// The usage band an S-57 dataset name states, or null when the name states
 /// none. An S-101 name states no band, and neither does a name that is not a
 /// dataset name.
