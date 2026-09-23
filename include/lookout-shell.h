@@ -262,6 +262,10 @@ void lookout_frame_kick(lookout *h);
 #define LOOKOUT_COORD_MAX    32
 #define LOOKOUT_POSITION_MAX 72
 #define LOOKOUT_SCALE_MAX    32
+#define LOOKOUT_COUNT_MAX    32
+#define LOOKOUT_BYTES_MAX    32
+#define LOOKOUT_DURATION_MAX 48
+#define LOOKOUT_DEPTH_MAX    32
 
 /* Degrees and decimal minutes with a hemisphere: "38°58.578'N". A longitude
  * (is_lat = 0) has three degree digits, so a pair keeps its column width.
@@ -276,10 +280,60 @@ size_t lookout_fmt_position(double lat, double lon, char *out, size_t cap);
  * writes "1:—". */
 size_t lookout_fmt_scale(double denominator, char *out, size_t cap);
 
+/* The display scale at the width a phone has for it: from 1,000,000 up, in
+ * millions to three significant figures ("1:4.80M", "1:12.3M", "1:123M").
+ * Below that, the same string as lookout_fmt_scale. */
+size_t lookout_fmt_scale_compact(double denominator, char *out, size_t cap);
+
+/* A full position at two decimals of minutes, about two metres:
+ * "38°58.58'N 076°28.92'W". For a readout row with no room for the third. */
+size_t lookout_fmt_position_compact(double lat, double lon, char *out, size_t cap);
+
+/* A count with a comma between each group of three: "7,214". The separator is
+ * a comma on every shell, independent of locale. */
+size_t lookout_fmt_count(uint64_t n, char *out, size_t cap);
+
+/* A size, a thousand to the megabyte as NOAA states a download. Below a
+ * gigabyte, megabytes to a tenth ("226.5 MB", "12 MB"). From there, gigabytes
+ * to a hundredth ("1.23 GB", "10 GB"). Trailing zeros are dropped. */
+size_t lookout_fmt_bytes(uint64_t bytes, char *out, size_t cap);
+
+/* How a time is said: a countdown on a running job, or an estimate before one
+ * starts. */
+enum {
+    LOOKOUT_DURATION_LEFT  = 0, /* "under a minute left", "about 3 min left",
+                                   "about 1.5 h left" */
+    LOOKOUT_DURATION_ABOUT = 1  /* "under a minute", "about a minute",
+                                   "about 3 minutes", "about 1.5 hours" */
+};
+
+/* About how long `seconds` is, in one of the styles above: to the minute under
+ * an hour, to a tenth of an hour past it. Returns 0 for a time that is negative
+ * or not finite. */
+size_t lookout_fmt_duration(double seconds, int style, char *out, size_t cap);
+
+/* The unit for lookout_fmt_depth. LOOKOUT_DEPTH_BARE may be or-ed in to leave
+ * the unit off, for a field that shows its unit beside it. */
+enum {
+    LOOKOUT_DEPTH_METRES = 0,
+    LOOKOUT_DEPTH_FEET   = 1,
+    LOOKOUT_DEPTH_BARE   = 2
+};
+
+/* A depth given in metres, shown in `unit` to a tenth, with a whole number
+ * shown whole: "5 m", "1.8 m", "12 ft". Returns 0 for a depth that is not
+ * finite. */
+size_t lookout_fmt_depth(double v_m, int unit, char *out, size_t cap);
+
 /* The S-52 navigational purpose band for a display scale: "Berthing",
  * "Harbor", "Approach", "Coastal", "General", "Overview", or "—" below 1:0.001.
  * Static storage, valid for the life of the process. */
 const char *lookout_band_name(double denominator);
+
+/* The name of an S-57 usage band, 1 to 6: "Overview", "General", "Coastal",
+ * "Approach", "Harbor", "Berthing", or "Unknown" for any other number. Static
+ * storage, valid for the life of the process. */
+const char *lookout_usage_band_name(int band);
 
 /* Parse a position the mariner typed: a decimal pair ("38.98, -76.48") or
  * degrees with hemispheres ("38°58.8'N 076°29.0'W", "38 58 30 N, 76 29 W").

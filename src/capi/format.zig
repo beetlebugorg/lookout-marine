@@ -15,6 +15,11 @@ comptime {
     std.debug.assert(format.coord_max + 1 <= 32);
     std.debug.assert(format.position_max + 1 <= 72);
     std.debug.assert(format.scale_max + 1 <= 32);
+    std.debug.assert(format.scale_compact_max + 1 <= 32);
+    std.debug.assert(format.count_max <= 32);
+    std.debug.assert(format.bytes_max <= 32);
+    std.debug.assert(format.duration_max <= 48);
+    std.debug.assert(format.depth_max <= 32);
 }
 
 /// Copy `s` and its NUL into the caller's buffer. Returns the length, or 0 when
@@ -47,6 +52,49 @@ export fn lookout_fmt_position(lat: f64, lon: f64, out: ?[*]u8, cap: usize) usiz
 export fn lookout_fmt_scale(denominator: f64, out: ?[*]u8, cap: usize) usize {
     var buf: [format.scale_max]u8 = undefined;
     return copyOut(out, cap, format.fmtScale(&buf, denominator));
+}
+
+/// The scale in millions from 1,000,000 up. See lookout-shell.h.
+export fn lookout_fmt_scale_compact(denominator: f64, out: ?[*]u8, cap: usize) usize {
+    var buf: [format.scale_compact_max]u8 = undefined;
+    return copyOut(out, cap, format.fmtScaleCompact(&buf, denominator));
+}
+
+/// A position at two decimals of minutes. See lookout-shell.h.
+export fn lookout_fmt_position_compact(lat: f64, lon: f64, out: ?[*]u8, cap: usize) usize {
+    var buf: [format.position_max]u8 = undefined;
+    return copyOut(out, cap, format.fmtPositionCompact(&buf, lat, lon));
+}
+
+/// A count grouped in threes. See lookout-shell.h.
+export fn lookout_fmt_count(n: u64, out: ?[*]u8, cap: usize) usize {
+    var buf: [format.count_max]u8 = undefined;
+    return copyOut(out, cap, format.fmtCount(&buf, n));
+}
+
+/// A size in megabytes or gigabytes. See lookout-shell.h.
+export fn lookout_fmt_bytes(bytes: u64, out: ?[*]u8, cap: usize) usize {
+    var buf: [format.bytes_max]u8 = undefined;
+    return copyOut(out, cap, format.fmtBytes(&buf, bytes));
+}
+
+/// About how long a time is. See lookout-shell.h.
+export fn lookout_fmt_duration(seconds: f64, style: c_int, out: ?[*]u8, cap: usize) usize {
+    var buf: [format.duration_max]u8 = undefined;
+    const s: format.DurationStyle = if (style == @intFromEnum(format.DurationStyle.about)) .about else .left;
+    return copyOut(out, cap, format.fmtDuration(&buf, seconds, s));
+}
+
+/// A depth in the unit on screen. See lookout-shell.h.
+export fn lookout_fmt_depth(v_m: f64, unit: c_int, out: ?[*]u8, cap: usize) usize {
+    var buf: [format.depth_max]u8 = undefined;
+    return copyOut(out, cap, format.fmtDepth(&buf, v_m, unit & 1 != 0, unit & 2 != 0));
+}
+
+/// The name of an S-57 usage band. See lookout-shell.h.
+export fn lookout_usage_band_name(band: c_int) [*:0]const u8 {
+    const b: u8 = if (band >= 1 and band <= 6) @intCast(band) else 0;
+    return format.bandName(b).ptr;
 }
 
 /// The S-52 navigational purpose band for a display scale. See lookout-shell.h.
