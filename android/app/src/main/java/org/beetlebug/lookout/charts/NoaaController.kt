@@ -165,6 +165,38 @@ class NoaaController(
         call { Lookout.noaaDownload(noaa, ids, destDir, again) }
     }
 
+    /**
+     * Tick the regions the core records as downloaded, and pass them to
+     * [onDone] on the main thread. The picker opens with these, so unticking
+     * one reads as giving it back.
+     */
+    fun pickRecorded(onDone: (Set<String>) -> Unit) {
+        call {
+            val buf = LongArray(6)
+            val rec = regions.filter { Lookout.noaaRegionState(noaa, it.id, buf) && buf[5] != 0L }
+            val ids = rec.map { it.id }.toSet()
+            readCost(rec.joinToString(",") { it.id })
+            access.onMain {
+                picked = ids
+                onDone(ids)
+            }
+        }
+    }
+
+    /**
+     * Make the download at [destDir] hold the picked water: the core deletes
+     * the water given back and fetches what is missing. [onDone] gets how
+     * many directories left the library, on the main thread.
+     */
+    fun apply(destDir: String, onDone: (Int) -> Unit) {
+        val ids = pickedIds
+        error = null
+        call {
+            val moved = Lookout.noaaApply(noaa, ids, destDir, false)
+            access.onMain { onDone(moved) }
+        }
+    }
+
     /** Stop the download and the core's prepare. What arrived stays. */
     fun cancel() {
         call { Lookout.noaaCancel(noaa) }
@@ -227,8 +259,7 @@ class NoaaController(
     }
 
     /** WORKER THREAD. Publishes through [access]. */
-    private fun readCost() {
-        val ids = pickedIds
+    private fun readCost(ids: String = pickedIds) {
         if (ids.isEmpty() || !Lookout.noaaCost(noaa, ids, costBuf)) {
             access.onMain {
                 cells = 0; bytes = 0; held = 0; heldBytes = 0
