@@ -20,6 +20,7 @@
 //! has a deadline, so none keeps the loop awake for good.
 
 const std = @import("std");
+const stackprobe = @import("stackprobe.zig");
 const cc = @import("c.zig").c;
 const root = @import("root.zig");
 const png = @import("png.zig");
@@ -913,11 +914,12 @@ test "a render fetches through the first handle's fetcher, and is kept on disk" 
     try testing.expectEqual(before, f.reqs.items.len);
 }
 
-test "a render runs to the end in the frame step of a thread with a 256 KB stack" {
+test "a render runs to the end in the frame step within 256 KB of stack" {
     // A shell's UI thread has 1 MB on Windows, and the frame step runs on it.
     // The settings store's atomic write, also under the frame step, needs
     // about 790 KB of that in std's Windows file calls. 256 KB is what is
-    // left.
+    // left. The thread is larger, and the probe measures how deep the frame
+    // step went (see stackprobe.zig).
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     var f: TestFetch = .{};
@@ -928,7 +930,9 @@ test "a render runs to the end in the frame step of a thread with a 256 KB stack
     defer testing.allocator.free(tile);
 
     const Run = struct {
-        fn run(l: *Lookout, fetch: *TestFetch, body: []const u8, out: *Result) void {
+        fn run(l: *Lookout, fetch: *TestFetch, body: []const u8, out: *Result, used: *usize) void {
+            const lo = stackprobe.paint(painted);
+            defer used.* = stackprobe.depth(lo, painted);
             const url = "https://t.example/style.json";
             var dst: [48 * 32 * 4]u8 = undefined;
             out.* = l.chartLinkPicture(url, .render, -76.48, 38.97, 12, 48, 32, &dst);
@@ -943,7 +947,14 @@ test "a render runs to the end in the frame step of a thread with a 256 KB stack
         }
     };
     var got: Result = .pending;
-    const th = try std.Thread.spawn(.{ .stack_size = 256 * 1024 }, Run.run, .{ main, &f, tile, &got });
+    var used: usize = 0;
+    const th = try std.Thread.spawn(.{ .stack_size = 4 * painted }, Run.run, .{ main, &f, tile, &got, &used });
     th.join();
     try testing.expectEqual(Result.ready, got);
+    std.debug.print("frame step stack: {d} KB\n", .{used / 1024});
+    try testing.expect(used < 256 * 1024);
 }
+
+/// Bytes the stack probe fills: far more than the frame step may use, and
+/// half of the thread the tests give it.
+const painted = 2 * 1024 * 1024;

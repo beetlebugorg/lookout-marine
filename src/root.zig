@@ -15,6 +15,7 @@
 //! the tile sources feed it, and its camera is the one camera. This file holds
 //! no scene and no GPU handle.
 const std = @import("std");
+const stackprobe = @import("stackprobe.zig");
 const builtin = @import("builtin");
 const cc = @import("c.zig").c;
 const cthost = @import("ct/host.zig"); // the renderer, behind one struct
@@ -4519,9 +4520,11 @@ test "a NOAA download on its own handle runs through two chart handles closing" 
     try std.testing.expectEqual(@as(u32, 1), st.done);
 }
 
-test "a frame with the phase profile on runs on a thread with a 256 KB stack" {
+test "a frame with the phase profile on stays within 256 KB of stack" {
     // A shell's UI thread has 1 MB on Windows. The profile's rows are 512 KB,
-    // and prepareFrame and render test for a profile on every frame.
+    // and prepareFrame and render test for a profile on every frame. The
+    // thread is larger, and the probe measures how deep the frames went (see
+    // stackprobe.zig).
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const home = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
@@ -4540,8 +4543,11 @@ test "a frame with the phase profile on runs on a thread with a 256 KB stack" {
     l.frame_prof.?.* = .{ .path = path };
     l.prof_checked = true;
 
+    const painted = 2 * 1024 * 1024;
     const Run = struct {
-        fn run(h: *Lookout) void {
+        fn run(h: *Lookout, used: *usize) void {
+            const lo = stackprobe.paint(painted);
+            defer used.* = stackprobe.depth(lo, painted);
             for (0..3) |_| {
                 h.apiLock();
                 _ = h.render() catch {};
@@ -4549,7 +4555,10 @@ test "a frame with the phase profile on runs on a thread with a 256 KB stack" {
             }
         }
     };
-    const th = try std.Thread.spawn(.{ .stack_size = 256 * 1024 }, Run.run, .{l});
+    var used: usize = 0;
+    const th = try std.Thread.spawn(.{ .stack_size = 4 * painted }, Run.run, .{ l, &used });
     th.join();
     try std.testing.expect(l.frame_prof.?.n > 0);
+    std.debug.print("frame stack: {d} KB\n", .{used / 1024});
+    try std.testing.expect(used < 256 * 1024);
 }
