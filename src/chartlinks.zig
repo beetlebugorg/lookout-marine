@@ -74,11 +74,10 @@ pub const Sink = struct {
     tileRespond: *const fn (ctx: *anyopaque, provider_req: u64, bytes: []const u8, status: TileStatus) void,
 };
 
-/// How many resolve fetches (style, sibling, TileJSON, sprites) may be
-/// outstanding at once, and how many tiles. TWO budgets, not one: resolve
-/// fetches are always few, and a mariner's new `add` must go out at once
-/// rather than wait behind a tile budget a fresh zoom level has filled.
-pub const MAX_RESOLVE_INFLIGHT = 8;
+/// How many tiles may be outstanding at once. Resolve fetches (style,
+/// sibling, TileJSON, sprites) are always few and have no budget, so a
+/// mariner's new `add` is sent at once rather than wait behind a tile budget
+/// a fresh zoom level has filled.
 pub const MAX_TILE_INFLIGHT = 24;
 /// A ceiling on tiles waiting for a budget slot. Past it the oldest is failed
 /// rather than dropped: a tile nobody answers is a hole in the chart that
@@ -410,10 +409,6 @@ pub const Links = struct {
         // been waiting for: resolving needs one, and the list is read before
         // the shell can have set it.
         self.reapply();
-    }
-
-    pub fn hasProvider(self: *const Links) bool {
-        return self.get != null;
     }
 
     /// Hand one url to the shell and remember what its answer is for. Answers

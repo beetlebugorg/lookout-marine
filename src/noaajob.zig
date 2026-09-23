@@ -31,11 +31,6 @@ const encunpack = @import("encunpack.zig");
 /// Set on every request id this service issues.
 pub const id_mark: u64 = @as(u64, 1) << 63;
 
-/// True when this answer belongs to a NOAA download.
-pub fn ownsId(id: u64) bool {
-    return id & id_mark != 0;
-}
-
 /// How many cell zips transfer at once. NOAA serves a public archive, and a
 /// mariner on a marina uplink gains little past four.
 pub const MAX_INFLIGHT = 4;
@@ -2596,14 +2591,6 @@ fn copyZ(dst: []u8, src: []const u8) void {
 // ---- tests ----------------------------------------------------------------
 
 const testing = std.testing;
-
-test "request ids are distinguishable from chartlinks ids" {
-    try testing.expect(ownsId(id_mark | 1));
-    try testing.expect(!ownsId(1));
-    try testing.expect(!ownsId(0));
-    // chartlinks counts up from 1 and never sets the top bit.
-    try testing.expect(!ownsId(std.math.maxInt(u32)));
-}
 
 /// A catalog of one cell, small enough to write in a test and complete enough
 /// to parse.

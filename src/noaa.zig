@@ -47,11 +47,6 @@ pub const Cell = struct {
     band: u8 = 0,
     /// Coverage, from every vertex of every panel.
     box: Box = .{},
-
-    /// True when these numbers match the cell.
-    pub fn sameAs(self: Cell, edition: u32, update: u32) bool {
-        return self.edition == edition and self.update == update;
-    }
 };
 
 /// A cell's coverage as a longitude span and a latitude span.
@@ -231,8 +226,7 @@ pub const Cost = struct {
 pub const Transfer = struct {
     /// The cell this brings, as an index into the catalog. Null for a bundle.
     cell: ?u32 = null,
-    /// The district a bundle covers, or `all_districts` for the country.
-    /// Zero for a single cell.
+    /// The district a bundle covers. Zero for a single cell.
     district: u8 = 0,
     /// How many of the picked cells this transfer brings, for the count a
     /// mariner watches.
@@ -244,17 +238,11 @@ pub const Transfer = struct {
     bytes: u64 = 0,
 };
 
-/// The district number that stands for every district at once.
-pub const all_districts: u8 = 255;
-
 /// Where the bundles live.
 pub const bundle_base = "https://www.charts.noaa.gov/ENCs/";
 
-/// The url of a district's bundle, or of the whole country's, into `buf`.
+/// The url of a district's bundle, into `buf`.
 pub fn bundleUrl(buf: []u8, district: u8) ![]const u8 {
-    if (district == all_districts) {
-        return std.fmt.bufPrint(buf, "{s}All_ENCs.zip", .{bundle_base});
-    }
     return std.fmt.bufPrint(buf, "{s}{d:0>2}CGD_ENCs.zip", .{ bundle_base, district });
 }
 
@@ -1116,10 +1104,6 @@ test "a bundle url names the district, padded the way NOAA writes it" {
     try testing.expectEqualStrings(
         "https://www.charts.noaa.gov/ENCs/17CGD_ENCs.zip",
         try bundleUrl(&buf, 17),
-    );
-    try testing.expectEqualStrings(
-        "https://www.charts.noaa.gov/ENCs/All_ENCs.zip",
-        try bundleUrl(&buf, all_districts),
     );
 }
 
