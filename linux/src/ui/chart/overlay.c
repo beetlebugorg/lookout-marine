@@ -1,4 +1,5 @@
 #include "ui/chart/overlay.h"
+#include "ui/caption.h"
 
 #include "util/json.h"
 #include "ui/chart/pick-report.h"
@@ -51,13 +52,10 @@ lk_overlay_card_new (const char *payload_json)
         continue;
 
       GtkWidget *line = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
-      GtkWidget *key = gtk_label_new (lk_json_text (lk_json_at (pair, 0)));
+      GtkWidget *key = lk_caption (lk_json_text (lk_json_at (pair, 0)));
       GtkWidget *value = gtk_label_new (lk_json_text (lk_json_at (pair, 1)));
 
-      gtk_widget_add_css_class (key, "dim-label");
-      gtk_widget_add_css_class (key, "caption");
       gtk_widget_add_css_class (value, "caption");
-      gtk_label_set_xalign (GTK_LABEL (key), 0.0);
       gtk_label_set_xalign (GTK_LABEL (value), 0.0);
       gtk_widget_set_hexpand (value, TRUE);
 

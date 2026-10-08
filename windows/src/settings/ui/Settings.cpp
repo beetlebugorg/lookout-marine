@@ -4,12 +4,14 @@
 #include "MainWindow.xaml.h"
 
 #include <microsoft.ui.xaml.window.h> // IWindowNative, for the window's icon
+#include <winrt/Microsoft.UI.Xaml.Documents.h> // the band legend's wrapping run
 
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <map>
 
+#include "lk_chrome.h"
 #include "lk_format.h"
 #include "lk_licenses.h"
 #include "lk_paths.h"
@@ -23,17 +25,15 @@ namespace
     /* The chart colours of one scheme: the presentation library's own sRGB
      * values (S-101 colour profile, tokens DEPDW/DEPMD/DEPMS/DEPVS/LANDA/
      * CSTLN), copied so a swatch can be drawn without opening a chart. A
-     * legend of the palette, not the palette itself — the engine draws from
-     * the tables in the chart (the reference's SchemePalette, hex for hex). */
+     * legend of the palette rather than the palette itself. The engine draws
+     * from the tables in the chart (the reference's SchemePalette, hex for hex). */
     struct SchemePalette
     {
         winrt::Windows::UI::Color deep, medium, shallow, very_shallow, land, coastline;
     };
 
-    winrt::Windows::UI::Color Hex(uint32_t v)
-    {
-        return { 0xFF, (uint8_t)(v >> 16), (uint8_t)(v >> 8), (uint8_t)v };
-    }
+    using lkw::Card;
+    using lkw::Hex;
 
     SchemePalette PaletteOf(int scheme)
     {
@@ -183,6 +183,8 @@ namespace winrt::LookoutMarine::implementation
 
         w.Closed([this](auto &&, auto &&) {
             StopPluginStatusPoll();
+            // Drop the chart pictures still pending for the Charts page.
+            lk_controller_chart_link_pictures_cancel(controller);
             if (settings_size_w > 0 && settings_size_h > 0)
                 lk_store_save_settings_size(settings_size_w, settings_size_h);
             if (settings_window != nullptr)
@@ -218,7 +220,7 @@ namespace winrt::LookoutMarine::implementation
 
     // The sections, in the order the strip shows them. The four the app owns are
     // always listed; Vessels, Alarms and Connections only while something puts
-    // settings in them, and today that something is a plugin — the mariner is
+    // settings in them, and today that something is a plugin. The mariner is
     // never told which. Plugins is the one section that talks ABOUT plugins.
     // Advanced is last: it is where anything unclaimed lands.
     void MainWindow::BuildSettingsTabs()
@@ -243,9 +245,9 @@ namespace winrt::LookoutMarine::implementation
         settings_tabs.push_back({ "plugins", L"Plugins", L"\uE71D" });
         settings_tabs.push_back({ "advanced", L"Advanced", L"\uE713" });
 
-        // A section can go away — a plugin that never came up takes its section
-        // with it — so a stale selection falls back rather than indexing off the
-        // end of the strip.
+        // A section can go away, since a plugin that never came up takes its
+        // section with it, so a stale selection falls back rather than indexing
+        // off the end of the strip.
         settings_tab = 0;
         for (int i = 0; i < (int)settings_tabs.size(); ++i)
         {
@@ -261,7 +263,7 @@ namespace winrt::LookoutMarine::implementation
 
         // The highlight shades, as alpha over the pane's dark chrome (black
         // tints, matching the existing selection): hover sits below the
-        // selection, and the selected row under the pointer a step above it —
+        // selection, and the selected row under the pointer a step above it,
         // the ordering a Windows list uses, so hover and selection read apart.
         auto tint = [](uint8_t a) { return Media::SolidColorBrush{ winrt::Windows::UI::Color{ a, 0x00, 0x00, 0x00 } }; };
         constexpr uint8_t kHover = 0x14, kSelected = 0x28, kSelectedHover = 0x38;
@@ -363,10 +365,10 @@ namespace winrt::LookoutMarine::implementation
         apply_timer.Start();
     }
 
-    // The band strip, redrawn in place: which shades exist for the current
+    // The band strip, redrawn in place, which shades exist for the current
     // settings and which contour separates each pair, labelled in the
-    // mariner's unit. Colours approximate the day palette — a legend, not
-    // the palette itself.
+    // mariner's unit. Colours approximate the day palette: a legend rather
+    // than the palette itself.
     void MainWindow::RefreshBandPreview()
     {
         if (band_preview == nullptr)
@@ -435,12 +437,12 @@ namespace winrt::LookoutMarine::implementation
     }
 
     // The pane wears the chart's scheme: dusk and night take the dark palette
-    // whatever the OS says — a bright panel has no place on a night passage.
+    // whatever the OS says. A bright panel has no place on a night passage.
     //
     // EXPLICIT Light, never Default. The pane is declared inside Root but
     // detached from it at construction and handed to a window of its own, so
     // Default does not mean "the chart's day scheme", it means "whatever the
-    // OS is set to" — and under a dark system theme that gave a dark pane
+    // OS is set to", and under a dark system theme that gave a dark pane
     // with the day scheme's dark ink written on it.
     void MainWindow::ThemeSettingsPane(ElementTheme want)
     {
@@ -472,6 +474,22 @@ namespace winrt::LookoutMarine::implementation
         // The controls the status poll updates in place died with that Clear.
         plugin_status_ui.clear();
         band_preview = nullptr; // died with the Clear too; depths re-makes it
+        // Set again by whatever this page draws that a poll feeds.
+        page_reads_discovery = false;
+        noaa_pane_count = nullptr;
+        noaa_pane_bar = nullptr;
+        bake_pane_count = nullptr;
+        bake_pane_eta = nullptr;
+        bake_pane_bar = nullptr;
+        removal_pane_title = nullptr;
+        removal_pane_count = nullptr;
+        removal_pane_bar = nullptr;
+        chart_tile_ui.clear();
+        chart_set_ui.clear();
+        chart_sets_total = nullptr;
+        chart_sets_none = nullptr;
+        chart_link_error_ui = nullptr;
+        chart_publisher_note = nullptr;
 
         const double ft = 3.28084;
         bool feet = pending.depth_unit == 1;
@@ -574,7 +592,7 @@ namespace winrt::LookoutMarine::implementation
         {
             // The three schemes DRAWN, not named: each swatch is a piece of
             // chart in that scheme's own colours, so the choice is made by
-            // eye — day is unreadable at night and night by day, and the
+            // eye: day is unreadable at night and night by day, and the
             // swatches say so without words (the reference's SchemeSwatches).
             {
                 Controls::TextBlock tb;
@@ -619,7 +637,7 @@ namespace winrt::LookoutMarine::implementation
 
                     Controls::Grid::SetColumn(cell, i);
                     // A tap picks the scheme; the page rebuilds so the ring
-                    // moves, and the pane takes the new scheme's chrome —
+                    // moves, and the pane picks up the new scheme's chrome,
                     // WITHOUT re-reading `pending` (LoadSettings would
                     // discard the change the apply timer has not pushed yet).
                     cell.Tapped([this, i](auto &&, auto &&) {
@@ -699,463 +717,7 @@ namespace winrt::LookoutMarine::implementation
                    [this](bool v) { pending.show_full_sector_lines = v; });
         }
         else if (tab == "charts")
-        {
-            header(L"Open");
-            Controls::TextBlock open_tb;
-            open_tb.Text(lk_controller_is_open(controller) && !open_chart_label.empty()
-                ? winrt::to_hstring(std::filesystem::path(open_chart_label).filename().string())
-                : L"No chart open");
-            open_tb.FontSize(12);
-            stack.Children().Append(open_tb);
-
-            // ---- the installed sets: each folder of charts with its own
-            // switch. What draws is the union of the switched-on ones; a set
-            // whose water is not today's water is switched off, not removed.
-            if (!chart_sets.empty())
-            {
-                header(L"Installed charts");
-                for (auto const &set : chart_sets)
-                {
-                    Controls::Grid srow;
-                    Controls::ColumnDefinition sc0, sc1, sc2, sc3;
-                    sc0.Width({ 0, GridUnitType::Auto });
-                    sc1.Width({ 1, GridUnitType::Star });
-                    sc2.Width({ 0, GridUnitType::Auto });
-                    sc3.Width({ 0, GridUnitType::Auto });
-                    srow.ColumnDefinitions().ReplaceAll({ sc0, sc1, sc2, sc3 });
-
-                    Controls::ToggleSwitch sts;
-                    sts.OnContent(nullptr);
-                    sts.OffContent(nullptr);
-                    sts.MinWidth(0);
-                    sts.IsOn(set.on);
-                    std::string spath = set.path;
-                    sts.Toggled([this, spath](auto &&sw, auto &&) {
-                        if (settings_loading)
-                            return;
-                        SetChartSetOn(spath, sw.template as<Controls::ToggleSwitch>().IsOn());
-                    });
-                    srow.Children().Append(sts);
-
-                    Controls::StackPanel stext;
-                    Controls::TextBlock sname;
-                    sname.Text(winrt::to_hstring(set.title));
-                    sname.FontWeight(winrt::Windows::UI::Text::FontWeights::Medium());
-                    sname.Opacity(set.on ? 1.0 : 0.6);
-                    sname.TextTrimming(TextTrimming::CharacterEllipsis);
-                    stext.Children().Append(sname);
-                    Controls::TextBlock ssum;
-                    std::string sum;
-                    if (set.charts != 0)
-                        sum = std::to_string(set.charts) + (set.charts == 1 ? " chart" : " charts");
-                    if (set.pictures != 0)
-                        sum += (sum.empty() ? "" : ", ") + std::to_string(set.pictures) +
-                               (set.pictures == 1 ? " picture" : " pictures");
-                    // A row is listed before the scan has read its folder, and
-                    // a folder still being read has not failed to answer.
-                    if (sum.empty() && set.scanned)
-                        sum = "not answering (drive unplugged?)";
-                    ssum.Text(winrt::to_hstring(sum));
-                    ssum.FontSize(11);
-                    ssum.Opacity(0.7);
-                    stext.Children().Append(ssum);
-                    stext.VerticalAlignment(VerticalAlignment::Center);
-                    Controls::Grid::SetColumn(stext, 1);
-                    srow.Children().Append(stext);
-
-                    Controls::Button srm;
-                    Controls::FontIcon sminus;
-                    sminus.Glyph(L""); // Remove
-                    sminus.FontSize(12);
-                    srm.Content(sminus);
-                    srm.Padding({ 4, 2, 4, 2 });
-                    srm.Background(Media::SolidColorBrush{ winrt::Windows::UI::Color{ 0, 0, 0, 0 } });
-                    srm.BorderThickness({ 0, 0, 0, 0 });
-                    Automation::AutomationProperties::SetName(srm,
-                        L"Take this set off the list. The folder itself is not touched.");
-                    srm.Click([this, spath](auto &&, auto &&) { RemoveChartSet(spath); });
-                    Controls::Grid::SetColumn(srm, 3);
-                    srow.Children().Append(srm);
-                    stack.Children().Append(srow);
-                }
-            }
-
-            header(L"Recent");
-            char **recents = lk_store_load_recents();
-            for (int i = 0; recents != nullptr && recents[i] != nullptr; ++i)
-            {
-                std::string path = recents[i];
-                std::string name = std::filesystem::path(path).filename().string();
-                // Same naming as the Open Recent menu: the library's entry is
-                // the office whose charts are open, never "Charts".
-                if (path == lkw::ChartLibraryDir())
-                    name = (!open_chart_label.empty() &&
-                            open_chart_label.find_first_of("\\/") == std::string::npos)
-                               ? open_chart_label
-                               : "Chart Library";
-                Controls::Button b;
-                b.Content(winrt::box_value(winrt::to_hstring(name.empty() ? path : name)));
-                b.HorizontalAlignment(HorizontalAlignment::Stretch);
-                b.Click([this, path](auto &&, auto &&) { OpenPaths(lkw::CellsFor(path), path); });
-                stack.Children().Append(b);
-            }
-            lk_store_free_recents(recents);
-
-            Controls::Button add;
-            add.Content(winrt::box_value(L"Add Charts…"));
-            add.HorizontalAlignment(HorizontalAlignment::Stretch);
-            add.Margin({ 0, 8, 0, 0 });
-            add.Click([this](auto &&, auto &&) { PickChartFolder(); });
-            stack.Children().Append(add);
-
-            Controls::TextBlock foot;
-            foot.Text(L"A folder of baked cells opens as one seamless library.");
-            foot.FontSize(11);
-            foot.Opacity(0.7);
-            foot.TextWrapping(TextWrapping::Wrap);
-            stack.Children().Append(foot);
-
-            // ---- raster charts: what is installed, grouped the way the
-            // engine groups sets, each file with its own on/off (half-gigabyte
-            // downloads are switched off, not deleted) and a remove.
-            header(L"Raster charts");
-            if (raster_paths.empty())
-            {
-                Controls::TextBlock none;
-                none.Text(L"No raster charts");
-                none.FontSize(12);
-                none.Opacity(0.7);
-                stack.Children().Append(none);
-            }
-            else
-            {
-                // The store carries the enabled flags (the live handle cannot
-                // answer for a file that failed to install this session).
-                std::map<std::string, bool> on;
-                {
-                    int *enabled = nullptr;
-                    char **stored = lk_store_load_rasters(&enabled);
-                    for (int i = 0; stored != nullptr && stored[i] != nullptr; ++i)
-                        on[stored[i]] = enabled[i] != 0;
-                    lk_store_free_rasters(stored, enabled);
-                }
-
-                // Group by the engine's set name, first-seen order, so what
-                // Settings shows and what the pill cycles are the same thing.
-                std::vector<std::pair<std::string, std::vector<std::string>>> groups;
-                for (auto const &p : raster_paths)
-                {
-                    std::string g = lookout_raster_set_name_for(p.c_str(), nullptr);
-                    auto it = std::find_if(groups.begin(), groups.end(),
-                                           [&](auto const &e) { return e.first == g; });
-                    if (it == groups.end())
-                        groups.push_back({ g, { p } });
-                    else
-                        it->second.push_back(p);
-                }
-
-                auto set_file_enabled = [this](std::string const &path, bool v) {
-                    lk_store_set_raster_enabled(path.c_str(), v ? 1 : 0);
-                    lk_controller_raster_set_enabled(controller, path.c_str(), v ? 1 : 0);
-                };
-                auto set_group_enabled = [this](std::vector<std::string> const &files, bool v) {
-                    std::vector<const char *> cps;
-                    for (auto const &p : files)
-                        cps.push_back(p.c_str());
-                    lk_store_set_rasters_enabled(cps.data(), (int)cps.size(), v ? 1 : 0);
-                    for (auto const &p : files)
-                        lk_controller_raster_set_enabled(controller, p.c_str(), v ? 1 : 0);
-                };
-                auto remove_group = [this](std::vector<std::string> const &files) {
-                    std::vector<const char *> cps;
-                    for (auto const &p : files)
-                        cps.push_back(p.c_str());
-                    lk_store_forget_rasters(cps.data(), (int)cps.size());
-                    for (auto const &p : files)
-                    {
-                        lk_controller_raster_set_enabled(controller, p.c_str(), 0);
-                        raster_paths.erase(
-                            std::remove(raster_paths.begin(), raster_paths.end(), p),
-                            raster_paths.end());
-                    }
-                };
-                auto mini_switch = [this](bool is_on, auto &&set) {
-                    Controls::ToggleSwitch ts;
-                    ts.OnContent(nullptr);
-                    ts.OffContent(nullptr);
-                    ts.MinWidth(0);
-                    ts.IsOn(is_on);
-                    ts.Toggled([this, set](auto &&s, auto &&) {
-                        if (settings_loading)
-                            return;
-                        set(s.template as<Controls::ToggleSwitch>().IsOn());
-                        UpdateReadouts();
-                        BuildSettingsPage();
-                    });
-                    return ts;
-                };
-
-                for (auto const &[gname, files] : groups)
-                {
-                    bool group_on = false;
-                    for (auto const &p : files)
-                        group_on = group_on || on.count(p) == 0 || on[p];
-
-                    Controls::Grid row;
-                    Controls::ColumnDefinition c0, c1, c2, c3;
-                    c0.Width({ 0, GridUnitType::Auto });
-                    c1.Width({ 1, GridUnitType::Star });
-                    c2.Width({ 0, GridUnitType::Auto });
-                    c3.Width({ 0, GridUnitType::Auto });
-                    row.ColumnDefinitions().ReplaceAll({ c0, c1, c2, c3 });
-
-                    auto gts = mini_switch(group_on, [this, set_group_enabled, files](bool v) {
-                        set_group_enabled(files, v);
-                    });
-                    row.Children().Append(gts);
-
-                    Controls::TextBlock name;
-                    name.Text(winrt::to_hstring(gname));
-                    name.FontWeight(winrt::Windows::UI::Text::FontWeights::Medium());
-                    name.Opacity(group_on ? 1.0 : 0.6);
-                    name.VerticalAlignment(VerticalAlignment::Center);
-                    name.TextTrimming(TextTrimming::CharacterEllipsis);
-                    Controls::Grid::SetColumn(name, 1);
-                    row.Children().Append(name);
-
-                    Controls::TextBlock count;
-                    count.Text(winrt::to_hstring(files.size() == 1
-                        ? std::string("1 file")
-                        : std::to_string(files.size()) + " files"));
-                    count.FontSize(11);
-                    count.Opacity(0.7);
-                    count.VerticalAlignment(VerticalAlignment::Center);
-                    Controls::Grid::SetColumn(count, 2);
-                    row.Children().Append(count);
-
-                    Controls::Button grm;
-                    Controls::FontIcon gminus;
-                    gminus.Glyph(L"\uE738"); // Remove
-                    gminus.FontSize(12);
-                    grm.Content(gminus);
-                    grm.Padding({ 4, 2, 4, 2 });
-                    grm.Background(Media::SolidColorBrush{ winrt::Windows::UI::Color{ 0, 0, 0, 0 } });
-                    grm.BorderThickness({ 0, 0, 0, 0 });
-                    Automation::AutomationProperties::SetName(grm,
-                        L"Remove the whole set. Takes full effect the next time a chart opens.");
-                    grm.Click([this, remove_group, files](auto &&, auto &&) {
-                        remove_group(files);
-                        UpdateReadouts();
-                        BuildSettingsPage();
-                    });
-                    Controls::Grid::SetColumn(grm, 3);
-                    row.Children().Append(grm);
-                    stack.Children().Append(row);
-
-                    // A baked bundle is hundreds of sheets: no mariner switches
-                    // those one by one, and hundreds of rows stall the pane.
-                    // The group row carries the whole set; files list only when
-                    // the set is small enough to reason about per file.
-                    if (files.size() > 16)
-                        continue;
-
-                    for (auto const &p : files)
-                    {
-                        bool file_on = on.count(p) == 0 || on[p];
-
-                        Controls::Grid frow;
-                        Controls::ColumnDefinition f0, f1, f2;
-                        f0.Width({ 0, GridUnitType::Auto });
-                        f1.Width({ 1, GridUnitType::Star });
-                        f2.Width({ 0, GridUnitType::Auto });
-                        frow.ColumnDefinitions().ReplaceAll({ f0, f1, f2 });
-                        frow.Margin({ 22, 0, 0, 0 });
-
-                        auto fts = mini_switch(file_on, [this, set_file_enabled, p](bool v) {
-                            set_file_enabled(p, v);
-                        });
-                        frow.Children().Append(fts);
-
-                        Controls::TextBlock fname;
-                        fname.Text(winrt::to_hstring(std::filesystem::path(p).filename().string()));
-                        fname.FontSize(11);
-                        fname.Opacity(file_on ? 1.0 : 0.6);
-                        fname.VerticalAlignment(VerticalAlignment::Center);
-                        fname.TextTrimming(TextTrimming::CharacterEllipsis);
-                        Controls::Grid::SetColumn(fname, 1);
-                        frow.Children().Append(fname);
-
-                        Controls::Button rm;
-                        Controls::FontIcon minus;
-                        minus.Glyph(L"\uE738"); // Remove
-                        minus.FontSize(12);
-                        rm.Content(minus);
-                        rm.Padding({ 4, 2, 4, 2 });
-                        rm.Background(Media::SolidColorBrush{ winrt::Windows::UI::Color{ 0, 0, 0, 0 } });
-                        rm.BorderThickness({ 0, 0, 0, 0 });
-                        Automation::AutomationProperties::SetName(rm,
-                            L"Remove. Takes full effect the next time a chart opens.");
-                        rm.Click([this, p](auto &&, auto &&) {
-                            lk_store_forget_raster(p.c_str());
-                            raster_paths.erase(
-                                std::remove(raster_paths.begin(), raster_paths.end(), p),
-                                raster_paths.end());
-                            // The engine has no remove: quiet it on the live
-                            // handle, and the next open drops it for good.
-                            lk_controller_raster_set_enabled(controller, p.c_str(), 0);
-                            UpdateReadouts();
-                            BuildSettingsPage();
-                        });
-                        Controls::Grid::SetColumn(rm, 2);
-                        frow.Children().Append(rm);
-                        stack.Children().Append(frow);
-                    }
-                }
-            }
-
-            Controls::Button add_raster;
-            add_raster.Content(winrt::box_value(L"Add Raster Charts…"));
-            add_raster.HorizontalAlignment(HorizontalAlignment::Stretch);
-            add_raster.Margin({ 0, 8, 0, 0 });
-            add_raster.Click([this](auto &&, auto &&) { AddRasterFiles(); });
-            stack.Children().Append(add_raster);
-
-            Controls::Button add_raster_dir;
-            add_raster_dir.Content(winrt::box_value(L"Add a Folder of Raster Charts…"));
-            add_raster_dir.HorizontalAlignment(HorizontalAlignment::Stretch);
-            add_raster_dir.Click([this](auto &&, auto &&) { AddRasterFolder(); });
-            stack.Children().Append(add_raster_dir);
-
-            Controls::TextBlock raster_foot;
-            raster_foot.Text(L"Charts made of pictures: MBTiles of satellite imagery or "
-                             L"another vendor's charts, and BSB/KAP raster nautical charts "
-                             L"baked with tile57. The ENC draws over them and drops its "
-                             L"depth and land shading only where they cover. Switch one "
-                             L"off to keep it installed without drawing it.");
-            raster_foot.FontSize(11);
-            raster_foot.Opacity(0.7);
-            raster_foot.TextWrapping(TextWrapping::Wrap);
-            stack.Children().Append(raster_foot);
-
-            // ---- charts by link: an online map AS the chart. Picking one
-            // renders that publisher's MapLibre style instead of the built-in
-            // portrayal — Lookout's own chart is just the default entry in
-            // the same list (the reference shell's Chart list, row for row).
-            header(L"Chart");
-            auto link_row = [this, &stack](std::string const &url, std::string const &title,
-                                   std::string const &sub, bool removable) {
-                Controls::Grid row;
-                Controls::ColumnDefinition c0, c1, c2, c3;
-                c0.Width({ 0, GridUnitType::Auto });
-                c1.Width({ 1, GridUnitType::Star });
-                c2.Width({ 0, GridUnitType::Auto });
-                c3.Width({ 0, GridUnitType::Auto });
-                row.ColumnDefinitions().ReplaceAll({ c0, c1, c2, c3 });
-
-                Controls::RadioButton pick;
-                pick.GroupName(L"chartlink");
-                pick.IsChecked(active_chart_link == url);
-                pick.MinWidth(0);
-                pick.Checked([this, url](auto &&, auto &&) {
-                    if (!settings_loading && active_chart_link != url)
-                        SelectChartLink(url);
-                });
-                row.Children().Append(pick);
-
-                Controls::StackPanel text;
-                Controls::TextBlock name;
-                name.Text(winrt::to_hstring(title));
-                name.TextTrimming(TextTrimming::CharacterEllipsis);
-                text.Children().Append(name);
-                if (!sub.empty())
-                {
-                    Controls::TextBlock s;
-                    s.Text(winrt::to_hstring(sub));
-                    s.FontSize(11);
-                    s.Opacity(0.7);
-                    s.TextTrimming(TextTrimming::CharacterEllipsis);
-                    text.Children().Append(s);
-                }
-                text.VerticalAlignment(VerticalAlignment::Center);
-                Controls::Grid::SetColumn(text, 1);
-                row.Children().Append(text);
-
-                if (removable)
-                {
-                    Controls::Button refresh;
-                    refresh.Content(winrt::box_value(L"Refresh"));
-                    refresh.FontSize(11);
-                    refresh.Padding({ 6, 2, 6, 2 });
-                    refresh.Click([this, url](auto &&, auto &&) { RefreshChartLink(url); });
-                    Controls::Grid::SetColumn(refresh, 2);
-                    row.Children().Append(refresh);
-
-                    Controls::Button rm;
-                    Controls::FontIcon minus;
-                    minus.Glyph(L"");
-                    minus.FontSize(12);
-                    rm.Content(minus);
-                    rm.Padding({ 4, 2, 4, 2 });
-                    rm.Background(Media::SolidColorBrush{ winrt::Windows::UI::Color{ 0, 0, 0, 0 } });
-                    rm.BorderThickness({ 0, 0, 0, 0 });
-                    rm.Click([this, url](auto &&, auto &&) { RemoveChartLink(url); });
-                    Controls::Grid::SetColumn(rm, 3);
-                    row.Children().Append(rm);
-                }
-                stack.Children().Append(row);
-            };
-            link_row("", "Lookout chart", "The built-in portrayal of your opened cells.", false);
-            for (auto const &l : chart_links)
-                link_row(l.url, l.name.empty() ? l.url : l.name, l.url, true);
-
-            // Add by link, committed on Enter like every other field.
-            Controls::TextBox link_box;
-            link_box.PlaceholderText(L"https://…/style.json");
-            link_box.Margin({ 0, 6, 0, 0 });
-            link_box.KeyDown([this](auto &&s, auto &&e) {
-                if (e.Key() != Windows::System::VirtualKey::Enter)
-                    return;
-                auto box = s.template as<Controls::TextBox>();
-                auto text = winrt::to_string(box.Text());
-                if (!text.empty())
-                {
-                    AddChartLink(text);
-                    box.Text(L"");
-                }
-            });
-            stack.Children().Append(link_box);
-
-            // A resolve is several fetches deep, so say so rather than leave
-            // the list looking as though the click did nothing.
-            if (chart_link_busy)
-            {
-                Controls::TextBlock working;
-                working.Text(L"Reading the chart\u2026");
-                working.FontSize(11);
-                working.Opacity(0.7);
-                stack.Children().Append(working);
-            }
-
-            if (!chart_link_error.empty())
-            {
-                Controls::TextBlock err;
-                err.Text(winrt::to_hstring(chart_link_error));
-                err.FontSize(11);
-                err.Foreground(lkw::Brush(lkw::chrome::kAmber));
-                err.TextWrapping(TextWrapping::Wrap);
-                stack.Children().Append(err);
-            }
-
-            Controls::TextBlock link_foot;
-            link_foot.Text(L"A chart added by link draws INSTEAD of Lookout's own: the "
-                           L"publisher styles it and their tiles are fetched as you sail. "
-                           L"A style link or a TileJSON tile source; also a style.json "
-                           L"on this machine by path.");
-            link_foot.FontSize(11);
-            link_foot.Opacity(0.7);
-            link_foot.TextWrapping(TextWrapping::Wrap);
-            stack.Children().Append(link_foot);
-        }
+            BuildChartsPage(stack);
         else if (tab == "advanced")
         {
             header(L"Safety & Quality");
@@ -1186,7 +748,7 @@ namespace winrt::LookoutMarine::implementation
                 Controls::TextBox date;
                 date.Text(winrt::to_hstring(pending.date_view));
                 date.MaxLength(8);
-                /* Commits on Enter or focus loss, never per keystroke — half
+                /* Commits on Enter or focus loss, never per keystroke: half
                  * a date is not a date the chart should redraw against. */
                 auto commit_date = [this](Controls::TextBox const &b) {
                     if (settings_loading)
@@ -1252,6 +814,14 @@ namespace winrt::LookoutMarine::implementation
         // settings for it. A section nothing contributed to draws nothing.
         if (tab != "plugins")
             BuildPluginSections(tab);
+
+        // The shape just built, for the polls to compare against, and then
+        // every value on it stated once.
+        if (tab == "charts")
+        {
+            charts_page_sig = ChartsPageStructure();
+            RefreshChartsPageInPlace();
+        }
 
         settings_loading = false;
     }

@@ -1,4 +1,4 @@
-/* test-store.c — what the shell keeps across launches.
+/* test-store.c: what the shell keeps across launches.
  *
  * The core owns the file and its format; what is checked here is the shell's
  * own reading of it, and the one-time read of a settings.ini a mariner already

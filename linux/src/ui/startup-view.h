@@ -1,6 +1,6 @@
-/* ui/startup-view.h — the loader and the first-run page.
+/* ui/startup-view.h: the opening page.
  *
- * The window builds both once and shows one of them while no chart draws.
+ * The window builds it once and shows it while a chart opens.
  */
 #pragma once
 
@@ -10,9 +10,6 @@ G_BEGIN_DECLS
 
 /* The opening page: a compass rose, a pulsing bar, and three steps. */
 GtkWidget *lk_window_build_loader (void);
-
-/* The first-run page: where charts come from, and how to install one. */
-GtkWidget *lk_window_build_empty_state (void);
 
 /* One step row, appended to `box`. The opening page and the import panel both
  * show their work as steps, and they show it the same way. */
@@ -25,8 +22,5 @@ void lk_loader_step_set (GtkWidget *row, int state,
 
 /* Pulses the loader's indeterminate bar. A GSourceFunc. */
 gboolean lk_window_loader_pulse (gpointer user_data);
-
-/* Rebuild the "Switched off" list on the first-run page. */
-void lk_window_refresh_switched_off (LkWindow *self);
 
 G_END_DECLS

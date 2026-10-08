@@ -495,6 +495,7 @@ pub fn build(b: *std.Build) void {
     // inside it, fed a recorded NMEA log over loopback. Only buildable where
     // the plugin host is, since it drives that host directly.
     const dev_step = b.step("plugin-dev", "Build the plugin replay harness (lookout-plugin-dev)");
+    var dev_exe: ?*std.Build.Step.Compile = null;
     if (plugins) {
         const dev_mod = b.createModule(.{
             .root_source_file = b.path("src/plugin_dev_main.zig"),
@@ -504,6 +505,7 @@ pub fn build(b: *std.Build) void {
         });
         cfg.apply(dev_mod, true);
         const dev = b.addExecutable(.{ .name = "lookout-plugin-dev", .root_module = dev_mod });
+        dev_exe = dev;
         b.installArtifact(dev);
         dev_step.dependOn(&b.addInstallArtifact(dev, .{}).step);
     } else {
@@ -563,6 +565,16 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&b.addRunArtifact(tests).step);
 
+    // The day run exits nonzero when its chart is missing, before it opens
+    // anything.
+    if (dev_exe) |dev| {
+        const missing = b.addRunArtifact(dev);
+        missing.addArgs(&.{ "--chart", "test/no-such-chart.pmtiles" });
+        missing.expectStdErrEqual("lookout-plugin-dev: no chart at test/no-such-chart.pmtiles\n");
+        missing.expectExitCode(2);
+        test_step.dependOn(&missing.step);
+    }
+
     // ---- plugin-layer unit tests ----
     // Each file rooted the way its own `zig test <file>` roots it, so what the
     // phase gate runs and what an agent runs by hand are the same compilation.
@@ -570,6 +582,9 @@ pub fn build(b: *std.Build) void {
     const pure_test_roots = [_][]const u8{
         "src/owned.zig",
         "src/shell/format.zig",
+        "src/shell/depth.zig",
+        "src/shell/palette.zig",
+        "src/shell/coastline.zig",
         "src/shell/bake.zig",
         "src/shell/frame.zig",
         "src/settings.zig",
@@ -580,7 +595,15 @@ pub fn build(b: *std.Build) void {
         "src/overlay.zig",
         "src/markers.zig",
         "src/chartlinks.zig",
+        "src/noaa.zig",
+        "src/noaajob.zig",
+        "src/encunpack.zig",
+        "src/trash.zig",
+        "src/httpgather.zig",
         "src/library.zig",
+        "src/png.zig",
+        "src/firstrun.zig",
+        "src/jni_rows.zig",
         "src/plugin_dev_replay.zig",
         "plugins/nmea0183/parser.zig",
         "plugins/nmea0183/paths.zig",
@@ -1022,6 +1045,8 @@ pub fn build(b: *std.Build) void {
         "src/root.zig",
         "src/licenses.zig",
         "src/pick.zig",
+        // Pictures of charts open a second handle, so they cannot be a root.
+        "src/pictures.zig",
         // The bake job @cImports tile57, so it cannot be a root of its own:
         // only a compilation with the engine's include path analyses it.
         "src/bakejob.zig",

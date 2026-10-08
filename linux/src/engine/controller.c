@@ -11,6 +11,9 @@ struct _LkChartController {
   GObject parent_instance;
 
   lookout *handle;    /* NULL until a chart is opened */
+  /* TRUE when the handle holds the store. A chart of no charts keeps it at
+   * arm's length, so the engine saves no pose for that one. */
+  gboolean handle_has_store;
   char    *chart_path; /* the path (or directory) currently open, for the title */
 
   GtkWidget  *view;  /* the chart widget we render for; not owned */
@@ -19,6 +22,10 @@ struct _LkChartController {
   guint    tick_id;
   /* The one-shot the core asked for with LOOKOUT_FRAME_WAIT. */
   guint    wake_id;
+
+  /* An empty open asked for before a view existed. The ask is kept and run
+   * when the view arrives. */
+  gboolean pending_empty_open;
 
   gint64 last_readouts_us;
 };
@@ -62,6 +69,12 @@ lk_chart_controller_set_model (LkChartController *self, LkAppModel *model)
 }
 
 gboolean
+lk_chart_controller_has_store (LkChartController *self)
+{
+  return LK_IS_CHART_CONTROLLER (self) && self->handle != NULL && self->handle_has_store;
+}
+
+gboolean
 lk_chart_controller_is_open (LkChartController *self)
 {
   return LK_IS_CHART_CONTROLLER (self) && self->handle != NULL;
@@ -72,6 +85,16 @@ lk_chart_controller_chart_path (LkChartController *self)
 {
   g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), NULL);
   return self->chart_path;
+}
+
+guint
+lk_chart_controller_charts_count (LkChartController *self)
+{
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), 0);
+
+  if (self->handle == NULL)
+    return 0;
+  return lookout_charts_count (self->handle);
 }
 
 /* ---- readouts ----------------------------------------------------------- */
@@ -104,7 +127,7 @@ lk_chart_controller_push_readouts (LkChartController *self)
   lk_app_model_refresh_raster_state (self->model);
 
   /* Under follow the CORE moves the camera without the shell; the pick's
-   * mark must ride its water, not its pixels. Only the mark moves — the
+   * mark must ride its water, not its pixels. Only the mark moves. The
    * report's frame is fixed for the report's life. */
   double plon, plat;
   if (lk_app_model_get_pick_geo (self->model, &plon, &plat))
@@ -124,7 +147,7 @@ lk_chart_controller_push_readouts (LkChartController *self)
  * the platform timer, on or off.
  *
  * Three verdicts. RENDER draws. WAIT keeps the frame clock, or takes the loop
- * off it and sets a one-shot when a rate comes with it — that is the slow beat
+ * off it and sets a one-shot when a rate comes with it. That is the slow beat
  * a plugin layer needs, because traffic arrives with no gesture behind it.
  * IDLE stops the loop until something kicks it. */
 
@@ -146,6 +169,7 @@ lk_chart_controller_tick (GtkWidget     *widget,
 
   lookout_frame_next (self->handle, &frame);
 
+
   if (self->model != NULL)
     {
       lk_app_model_set_building (self->model, frame.building != 0);
@@ -162,7 +186,7 @@ lk_chart_controller_tick (GtkWidget     *widget,
           lk_chart_view_surface_ready (LK_CHART_VIEW (self->view));
           /* The chart is on the screen, so the loader has done its job. A
            * library of a thousand cells keeps tessellating for a while after
-           * that, and the build pill carries it — a loader still up over a
+           * that, and the build pill carries it. A loader still up over a
            * drawn chart says the app is stuck when it is not. */
           if (self->model != NULL)
             lk_app_model_set_first_build_done (self->model, TRUE);
@@ -290,7 +314,7 @@ lk_bundled_plugin_dir (void)
 
 /* Bundled first, then installed. The order is the precedence the core
  * documents: $LOOKOUT_PLUGINS (which loads at open, before this runs), then
- * bundled, then installed — on an id collision the first copy loaded wins, so
+ * bundled, then installed, on an id collision the first copy loaded wins, so
  * a developer override beats the shipped copy and the shipped copy beats one
  * the mariner installed under the same id.
  *
@@ -742,16 +766,29 @@ lk_chart_controller_attach_view (LkChartController *self, GtkWidget *view)
 
   if (self->view == NULL)
     self->view = view;
+
+  /* Whatever wanted a handle before this view existed gets one now. */
+  if (self->pending_empty_open && self->handle == NULL)
+    {
+      static const char *const none[] = { NULL };
+
+      self->pending_empty_open = FALSE;
+      lk_chart_controller_open (self, none, view);
+    }
 }
 
-/* One open call, given the native surface kind + handle. */
+/* One open call, given the native surface kind + handle. `n` may be 0, which
+ * opens a chart of no charts. */
 static lookout *
 lk_chart_controller_open_handle (const char *const *paths, guint n,
                                  int kind, void *native, int width, int height)
 {
+  static const char *const none[] = { NULL };
+
   if (n == 1)
     return lookout_open_in_window (kind, native, paths[0], width, height, 1);
-  return lookout_open_charts_in_window (kind, native, paths, n, width, height, 1);
+  return lookout_open_charts_in_window (kind, native, n == 0 ? none : paths, n,
+                                        width, height, 1);
 }
 
 gboolean
@@ -763,8 +800,6 @@ lk_chart_controller_open (LkChartController *self,
   g_return_val_if_fail (LK_IS_CHART_VIEW (view), FALSE);
 
   guint n = paths == NULL ? 0 : g_strv_length ((char **) paths);
-  if (n == 0)
-    return FALSE;
 
   lk_chart_controller_close (self);
   self->view = view;
@@ -779,7 +814,7 @@ lk_chart_controller_open (LkChartController *self,
    * in the window, so the compositor draws it crisply and the chrome floats over. */
   if (!lk_chart_view_ensure_native_surface (LK_CHART_VIEW (view)))
     {
-      g_warning ("open FAILED — no native surface");
+      g_warning ("open FAILED, no native surface");
       if (self->model != NULL)
         lk_app_model_set_open_error (self->model, "The chart view has no drawing surface.");
       return FALSE;
@@ -787,7 +822,8 @@ lk_chart_controller_open (LkChartController *self,
 
   LkNativeSurface *surface = lk_chart_view_get_native_surface (LK_CHART_VIEW (view));
   g_message ("opening %u chart(s) into a %d×%d pt %s surface: %s",
-             n, width, height, lk_native_surface_backend (surface), paths[0]);
+             n, width, height, lk_native_surface_backend (surface),
+             n == 0 ? "the basemap" : paths[0]);
   lookout *handle = lk_chart_controller_open_handle (paths, n,
                                                      lk_native_surface_kind (surface),
                                                      lk_native_surface_handle (surface),
@@ -795,7 +831,7 @@ lk_chart_controller_open (LkChartController *self,
 
   if (handle == NULL)
     {
-      g_warning ("open FAILED (lookout_open_in_window returned NULL — Vulkan device or chart file?)");
+      g_warning ("open FAILED (lookout_open_in_window returned NULL. Vulkan device or chart file?)");
       if (self->model != NULL)
         lk_app_model_set_open_error (self->model,
                                      "Couldn't open the chart.\n"
@@ -808,11 +844,13 @@ lk_chart_controller_open (LkChartController *self,
     lk_app_model_set_open_error (self->model, NULL);
 
   g_free (self->chart_path);
-  self->chart_path = n == 1 ? g_strdup (paths[0]) : g_path_get_dirname (paths[0]);
+  self->chart_path = n == 0   ? NULL
+                     : n == 1 ? g_strdup (paths[0])
+                              : g_path_get_dirname (paths[0]);
 
   /* Re-install the mariner's raster charts. A raster chart belongs to a lookout
    * handle, and the close above destroyed the old one, so every open replays
-   * them — that is what makes a raster chart survive both a change of ENC and a
+   * them. That is what makes a raster chart survive both a change of ENC and a
    * restart. */
   if (self->model != NULL)
     lk_app_model_reinstall_raster_charts (self->model);
@@ -822,20 +860,45 @@ lk_chart_controller_open (LkChartController *self,
   if (self->model != NULL)
     lk_app_model_reapply_chart_link (self->model);
 
+  /* The first chart of the run starts a due NOAA update check. */
+  if (self->model != NULL)
+    lk_app_model_check_noaa_updates (self->model);
+
   lookout_set_pixel_density (handle, (float) gtk_widget_get_scale_factor (view));
   lookout_resize (handle, width, height);
 
-  /* The engine keeps the pose and the mariner settings in the store from here:
-   * it restores both now, writes the pose down as the mariner moves, and
-   * writes both again at close. With nothing saved it holds the view it opened
-   * on, so the shell asks for the opening one. */
-  lookout_set_store (handle, lk_store_handle ());
-  if (!lk_store_has_saved_view ())
+  if (n == 0)
     {
-      lookout_view opening;
+      /* A CHART OF NO CHARTS KEEPS THE STORE AT ARM'S LENGTH. With a store
+       * attached the core writes the pose every 3 s and again at close, and
+       * this chart's default view is the whole world. That pose then read as
+       * the mariner's saved one, so the next open with charts restored the
+       * world. The mariner settings are still applied, straight from the
+       * store. */
+      tile57_mariner mariner;
 
-      lookout_default_view (handle, &opening);
-      lookout_set_view (handle, &opening);
+      /* The engine's defaults with the mariner's saved choices over them, as
+       * lk_chart_controller_get_mariner reads them with no handle. A bare
+       * struct here is not a mariner. */
+      lookout_mariner_defaults (&mariner);
+      lookout_store_read_mariner (lk_store_handle (), &mariner);
+      lookout_set_mariner (handle, &mariner);
+      self->handle_has_store = FALSE;
+    }
+  else
+    {
+      /* The engine keeps the pose and the mariner settings in the store from
+       * here: it restores both now, writes the pose down as the mariner
+       * moves, and writes both again at close. */
+      lookout_set_store (handle, lk_store_handle ());
+      self->handle_has_store = TRUE;
+      if (!lk_store_has_saved_view ())
+        {
+          lookout_view opening;
+
+          lookout_default_view (handle, &opening);
+          lookout_set_view (handle, &opening);
+        }
     }
 
   /* $LOOKOUT_VIEW="lon,lat,zoom[,rot]" pins the opening camera (screenshots). */
@@ -843,7 +906,7 @@ lk_chart_controller_open (LkChartController *self,
   if (spec != NULL)
     {
       /* Every field must parse whole. A non-numeric field read as 0 would
-       * open on null island — and the 3 s pose save would then keep it. */
+       * open on null island, and the 3 s pose save would then keep it. */
       g_auto (GStrv) parts = g_strsplit (spec, ",", -1);
       guint count = g_strv_length (parts);
       double fields[4] = { 0, 0, 0, 0 };
@@ -894,7 +957,13 @@ lk_chart_controller_reopen (LkChartController *self, const char *const *paths)
   g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), FALSE);
 
   if (self->view == NULL)
-    return FALSE;
+    {
+      /* No view yet. An empty open is worth keeping, because the caller wants
+       * a handle rather than a chart and nothing else will ask again. */
+      if (paths == NULL || g_strv_length ((char **) paths) == 0)
+        self->pending_empty_open = TRUE;
+      return FALSE;
+    }
   return lk_chart_controller_open (self, paths, self->view);
 }
 
@@ -911,7 +980,7 @@ lk_chart_controller_close (LkChartController *self)
   /* Before the handle: a fetch landing later must find the provider gone,
    * never a dying engine. The respond wrapper below refuses a NULL handle,
    * and the links layer cancels its in-flight fetches before the NEXT handle
-   * can ask for anything — a new handle reuses the old one's request ids. */
+   * can ask for anything, a new handle reuses the old one's request ids. */
   lookout_set_http_provider (self->handle, NULL, NULL, NULL);
 
   /* lookout_close writes the pose and the mariner settings down on its way
@@ -939,18 +1008,19 @@ lk_chart_controller_set_http_provider (LkChartController *self,
 
 void
 lk_chart_controller_http_respond (LkChartController *self, guint64 req_id,
-                                  const void *bytes, gsize len, int status)
+                                  const void *bytes, gsize len, int status,
+                                  gboolean done)
 {
   /* From soup completion callbacks, which may outlive the handle they were
    * started for: a NULL handle swallows the answer, and the core ignores a
    * request id it no longer knows. */
   if (!LK_IS_CHART_CONTROLLER (self) || self->handle == NULL)
     return;
-  lookout_http_respond (self->handle, req_id, bytes, len, status);
-  /* An answer is adopted at the top of a frame, and the tick stands down when
-   * nothing is moving, so a resolve landing with no gesture behind it needs
-   * someone to ask for the next frame. */
-  lk_chart_controller_kick (self);
+  lookout_http_respond_chunk (self->handle, req_id, bytes, len, status, done ? 1 : 0);
+  /* The core adopts a response at the top of a frame, and the tick stops when
+   * the chart is still. The kick on the last piece schedules that frame. */
+  if (done)
+    lk_chart_controller_kick (self);
 }
 
 void
@@ -1010,6 +1080,53 @@ lk_chart_controller_chart_links_read (LkChartController *self)
   if (lookout_chart_links_changed (self->handle) == 0)
     return NULL;
   return lookout_links_read (self->handle);
+}
+
+/* ---- pictures of charts -------------------------------------------------- */
+
+int
+lk_chart_controller_chart_link_picture (LkChartController *self, const char *url, int kind,
+                                        double lon, double lat, double zoom, int width,
+                                        int height, guint8 *dst)
+{
+  int got;
+
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), LOOKOUT_PICTURE_NONE);
+
+  if (self->handle == NULL)
+    return LOOKOUT_PICTURE_NONE;
+  got = lookout_chart_link_picture (self->handle, url, kind, lon, lat, zoom, width, height,
+                                    dst);
+  /* The core draws a pending picture inside the frame loop. */
+  if (got == LOOKOUT_PICTURE_PENDING)
+    lk_chart_controller_kick (self);
+  return got;
+}
+
+void
+lk_chart_controller_chart_link_pictures_cancel (LkChartController *self)
+{
+  g_return_if_fail (LK_IS_CHART_CONTROLLER (self));
+
+  if (self->handle != NULL)
+    lookout_chart_link_pictures_cancel (self->handle);
+}
+
+gboolean
+lk_chart_controller_view_centre (LkChartController *self, double *out_lon, double *out_lat)
+{
+  lookout_view view;
+
+  g_return_val_if_fail (LK_IS_CHART_CONTROLLER (self), FALSE);
+
+  if (self->handle == NULL)
+    return FALSE;
+  lookout_get_view (self->handle, &view);
+  if (out_lon != NULL)
+    *out_lon = view.lon;
+  if (out_lat != NULL)
+    *out_lat = view.lat;
+  return TRUE;
 }
 
 /* ---- view --------------------------------------------------------------- */
@@ -1110,6 +1227,19 @@ lk_chart_controller_zoom_at (LkChartController *self, double dzoom, double x, do
   if (self->handle == NULL)
     return;
   lookout_zoom_at_logical (self->handle, dzoom, (float) x, (float) y);
+  lk_chart_controller_retire_pick (self);
+  lk_chart_controller_kick (self);
+}
+
+/* With no ease, for a pinch. The chart follows the fingers frame for frame. */
+void
+lk_chart_controller_zoom_about (LkChartController *self, double dzoom, double x, double y)
+{
+  g_return_if_fail (LK_IS_CHART_CONTROLLER (self));
+
+  if (self->handle == NULL)
+    return;
+  lookout_zoom_about_logical (self->handle, dzoom, (float) x, (float) y);
   lk_chart_controller_retire_pick (self);
   lk_chart_controller_kick (self);
 }
@@ -1419,7 +1549,7 @@ lk_chart_controller_pick (LkChartController *self, double lon, double lat)
   /* The ranked pick, not the raw one: the engine's own list is in draw order,
    * which puts the land area before the light that was tapped. The core drops
    * the meta objects that say nothing, demotes a feature the cell gave no
-   * attributes, and states depths in the mariner's unit — once, for every
+   * attributes, and states depths in the mariner's unit, once, for every
    * shell. */
   return lookout_picks_read (self->handle, lon, lat);
 }

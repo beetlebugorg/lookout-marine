@@ -4,6 +4,7 @@
 //! shells that have not adopted this.
 
 const std = @import("std");
+const owned = @import("owned");
 
 const capi = @import("../capi.zig");
 const frame = @import("../shell/frame.zig");
@@ -24,15 +25,15 @@ pub const lookout_frame = extern struct {
 /// One tick. See lookout-shell.h.
 export fn lookout_frame_next(h: ?*lookout, out: ?*lookout_frame) void {
     const dst = out orelse return;
-    dst.* = .{ .verdict = .idle, .wait_ms = 0, .building = 0 };
+    owned.fill(lookout_frame, dst, .{ .verdict = .idle, .wait_ms = 0, .building = 0 });
     const l = locked(h);
     defer l.apiUnlock();
     const step = l.frameStep();
-    dst.* = .{
+    owned.fill(lookout_frame, dst, .{
         .verdict = step.verdict,
         .wait_ms = step.wait_ms,
         .building = @intFromBool(l.isBuilding()),
-    };
+    });
 }
 
 /// Start the loop again after a change the shell made itself.

@@ -1443,15 +1443,15 @@ pub const Broker = struct {
         const recs = try a.alloc(pl.TableRec, self.tables.items.len);
         for (self.tables.items, recs) |*tab, *rec| {
             const cols = try a.alloc(pl.Column, tab.columns.len);
-            for (tab.columns, cols) |c, *dst| dst.* = .{
+            for (tab.columns, cols) |c, *dst| pl.fill(pl.Column, dst, .{
                 .key = try pl.str(a, c.key),
                 .label = try pl.str(a, c.label),
                 .type = columnTypeOf(c.type),
-            };
+            });
             const by_ptr = try a.alloc(*const pl.Column, cols.len);
             for (cols, by_ptr) |*c, *dst| dst.* = c;
 
-            rec.* = .{
+            pl.fill(pl.TableRec, rec, .{
                 .table = .{
                     .plugin = try pl.str(a, tab.plugin_id),
                     .key = try pl.str(a, tab.key),
@@ -1467,7 +1467,7 @@ pub const Broker = struct {
                 },
                 .columns = by_ptr.ptr,
                 .columns_len = by_ptr.len,
-            };
+            });
         }
         out.rows = try pl.published(pl.TableRec, "table", a, recs);
     }

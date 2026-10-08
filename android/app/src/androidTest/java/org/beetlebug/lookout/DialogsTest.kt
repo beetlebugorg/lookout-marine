@@ -19,6 +19,7 @@ import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -99,11 +100,15 @@ class DialogsTest {
     /**
      * The bands are offered as chips so a mariner picks a purpose rather than
      * a number.
+     *
+     * The row scrolls, so the last chip is off the side of a phone. Each one is
+     * scrolled to before it is read: that a mariner can reach it is the claim,
+     * not that five fit at once.
      */
     @Test fun theBandsAreOfferedAsChips() {
         scaleEntry()
         for (band in listOf("Berthing", "Harbor", "Approach", "Coastal", "General")) {
-            compose.onNodeWithText(band).assertIsDisplayed()
+            compose.onNodeWithText(band).performScrollTo().assertIsDisplayed()
         }
     }
 

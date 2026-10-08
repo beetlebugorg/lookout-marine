@@ -15,6 +15,9 @@
 //  under an alarmed one and never moves it off the top line.
 
 #if os(iOS)
+// The table's tick is a Combine publisher, and a property declaring one needs
+// the module named here.
+import Combine
 import SwiftUI
 
 struct PluginTableView: View {

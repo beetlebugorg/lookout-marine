@@ -1,7 +1,7 @@
 // The window shell: construction, chrome wiring, and the render thread.
 //
 // Everything else this window does lives in the directory for the area it
-// belongs to — chart/, hud/, library/, plugins/, settings/, about/ — each
+// belongs to, chart/, hud/, library/, plugins/, settings/, about/, each
 // beside the model that drives it. See README.md for the map.
 #include "pch.h"
 #include "MainWindow.xaml.h"
@@ -24,8 +24,8 @@ namespace
 {
     // A frame must never take the whole app down. The per-frame UI work and the
     // render thread call into WinRT and D3D, and either can fail under memory
-    // pressure — building a XAML element, an allocation for a world-view scene
-    // on the software rasterizer — as a thrown hresult_error. An exception that
+    // pressure: building a XAML element, an allocation for a world-view scene
+    // on the software rasterizer: as a thrown hresult_error. An exception that
     // escapes a dispatcher callback, or a std::thread body, terminates the
     // process; for a chartplotter a dropped frame must cost only that frame.
     // Logged once so a persistent failure shows in the core log without a line
@@ -69,7 +69,7 @@ namespace winrt::LookoutMarine::implementation
 {
     // The window's own icon. The ICON resource in LookoutMarine.rc is what
     // Explorer and the taskbar read off the executable, but an HWND wears only
-    // what WM_SETICON gave it — without this an unpackaged WinUI 3 window opens
+    // what WM_SETICON gave it: without this an unpackaged WinUI 3 window opens
     // with the stock WinUI mark in its titlebar and Alt-Tab. Every window this
     // app opens wears it, not just the chart.
     //
@@ -136,14 +136,17 @@ namespace winrt::LookoutMarine::implementation
         // ten wakeups a second with no chart open is a clock ticking for
         // nothing. It starts when a chart opens (chart/ui/Open.cpp) and stops
         // when the window closes; before that the only thing it did was retry
-        // the open, which the first layout below does instead — an event,
+        // the open, which the first layout below does instead: an event,
         // not a poll.
         readout_timer = DispatcherTimer{};
         readout_timer.Interval(std::chrono::milliseconds(100));
         readout_timer.Tick([this](auto &&, auto &&) { OnRendering(nullptr, nullptr); });
 
+        first_run.Open();
+        NoaaOpen();
+
         // The ROOT ELEMENT's SizeChanged, not the window's: the element fires
-        // after layout, when ActualWidth/Height already hold the new size —
+        // after layout, when ActualWidth/Height already hold the new size:
         // which is also the moment the first open becomes possible, because
         // an open needs a size to give the engine.
         Root().SizeChanged([this](auto &&, auto &&) {
@@ -164,9 +167,10 @@ namespace winrt::LookoutMarine::implementation
             StopRenderThread();
             lk_controller_free(controller);
             controller = nullptr;
-            // The set model holds a scan thread and the store, so it goes
-            // before the store does.
-            CloseChartSets();
+            // The NOAA service borrows the set model, and the set model holds
+            // a scan thread and the store, so they close in that order.
+            NoaaClose();
+            sets.Close();
             // The store coalesces its writes, so the last of them reaches the
             // disk here rather than at whatever the window was doing.
             lk_store_shutdown();
@@ -201,7 +205,7 @@ namespace winrt::LookoutMarine::implementation
 
     void MainWindow::WireChrome()
     {
-        EmptyOpenBtn().Click([this](auto &&, auto &&) { PickChartFolder(); });
+        FirstRunAttach();
         ZoomInBtn().Click([this](auto &&, auto &&) { Command('+'); });
         ZoomOutBtn().Click([this](auto &&, auto &&) { Command('-'); });
         // The north bubble is the follow lock; Ctrl+U stays the plain
@@ -231,7 +235,7 @@ namespace winrt::LookoutMarine::implementation
 
         // Chart gestures via XAML (DXGI mode; the fallback path uses the child
         // HWND wndproc). Only presses that start on the chart surface are chart
-        // gestures — capturing on a chrome press steals the button's Click.
+        // gestures: capturing on a chrome press steals the button's Click.
         auto on_chart = [this](winrt::Windows::Foundation::IInspectable const &src) {
             auto el = src.try_as<UIElement>();
             return el == Root() || (chart_panel != nullptr && el == chart_panel);
@@ -347,6 +351,10 @@ namespace winrt::LookoutMarine::implementation
             });
             Root().KeyboardAccelerators().Append(f11);
         }
+
+        // The markup buttons drawn flat against their panel, in the scheme
+        // the chrome opens in. ApplyChromeTheme does this again on a change.
+        FlatChromeButtons();
     }
 
     void MainWindow::OnRendering(Windows::Foundation::IInspectable const &,
@@ -365,8 +373,8 @@ namespace winrt::LookoutMarine::implementation
                 // Between a close and the open that follows it there is
                 // nothing to read out. The open itself is driven by layout,
                 // not by this clock, so the poll stands down until one lands,
-                // unless a settings page is up with a scan still to land.
-                if (!SettingsOpen() || !ChartSetsScanning())
+                // unless a picked set or a settings page is waiting on a scan.
+                if (pending_set.empty() && (!SettingsOpen() || !sets.Scanning()))
                     readout_timer.Stop();
                 return;
             }
@@ -375,12 +383,16 @@ namespace winrt::LookoutMarine::implementation
             // landing answer raises needs-redraw, so a resolve keeps the render
             // loop ticking until it is done.
             PollChartLinks();
+            // The NOAA service's responses, beside the wake that posts them.
+            NoaaChanged();
+            // A removal the page is reporting, for the same reason.
+            PollRemovalPane();
         }
         catch (...)
         {
             // This runs on the readout timer, ~10 Hz. Every call in it touches
-            // WinRT — the readouts rebuild scale-bar segments and the chart
-            // link rows rebuild XAML — and any of those can throw under memory
+            // WinRT: the readouts rebuild scale-bar segments and the chart
+            // link rows rebuild XAML, and any of those can throw under memory
             // pressure. The next tick rebuilds the same chrome, so a lost one
             // costs nothing; letting it escape the timer callback would end the
             // process.
@@ -466,7 +478,7 @@ namespace winrt::LookoutMarine::implementation
           }
           catch (...)
           {
-            // A frame that throws must not tear down the thread — an exception
+            // A frame that throws must not tear down the thread: an exception
             // out of a std::thread body calls std::terminate. Drop the frame
             // and pause so a persistent failure does not spin a hot loop.
             SwallowFrameError("RenderLoop");
@@ -487,7 +499,7 @@ namespace winrt::LookoutMarine::implementation
      * is open and quiet, pan a steady drag (4 pt a frame is an ordinary
      * finger, and it keeps crossing into new tiles), rest, zoom IN across
      * levels (each one needs tiles the view never held), then measure how
-     * long the chart takes to FINISH after the gesture stops — the phases of
+     * long the chart takes to FINISH after the gesture stops: the phases of
      * the reference's GestureBench, minus its tour. */
     void MainWindow::BenchStep()
     {
@@ -523,7 +535,7 @@ namespace winrt::LookoutMarine::implementation
                 bench_frames = 0;
             }
             break;
-        case 3: // zoom in, 0.05 a frame — six levels over 480 frames
+        case 3: // zoom in, 0.05 a frame, six levels over 480 frames
         {
             RECT rc{};
             GetClientRect(top_hwnd, &rc);

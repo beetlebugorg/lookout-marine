@@ -67,6 +67,34 @@ pub fn published(
     return out;
 }
 
+/// Write `value` to `dst` one field at a time over zeroed bytes, so the
+/// padding between fields reads 0. A plain assignment leaves the padding
+/// undefined, and a shell that compares or hashes a struct by its bytes then
+/// sees two equal values differ.
+pub fn fill(comptime T: type, dst: *T, value: T) void {
+    @memset(std.mem.asBytes(dst), 0);
+    copyFields(T, dst, &value);
+}
+
+fn copyFields(comptime T: type, dst: *T, src: *const T) void {
+    switch (@typeInfo(T)) {
+        .@"struct" => |s| {
+            if (s.layout == .@"packed") {
+                dst.* = src.*;
+                return;
+            }
+            inline for (s.fields) |f| {
+                copyFields(f.type, &@field(dst, f.name), &@field(src, f.name));
+            }
+        },
+        .array => |a| switch (@typeInfo(a.child)) {
+            .@"struct", .array => for (dst, src) |*d, *s| copyFields(a.child, d, s),
+            else => dst.* = src.*,
+        },
+        else => dst.* = src.*,
+    }
+}
+
 const t = std.testing;
 
 test "a string is copied and terminated" {
@@ -106,4 +134,23 @@ test "a published pointer casts back to its record" {
     const rows = try published(Rec, "row", a, recs);
     const back: *const Rec = @ptrCast(@alignCast(rows[0]));
     try t.expectEqual(@as(usize, 42), back.extra);
+}
+
+test "fill leaves the padding 0, nested and in arrays" {
+    const Inner = extern struct { a: u8, b: u32 };
+    const Outer = extern struct { flag: u8, inner: Inner, list: [2]Inner, n: u64 };
+    var got: Outer = undefined;
+    @memset(std.mem.asBytes(&got), 0xAA);
+    fill(Outer, &got, .{
+        .flag = 1,
+        .inner = .{ .a = 2, .b = 3 },
+        .list = .{ .{ .a = 4, .b = 5 }, .{ .a = 6, .b = 7 } },
+        .n = 8,
+    });
+    const bytes = std.mem.asBytes(&got);
+    // flag, then 3 bytes of padding before inner, whose own a is followed by 3.
+    try t.expectEqualSlices(u8, &.{ 1, 0, 0, 0, 2, 0, 0, 0 }, bytes[0..8]);
+    try t.expectEqual(@as(u32, 7), got.list[1].b);
+    try t.expectEqual(@as(u64, 8), got.n);
+    for (bytes) |b| try t.expect(b != 0xAA);
 }

@@ -25,8 +25,8 @@ struct DepthsSections: View {
     private func depth(_ b: Binding<Double>) -> Binding<Double> {
         guard feet else { return b }
         return Binding(
-            get: { (b.wrappedValue * 3.28084).rounded() },
-            set: { b.wrappedValue = $0.rounded() / 3.28084 }
+            get: { (b.wrappedValue / LOOKOUT_METRES_PER_FOOT).rounded() },
+            set: { b.wrappedValue = $0.rounded() * LOOKOUT_METRES_PER_FOOT }
         )
     }
 
@@ -80,7 +80,7 @@ private struct BandPreview: View {
     private var feet: Bool { m.depthUnit == .feet }
 
     private func label(_ metres: Double) -> String {
-        feet ? "\(Int((metres * 3.28084).rounded())) ft" : String(format: "%g m", metres)
+        feet ? "\(Int((metres / LOOKOUT_METRES_PER_FOOT).rounded())) ft" : String(format: "%g m", metres)
     }
 
     var body: some View {

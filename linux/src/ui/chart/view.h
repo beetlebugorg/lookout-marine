@@ -1,4 +1,4 @@
-/* ui/chart/view.h — the GPU chart surface embedded in GTK.
+/* ui/chart/view.h: the GPU chart surface embedded in GTK.
  *
  * Owns the native chart surface, pins it over its allocation, and forwards
  * input to the controller. Drag pans (with fling), Shift-drag rotates, wheel
@@ -28,7 +28,7 @@ gboolean lk_chart_view_ensure_native_surface (LkChartView *self);
 /* The widget's size in logical points (with a fallback before layout). */
 void lk_chart_view_get_point_size (LkChartView *self, int *width, int *height);
 
-/* lookout presented its first frame — map the surface (hidden until then). */
+/* lookout presented its first frame, map the surface (hidden until then). */
 void lk_chart_view_surface_ready (LkChartView *self);
 
 /* Fold an angle in radians into (−π, π]. The rotate gesture reports its delta

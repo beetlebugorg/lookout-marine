@@ -1,4 +1,4 @@
-// lk_plugin_model — the shape the wasm plugin registry takes on this side.
+// lk_plugin_model: the shape the wasm plugin registry takes on this side.
 //
 // A plugin declares a settings schema in its manifest and the core hands the
 // whole registry over as structs (lookout_plugins_read); plugins/ui/PluginSettings.cpp
@@ -34,7 +34,7 @@ namespace lkw
         explicit PluginField(lookout_plugin_setting const &s);
     };
 
-    // One heading's worth of controls inside one settings section — the unit the
+    // One heading's worth of controls inside one settings section: the unit the
     // pane draws, and the unit "Reset to defaults" acts on. A plugin whose schema
     // spans sections contributes one of these to each.
     struct PluginGroup

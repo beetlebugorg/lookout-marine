@@ -5,10 +5,16 @@ import org.beetlebug.lookout.store.Store
 import org.beetlebug.lookout.engine.EngineAccess
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.util.Log
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import java.nio.ByteBuffer
 
 /**
  * Charts by link: an online map AS the chart.
@@ -23,6 +29,9 @@ import androidx.compose.runtime.setValue
  * the snapshot; ChartLinkFetch.kt fetches the urls.
  */
 class ChartLinkController(appContext: Context, private val access: EngineAccess) {
+
+    private val appFiles = appContext.filesDir
+    private val resolver = appContext.contentResolver
 
     //
     // One chart added by link: a MapLibre style url. Picking it renders that
@@ -51,6 +60,14 @@ class ChartLinkController(appContext: Context, private val access: EngineAccess)
      *  service). Null when the Lookout chart is up. */
     var chartLinkAttribution by mutableStateOf<String?>(null)
         private set
+
+    /** Counts the core's chart-link changes, a finished picture among them. */
+    var revision by mutableIntStateOf(0)
+        private set
+
+    /** Each chart's picture from the core, by link url, and "" for Lookout's
+     *  own chart. */
+    val pictures = mutableStateMapOf<String, ImageBitmap>()
 
     private val linkFetch = ChartLinkFetch()
 
@@ -124,6 +141,7 @@ class ChartLinkController(appContext: Context, private val access: EngineAccess)
         }
         val hint = active != null
         access.onMain {
+            revision++
             chartLinks = links
             activeChartLink = active
             chartLinkAttribution = credit
@@ -133,6 +151,35 @@ class ChartLinkController(appContext: Context, private val access: EngineAccess)
                 Store.setFlag(Store.Group.CHARTLINKS, LINK_ACTIVE_HINT, hint)
             }
         }
+    }
+
+    /**
+     * Add a style the mariner has on this device.
+     *
+     * The core tells a path from a url and reads the file itself, but it needs
+     * a path to open: a document picker hands back a content uri, which is not
+     * one. The bytes are copied into the app's own folder and that path is
+     * added. A style document is a few kilobytes, and the copy is what makes it
+     * survive the picker's permission going away.
+     */
+    fun addStyleFile(uri: android.net.Uri) {
+        chartLinkError = null
+        chartLinkBusy = true
+        val name = uri.lastPathSegment?.substringAfterLast('/')?.ifEmpty { null } ?: "style.json"
+        val dir = java.io.File(appFiles, "styles").apply { mkdirs() }
+        val out = java.io.File(dir, if (name.endsWith(".json")) name else "$name.json")
+        try {
+            resolver.openInputStream(uri).use { input ->
+                if (input == null) throw java.io.IOException("no bytes")
+                out.outputStream().use { input.copyTo(it) }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "style file: $e")
+            chartLinkBusy = false
+            chartLinkError = "That file could not be read."
+            return
+        }
+        access.onEngine { l -> l.chartLinkAdd(out.absolutePath) }
     }
 
     /**
@@ -174,6 +221,45 @@ class ChartLinkController(appContext: Context, private val access: EngineAccess)
         access.onEngine { l -> l.chartLinkRefresh(url) }
     }
 
+    /**
+     * Ask the core for each chart's picture at the water on screen, as the
+     * gallery draws it: the chart being drawn as the engine draws it, and one
+     * publisher tile for any other raster style. A picture still pending comes
+     * back on a later [revision].
+     */
+    fun askPictures(urls: List<String>, widthPx: Int, heightPx: Int) {
+        if (widthPx <= 0 || heightPx <= 0) return
+        access.onEngine { l ->
+            val view = DoubleArray(Lookout.READOUTS_LEN)
+            l.readouts(view)
+            val px = ByteArray(widthPx * heightPx * 4)
+            val got = HashMap<String, ImageBitmap?>()
+            for (url in urls) {
+                when (l.chartLinkPicture(url, Lookout.PICTURE_TILE, view[Lookout.R_LON],
+                                         view[Lookout.R_LAT], PICTURE_ZOOM, widthPx, heightPx, px)) {
+                    Lookout.PICTURE_READY -> {
+                        // ARGB_8888 holds premultiplied RGBA in memory order.
+                        val bmp = Bitmap.createBitmap(widthPx, heightPx, Bitmap.Config.ARGB_8888)
+                        bmp.copyPixelsFromBuffer(ByteBuffer.wrap(px))
+                        got[url] = bmp.asImageBitmap()
+                    }
+                    Lookout.PICTURE_PENDING -> {}
+                    else -> got[url] = null
+                }
+            }
+            access.onMain {
+                for ((url, pic) in got) {
+                    if (pic == null) pictures.remove(url) else pictures[url] = pic
+                }
+            }
+        }
+    }
+
+    /** Drop the pictures still pending. The gallery calls this as it leaves. */
+    fun stopPictures() {
+        access.onEngine { l -> l.chartLinkPicturesCancel() }
+    }
+
     /** Bring the fetcher up against a freshly opened engine. RENDER THREAD. */
     fun start(l: Lookout) {
         migrateChartLinks(l)
@@ -193,5 +279,9 @@ class ChartLinkController(appContext: Context, private val access: EngineAccess)
 
         /** See linkFirstHint. */
         const val LINK_ACTIVE_HINT = "active_hint"
+
+        /** Low enough that one publisher tile holds a recognisable stretch of
+         *  coast. */
+        const val PICTURE_ZOOM = 9.0
     }
 }

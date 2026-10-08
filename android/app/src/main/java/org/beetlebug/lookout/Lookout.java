@@ -133,6 +133,8 @@ public final class Lookout implements AutoCloseable {
     public void pan(float dxPts, float dyPts)    { if (h != 0) nPan(h, dxPts, dyPts); }
     /** Zoom by dz levels about a point (logical pts); eases via tickAnim. */
     public void zoomAt(double dz, float xPts, float yPts) { if (h != 0) nZoomAt(h, dz, xPts, yPts); }
+    /** The same zoom with no ease, for a pinch that reports continuously. */
+    public void zoomAbout(double dz, float xPts, float yPts) { if (h != 0) nZoomAbout(h, dz, xPts, yPts); }
     /** Render one frame; true when the frame presented. */
     public boolean render()                      { return h != 0 && nRender(h); }
     /** True while the view needs another frame (state changed, building). */
@@ -274,7 +276,7 @@ public final class Lookout implements AutoCloseable {
     public static boolean chartSetsChanged(long s) {
         return s != 0 && nChartSetsChanged(s);
     }
-    /** The list, in the order added: eleven strings per set. */
+    /** The list, in the order added: thirteen strings per set. */
     public static String[] chartSetsAll(long s)   {
         return s == 0 ? new String[0] : nChartSetsAll(s);
     }
@@ -297,6 +299,28 @@ public final class Lookout implements AutoCloseable {
     /** Every chart the switched-on sets hold, sorted and deduplicated. */
     public static String[] chartSetsCompose(long s) {
         return s == 0 ? new String[0] : nChartSetsCompose(s);
+    }
+    /** Read a set again after a bake wrote into its prepared directory. False
+     *  when it is not on the list. */
+    public static boolean chartSetsRescan(long s, String path) {
+        return s != 0 && nChartSetsRescan(s, path);
+    }
+    /** Mark a set as a downloader's. True when the mark changed. */
+    public static boolean chartSetsSetManaged(long s, String path, boolean managed) {
+        return s != 0 && nChartSetsSetManaged(s, path, managed);
+    }
+    /** The files one set still has to prepare, in chartSetFiles' row shape. */
+    public static String[] chartSetToPrepare(long s, String path) {
+        return s == 0 ? new String[0] : nChartSetToPrepare(s, path);
+    }
+    /** Record that the mariner stopped the prepare of a set. */
+    public static void chartSetsNoteCancel(long s, String path) {
+        if (s != 0) nChartSetsNoteCancel(s, path);
+    }
+    /** Record how a bake of a set ended. Call once the bake has stopped and
+     *  before bakeFree, then rescan the set. */
+    public static boolean chartSetsNoteBake(long s, String path, long job) {
+        return s != 0 && nChartSetsNoteBake(s, path, job);
     }
 
     /**
@@ -324,6 +348,21 @@ public final class Lookout implements AutoCloseable {
     /** The S-52 navigational purpose band for a display scale. */
     public static String bandName(double denominator)  { return nBandName(denominator); }
 
+    /** The name of an S-57 usage band, 1 to 6: "Overview" to "Berthing". */
+    public static String usageBandName(int band)       { return nUsageBandName(band); }
+
+    /** A size, a thousand to the megabyte: "226.5 MB", "1.23 GB". */
+    public static String fmtBytes(long bytes)          { return nFmtBytes(bytes); }
+
+    /** A count grouped in threes: "7,214". */
+    public static String fmtCount(long n)              { return nFmtCount(n); }
+
+    /** A depth given in metres, in feet or metres to a tenth: "5 m", "12 ft".
+     *  With bare, the number alone. */
+    public static String fmtDepth(double metres, boolean feet, boolean bare) {
+        return nFmtDepth(metres, feet, bare);
+    }
+
     /** {lat, lon} for a position the mariner typed, or null. */
     public static double[] parsePosition(String text)  { return nParsePosition(text); }
 
@@ -333,6 +372,17 @@ public final class Lookout implements AutoCloseable {
     /** A wanted display scale as a zoom delta, to hand to zoomAt. */
     public static double zoomDeltaForScale(double current, double wanted) {
         return nZoomDeltaForScale(current, wanted);
+    }
+
+    /** The depth settings for a boat: lookout_depth_plan's seventeen fields,
+     *  in their order. DepthPlan names them. */
+    public static double[] depthPlan(double draftM, double clearanceM, boolean feet) {
+        return nDepthPlan(draftM, clearanceM, feet);
+    }
+    /** The depth step's picture for a boat (lookout_depth_preview). See
+     *  DepthPreview for the layout. */
+    public static double[] depthPreview(double draftM, double clearanceM, boolean feet) {
+        return nDepthPreview(draftM, clearanceM, feet);
     }
 
     /** What to call the set a raster file belongs to. The engine's own rule,
@@ -402,6 +452,7 @@ public final class Lookout implements AutoCloseable {
     private static native void nDefaultView(long h);
     private static native void nPan(long h, float dxPts, float dyPts);
     private static native void nZoomAt(long h, double dz, float xPts, float yPts);
+    private static native void nZoomAbout(long h, double dz, float xPts, float yPts);
     private static native boolean nRender(long h);
     private static native boolean nNeedsRedraw(long h);
     private static native boolean nAnimating(long h);
@@ -444,13 +495,24 @@ public final class Lookout implements AutoCloseable {
     private static native boolean nChartSetsSetOn(long s, String path, boolean on);
     private static native boolean nChartSetsIsOn(long s, String path);
     private static native String[] nChartSetsCompose(long s);
+    private static native boolean nChartSetsRescan(long s, String path);
+    private static native boolean nChartSetsSetManaged(long s, String path, boolean managed);
+    private static native String[] nChartSetToPrepare(long s, String path);
+    private static native void nChartSetsNoteCancel(long s, String path);
+    private static native boolean nChartSetsNoteBake(long s, String path, long job);
     private static native String nFmtPosition(double lat, double lon);
     private static native String nFmtCoordDm(double value, boolean isLat);
     private static native String nFmtScale(double denominator);
     private static native String nBandName(double denominator);
+    private static native String nUsageBandName(int band);
+    private static native String nFmtBytes(long bytes);
+    private static native String nFmtCount(long n);
+    private static native String nFmtDepth(double metres, boolean feet, boolean bare);
     private static native double[] nParsePosition(String text);
     private static native double nParseScale(String text);
     private static native double nZoomDeltaForScale(double current, double wanted);
+    private static native double[] nDepthPlan(double draftM, double clearanceM, boolean feet);
+    private static native double[] nDepthPreview(double draftM, double clearanceM, boolean feet);
     private static native String nRasterSetNameFor(String path);
     private static native String[] nMarinerKeys();
     private static native void nGetMariner(long h, double[] out);
@@ -798,8 +860,9 @@ public final class Lookout implements AutoCloseable {
 
     /** What a removal renames to before deleting behind itself. */
     public static String bakeTrashPrefix()        { return nBakeTrashPrefix(); }
-    /** The test a launch sweep uses. */
-    public static boolean bakeIsTrash(String name) { return nBakeIsTrash(name); }
+    /** Delete what removals left under root. Blocks while it deletes, so
+     *  call it off the main thread. Returns how many directories went. */
+    public static int bakeSweep(String root)       { return nBakeSweep(root); }
 
     // ---- portrayal quick toggles -------------------------------------------
 
@@ -829,7 +892,7 @@ public final class Lookout implements AutoCloseable {
     private static native String nBakePreparedName(String source);
     private static native boolean nBakeIsDerived(String root, String path);
     private static native String nBakeTrashPrefix();
-    private static native boolean nBakeIsTrash(String name);
+    private static native int nBakeSweep(String root);
     private static native void nToggleText(long h);
     private static native void nToggleSoundings(long h);
     private static native void nToggleOtherCategory(long h);
@@ -900,6 +963,13 @@ public final class Lookout implements AutoCloseable {
     public void httpRespond(long id, byte[] bytes, int status) {
         if (h != 0) nHttpRespond(h, id, bytes, status);
     }
+    /** Answer one ask a piece at a time, reading buf up to len. Pieces of one
+     *  ask go in order from one thread, with done set on the last. A NOAA
+     *  district downloads as one zip of a couple of hundred megabytes, which
+     *  does not fit a phone heap as a byte[]. */
+    public void httpRespondChunk(long id, byte[] buf, int len, int status, boolean done) {
+        if (h != 0) nHttpRespondChunk(h, id, buf, len, status, done);
+    }
     public void chartLinkAdd(String link)        { if (h != 0) nChartLinkAdd(h, link); }
     /** null draws lookout's own chart. */
     public void chartLinkSelect(String url)      { if (h != 0) nChartLinkSelect(h, url); }
@@ -913,6 +983,155 @@ public final class Lookout implements AutoCloseable {
     public void chartLinksImport(String json)    { if (h != 0) nChartLinksImport(h, json); }
     /** Is a chart link the one being drawn? */
     public boolean altStyleActive()              { return h != 0 && nAltStyleActive(h); }
+
+    // ---- pictures of a linked chart ------------------------------------
+
+    /** lookout_chart_link_picture's kinds and results. */
+    public static final int PICTURE_TILE = 0, PICTURE_RENDER = 1;
+    public static final int PICTURE_NONE = 0, PICTURE_READY = 1, PICTURE_PENDING = 2;
+
+    /** One chart's picture at a point. "" is Lookout's own chart. On
+     *  PICTURE_READY dst holds width * height * 4 bytes of premultiplied
+     *  RGBA. */
+    public int chartLinkPicture(String url, int kind, double lon, double lat, double zoom,
+                                int width, int height, byte[] dst) {
+        return h == 0 ? PICTURE_NONE
+                      : nChartLinkPicture(h, url, kind, lon, lat, zoom, width, height, dst);
+    }
+    /** Drop the pictures still pending. */
+    public void chartLinkPicturesCancel()        { if (h != 0) nChartLinkPicturesCancel(h); }
+
+    // ---- S-52 colours ---------------------------------------------------
+
+    /** One colour the engine draws with, by S-52 token (DEPVS, DEPMS, DEPMD,
+     *  DEPDW, LANDA, DEPCN) and scheme (0 day, 1 dusk, 2 night), as RGBA in
+     *  0..1. False when the token is not in the table. No handle: the palette
+     *  is the core's own. */
+    public static boolean s52Color(String token, int scheme, float[] rgba) {
+        return nS52Color(token, scheme, rgba);
+    }
+
+    // ---- the coverage coastline ----------------------------------------
+
+    /** lookout_noaa_region.panel: the map panel a region is drawn on. */
+    public static final int PANEL_LOWER48 = 0;
+    public static final int PANEL_ALASKA = 1;
+    public static final int PANEL_HAWAII = 2;
+
+    /** GSHHG levels. A lake is its own ring, filled over the land. */
+    public static final int COAST_LAND = 1;
+    public static final int COAST_LAKE = 2;
+
+    /** Width over height of a lon/lat window drawn in Mercator. */
+    public static double mapAspect(double w, double e, double s, double n) {
+        return nMapAspect(w, e, s, n);
+    }
+
+    /** Longitude and latitude pairs as x and y pairs in a pxW by pxH
+     *  rectangle showing the window. */
+    public static float[] mapProject(double w, double e, double s, double n,
+                                     float pxW, float pxH, double[] lonlat) {
+        return nMapProject(w, e, s, n, pxW, pxH, lonlat);
+    }
+
+    /** The coastline rings of one level that reach into the window, projected
+     *  into its rectangle, as { float[] xy, int[] ends }. ends[i] is the point
+     *  index one past ring i. */
+    public static Object[] coastlineRings(int level, double w, double e, double s, double n,
+                                          float pxW, float pxH) {
+        return nCoastlineRings(level, w, e, s, n, pxW, pxH);
+    }
+
+    // ---- NOAA's charts --------------------------------------------------
+
+    /** The region table: id, name, blurb, "west,south,east,north" and the map
+     *  panel (a PANEL_ number) for each, five strings per region. Static for
+     *  the life of the process. */
+    public static String[] noaaRegions()         { return nNoaaRegions(); }
+    /** Open the NOAA service over the store and the chart sets. It outlives
+     *  every chart handle, so a download runs while charts reopen. 0 when it
+     *  could not be allocated. */
+    public static long noaaOpen(long store, long sets)  { return nNoaaOpen(store, sets); }
+    public static void noaaClose(long n)                { nNoaaClose(n); }
+    /** Install or remove the service's fetcher. Removing it releases the
+     *  thread waiting in noaaFetchWait. */
+    public static void noaaFetch(long n, boolean on)    { nNoaaFetch(n, on); }
+    /** Block until the service has requests, cancels or a wake. counts[0] is
+     *  how many requests, counts[1] how many cancels. Returns 1 for a wake, 2
+     *  once the fetcher is removed, else 0. */
+    public static int noaaFetchWait(long[] ids, int[] allow, String[] urls, long[] cancelled, int[] counts) {
+        return nNoaaFetchWait(ids, allow, urls, cancelled, counts);
+    }
+    /** One piece of a response, from any thread; buf is read up to len. */
+    public static void noaaRespondChunk(long n, long id, byte[] buf, int len, int status, boolean done) {
+        nNoaaRespondChunk(n, id, buf, len, status, done);
+    }
+    /** Adopt what arrived. True when the state changed since the last call. */
+    public static boolean noaaChanged(long n)           { return nNoaaSvcChanged(n); }
+    /** out[0] phase, [1] checked at, [2] catalog cells, [3] total, [4] done,
+     *  [5] failed, [6] bytes total, [7] bytes done, [8] outcome, [9] run,
+     *  [10] preparing, [11] prepared, [12] to prepare, [13..18] prepared by
+     *  band and [19..24] to prepare by band, band 1 first. Returns whether a
+     *  catalog is loaded. */
+    public static boolean noaaPoll(long n, long[] out)  { return nNoaaSvcPoll(n, out); }
+    /** The catalog date and the error, each possibly empty. */
+    public static String[] noaaText(long n)             { return nNoaaSvcText(n); }
+    /** The region ids an apply of pickedIds gives back. */
+    public static String[] noaaGivesBack(long n, String pickedIds) { return nNoaaGivesBack(n, pickedIds); }
+    public static void noaaRefresh(long n)              { nNoaaSvcRefresh(n); }
+    public static void noaaCancel(long n)               { nNoaaSvcCancel(n); }
+    /** The managed cells NOAA has reissued. 0 until a check is recorded. */
+    public static int noaaOutdated(long n)              { return nNoaaOutdated(n); }
+    /** Download the reissued editions into destDir. */
+    public static void noaaUpdate(long n, String destDir) { nNoaaUpdate(n, destDir); }
+    /** Start the update check when one is due. True while it runs. */
+    public static boolean noaaUpdateDue(long n)         { return nNoaaUpdateDue(n); }
+    /** How often the update check runs: NOAA_CHECK_NEVER, _STARTUP or _DAILY. */
+    public static int noaaUpdateCheck(long n)           { return nNoaaUpdateCheck(n); }
+    public static void noaaSetUpdateCheck(long n, int cadence) { nNoaaSetUpdateCheck(n, cadence); }
+    /** lookout_noaa_update_check's LOOKOUT_NOAA_CHECK_* values. */
+    public static final int NOAA_CHECK_NEVER = 0;
+    public static final int NOAA_CHECK_STARTUP = 1;
+    public static final int NOAA_CHECK_DAILY = 2;
+    /** out[0] cells, [1] bytes, [2] cells already held, [3] what fetching
+     *  those again costs. */
+    public static boolean noaaCost(long n, String regionIds, long[] out) {
+        return nNoaaSvcCost(n, regionIds, out);
+    }
+    public static void noaaDownload(long n, String regionIds, String destDir, boolean again) {
+        nNoaaSvcDownload(n, regionIds, destDir, again);
+    }
+    /** Make the download at destDir hold the picked water: record the pick,
+     *  delete the cells it gave back, fetch what it lacks. Returns how many
+     *  directories left the library. */
+    public static int noaaApply(long n, String pickedIds, String destDir, boolean again) {
+        return nNoaaSvcApply(n, pickedIds, destDir, again);
+    }
+    /** out[0] cells, [1] held by the managed set, [2] bytes to fetch the
+     *  missing ones, [3] bytes to fetch the held ones again, [4] 1 when all
+     *  held, [5] 1 when recorded. False before a catalog is read. */
+    public static boolean noaaRegionState(long n, String regionId, long[] out) {
+        return nNoaaSvcRegionState(n, regionId, out);
+    }
+    /** The boxes of a region's coverage, flattened as west, south, east,
+     *  north. Returns how many boxes there are, which may be more than `out`
+     *  held. */
+    public static int noaaRegionCoverage(long n, String regionId, double[] out) {
+        return nNoaaSvcRegionCoverage(n, regionId, out);
+    }
+
+    // ---- setup (lookout_setup_*) ---------------------------------------------
+
+    /** A setup state machine, down. 0 when it could not be allocated. */
+    public static long setupNew()                          { return nSetupNew(); }
+    public static void setupFree(long s)                   { nSetupFree(s); }
+    /** Replace the facts setup reads. The slots are nSetupNote's. */
+    public static void setupNote(long s, long[] facts)     { nSetupNote(s, facts); }
+    /** Apply a LOOKOUT_SETUP_* action. Returns the source to act on, or -1. */
+    public static int setupAct(long s, int action, int arg) { return nSetupAct(s, action, arg); }
+    /** Read the state into nSetupRead's slots. */
+    public static void setupRead(long s, long[] out)       { nSetupRead(s, out); }
+
     /** A live grant flip; a revoked call answers -1 to the running plugin. */
     public boolean pluginGrantSet(String id, String cap, boolean on) {
         return h != 0 && nPluginGrantSet(h, id, cap, on);
@@ -928,6 +1147,7 @@ public final class Lookout implements AutoCloseable {
     private static native int nHttpPoll(long h, long[] ids, int[] allow, String[] urls);
     private static native int nHttpCancelPoll(long h, long[] ids);
     private static native void nHttpRespond(long h, long id, byte[] bytes, int status);
+    private static native void nHttpRespondChunk(long h, long id, byte[] buf, int len, int status, boolean done);
     private static native void nChartLinkAdd(long h, String link);
     private static native void nChartLinkSelect(long h, String url);
     private static native void nChartLinkRemove(long h, String url);
@@ -935,6 +1155,42 @@ public final class Lookout implements AutoCloseable {
     private static native String nChartLinksJson(long h);
     private static native boolean nChartLinksChanged(long h);
     private static native void nChartLinksImport(long h, String json);
+    private static native int nChartLinkPicture(long h, String url, int kind, double lon, double lat,
+                                                double zoom, int width, int height, byte[] dst);
+    private static native void nChartLinkPicturesCancel(long h);
+    private static native boolean nS52Color(String token, int scheme, float[] out);
+    private static native double nMapAspect(double w, double e, double s, double n);
+    private static native float[] nMapProject(double w, double e, double s, double n,
+                                              float pxW, float pxH, double[] lonlat);
+    private static native Object[] nCoastlineRings(int level, double w, double e, double s,
+                                                   double n, float pxW, float pxH);
+    private static native String[] nNoaaRegions();
+    private static native long nNoaaOpen(long store, long sets);
+    private static native void nNoaaClose(long n);
+    private static native void nNoaaFetch(long n, boolean on);
+    private static native int nNoaaFetchWait(long[] ids, int[] allow, String[] urls, long[] cancelled, int[] counts);
+    private static native void nNoaaRespondChunk(long n, long id, byte[] buf, int len, int status, boolean done);
+    private static native boolean nNoaaSvcChanged(long n);
+    private static native boolean nNoaaSvcPoll(long n, long[] out);
+    private static native String[] nNoaaSvcText(long n);
+    private static native String[] nNoaaGivesBack(long n, String pickedIds);
+    private static native void nNoaaSvcRefresh(long n);
+    private static native void nNoaaSvcCancel(long n);
+    private static native int nNoaaOutdated(long n);
+    private static native void nNoaaUpdate(long n, String destDir);
+    private static native boolean nNoaaUpdateDue(long n);
+    private static native int nNoaaUpdateCheck(long n);
+    private static native void nNoaaSetUpdateCheck(long n, int cadence);
+    private static native boolean nNoaaSvcCost(long n, String regionIds, long[] out);
+    private static native void nNoaaSvcDownload(long n, String regionIds, String destDir, boolean again);
+    private static native int nNoaaSvcApply(long n, String pickedIds, String destDir, boolean again);
+    private static native boolean nNoaaSvcRegionState(long n, String regionId, long[] out);
+    private static native int nNoaaSvcRegionCoverage(long n, String regionId, double[] out);
+    private static native long nSetupNew();
+    private static native void nSetupFree(long s);
+    private static native void nSetupNote(long s, long[] facts);
+    private static native int nSetupAct(long s, int action, int arg);
+    private static native void nSetupRead(long s, long[] out);
     private static native String[] nTables(long h);
     private static native String[] nTableRows(long h, String id, String key, String sortKey, boolean ascending);
     private static native boolean nPluginTableOpen(long h, String id, String key, boolean open);

@@ -1,4 +1,4 @@
-// lk_pick — the pick report as the card lays it out.
+// lk_pick: the pick report as the card lays it out.
 //
 // The ENGINE composes the report and flattens the source fold
 // (lookout_picks_read): the title, the rows, the notes, the footnote and the

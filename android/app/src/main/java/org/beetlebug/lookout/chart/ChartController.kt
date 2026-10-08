@@ -8,6 +8,8 @@ import org.beetlebug.lookout.plugins.rowsJson
 import org.beetlebug.lookout.Lookout
 import org.beetlebug.lookout.LookoutActivity
 import org.beetlebug.lookout.charts.ChartLinkController
+import org.beetlebug.lookout.charts.NoaaController
+import org.beetlebug.lookout.firstrun.FirstRunModel
 import org.beetlebug.lookout.charts.ChartSets
 import org.beetlebug.lookout.charts.RasterController
 import org.beetlebug.lookout.charts.RasterCharts
@@ -35,6 +37,7 @@ import org.beetlebug.lookout.plugins.TableController
 import org.beetlebug.lookout.plugins.TableSpec
 import org.beetlebug.lookout.plugins.readTableSpecs
 import org.beetlebug.lookout.plugins.trimmed
+import org.beetlebug.lookout.settings.DepthUnit
 import org.beetlebug.lookout.settings.MarinerState
 import org.beetlebug.lookout.settings.Scheme
 import org.beetlebug.lookout.store.Store
@@ -102,6 +105,18 @@ class ChartController(private val appContext: Context) {
      */
     var rendering by mutableStateOf(false)
         private set
+
+    /** True while an open chart has cells. A handle opened over the basemap
+     *  alone has none. */
+    var chartHasCells by mutableStateOf(false)
+        private set
+
+    /** Called off the main thread, at attach and when cells join a live
+     *  handle. */
+    fun noteChartCells(l: Lookout) {
+        val cells = l.chartsCount() > 0
+        access.onMain { chartHasCells = cells }
+    }
 
     /** Which step the startup loader is showing. */
     var loadPhase by mutableStateOf(LoadPhase.MAPPING)
@@ -182,6 +197,10 @@ class ChartController(private val appContext: Context) {
 
     /** Charts by link: an online map AS the chart. */
     val chartLinkController = ChartLinkController(appContext, access)
+    /** NOAA's catalog and downloads. Setup drives it; so does the Charts pane. */
+    val noaaController = NoaaController(access)
+    /** Setup, over an app with nothing to draw. */
+    val firstRun = FirstRunModel()
 
     val rasterCharts get() = rasterController.charts
 
@@ -221,6 +240,7 @@ class ChartController(private val appContext: Context) {
         // here — only the mariner's old SharedPreferences list, once.
         chartLinkController.start(l)
         val loaded = date
+        noteChartCells(l)
         access.onMain {
             mariner.loadFrom(v, loaded)
             plugins.drainOpenFiles()
@@ -311,6 +331,7 @@ class ChartController(private val appContext: Context) {
         // after the engine and its alarm were gone.
         access.onMain {
             rendering = false
+            chartHasCells = false
             identify = emptyList()
             alertsController.clear()
             // The plugins' declared tables went with them.
@@ -336,6 +357,10 @@ class ChartController(private val appContext: Context) {
         // the readouts at 10 Hz.
         followPin(l)
         watchPlugins(l, frameTimeNanos)
+        // The chart-link list, the credit and the error, from the core. Before
+        // the throttle: a finished chart picture raises the flag on the tick
+        // before the loop stops, and a throttled tick skips the poll.
+        chartLinkController.poll(l)
         if (lastPushNs != 0L && frameTimeNanos - lastPushNs < PUSH_INTERVAL_NS) return
         lastPushNs = frameTimeNanos
         l.readouts(readoutBuf)
@@ -376,10 +401,6 @@ class ChartController(private val appContext: Context) {
         // coverage, so this is read on the frame, not only when something is
         // pressed. Cheap: a handful of calls over a handful of sets.
         rasterController.pushRaster(l)
-        // The chart-link list, the credit and the error, from the core. A
-        // landing answer raises needs-redraw, so a resolve keeps this ticking
-        // until it is done.
-        chartLinkController.poll(l)
         if (r == lastPushed) return
         lastPushed = r
         access.onMain {
@@ -600,6 +621,17 @@ class ChartController(private val appContext: Context) {
     }
 
     fun resetRotation() = onEngine { it.resetRotation() }
+
+    /**
+     * Frame the lower 48 behind setup, so the chart under it shows the
+     * coastline the mariner is choosing from. United States charts label
+     * depths in feet, and setup is the one moment the unit can be chosen
+     * before the first sounding draws.
+     */
+    fun showWholeCountry() {
+        onEngine { it.setView(-96.0, 38.0, 5.0, 0.0) }
+        mariner.depthUnit = DepthUnit.FEET
+    }
 
     // ---- the chart menu and markers -----------------------------------------
 

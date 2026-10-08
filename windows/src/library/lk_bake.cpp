@@ -56,6 +56,9 @@ namespace lkw
 
     std::string BakeProgress::Title() const
     {
+        // A removal names what is going, the way the reference does.
+        if (kind == WorkKind::Removing)
+            return "Removing " + name;
         if (kind == WorkKind::Finding || total == 0)
             return "Finding charts in " + name;
         return "Importing " + name;
@@ -66,14 +69,10 @@ namespace lkw
         if (done < 3 || total <= done || elapsed <= 1.0)
             return {};
         double per = elapsed / (double)done;
-        double left = per * (double)(total - done);
-        if (left < 60)
-            return "under a minute left";
-        if (left < 3600)
-            return "about " + std::to_string((int)(left / 60 + 0.5)) + " min left";
-        char buf[64];
-        snprintf(buf, sizeof buf, "about %.1f h left", left / 3600.0);
-        return buf;
+        char buf[LOOKOUT_DURATION_MAX];
+        size_t const n = lookout_fmt_duration(per * (double)(total - done), LOOKOUT_DURATION_LEFT,
+                                              buf, sizeof buf);
+        return std::string(buf, n);
     }
 
     ScanResult ScanCharts(std::string const &path)
@@ -161,7 +160,7 @@ namespace lkw
 
     /* An import that produced NOTHING must say why, not just take the panel
      * down: a folder of malformed cells otherwise looks like an app that did
-     * nothing. A partial bake is not an error — what landed is a library — so
+     * nothing. A partial bake is not an error, what landed is a library, so
      * only the all-failed case keeps the message. */
     std::string BakeJob::Error() const
     {
@@ -270,5 +269,57 @@ namespace lkw
         job_ = lookout_bake_start(source.c_str(), in_c.data(), out_c.data(), cells, sheets,
                                   items.size() - cells - sheets, IsArchive(source) ? 1 : 0);
         return job_ != nullptr;
+    }
+
+    // ---- RemovalJob -------------------------------------------------------
+
+    void RemovalJob::Begin(std::string name, unsigned total)
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        now_ = BakeProgress{};
+        now_.kind = WorkKind::Removing;
+        now_.name = std::move(name);
+        now_.total = total;
+        now_.running = true;
+        note_.clear();
+    }
+
+    void RemovalJob::Count(unsigned total)
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        now_.total = total;
+    }
+
+    void RemovalJob::Step()
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        if (now_.done < now_.total)
+            ++now_.done;
+    }
+
+    void RemovalJob::Finish(std::string note)
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        now_.done = now_.total;
+        now_.running = false;
+        note_ = std::move(note);
+    }
+
+    BakeProgress RemovalJob::Snapshot() const
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        return now_;
+    }
+
+    bool RemovalJob::Running() const
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        return now_.running;
+    }
+
+    std::string RemovalJob::Note() const
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        return note_;
     }
 }

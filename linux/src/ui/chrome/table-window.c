@@ -340,7 +340,7 @@ lk_table_row_activated (GtkListBox *box, GtkListBoxRow *row, gpointer user_data)
     return;
 
   /* Following would drag the camera straight back to own ship, so it stops
-     first — the mariner asked to look at this row, not at the boat. */
+     first, the mariner asked to look at this row, not at the boat. */
   lk_chart_controller_follow_set (controller, FALSE);
 
   lookout_view view = lk_chart_controller_get_view (controller);

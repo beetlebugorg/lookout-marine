@@ -1,4 +1,4 @@
-/* ui/settings/private.h — the settings window's shared state.
+/* ui/settings/private.h: the settings window's shared state.
  *
  * The window is built from one unit per page. They all read and write the one
  * struct below, so it lives here rather than in ui/settings/window.c.
@@ -27,7 +27,7 @@ typedef struct _LkSettings LkSettings;
  * Every one of them is driven by a signal it raises itself: a control in the
  * list changes the model, which signals straight back. Rebuilding inside that
  * would free the control that is still emitting, so the rebuild waits for the
- * next idle — which also folds a burst of changes into one pass. */
+ * next idle, which also folds a burst of changes into one pass. */
 typedef struct {
   GtkWidget  *box;      /* the list, NULL until the page builds it */
   guint       idle_id;
@@ -45,12 +45,21 @@ struct _LkSettings {
   GtkWidget *sidebar;
   GtkWidget *stack;
 
-  /* The three lists on the Charts page: the installed raster charts, the
-   * charts by link, and the library of installed sets. All three answer a signal
-   * their own controls raise, so all three defer their rebuild. */
-  LkDeferredList raster;
+  /* The three lists on the Charts page: what the active chart cannot say for
+   * itself, the library of installed sets with its pictures, and the work
+   * arriving now. All three answer a signal their own controls raise, so all
+   * three defer their rebuild. */
   LkDeferredList links;
   LkDeferredList sets;
+  LkDeferredList work;
+
+  /* The summary beside the set list's heading, re-lettered as the scans land,
+   * and the section that holds the work in flight, hidden when there is
+   * none. */
+  GtkWidget *sets_summary;
+  GtkWidget *work_section;
+  /* The NOAA row, which carries when the catalog was last read. */
+  GtkWidget *noaa_row;
 
   /* The Display tab's three scheme swatches, so the ring can move to the pick. */
   GtkWidget *scheme_swatches[3];

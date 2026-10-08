@@ -152,15 +152,20 @@ fun ReadoutsCapsule(
         tonalElevation = 2.dp,
         shadowElevation = 4.dp,
     ) {
+      // Two lines only when there is a position to put on the second one.
+      // Padding the column for a line that is not there left the row short of
+      // the capsule's own height, and the minimum stretched the surface with
+      // all the slack falling under the text.
+      val twoLine = compact && readouts.fixState == Lookout.FIX_LIVE
       Column(
           horizontalAlignment = Alignment.CenterHorizontally,
           modifier = Modifier.padding(
               horizontal = if (compact) 14.dp else 18.dp,
-              vertical = if (compact) 6.dp else 0.dp,
+              vertical = if (twoLine) 6.dp else 0.dp,
           ),
       ) {
         Row(
-            modifier = if (compact) Modifier else Modifier.height(Chrome.capsule),
+            modifier = if (twoLine) Modifier else Modifier.height(Chrome.capsule),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(if (compact) 10.dp else 12.dp),
         ) {
@@ -185,17 +190,18 @@ fun ReadoutsCapsule(
                     .clickable(onClick = onScaleTap)
                     .padding(horizontal = 5.dp, vertical = 3.dp),
             )
-            // The zoom is a number about the tile pyramid, not about the water.
-            // It is the first thing to go when the width runs out.
-            if (!compact) {
-                Separator()
-                Text(
-                    text = String.format(Locale.US, "z%.1f", readouts.zoom),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                )
-            }
+            // The zoom keeps its place beside the scale it belongs to, at any
+            // width. It used to move to the second line on a phone, which put
+            // it after the GPS pill and out of the order the wide row reads
+            // in, and with no fix to print it took a whole line for one
+            // number.
+            Separator()
+            Text(
+                text = String.format(Locale.US, "z%.1f", readouts.zoom),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+            )
             // The position slot, where the reference keeps it: the fix pill,
             // and beside it own ship's REPORTED fix — nothing else. The map
             // centre or a dead-reckoned number here is a wrong position a
@@ -226,34 +232,23 @@ fun ReadoutsCapsule(
                 )
             }
         }
-        if (compact) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+        // The second line carries the one readout a phone has no room for: the
+        // position, twenty-seven characters of it. Nothing else moves down
+        // here, so with no fix to print there is no second line at all.
+        //
+        // THE SHIP-OR-NOTHING RULE, the same one the wide row keeps. This line
+        // used to print the MAP CENTRE, unconditionally: with the chart panned
+        // away from the boat it read as a position, beside a "GPS" badge, and
+        // a mariner could write it in a log or pass it over the radio. Own
+        // ship's reported fix or no numbers at all.
+        if (twoLine) {
+            Text(
+                text = coordString(readouts.shipLat, readouts.shipLon),
+                style = MaterialTheme.typography.bodyMedium,
+                fontFamily = FontFamily.Monospace,
+                maxLines = 1,
                 modifier = Modifier.padding(top = 2.dp),
-            ) {
-                // THE SHIP-OR-NOTHING RULE, the same one the wide row keeps.
-                // This line used to print the MAP CENTRE, unconditionally, a
-                // few points under the fix pill: with the chart panned away
-                // from the boat it read as a position, beside a "GPS" badge,
-                // and a mariner could write it in a log or pass it over the
-                // radio. Own ship's reported fix or no numbers at all.
-                if (readouts.fixState == Lookout.FIX_LIVE) {
-                    Text(
-                        text = coordString(readouts.shipLat, readouts.shipLon),
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontFamily = FontFamily.Monospace,
-                        maxLines = 1,
-                    )
-                    Separator()
-                }
-                Text(
-                    text = String.format(Locale.US, "z%.1f", readouts.zoom),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                )
-            }
+            )
         }
       }
     }

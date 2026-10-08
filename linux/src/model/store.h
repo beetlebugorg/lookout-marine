@@ -1,4 +1,4 @@
-/* model/store.h — what the shell keeps across launches.
+/* model/store.h: what the shell keeps across launches.
  *
  * The core owns the file: one JSON object of groups at
  * $XDG_CONFIG_HOME/lookout-marine/settings.json, with coalesced writes, one
@@ -67,18 +67,19 @@ void     lk_store_save_raster_all (const char *const *paths,
 gboolean lk_store_load_chart_hidden (void);
 void     lk_store_save_chart_hidden (gboolean hidden);
 
-/* The chart links the mariner added, as one JSON array text — the same
+/* The chart links the mariner added, as one JSON array text, the same
  * document every shell stores ([{url,name,doc},…]), so what a link means is
  * defined once, in the chart-links code, not per store. NULL when none are
  * saved; free the load. The active link is the url of the one being sailed
  * on, or NULL/empty for lookout's own chart. */
 char *lk_store_load_chart_links (void);
 void  lk_store_save_chart_links (const char *json);
+
 char *lk_store_load_chart_link_active (void);
 void  lk_store_save_chart_link_active (const char *url);
 
-/* Plugin settings, kept as the config object each plugin was last handed —
- * `{"cpa_limit":926,"cpa_alarm":true,"connections":[…]}` — one string per
+/* Plugin settings, kept as the config object each plugin was last handed,
+ * `{"cpa_limit":926,"cpa_alarm":true,"connections":[…]}`, one string per
  * plugin id.
  *
  * The whole object rather than field by field, because a LIST is in it: the

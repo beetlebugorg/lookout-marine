@@ -154,7 +154,7 @@ lk_json_read_number (LkJsonReader *r)
   char *end = NULL;
 
   /* A JSON number starts with a digit or a minus. g_ascii_strtod also takes
-     forms JSON forbids — a leading plus or dot, hexadecimal floats, inf, nan —
+     forms JSON forbids, a leading plus or dot, hexadecimal floats, inf, nan,
      so both the first character and the whole consumed span are checked. */
   if (*start != '-' && !g_ascii_isdigit (*start))
     return NULL;
@@ -167,7 +167,7 @@ lk_json_read_number (LkJsonReader *r)
     {
       if (!g_ascii_isdigit (*c) && *c != '.' && *c != '-' && *c != '+' &&
           *c != 'e' && *c != 'E')
-        return NULL; /* a hex digit or an 'x' — a form strtod took, JSON forbids */
+        return NULL; /* a hex digit or an 'x', a form strtod took, JSON forbids */
     }
 
   LkJson *node = lk_json_new (LK_JSON_NUMBER);
@@ -398,7 +398,7 @@ lk_json_member (const LkJson *node, const char *name)
 }
 
 /* g_ptr_array_sort_values hands the elements themselves, not slots holding
- * them — unlike the older g_ptr_array_sort. */
+ * them, unlike the older g_ptr_array_sort. */
 static int
 lk_json_compare_keys (gconstpointer a, gconstpointer b)
 {

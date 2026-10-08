@@ -1,4 +1,4 @@
-/* ui/settings/plugins-page.h — the Plugins page.
+/* ui/settings/plugins-page.h: the Plugins page.
  *
  * What is loaded, what each one may reach, and how to add or remove one.
  */

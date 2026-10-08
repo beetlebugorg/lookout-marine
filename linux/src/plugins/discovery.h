@@ -1,4 +1,4 @@
-/* plugins/discovery.h — what is already answering on the boat's network.
+/* plugins/discovery.h: what is already answering on the boat's network.
  *
  * A Signal K server announces itself over DNS-SD, and so do some NMEA
  * gateways. A connection list declares the service types it accepts

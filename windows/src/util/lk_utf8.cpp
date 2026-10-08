@@ -1,4 +1,4 @@
-/* lk_utf8 — see lk_utf8.h. */
+/* lk_utf8: see lk_utf8.h. */
 #include "lk_utf8.h"
 
 namespace lkw

@@ -15,6 +15,7 @@
 //! the tile sources feed it, and its camera is the one camera. This file holds
 //! no scene and no GPU handle.
 const std = @import("std");
+const stackprobe = @import("stackprobe.zig");
 const builtin = @import("builtin");
 const cc = @import("c.zig").c;
 const cthost = @import("ct/host.zig"); // the renderer, behind one struct
@@ -22,6 +23,9 @@ const cstyle = @import("ct/style.zig");
 const craster = @import("ct/raster.zig"); // the raster underlay's data half
 const ctprovided = @import("ct/provided.zig");
 const clinks = @import("chartlinks.zig"); // charts by link: resolve, serve, persist
+const pics = @import("pictures.zig"); // pictures of charts, for a shell's chart list
+pub const noaajob = @import("noaajob.zig"); // NOAA chart catalog and downloads
+pub const encunpack = @import("encunpack.zig"); // an exchange set zip into an ENC_ROOT
 const camera = @import("charttable").camera; // charttable's camera IS the camera
 const pick_rules = @import("pick.zig"); // what a cursor pick reports, and in what order
 pub const library = @import("library.zig"); // what a folder of charts holds
@@ -31,6 +35,7 @@ const ctglyphs = @import("charttable").glyphs;
 const ctscene = @import("charttable").scene;
 const ov = @import("overlay.zig");
 const marks = @import("markers.zig"); // the mariner's own marks on the water
+const cachedir = @import("cachedir.zig"); // where files that can be made again live
 
 pub const Mariner = cc.tile57_mariner;
 pub const Scheme = cc.tile57_scheme;
@@ -43,11 +48,15 @@ const plugins_on = @import("build_options").plugins;
 const plugin_read = @import("plugins");
 const phost = if (plugins_on) @import("plugin/host.zig") else struct {};
 const clock = @import("clock.zig");
-const settings = @import("settings.zig");
-/// The bake, for the host test that drives it over a real archive.
+pub const settings = @import("settings.zig");
+/// The bake, for the host test that drives it over a real archive, and the
+/// NOAA prepare that runs it over real cells.
+pub const chartsets = @import("chartsets.zig");
+pub const noaa = @import("noaa.zig");
 pub const bakejob = @import("bakejob.zig");
 pub const bake_rules = @import("shell/bake.zig");
 const frame_rules = @import("shell/frame.zig"); // when the next frame is
+const palette = @import("shell/palette.zig"); // the colours the core adds
 
 const MAX_SCHEMES = 3; // day / dusk / night
 
@@ -59,6 +68,68 @@ fn schemeName(s: Scheme) []const u8 {
         cc.TILE57_SCHEME_NIGHT => "night",
         else => "day",
     };
+}
+
+/// One S-52 colour from the palette the engine draws with, as RGBA in 0..1.
+///
+/// The colortables are baked into tile57 and keyed by token and scheme. A
+/// shell that draws its own depth legend reads them here rather than typing
+/// hex in, so the legend and the chart cannot drift apart. The tokens the core
+/// adds (shell/palette.zig) are looked up first.
+pub fn s52Color(token: []const u8, scheme: Scheme) ?[4]f32 {
+    if (palette.color(token, schemeName(scheme))) |c| return c;
+    const parsed = colorTables() orelse return null;
+    const root = switch (parsed.value) {
+        .object => |o| o,
+        else => return null,
+    };
+    const table = switch (root.get(schemeName(scheme)) orelse return null) {
+        .object => |o| o,
+        else => return null,
+    };
+    const hex = switch (table.get(token) orelse return null) {
+        .string => |v| v,
+        else => return null,
+    };
+    return rgbaFromHex(hex);
+}
+
+/// The colortables, parsed on the first call and kept for the life of the
+/// process. They are baked into tile57 and never change, and a shell reads a
+/// colour for every panel it paints.
+var color_tables: ?std.json.Parsed(std.json.Value) = null;
+var color_tables_read = false;
+var color_tables_mu: Lock = .{};
+
+fn colorTables() ?*const std.json.Parsed(std.json.Value) {
+    color_tables_mu.lock();
+    defer color_tables_mu.unlock();
+    if (!color_tables_read) {
+        color_tables_read = true;
+        var ct: [*c]u8 = null;
+        var ct_len: usize = 0;
+        var err: cc.tile57_error = undefined;
+        if (cc.tile57_colortables_default(&ct, &ct_len, &err) == cc.TILE57_OK and ct != null) {
+            defer cc.tile57_free(ct);
+            // alloc_always: the parse outlives the buffer tile57 lends.
+            color_tables = std.json.parseFromSlice(std.json.Value, std.heap.c_allocator, ct[0..ct_len], .{
+                .allocate = .alloc_always,
+            }) catch null;
+        }
+    }
+    return if (color_tables) |*p| p else null;
+}
+
+/// "#rrggbb" as RGBA in 0..1.
+fn rgbaFromHex(hex: []const u8) ?[4]f32 {
+    const body = if (hex.len > 0 and hex[0] == '#') hex[1..] else hex;
+    if (body.len != 6) return null;
+    var out: [4]f32 = .{ 0, 0, 0, 1 };
+    for (0..3) |i| {
+        const v = std.fmt.parseInt(u8, body[i * 2 .. i * 2 + 2], 16) catch return null;
+        out[i] = @as(f32, @floatFromInt(v)) / 255.0;
+    }
+    return out;
 }
 
 /// A camera pose. rotation_deg is course-up rotation (0 = north-up).
@@ -95,31 +166,10 @@ fn buildMarinerFrom(base: cc.tile57_mariner, sch: cc.tile57_scheme) cc.tile57_ma
 
 /// A cache root the host handed us. Android exports neither HOME nor
 /// XDG_CACHE_HOME, so there this is the ONLY way to a writable cache — the path
-/// exists solely as Context.getCacheDir(). Owned here; set before opening.
-var cache_root: ?[]u8 = null;
-
-/// Adopt `path` as the cache root, replacing any previous one.
+/// exists solely as Context.getCacheDir(). Owned by cachedir.zig. Set it
+/// before opening.
 pub fn setCacheRoot(path: []const u8) void {
-    const a = std.heap.c_allocator;
-    const dup = a.dupe(u8, path) catch return;
-    if (cache_root) |old| a.free(old);
-    cache_root = dup;
-}
-
-/// `<root>/lookout/v<version>`: the host's root if it gave one, else
-/// XDG_CACHE_HOME, else the platform default under HOME.
-fn cacheDirPath(alloc: std.mem.Allocator, ver: []const u8) ?[]u8 {
-    if (cache_root) |root| return std.fmt.allocPrint(alloc, "{s}/lookout/v{s}", .{ root, ver }) catch null;
-    if (std.c.getenv("XDG_CACHE_HOME")) |x| {
-        const s = std.mem.span(x);
-        if (s.len > 0) return std.fmt.allocPrint(alloc, "{s}/lookout/v{s}", .{ s, ver }) catch null;
-    }
-    const home = std.mem.span(std.c.getenv("HOME") orelse return null);
-    if (home.len == 0) return null;
-    return switch (builtin.os.tag) {
-        .macos, .ios => std.fmt.allocPrint(alloc, "{s}/Library/Caches/lookout/v{s}", .{ home, ver }) catch null,
-        else => std.fmt.allocPrint(alloc, "{s}/.cache/lookout/v{s}", .{ home, ver }) catch null,
-    };
+    cachedir.setRoot(path);
 }
 
 /// The app's atlas cache directory — purgeable by the OS (it's a rebuildable
@@ -127,7 +177,7 @@ fn cacheDirPath(alloc: std.mem.Allocator, ver: []const u8) ?[]u8 {
 /// Keyed by tile57 version so a catalogue/engine change invalidates old atlases.
 pub fn atlasCacheDir(alloc: std.mem.Allocator) ?[]u8 {
     const ver = std.mem.span(cc.tile57_version());
-    const dir = cacheDirPath(alloc, ver) orelse return null;
+    const dir = cachedir.versionedPath(alloc, ver) orelse return null;
     const io = std.Io.Threaded.global_single_threaded.io();
     std.Io.Dir.cwd().createDirPath(io, dir) catch {};
     return dir;
@@ -167,6 +217,9 @@ pub const OpenOptions = struct {
     /// input via pan/zoom/setView/resize.
     native_handle: ?*anyopaque = null,
     native_kind: cthost.NativeKind = .none,
+    /// Read and write the mariner's chart links. False for a handle that
+    /// draws pictures of charts, which keeps no list of its own.
+    link_store: bool = true,
 };
 
 pub const NativeKind = cthost.NativeKind;
@@ -629,6 +682,36 @@ pub const FrameProf = struct {
     }
 };
 
+/// The mariner settings a chart opens with: the look of a traditional paper
+/// chart, using only mariner settings.
+///
+/// tile57's defaults are already half-way there (day scheme, four-shade
+/// graduated-blue water, symbolized boundaries, full point symbols, and none
+/// of the "simplified" ECDIS symbology). What is left is the content. A paper
+/// chart has no display categories and no ECDIS overscale indicator.
+///
+/// lookout_mariner_defaults returns this, so a host that reads the defaults
+/// before opening a chart gets what the engine itself starts with. It used to
+/// return tile57's defaults, where soundings follow the display category and
+/// the category is STANDARD, so the first settings write from a host that had
+/// read them turned soundings off.
+pub fn marinerDefaults() cc.tile57_mariner {
+    var m: cc.tile57_mariner = undefined;
+    cc.tile57_mariner_defaults(&m);
+    // Show seabed, cables and contour labels, the OTHER content paper has.
+    m.display_other = true;
+    // Paper is covered in spot soundings. Show them whatever the category.
+    m.soundings = 1;
+    // AP(OVERSC01) hatch is an ECDIS artifact that paper never has.
+    m.show_overscale = false;
+    // The ECDIS-only OTHER overlays (info callouts, meta boundaries, data
+    // quality) stay off in tile57's defaults, so display_other gives the paper
+    // content without the ECDIS clutter. finishOpen -> applyZoomAndView
+    // derives the live gates (cat_mask/sound_on/clear) from this before the
+    // first render.
+    return m;
+}
+
 pub const Lookout = struct {
     alloc: std.mem.Allocator,
     charts: std.ArrayList(*cc.tile57_chart) = .empty, // 1 (single) or many (composed)
@@ -690,16 +773,29 @@ pub const Lookout = struct {
     /// Null means the chart is lookout's own. While one is set, the mariner's
     /// display settings do not shape the chart: it is the publisher's.
     alt_style: ?[]u8 = null,
-    /// The alt style's sprite packs (index JSON + sheet PNG, bytes as the
-    /// host fetched them), kept so a scheme change — which rebakes the S-52
-    /// sheet and REPLACES the atlas — can fold them back in. They belong to
-    /// the current alt style: setAltStyle clears them, and the host re-sends
-    /// the new style's packs after.
+    /// Whether `alt_style` is the style charttable holds now.
+    ///
+    /// A publisher's style is fixed: the mariner's settings do not reach
+    /// inside it and neither does the SCAMIN latitude. Re-setting it costs a
+    /// parse of every layer it declares and a re-fold of its sprite packs,
+    /// over a second of the calling thread for a 389 layer style with 5,354
+    /// sprite cells. A dirty style leaves it alone while this is true.
+    alt_applied: bool = false,
+    /// The alt style's sprite packs (index JSON + sheet PNG, bytes as
+    /// fetched), kept so a scheme change, which rebakes the S-52 sheet and
+    /// REPLACES the atlas, can fold them back in. They belong to the current
+    /// alt style: setAltStyle clears them, and the chart link sends the new
+    /// style's packs after.
     alt_packs: std.ArrayListUnmanaged(AltPack) = .empty,
+    /// Sheets being decoded, in the order they were asked for.
+    sheets: std.ArrayListUnmanaged(*SheetDecode) = .empty,
     /// Charts by link: the whole feature, from the mariner's typed link to the
     /// tiles the style names. The shell keeps one job, fetching bytes for a
     /// url. See src/chartlinks.zig.
     links: clinks.Links = undefined,
+    /// Pictures of charts for a shell's chart list, and the second handle
+    /// that renders them. See src/pictures.zig.
+    pictures: pics.Pictures = undefined,
 
     // API-entry lock (see capi.locked): serializes the C ABI between the
     // host's input thread and its render thread. Distinct from engine_mu,
@@ -814,8 +910,10 @@ pub const Lookout = struct {
     render_size_scale: f32 = 1.0,
 
     /// $LOOKOUT_PHASE_PROF=<path>: per-frame phase timings, written as CSV.
-    /// Null unless asked for, and every probe is behind `if (prof)`.
-    frame_prof: ?FrameProf = null,
+    /// Null unless asked for, and every probe is behind `if (prof)`. On the
+    /// heap: the rows are 512 KB, and a Debug build copies an optional struct
+    /// onto the stack to compare it with null.
+    frame_prof: ?*FrameProf = null,
     prof_checked: bool = false,
     /// The view box last handed to the plugin broker, as min_lat, min_lon,
     /// max_lat, max_lon — so an unmoved camera skips the handoff entirely.
@@ -893,31 +991,19 @@ pub const Lookout = struct {
         // and neither belongs to a chart. Nothing resolves until the shell
         // supplies a fetcher (setHttpProvider).
         self.links = clinks.Links.init(alloc, self.linksSink());
-        if (marks.supportDirAlloc(alloc)) |d| {
+        self.links.relay = .{ .ctx = self, .deliver = pics.Pictures.onRelay };
+        self.pictures = pics.Pictures.init(alloc);
+        if (opts.link_store) if (marks.supportDirAlloc(alloc)) |d| {
             defer alloc.free(d);
             self.links.openStore(d);
-        }
+        };
         if (dbg) {
             std.debug.print("  charttable init (Metal device+shaders+pipelines) {d} ms\n", .{clock.ticksMs() - t});
             t = clock.ticksMs();
         }
         self.n_schemes = @min(opts.schemes.len, MAX_SCHEMES);
         for (0..self.n_schemes) |i| self.schemes[i] = opts.schemes[i];
-        cc.tile57_mariner_defaults(&self.mariner);
-        // Default to the look of a traditional paper chart, using only mariner
-        // settings. tile57's defaults are already half-way there (day scheme,
-        // four-shade graduated-blue water, symbolized boundaries, full point
-        // symbols — none of the "simplified" ECDIS symbology). What's left is
-        // the *content*: a paper chart has no display categories and no ECDIS
-        // overscale indicator, so —
-        self.mariner.display_other = true; // show seabed, cables, contour labels — the OTHER content paper always carries
-        self.mariner.soundings = 1; // paper is covered in spot soundings; show them regardless of category
-        self.mariner.show_overscale = false; // AP(OVERSC01) hatch is an ECDIS-only artifact, never on paper
-        // The ECDIS-only OTHER overlays (info callouts, meta boundaries, data
-        // quality) stay off in tile57's defaults, so display_other brings the
-        // paper content without the ECDIS clutter. finishOpen -> applyZoomAndView
-        // derives the live gates (cat_mask/sound_on/clear) from this before the
-        // first render.
+        self.mariner = marinerDefaults();
         // The marks the mariner already had, on the chart before the first
         // frame: they belong to the boat, not to the cell being opened. AFTER
         // the mariner state above, because the marks are posted in the colours
@@ -1877,7 +1963,11 @@ pub const Lookout = struct {
     /// All of these are in the RENDERER's zoom convention, because that is what
     /// they are compared against: a chart's declared min/max are tile levels,
     /// and a tile level is a charttable zoom.
-    const MIN_ZOOM_FLOOR = 4.0;
+    /// The basemap bakes zoom 0 through 5 (tools/basemap.zig), so zooming out
+    /// past the chart data still draws a coastline. The floor is the level
+    /// where the mercator square stops being larger than the screen, matching
+    /// the alt-style path below.
+    const MIN_ZOOM_FLOOR = 2.0;
     fn updateZoomLimits(self: *Lookout) void {
         // An alt chart is the publisher's map, not the library's: its own
         // sources say how deep it goes, and the ENC's coverage must not
@@ -2018,6 +2108,11 @@ pub const Lookout = struct {
         // Now that nothing else can post into them.
         self.overlay.deinit();
         self.markers.deinit();
+        // BEFORE the links: the second handle's fetches are relayed through
+        // them, and closing it cancels those.
+        self.pictures.deinit(self);
+        if (self.frame_prof) |p| std.heap.c_allocator.destroy(p);
+        self.frame_prof = null;
         // BEFORE the renderer: standing the link machine down answers the
         // tiles it has outstanding, and those answers go through the renderer.
         self.links.deinit();
@@ -2032,6 +2127,8 @@ pub const Lookout = struct {
         if (self.alt_style) |s| self.alloc.free(s);
         self.clearAltPacks();
         self.alt_packs.deinit(self.alloc);
+        self.dropSheets();
+        self.sheets.deinit(self.alloc);
         if (self.scamin.len != 0) self.alloc.free(self.scamin);
         self.freeLanguages();
         if (self.compose) |c| cc.tile57_compose_close(c); // BEFORE the charts
@@ -2076,7 +2173,14 @@ pub const Lookout = struct {
     const DEFAULT_VIEW_ZOOM = 5.0;
     pub fn defaultView(self: *Lookout) View {
         var v = self.fitChart();
-        v.zoom = std.math.clamp(DEFAULT_VIEW_ZOOM, self.cam.min_zoom, self.cam.max_zoom);
+        // With no survey and no pictures there is nothing to frame, and
+        // fitChart says so by returning the whole world. Pulling in to
+        // DEFAULT_VIEW_ZOOM opened a fresh install on one stretch of empty
+        // ocean off West Africa, at a scale the basemap has no detail for.
+        const empty = self.charts.items.len == 0 and self.rasters.coverage() == null;
+        if (!empty) {
+            v.zoom = std.math.clamp(DEFAULT_VIEW_ZOOM, self.cam.min_zoom, self.cam.max_zoom);
+        }
         v.rotation_deg = 0;
         return v;
     }
@@ -2270,7 +2374,18 @@ pub const Lookout = struct {
         self.markDirty();
     }
     pub fn zoomAtLogical(self: *Lookout, dzoom: f64, x_pt: f32, y_pt: f32) void {
-        self.follow.zoomToward(self.cam, dzoom, x_pt, y_pt); // eases in tickAnim, not an instant snap
+        self.follow.zoomToward(self.cam, dzoom, x_pt, y_pt); // eases in tickAnim
+        self.markDirty();
+    }
+
+    /// Zoom by `dzoom` about a logical point, with no ease.
+    ///
+    /// For a gesture that states the zoom continuously, such as a pinch. The
+    /// eased path above sets a target the camera reaches about 85 ms later,
+    /// so the chart trails the fingers and arrives after they stop. This
+    /// entry also clears an ease already running.
+    pub fn zoomAboutLogical(self: *Lookout, dzoom: f64, x_pt: f32, y_pt: f32) void {
+        self.follow.zoomAbout(self.cam, dzoom, x_pt, y_pt);
         self.markDirty();
     }
 
@@ -2356,12 +2471,14 @@ pub const Lookout = struct {
         }
         // A resolve's answer stalls on the first one without this.
         self.links.adopt();
+        // After the adopt, which passes the second handle its responses.
+        const pictures_busy = self.pictures.step(self);
         // The store coalesces its writes, so something has to ask it whether
         // the window has passed. A settings file written once at startup and
         // never again would otherwise never reach the disk.
         if (self.store) |s| s.tick();
 
-        const step = frame_rules.decide(.{
+        var step = frame_rules.decide(.{
             .animating = self.cam.animating(),
             .needs_redraw = self.needsRedraw(),
             .building = self.isBuilding(),
@@ -2369,7 +2486,19 @@ pub const Lookout = struct {
             .ticks_since_change = self.ticks_since_change,
         });
         self.ticks_since_change = step.ticks_since_change;
+        step = frame_rules.withPictures(step, pictures_busy);
         return step;
+    }
+
+    /// One picture of a chart for a shell's chart list. See pictures.zig.
+    pub fn chartLinkPicture(self: *Lookout, url: []const u8, kind: pics.Kind, lon: f64, lat: f64, zoom: f64, w: u32, h: u32, dst: []u8) pics.Result {
+        const r = self.pictures.get(self, url, kind, lon, lat, zoom, w, h, dst);
+        if (r == .pending) self.ticks_since_change = 0;
+        return r;
+    }
+
+    pub fn chartLinkPicturesCancel(self: *Lookout) void {
+        self.pictures.cancel(self);
     }
 
     /// Start the loop again after a change a shell made itself.
@@ -2514,16 +2643,23 @@ pub const Lookout = struct {
     /// Exported as lookout_store_read_mariner.
     pub fn restoreMariner(store: *settings.Store, m: *Mariner) void {
         const g = settings.group_mariner;
+        // A value that cannot be read counts as absent, so the field keeps the
+        // engine default. A shell that wrote the wrong type otherwise pushed
+        // every unreadable key to 0 or false: an Apple shell migrating the old
+        // UserDefaults dictionary stored every number as "true", and soundings
+        // read 0 from that and went off on every launch.
         const num = struct {
             fn go(s: *settings.Store, key: []const u8) ?f64 {
-                if (!s.has(g, key)) return null;
-                return s.number(g, key, 0);
+                const t = s.text(g, key) orelse return null;
+                return std.fmt.parseFloat(f64, t) catch null;
             }
         }.go;
         const flag = struct {
             fn go(s: *settings.Store, key: []const u8) ?bool {
-                if (!s.has(g, key)) return null;
-                return s.flag(g, key, false);
+                const t = s.text(g, key) orelse return null;
+                if (std.mem.eql(u8, t, "true") or std.mem.eql(u8, t, "1")) return true;
+                if (std.mem.eql(u8, t, "false") or std.mem.eql(u8, t, "0")) return false;
+                return null;
             }
         }.go;
 
@@ -2638,13 +2774,51 @@ pub const Lookout = struct {
         png: []u8,
     };
 
-    /// Draw a host-supplied style instead of the engine's portrayal, or null
+    /// A sprite sheet being decoded on a thread of its own.
+    ///
+    /// Folding a pack is a PNG decode, an index parse and a copy of every
+    /// cell into the atlas. For one shipped chart that is 4096 by 4096 and
+    /// 5,354 cells: 274 ms of decode and 185 ms of copying, measured, and
+    /// all of it on whichever thread the shell draws from. The decode needs
+    /// nothing but the bytes, so it runs here and the fold takes the pixels.
+    const SheetDecode = struct {
+        prefix: []u8,
+        json: []u8,
+        png: []u8,
+        img: ?ctpng.Image = null,
+        done: std.atomic.Value(bool) = .init(false),
+        thread: ?std.Thread = null,
+        /// Frames this has stood aside for a build. A scene that never goes
+        /// quiet must not hold the cells out forever.
+        waits: u16 = 0,
+
+        /// The decoded sheet is tens of megabytes and lives for one fold, so
+        /// it comes off the pages rather than the core's allocator.
+        const sheet_alloc = std.heap.page_allocator;
+
+        fn work(self: *SheetDecode) void {
+            self.img = cthost.Host.decodeSheet(sheet_alloc, self.png) catch null;
+            self.done.store(true, .release);
+        }
+
+        fn deinit(self: *SheetDecode, alloc: std.mem.Allocator) void {
+            if (self.thread) |t| t.join();
+            if (self.img) |i| sheet_alloc.free(i.rgba);
+            alloc.free(self.prefix);
+            alloc.free(self.json);
+            alloc.free(self.png);
+            alloc.destroy(self);
+        }
+    };
+
+    /// Draw a chart link's style instead of the engine's portrayal, or null
     /// for lookout's own chart. The bytes are copied. Any sprite packs
-    /// belong to the style they came with, so they go here — the host sends
-    /// the new style's packs after (altSpritePack).
+    /// belong to the style they came with, so they go here. The chart link
+    /// sends the new style's packs after (altSpritePack).
     pub fn setAltStyle(self: *Lookout, json: ?[]const u8) !void {
         if (self.alt_style) |old| self.alloc.free(old);
         self.alt_style = null;
+        self.alt_applied = false;
         self.clearAltPacks();
         if (json) |j| self.alt_style = try self.alloc.dupe(u8, j);
         self.style_dirty = true;
@@ -2652,6 +2826,8 @@ pub const Lookout = struct {
     }
 
     fn clearAltPacks(self: *Lookout) void {
+        // The sheets on their way in belong to the style going away.
+        self.dropSheets();
         for (self.alt_packs.items) |p| {
             self.alloc.free(p.prefix);
             self.alloc.free(p.json);
@@ -2662,7 +2838,7 @@ pub const Lookout = struct {
 
     /// One MapLibre sprite pack for the active alt style: the pack's id as
     /// the icon-name prefix ("" for the spec's "default"), the index JSON
-    /// and the sheet PNG as the host fetched them. Folded into the resident
+    /// and the sheet PNG as fetched. Folded into the resident
     /// atlas at once, kept so a scheme change can fold it back in, and the
     /// scene rebuilt so icons that were missing resolve. Answers how many
     /// cells landed.
@@ -2698,16 +2874,99 @@ pub const Lookout = struct {
             self.alloc.free(b);
             return 0;
         };
-        const added = self.ct.addSpritePack(prefix, index_json, png_bytes);
-        if (added > 0) self.markDirty();
-        return added;
+        self.startSheet(prefix, index_json, png_bytes);
+        // Nothing has landed yet: the count is what the fold answers, and the
+        // fold happens once the sheet is decoded. A caller that needs the
+        // cells now (a snapshot) flushes first.
+        return 0;
+    }
+
+    /// Read a pack's sheet on a thread, to be folded when it lands.
+    fn startSheet(self: *Lookout, prefix: []const u8, index_json: []const u8, png_bytes: []const u8) void {
+        const job = self.alloc.create(SheetDecode) catch return;
+        job.* = .{
+            .prefix = self.alloc.dupe(u8, prefix) catch {
+                self.alloc.destroy(job);
+                return;
+            },
+            .json = self.alloc.dupe(u8, index_json) catch {
+                self.alloc.free(job.prefix);
+                self.alloc.destroy(job);
+                return;
+            },
+            .png = self.alloc.dupe(u8, png_bytes) catch {
+                self.alloc.free(job.prefix);
+                self.alloc.free(job.json);
+                self.alloc.destroy(job);
+                return;
+            },
+        };
+        self.sheets.append(self.alloc, job) catch {
+            job.deinit(self.alloc);
+            return;
+        };
+        job.thread = std.Thread.spawn(.{}, SheetDecode.work, .{job}) catch blk: {
+            // No thread to be had: decode here. Slower to answer, never wrong.
+            job.work();
+            break :blk null;
+        };
+        self.markDirty();
+    }
+
+    /// Fold the sheets that have finished decoding.
+    ///
+    /// One per call: the copy into the atlas is the other half of the cost,
+    /// and two of them in one frame is a stall the mariner feels. A fold also
+    /// waits for the build worker, which reads the atlas, so this stands
+    /// aside while one is running.
+    /// How many frames a decoded sheet waits for the build worker before it
+    /// folds anyway. Half a second at 60 Hz.
+    const SHEET_WAIT_MAX: u16 = 30;
+
+    fn pumpSheets(self: *Lookout) void {
+        if (self.sheets.items.len == 0) return;
+
+        const job = self.sheets.items[0];
+        if (!job.done.load(.acquire)) return;
+        if (self.ct.buildingScene() and job.waits < SHEET_WAIT_MAX) {
+            job.waits += 1;
+            return;
+        }
+        if (job.thread) |t| {
+            t.join();
+            job.thread = null;
+        }
+        _ = self.sheets.orderedRemove(0);
+        if (job.img) |img| {
+            if (self.ct.addSpriteCells(job.prefix, job.json, img) > 0) self.markDirty();
+        }
+        job.deinit(self.alloc);
+    }
+
+    /// Fold every sheet, waiting for each. For the offscreen snapshot, which
+    /// has to have the picture before it reads the pixels.
+    fn flushSheets(self: *Lookout) void {
+        while (self.sheets.items.len != 0) {
+            const job = self.sheets.items[0];
+            if (job.thread) |t| {
+                t.join();
+                job.thread = null;
+            }
+            _ = self.sheets.orderedRemove(0);
+            if (job.img) |img| _ = self.ct.addSpriteCells(job.prefix, job.json, img);
+            job.deinit(self.alloc);
+        }
+    }
+
+    fn dropSheets(self: *Lookout) void {
+        for (self.sheets.items) |job| job.deinit(self.alloc);
+        self.sheets.clearRetainingCapacity();
     }
 
     /// Fold the active alt style's packs back into a freshly (re)loaded
     /// sheet — a scheme change replaces the atlas out from under them.
     fn reapplyAltSprites(self: *Lookout) void {
-        for (self.alt_packs.items) |p|
-            _ = self.ct.addSpritePack(p.prefix, p.json, p.png);
+        for (self.alt_packs.items) |p| self.startSheet(p.prefix, p.json, p.png);
     }
 
     pub fn altStyleActive(self: *const Lookout) bool {
@@ -2741,6 +3000,7 @@ pub const Lookout = struct {
             std.debug.print("chart link style: {s}\n", .{@errorName(e)});
             return false;
         };
+        self.alt_applied = true;
         return true;
     }
 
@@ -2764,6 +3024,7 @@ pub const Lookout = struct {
         self.links.askTile(source, req_id, z, x, y);
     }
 
+    pub const PictureKind = pics.Kind;
     pub const HttpGetFn = clinks.HttpGetFn;
     pub const HttpCancelFn = clinks.HttpCancelFn;
 
@@ -2790,9 +3051,15 @@ pub const Lookout = struct {
         // pushed through the same flag.
         self.style_lat = self.scaminLat();
         if (self.alt_style) |j| {
+            // Already in the renderer: a mariner change and a latitude move
+            // are both nothing to a publisher's style, and the parse and the
+            // sprite re-fold are what a mariner feels as the window stopping.
+            if (self.alt_applied) return;
             self.ct.setStyleJson(j) catch |e| {
                 std.debug.print("alt style: {s}\n", .{@errorName(e)});
+                return;
             };
+            self.alt_applied = true;
             return;
         }
         var m = buildMarinerFrom(self.mariner, self.mariner.scheme);
@@ -2818,6 +3085,9 @@ pub const Lookout = struct {
             std.debug.print("style: {s}\n", .{@errorName(e)});
             return;
         };
+        // The engine's own style is what the renderer holds now, so an alt
+        // style kept from before has to be set again to come back.
+        self.alt_applied = false;
         self.ct.setSizeScale(self.render_size_scale);
     }
 
@@ -2865,6 +3135,7 @@ pub const Lookout = struct {
     pub fn build(self: *Lookout) !void {
         self.ensureAtlases();
         self.ensureStyle();
+        self.flushSheets();
         self.ct.update();
         const t0 = clock.ticksMs();
         var spins: u32 = 0;
@@ -2937,6 +3208,9 @@ pub const Lookout = struct {
         const ts = if (self.frame_prof != null) clock.ticksUs() else 0;
         self.ensureStyle();
         self.prof_style_us = if (self.frame_prof != null) clock.ticksUs() - ts else 0;
+        // AFTER the style: the cells belong to the style that named them, and
+        // a fold waits for the build worker that the style just started.
+        self.pumpSheets();
     }
 
     /// How far the SCAMIN latitude may drift before the style is stale.
@@ -2965,7 +3239,10 @@ pub const Lookout = struct {
         if (!self.prof_checked) {
             self.prof_checked = true;
             if (std.c.getenv("LOOKOUT_PHASE_PROF")) |p| {
-                self.frame_prof = .{ .path = std.mem.span(p) };
+                if (std.heap.c_allocator.create(FrameProf)) |fp| {
+                    fp.* = .{ .path = std.mem.span(p) };
+                    self.frame_prof = fp;
+                } else |_| {}
             }
         }
         const prof = self.frame_prof != null;
@@ -3011,7 +3288,7 @@ pub const Lookout = struct {
                 self.view_dirty = true;
             }
         }
-        if (self.frame_prof) |*p| p.record(.{
+        if (self.frame_prof) |p| p.record(.{
             .prepare_us = t1 - t0,
             .style_us = self.prof_style_us,
             .trim_us = t2 - t1,
@@ -3097,6 +3374,10 @@ pub const Lookout = struct {
         // draws on demand would never tick, and a resolve would stall on its
         // first answer.
         if (self.links.pending()) return true;
+        // A sheet still decoding, or decoded and waiting for the build worker
+        // to let go of the atlas. A shell that draws on demand has to come
+        // back for it, or the icons never land.
+        if (self.sheets.items.len != 0) return true;
         if (self.ct.needsRedraw()) return true;
         // What the BOAT did. Own ship's display position walks between fixes,
         // a plugin can post geometry from its own thread, and under follow the
@@ -3135,6 +3416,26 @@ pub const Lookout = struct {
         const px = try self.ct.snapshotRgba();
         defer self.alloc.free(px);
         try png.write(self.alloc, path, px, self.ct.width(), self.ct.height());
+    }
+
+    /// build() without the wait: one update, and back.
+    pub fn buildStep(self: *Lookout) void {
+        self.ensureAtlases();
+        self.ensureStyle();
+        self.flushSheets();
+        self.ct.update();
+    }
+
+    /// Render what is built now, offscreen, into a caller RGBA8 buffer (len
+    /// must be width*height*4). snapshotRgba waits for the build first, for
+    /// up to BUILD_SPIN_MAX spins, and this is called from the frame step.
+    pub fn snapshotNow(self: *Lookout, dst: []u8) !void {
+        self.buildStep();
+        self.updateOverlay();
+        const px = try self.ct.snapshotRgba();
+        defer self.alloc.free(px);
+        if (dst.len < px.len) return error.BufferTooSmall;
+        @memcpy(dst[0..px.len], px);
     }
 
     /// Render offscreen into a caller RGBA8 buffer (len must be width*height*4).
@@ -3285,7 +3586,7 @@ pub const Lookout = struct {
                 break :blk "{}";
             };
             if (rep) |p| cc.tile57_free(p);
-            rec.* = try pick_rules.record(a, sa, f, raw, page);
+            pick_rules.fill(pick_rules.ReportRec, rec, try pick_rules.record(a, sa, f, raw, page));
         }
         out.rows = try pick_rules.published(pick_rules.ReportRec, "report", a, recs);
         return out;
@@ -3511,6 +3812,14 @@ fn verifyArchive(_: ?*anyopaque, path: [:0]const u8, out: *library.Facts) librar
 }
 
 
+/// One DSID field as a number. 0 for an empty or unparseable string. tile57
+/// reports an empty string for a file with no dataset identity.
+fn tagNumber(p: [*c]const u8) u32 {
+    if (p == null) return 0;
+    const text = std.mem.span(p);
+    return std.fmt.parseInt(u32, std.mem.trim(u8, text, " "), 10) catch 0;
+}
+
 /// tile57's answer for one path: what each file that looks like a chart
 /// actually is. This is the whole of the shell's knowledge about chart file
 /// formats now, and it amounts to passing the path along.
@@ -3550,6 +3859,11 @@ fn takeInventory(
             .bytes = r.bytes,
             .scale = r.scale,
             .bounds = if (r.has_bounds) .{ r.west, r.south, r.east, r.north } else null,
+            // tile57 states EDTN and UPDN as the text DSID holds. A dataset
+            // that states neither reports an empty string, and so does every
+            // baked archive and picture.
+            .edition = tagNumber(r.edition),
+            .update = tagNumber(r.update),
         }) catch {
             alloc.free(row_path);
             alloc.free(row_name);
@@ -3620,6 +3934,18 @@ test {
     // The bake job, which needs the engine's headers and so cannot be a test
     // root of its own.
     _ = bakejob;
+    // Pictures of charts, which open a handle and so cannot be a root either.
+    _ = pics;
+}
+
+test "an S-52 colour reads the same on every call, and an unknown token reads none" {
+    const first = s52Color("DEPDW", cc.TILE57_SCHEME_DAY) orelse return error.TestUnexpectedResult;
+    const again = s52Color("DEPDW", cc.TILE57_SCHEME_DAY) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(first, again);
+    try std.testing.expectEqual(@as(f32, 1), first[3]);
+    const night = s52Color("DEPDW", cc.TILE57_SCHEME_NIGHT) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!std.meta.eql(first, night));
+    try std.testing.expectEqual(@as(?[4]f32, null), s52Color("NOSUCHTOKEN", cc.TILE57_SCHEME_DAY));
 }
 
 test "camera roundtrip" {
@@ -3699,6 +4025,36 @@ test "a zoom while following pivots on the anchor" {
     const after = cam2.screenToWorld(30, 30);
     try t.expectApproxEqAbs(under.x, after.x, 1e-9);
     try t.expectApproxEqAbs(under.y, after.y, 1e-9);
+}
+
+test "a pinch step moves the camera now, a wheel step eases toward it" {
+    const t = std.testing;
+    const off = Follow{};
+
+    // What a pinch does: the zoom the fingers state is the zoom on screen,
+    // and the point under them does not move.
+    var pinched = followTestCamera();
+    const start = pinched.zoom;
+    const under = pinched.screenToWorld(300, 200);
+    off.zoomAbout(&pinched, 0.4, 300, 200);
+    try t.expectApproxEqAbs(start + 0.4, pinched.zoom, 1e-12);
+    const held = pinched.screenToWorld(300, 200);
+    try t.expectApproxEqAbs(under.x, held.x, 1e-9);
+    try t.expectApproxEqAbs(under.y, held.y, 1e-9);
+    // Nothing is left running, so the chart can go idle.
+    try t.expect(!pinched.animating());
+
+    // What a wheel click does: the camera is where it was, and the ease
+    // moves it over the next few frames.
+    var wheeled = followTestCamera();
+    off.zoomToward(&wheeled, 0.4, 300, 200);
+    try t.expectApproxEqAbs(start, wheeled.zoom, 1e-12);
+    try t.expect(wheeled.animating());
+    var ticks: usize = 0;
+    while (wheeled.animating() and ticks < 60) : (ticks += 1) wheeled.tick(1.0 / 60.0);
+    try t.expectApproxEqAbs(start + 0.4, wheeled.zoom, 1e-4);
+    // The ease spans several frames. That is the lag a pinch had.
+    try t.expect(ticks > 3);
 }
 
 test "a fix older than the staleness window leaves the camera alone" {
@@ -4125,3 +4481,124 @@ test "what the engine does not persist stays out of the store" {
     try t.expect(!f.store.has(g, "viewing_groups_off"));
 }
 
+
+test "a NOAA download on its own handle runs through two chart handles closing" {
+    const alloc = std.testing.allocator;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const dest = "/tmp/lookout-noaa-chart-reopen";
+    std.Io.Dir.cwd().deleteTree(io, dest) catch {};
+    defer std.Io.Dir.cwd().deleteTree(io, dest) catch {};
+
+    // A chart handle reads the mariner's chart links from the support
+    // directory, and writes its cache under the cache root. Point both at an
+    // empty directory.
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const home = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer alloc.free(home);
+    marks.test_support_dir = home;
+    defer marks.test_support_dir = null;
+    cachedir.setRoot(home);
+
+    const Fetch = struct {
+        ids: std.ArrayList(u64) = .empty,
+        fn get(user: ?*anyopaque, req_id: u64, url: [*:0]const u8, allow_file: c_int) callconv(.c) void {
+            _ = url;
+            _ = allow_file;
+            const self: *@This() = @ptrCast(@alignCast(user orelse return));
+            self.ids.append(std.testing.allocator, req_id) catch {};
+        }
+    };
+    var f = Fetch{};
+    defer f.ids.deinit(alloc);
+
+    const n = try alloc.create(noaajob.Handle);
+    n.* = noaajob.Handle.init(alloc);
+    defer {
+        n.deinit();
+        alloc.destroy(n);
+    }
+    n.svc.cat = try noaajob.oneDistrict(alloc, 5, 1);
+    n.svc.phase = .ready;
+    n.setProvider(Fetch.get, null, null, &f);
+    n.download(&.{5}, dest, false);
+    try std.testing.expectEqual(@as(usize, 1), f.ids.items.len);
+
+    // The C allocator, as lookout_open uses. close frees the handle. A
+    // machine with no GPU device cannot open one, and the test skips there.
+    for (0..2) |_| {
+        const l = Lookout.openCharts(std.heap.c_allocator, &.{}, .{ .width = 64, .height = 64 }) catch |e| switch (e) {
+            error.SurfaceFailed => return error.SkipZigTest,
+            else => return e,
+        };
+        l.close();
+    }
+    try std.testing.expectEqual(noaajob.Outcome.running, n.svc.outcome);
+
+    const zip = try encunpack.testZip(alloc, &.{.{ .name = "ENC_ROOT/US505000/US505000.000", .data = "cell" }});
+    defer alloc.free(zip);
+    n.respondChunk(f.ids.items[0], zip, 200, true);
+    var tries: usize = 0;
+    while (n.poll().outcome == @intFromEnum(noaajob.Outcome.running) and tries < 2000) : (tries += 1) {
+        _ = n.changed();
+        sleepMs(1);
+    }
+    const st = n.poll();
+    try std.testing.expectEqual(@as(u8, @intFromEnum(noaajob.Outcome.finished)), st.outcome);
+    try std.testing.expectEqual(@as(u32, 1), st.done);
+}
+
+test "a frame with the phase profile on stays within 256 KB of stack" {
+    // A shell's UI thread has 1 MB on Windows. The profile's rows are 512 KB,
+    // and prepareFrame and render test for a profile on every frame. The
+    // thread is larger, and the probe measures how deep the frames went (see
+    // stackprobe.zig).
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const home = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(home);
+    marks.test_support_dir = home;
+    defer marks.test_support_dir = null;
+    cachedir.setRoot(home);
+    const l = Lookout.openCharts(std.heap.c_allocator, &.{}, .{ .width = 64, .height = 64 }) catch |e| switch (e) {
+        error.SurfaceFailed => return error.SkipZigTest,
+        else => return e,
+    };
+    defer l.close();
+    const path = try std.fmt.allocPrint(std.testing.allocator, "{s}/prof.csv", .{home});
+    defer std.testing.allocator.free(path);
+    l.frame_prof = try std.heap.c_allocator.create(FrameProf);
+    l.frame_prof.?.* = .{ .path = path };
+    l.prof_checked = true;
+
+    const painted = 2 * 1024 * 1024;
+    const Run = struct {
+        fn run(h: *Lookout, used: *usize) void {
+            const lo = stackprobe.paint(painted);
+            defer used.* = stackprobe.depth(lo, painted);
+            for (0..3) |_| {
+                h.apiLock();
+                _ = h.render() catch {};
+                h.apiUnlock();
+            }
+        }
+    };
+    var used: usize = 0;
+    const th = try std.Thread.spawn(.{ .stack_size = 4 * painted }, Run.run, .{ l, &used });
+    th.join();
+    try std.testing.expect(l.frame_prof.?.n > 0);
+    std.debug.print("frame stack: {d} KB\n", .{used / 1024});
+    try std.testing.expect(used < 256 * 1024);
+}
+
+test "a thread with the plugin broker's 512 KB stack starts" {
+    // glibc places static TLS inside each thread's stack, and pthread_create
+    // returns EINVAL when the stack cannot hold it. The broker's resolver,
+    // HTTP and WebSocket threads have 512 KB. This test binary has tile57's
+    // TLS, as the app does, and the test runner's own 256 KB signal stack.
+    const Run = struct {
+        fn run() void {}
+    };
+    const th = try std.Thread.spawn(.{ .stack_size = 512 * 1024 }, Run.run, .{});
+    th.join();
+}

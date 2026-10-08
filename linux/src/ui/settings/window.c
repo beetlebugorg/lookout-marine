@@ -1,4 +1,4 @@
-/* ui/settings/window.c — the settings window itself.
+/* ui/settings/window.c: the settings window itself.
  *
  * The lifecycle, the sidebar that chooses a pane, and the two pages small
  * enough to live here. Every other page is a unit beside this one: it builds
@@ -23,9 +23,9 @@ lk_settings_free (gpointer data)
 {
   LkSettings *settings = data;
 
-  lk_deferred_list_clear (&settings->raster);
   lk_deferred_list_clear (&settings->links);
   lk_deferred_list_clear (&settings->sets);
+  lk_deferred_list_clear (&settings->work);
   g_clear_handle_id (&settings->status_poll_id, g_source_remove);
   g_clear_handle_id (&settings->list_refill_id, g_source_remove);
   g_clear_pointer (&settings->discovery, lk_discovery_free);
@@ -80,7 +80,7 @@ lk_build_text_page (LkSettings *settings)
   lk_plugin_fill_tab (page, settings, "text");
 }
 
-/* Commits on Enter or focus loss, never per keystroke — half a date is not a
+/* Commits on Enter or focus loss, never per keystroke, half a date is not a
    date the chart should redraw against. */
 static void
 lk_date_commit (GtkEntry *entry, gpointer user_data)
@@ -214,9 +214,9 @@ lk_settings_window_destroyed (GtkWidget *window, gpointer user_data)
   g_clear_handle_id (&settings->list_refill_id, g_source_remove);
   /* Every queued refill too: a toggle or an edit queues one, and a window
      destroyed before the idle runs would have it write into freed rows. */
-  lk_deferred_list_clear (&settings->raster);
   lk_deferred_list_clear (&settings->links);
   lk_deferred_list_clear (&settings->sets);
+  lk_deferred_list_clear (&settings->work);
   g_clear_pointer (&settings->discovery, lk_discovery_free);
   g_ptr_array_set_size (settings->discover_lists, 0);
   g_ptr_array_set_size (settings->status_labels, 0);
@@ -265,7 +265,7 @@ lk_settings_select_section (LkSettings *settings, const char *id)
     gtk_list_box_select_row (GTK_LIST_BOX (settings->sidebar), wanted);
 }
 
-/* Esc closes it — a tiling compositor draws no titlebar X. */
+/* Esc closes it, a tiling compositor draws no titlebar X. */
 static gboolean
 lk_settings_key_pressed (GtkEventControllerKey *controller,
                          guint keyval, guint keycode,
@@ -327,6 +327,15 @@ lk_settings_window_new (LkAppModel *model, GtkWindow *parent, const char *tab)
   /* And the library, whose titles fill in as the background scans land. */
   g_signal_connect_object (model, "chart-sets-changed",
                            G_CALLBACK (lk_settings_sets_changed), window, 0);
+  /* The work arriving now. This window stands over the chart, so a download
+   * begun here otherwise runs behind it with nothing to say where it got to. */
+  g_signal_connect_object (lk_app_model_get_noaa (model), "changed",
+                           G_CALLBACK (lk_settings_work_changed), window, 0);
+  g_signal_connect_object (model, "notify::baking",
+                           G_CALLBACK (lk_settings_baking_changed), window, 0);
+  /* And a removal, which runs behind the app the same way. */
+  g_signal_connect_object (model, "notify::removing",
+                           G_CALLBACK (lk_settings_baking_changed), window, 0);
 
   /* A SIDEBAR OF SECTIONS beside the pane it chooses, as on the Mac. It is a
    * slot list, not a fixed menu: the four core sections, Plugins and Advanced
@@ -348,11 +357,8 @@ lk_settings_window_new (LkAppModel *model, GtkWindow *parent, const char *tab)
 
   /* The one thing the whole window promises. It stands under the list of
    * sections rather than repeating itself inside every one of them. */
-  GtkWidget *promise = gtk_label_new ("Applies at once · kept for next launch");
-  gtk_widget_add_css_class (promise, "dim-label");
-  gtk_widget_add_css_class (promise, "caption");
+  GtkWidget *promise = lk_caption ("Applies at once · kept for next launch");
   gtk_label_set_wrap (GTK_LABEL (promise), TRUE);
-  gtk_label_set_xalign (GTK_LABEL (promise), 0.0);
   gtk_widget_set_margin_start (promise, 14);
   gtk_widget_set_margin_end (promise, 14);
   gtk_widget_set_margin_bottom (promise, 10);
@@ -403,7 +409,7 @@ lk_settings_window_new (LkAppModel *model, GtkWindow *parent, const char *tab)
 
   lk_settings_select_section (settings, tab);
 
-  /* While the window is up, the connection lines move on their own — but only
+  /* While the window is up, the connection lines move on their own, but only
      when a plugin shows a status line. With nothing to watch the poll would
      read the whole registry once a second to change nothing. A hot install
      rebuilds this window, so a plugin added later starts the poll then. */

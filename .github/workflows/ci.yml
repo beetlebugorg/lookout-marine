@@ -132,10 +132,13 @@ jobs:
 
       # The widget suite needs a display; it skips itself (exit 77) where none
       # can be opened, so the step is safe on any runner. Xvfb gives it one.
+      # The window tests open a chart, which needs a Vulkan driver, and the
+      # runner has no GPU. mesa-vulkan-drivers installs lavapipe, a software
+      # Vulkan driver.
       - name: Test
         working-directory: linux
         run: |
-          sudo apt-get install -y xvfb
+          sudo apt-get install -y xvfb mesa-vulkan-drivers
           meson test -C build --print-errorlogs
 
       - uses: actions/upload-artifact@v5
@@ -260,7 +263,12 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+      # The action installs "tools platform-tools" by default, and the SDK
+      # repository dropped "tools", so sdkmanager exits 1. The step below
+      # installs the NDK and CMake this build needs.
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
 
       # The versions android/app/build.gradle names. Gradle runs build-libs.sh
       # for the core before the CMake link.

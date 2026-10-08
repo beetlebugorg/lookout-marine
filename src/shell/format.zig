@@ -314,6 +314,177 @@ pub fn parseScale(raw: []const u8) ?f64 {
     return denominator;
 }
 
+// ---- compact readouts ----------------------------------------------------------
+
+/// The longest string `fmtScaleCompact` writes.
+pub const scale_compact_max = scale_max;
+
+/// The scale at the width a phone has for it: `1:4.80M` from 1,000,000 up, the
+/// full scale below that. Three significant figures.
+pub fn fmtScaleCompact(buf: []u8, denominator: f64) []const u8 {
+    if (!(denominator >= 1_000_000) or !(denominator < 1e15)) return fmtScale(buf, denominator);
+    const millions = denominator / 1_000_000;
+    // Three significant figures. A value that rounds up to the next decade
+    // has one decimal fewer: 9.996 is 10.0, and 99.96 is 100.
+    const decimals: u8 = if (@round(millions * 100) < 1000) 2 else if (@round(millions * 10) < 1000) 1 else 0;
+    var num: [24]u8 = undefined;
+    const text = fmtDecimal(&num, millions, decimals, .{ .trim = false, .group = true });
+    return std.fmt.bufPrint(buf, "1:{s}M", .{text}) catch buf[0..0];
+}
+
+/// Degrees and minutes to two decimals, `38°58.58'N`: about two metres, inside
+/// any GPS fix. The third decimal is what a phone's row runs out of room for.
+pub fn fmtCoordDMCompact(buf: []u8, value: f64, is_lat: bool) []const u8 {
+    if (!std.math.isFinite(value) or @abs(value) > 1_000_000) return buf[0..0];
+    const hemi: []const u8 = if (is_lat)
+        (if (value >= 0) "N" else "S")
+    else
+        (if (value >= 0) "E" else "W");
+    const a = @abs(value);
+    var deg: u64 = @intFromFloat(a);
+    var mins = (a - @as(f64, @floatFromInt(deg))) * 60;
+    if (@round(mins * 100) >= 6_000) {
+        mins = 0;
+        deg += 1;
+    }
+    const out = if (is_lat)
+        std.fmt.bufPrint(buf, "{d:0>2}°{d:0>5.2}'{s}", .{ deg, mins, hemi })
+    else
+        std.fmt.bufPrint(buf, "{d:0>3}°{d:0>5.2}'{s}", .{ deg, mins, hemi });
+    return out catch buf[0..0];
+}
+
+/// A full position at two decimals of minutes: `38°58.58'N 076°28.92'W`.
+pub fn fmtPositionCompact(buf: []u8, lat: f64, lon: f64) []const u8 {
+    var lat_buf: [coord_max]u8 = undefined;
+    var lon_buf: [coord_max]u8 = undefined;
+    const la = fmtCoordDMCompact(&lat_buf, lat, true);
+    const lo = fmtCoordDMCompact(&lon_buf, lon, false);
+    if (la.len == 0 or lo.len == 0) return buf[0..0];
+    return std.fmt.bufPrint(buf, "{s} {s}", .{ la, lo }) catch buf[0..0];
+}
+
+// ---- sizes, counts, times and depths ----------------------------------------
+
+const Decimal = struct {
+    /// Drop trailing zeros, and the point with them.
+    trim: bool,
+    /// Group the whole part in threes with a comma.
+    group: bool,
+};
+
+/// A non-negative value to `decimals` places, rounded half away from zero.
+fn fmtDecimal(buf: []u8, value: f64, decimals: u8, opt: Decimal) []const u8 {
+    if (!std.math.isFinite(value) or value < 0 or value >= 1e15) return buf[0..0];
+    const scale = std.math.pow(f64, 10, @floatFromInt(decimals));
+    const scaled: u64 = @intFromFloat(@round(value * scale));
+    const unit: u64 = @intFromFloat(scale);
+    var whole_buf: [32]u8 = undefined;
+    const whole = if (opt.group)
+        fmtGrouped(&whole_buf, scaled / unit)
+    else
+        std.fmt.bufPrint(&whole_buf, "{d}", .{scaled / unit}) catch return buf[0..0];
+    if (decimals == 0) return std.fmt.bufPrint(buf, "{s}", .{whole}) catch buf[0..0];
+
+    var frac_buf: [16]u8 = undefined;
+    var frac: []const u8 = std.fmt.bufPrint(&frac_buf, "{d:0>[1]}", .{ scaled % unit, decimals }) catch return buf[0..0];
+    if (opt.trim) frac = std.mem.trimEnd(u8, frac, "0");
+    if (frac.len == 0) return std.fmt.bufPrint(buf, "{s}", .{whole}) catch buf[0..0];
+    return std.fmt.bufPrint(buf, "{s}.{s}", .{ whole, frac }) catch buf[0..0];
+}
+
+/// A whole number with a comma between each group of three: `12,345`.
+fn fmtGrouped(buf: []u8, n: u64) []const u8 {
+    var plain: [24]u8 = undefined;
+    const digits = std.fmt.bufPrint(&plain, "{d}", .{n}) catch return buf[0..0];
+    if (buf.len < digits.len + digits.len / 3) return buf[0..0];
+    var at: usize = 0;
+    for (digits, 0..) |c, i| {
+        if (i > 0 and (digits.len - i) % 3 == 0) {
+            buf[at] = ',';
+            at += 1;
+        }
+        buf[at] = c;
+        at += 1;
+    }
+    return buf[0..at];
+}
+
+/// The longest string `fmtCount` writes.
+pub const count_max = 32;
+
+/// A count with a comma between each group of three: `7,214`. The separator is
+/// a comma, independent of locale.
+pub fn fmtCount(buf: []u8, n: u64) []const u8 {
+    return fmtGrouped(buf, n);
+}
+
+/// The longest string `fmtBytes` writes.
+pub const bytes_max = 32;
+
+/// A size, a thousand to the megabyte as NOAA states a download: `226.5 MB`
+/// below a gigabyte, `1.23 GB` from there. One decimal of a megabyte and two
+/// of a gigabyte, with trailing zeros dropped.
+pub fn fmtBytes(buf: []u8, bytes: u64) []const u8 {
+    const b: f64 = @floatFromInt(bytes);
+    const opt: Decimal = .{ .trim = true, .group = true };
+    var num: [32]u8 = undefined;
+    // 999.96 MB rounds to 1,000 MB, so it shows in gigabytes.
+    if (@round(b / 1e5) < 10_000) {
+        const text = fmtDecimal(&num, b / 1e6, 1, opt);
+        return std.fmt.bufPrint(buf, "{s} MB", .{text}) catch buf[0..0];
+    }
+    const text = fmtDecimal(&num, b / 1e9, 2, opt);
+    return std.fmt.bufPrint(buf, "{s} GB", .{text}) catch buf[0..0];
+}
+
+/// The two ways a time is said.
+pub const DurationStyle = enum(c_int) {
+    /// A countdown on a running job: "about 3 min left".
+    left = 0,
+    /// An estimate before a job starts: "about 3 minutes".
+    about = 1,
+};
+
+/// The longest string `fmtDuration` writes.
+pub const duration_max = 48;
+
+/// About how long, to the minute under an hour and to a tenth of an hour past
+/// it. Under a minute reads as that.
+pub fn fmtDuration(buf: []u8, seconds: f64, style: DurationStyle) []const u8 {
+    if (!std.math.isFinite(seconds) or seconds < 0 or seconds > 1e12) return buf[0..0];
+    const left = style == .left;
+    if (seconds < 60) {
+        return std.fmt.bufPrint(buf, "{s}", .{if (left) "under a minute left" else "under a minute"}) catch buf[0..0];
+    }
+    if (seconds < 3600) {
+        const minutes: u64 = @intFromFloat(@round(seconds / 60));
+        if (left) return std.fmt.bufPrint(buf, "about {d} min left", .{minutes}) catch buf[0..0];
+        if (minutes <= 1) return std.fmt.bufPrint(buf, "about a minute", .{}) catch buf[0..0];
+        return std.fmt.bufPrint(buf, "about {d} minutes", .{minutes}) catch buf[0..0];
+    }
+    var num: [32]u8 = undefined;
+    const hours = fmtDecimal(&num, seconds / 3600, 1, .{ .trim = false, .group = true });
+    return std.fmt.bufPrint(buf, "about {s} {s}", .{ hours, if (left) "h left" else "hours" }) catch buf[0..0];
+}
+
+/// The longest string `fmtDepth` writes.
+pub const depth_max = 32;
+
+/// A depth in the unit on screen, to a tenth with a whole number shown whole:
+/// `5 m`, `1.8 m`, `12 ft`. `metres` is the depth; `feet` picks the unit, and
+/// `bare` leaves the unit off.
+pub fn fmtDepth(buf: []u8, metres: f64, feet: bool, bare: bool) []const u8 {
+    if (!std.math.isFinite(metres) or @abs(metres) > 1e9) return buf[0..0];
+    const v = if (feet) metres / 0.3048 else metres;
+    var num: [32]u8 = undefined;
+    const text = fmtDecimal(&num, @abs(v), 1, .{ .trim = true, .group = false });
+    // A depth that rounds to zero has no sign.
+    const sign: []const u8 = if (v < 0 and @round(@abs(v) * 10) > 0) "-" else "";
+    if (bare) return std.fmt.bufPrint(buf, "{s}{s}", .{ sign, text }) catch buf[0..0];
+    return std.fmt.bufPrint(buf, "{s}{s} {s}", .{ sign, text, if (feet) "ft" else "m" }) catch buf[0..0];
+}
+
 // ---- tests ------------------------------------------------------------------
 
 const t = std.testing;
@@ -539,4 +710,108 @@ test "a scale is a zoom delta" {
 test "a zoom delta with no scale to move from" {
     try t.expectEqual(@as(f64, 0), zoomDeltaForScale(0, 25_000));
     try t.expectEqual(@as(f64, 0), zoomDeltaForScale(25_000, 0));
+}
+
+test "the compact scale is the full scale below a million" {
+    var a: [scale_max]u8 = undefined;
+    var b: [scale_max]u8 = undefined;
+    try t.expectEqualStrings(fmtScale(&a, 13267.4), fmtScaleCompact(&b, 13267.4));
+    try t.expectEqualStrings(fmtScale(&a, 999_999), fmtScaleCompact(&b, 999_999));
+    try t.expectEqualStrings("1:—", fmtScaleCompact(&b, 0));
+}
+
+test "the compact scale reads in millions to three significant figures" {
+    var b: [scale_max]u8 = undefined;
+    try t.expectEqualStrings("1:4.80M", fmtScaleCompact(&b, 4_802_073));
+    try t.expectEqualStrings("1:1.00M", fmtScaleCompact(&b, 1_000_000));
+    try t.expectEqualStrings("1:12.3M", fmtScaleCompact(&b, 12_345_678));
+    try t.expectEqualStrings("1:123M", fmtScaleCompact(&b, 123_400_000));
+    // Rounding up to the next decade drops a decimal.
+    try t.expectEqualStrings("1:10.0M", fmtScaleCompact(&b, 9_996_000));
+    try t.expectEqualStrings("1:100M", fmtScaleCompact(&b, 99_960_000));
+    try t.expectEqualStrings("1:1,500M", fmtScaleCompact(&b, 1_500_000_000));
+}
+
+test "the compact position has two decimals of minutes" {
+    var b: [position_max]u8 = undefined;
+    try t.expectEqualStrings("38°58.58'N 076°28.92'W", fmtPositionCompact(&b, 38.9763, -76.482));
+    try t.expectEqualStrings("33°52.13'S 151°12.56'E", fmtPositionCompact(&b, -33.8688, 151.2093));
+    try t.expectEqualStrings("", fmtPositionCompact(&b, std.math.nan(f64), 0));
+}
+
+test "the compact position rounds a sixtieth minute up to the degree" {
+    var b: [coord_max]u8 = undefined;
+    try t.expectEqualStrings("39°00.00'N", fmtCoordDMCompact(&b, 38.999999, true));
+    try t.expectEqualStrings("000°00.00'W", fmtCoordDMCompact(&b, -0.0000001, false));
+}
+
+test "a count is grouped in threes" {
+    var b: [count_max]u8 = undefined;
+    try t.expectEqualStrings("0", fmtCount(&b, 0));
+    try t.expectEqualStrings("999", fmtCount(&b, 999));
+    try t.expectEqualStrings("1,000", fmtCount(&b, 1000));
+    try t.expectEqualStrings("7,214", fmtCount(&b, 7214));
+    try t.expectEqualStrings("18,446,744,073,709,551,615", fmtCount(&b, std.math.maxInt(u64)));
+}
+
+test "a size below a gigabyte is in megabytes to a tenth" {
+    var b: [bytes_max]u8 = undefined;
+    try t.expectEqualStrings("0 MB", fmtBytes(&b, 0));
+    try t.expectEqualStrings("0 MB", fmtBytes(&b, 40_000));
+    try t.expectEqualStrings("0.5 MB", fmtBytes(&b, 499_999));
+    try t.expectEqualStrings("1 MB", fmtBytes(&b, 1_000_000));
+    try t.expectEqualStrings("1.2 MB", fmtBytes(&b, 1_234_567));
+    try t.expectEqualStrings("12.3 MB", fmtBytes(&b, 12_345_678));
+    try t.expectEqualStrings("226.5 MB", fmtBytes(&b, 226_500_000));
+    try t.expectEqualStrings("999.9 MB", fmtBytes(&b, 999_949_999));
+}
+
+test "a size from a gigabyte is in gigabytes to a hundredth" {
+    var b: [bytes_max]u8 = undefined;
+    try t.expectEqualStrings("1 GB", fmtBytes(&b, 999_950_000));
+    try t.expectEqualStrings("1 GB", fmtBytes(&b, 1_000_000_000));
+    try t.expectEqualStrings("1.07 GB", fmtBytes(&b, 1_073_741_824));
+    try t.expectEqualStrings("1.1 GB", fmtBytes(&b, 1_100_000_000));
+    try t.expectEqualStrings("1.23 GB", fmtBytes(&b, 1_234_567_890));
+    try t.expectEqualStrings("10 GB", fmtBytes(&b, 9_999_999_999));
+    try t.expectEqualStrings("12.35 GB", fmtBytes(&b, 12_345_678_901));
+    try t.expectEqualStrings("1,234.57 GB", fmtBytes(&b, 1_234_567_890_123));
+}
+
+test "a countdown in each unit" {
+    var b: [duration_max]u8 = undefined;
+    try t.expectEqualStrings("under a minute left", fmtDuration(&b, 3, .left));
+    try t.expectEqualStrings("about 1 min left", fmtDuration(&b, 60, .left));
+    try t.expectEqualStrings("about 3 min left", fmtDuration(&b, 200, .left));
+    try t.expectEqualStrings("about 3.0 h left", fmtDuration(&b, 10_800, .left));
+    try t.expectEqualStrings("about 2.5 h left", fmtDuration(&b, 9_000, .left));
+}
+
+test "an estimate in each unit" {
+    var b: [duration_max]u8 = undefined;
+    try t.expectEqualStrings("under a minute", fmtDuration(&b, 59.9, .about));
+    try t.expectEqualStrings("about a minute", fmtDuration(&b, 60, .about));
+    try t.expectEqualStrings("about a minute", fmtDuration(&b, 89, .about));
+    try t.expectEqualStrings("about 2 minutes", fmtDuration(&b, 90, .about));
+    try t.expectEqualStrings("about 1.5 hours", fmtDuration(&b, 5_400, .about));
+}
+
+test "a time that is not one has no string" {
+    var b: [duration_max]u8 = undefined;
+    try t.expectEqualStrings("", fmtDuration(&b, -1, .left));
+    try t.expectEqualStrings("", fmtDuration(&b, std.math.inf(f64), .about));
+}
+
+test "a depth reads with its unit and no trailing zero" {
+    var b: [depth_max]u8 = undefined;
+    try t.expectEqualStrings("5 m", fmtDepth(&b, 5, false, false));
+    try t.expectEqualStrings("1.8 m", fmtDepth(&b, 1.75, false, false));
+    try t.expectEqualStrings("0.3 m", fmtDepth(&b, 0.3, false, false));
+    try t.expectEqualStrings("12 ft", fmtDepth(&b, 12 * 0.3048, true, false));
+    try t.expectEqualStrings("5.5 ft", fmtDepth(&b, 5.5 * 0.3048, true, false));
+    try t.expectEqualStrings("5.6", fmtDepth(&b, 1.7, true, true));
+    try t.expectEqualStrings("6", fmtDepth(&b, 5.96, false, true));
+    try t.expectEqualStrings("-2 m", fmtDepth(&b, -2, false, false));
+    try t.expectEqualStrings("0 m", fmtDepth(&b, -0.01, false, false));
+    try t.expectEqualStrings("", fmtDepth(&b, std.math.nan(f64), false, false));
 }

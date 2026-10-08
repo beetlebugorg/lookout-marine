@@ -1,4 +1,4 @@
-/* lk_licenses — the licenses screen's model.
+/* lk_licenses: the licenses screen's model.
  *
  * The core bakes vendor/licenses/licenses.json into the binary and hands over
  * the entries this build carries (lookout_licenses_read, given the shell id),

@@ -1,4 +1,4 @@
-/* lk_bake — turning raw S-57 cells into charts the app can draw.
+/* lk_bake: turning raw S-57 cells into charts the app can draw.
  *
  * A cell as a hydrographic office publishes it is an S-57 dataset: the survey,
  * not a picture of it. The app draws baked archives, so a folder or an archive
@@ -16,11 +16,12 @@
  *
  * THE UI POLLS RATHER THAN BEING CALLED. No callback crosses back out of the
  * engine, and a XAML element may only be touched on the UI thread anyway, so
- * the panel reads one snapshot on a timer — which also throttles a 7,000 cell
+ * the panel reads one snapshot on a timer, which also throttles a 7,000 cell
  * import to the handful of updates an eye can follow.
  */
 #pragma once
 
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -32,7 +33,11 @@ namespace lkw
     enum class WorkKind
     {
         Finding,  /* looking through a folder or an archive for charts */
-        Importing /* converting cells and sheets into charts */
+        Importing, /* converting cells and sheets into charts */
+        /* deleting charts a mariner gave back: a set they removed, or
+         * water they unticked in the NOAA picker. Counted the way the
+         * import counted them in, a chart at a time. */
+        Removing
     };
 
     /* Where a bake has got to. Copied out under the lock; never aliased. */
@@ -57,7 +62,7 @@ namespace lkw
     };
 
     /* One chart the scan found. `path` is a filesystem path for a folder, or an
-     * ENTRY NAME for an archive — which is what the engine's zip bake takes back. */
+     * ENTRY NAME for an archive, which is what the engine's zip bake takes back. */
     struct ScannedCell
     {
         std::string path;
@@ -87,8 +92,47 @@ namespace lkw
     bool IsArchive(std::string const &path);
 
     /* Look through a folder or a .zip and report the charts in it. Reads only the
-     * archive's central directory — nothing is inflated and nothing is written. */
+     * archive's central directory: nothing is inflated and nothing is written. */
     ScanResult ScanCharts(std::string const &path);
+
+    /* A removal, reported while it runs.
+     *
+     * The charts are out of the library the moment the rename returns, and the
+     * delete behind it takes as long as the disk takes: 930 cells is 446 MB of
+     * files to unlink. That is what this reports, so a removal says where it
+     * has got to in the same panel an import does, and for the same reason.
+     *
+     * There is no way out of one. The set is already off the list and the
+     * charts are already moved aside, so stopping here could only leave them
+     * half deleted.
+     *
+     * Written by the delete thread, read by the UI thread, under one lock.
+     * Held by shared_ptr: the thread outlives the call that started it.
+     */
+    class RemovalJob
+    {
+    public:
+        /* `name` is what is going, in the mariner's words ("Mid-Atlantic",
+         * "NOAA"). `total` is how many charts were moved aside. */
+        void Begin(std::string name, unsigned total);
+        /* One chart gone. */
+        void Step();
+        /* How many there are, once the emptier has listed them. */
+        void Count(unsigned total);
+        /* Nothing left to delete. `note` is what the page says afterwards, and
+         * stays until the next removal. */
+        void Finish(std::string note);
+
+        BakeProgress Snapshot() const;
+        bool Running() const;
+        /* What the last removal left to say. Empty when there is nothing. */
+        std::string Note() const;
+
+    private:
+        mutable std::mutex mu_;
+        BakeProgress now_;
+        std::string note_;
+    };
 
     /* One bake, running on the ENGINE's own thread. Construct, Start, poll
      * Snapshot, and either let it finish or Cancel. Destroying it cancels and
@@ -102,7 +146,7 @@ namespace lkw
         BakeJob &operator=(BakeJob const &) = delete;
 
         /* Bake every source under `source`: cells into `out_dir`, BSB/KAP
-         * sheets into `raster_out_dir` — separate roots, because the vector
+         * sheets into `raster_out_dir`: separate roots, because the vector
          * open globs the chart library for .pmtiles and a picture archive it
          * swallowed would join the composed chart library. False when there is
          * nothing to bake, in which case no bake starts. */
@@ -115,17 +159,20 @@ namespace lkw
         void Cancel();
 
         BakeProgress Snapshot() const;
+        /* The core's job, for lookout_chart_sets_note_bake. Freed when this
+         * is destroyed, so read it before the reset. */
+        lookout_bake const *Handle() const { return job_; }
         bool Running() const;
         /* Why an import produced nothing, one sentence ready to show. Empty on
          * success, on cancel, and on a partial result (what landed is a
          * library). Valid once Running() is false. */
         std::string Error() const;
-        /* Every VECTOR chart archive that finished — what the open takes.
+        /* Every VECTOR chart archive that finished: what the open takes.
          * Valid once Running() is false. */
         std::vector<std::string> Finished() const;
         /* What landed, of one kind. */
         std::vector<std::string> Landed(bool raster) const;
-        /* Every baked raster sheet — these belong to the raster underlay
+        /* Every baked raster sheet: these belong to the raster underlay
          * (lookout_raster_add), never to the vector open. */
         std::vector<std::string> FinishedRasters() const;
 

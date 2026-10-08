@@ -1,9 +1,9 @@
 // The startup loader: launch → first frame as one continuous surface, with a
 // named phase so a long open reads as progress, not a hang. Mirrors
 // StartupLoader in HUDOverlay.swift (macOS/iOS) and Hud.kt (Android):
-//   1. "Baking the symbol atlas"     — first run only (atlas cache cold)
-//   2. "Mapping N cells"             — while the synchronous open runs
-//   3. "Tessellating the first scene" — until the first build settles
+//   1. "Baking the symbol atlas"    : first run only (atlas cache cold)
+//   2. "Mapping N cells"            : while the synchronous open runs
+//   3. "Tessellating the first scene": until the first build settles
 #include "pch.h"
 #include "MainWindow.xaml.h"
 

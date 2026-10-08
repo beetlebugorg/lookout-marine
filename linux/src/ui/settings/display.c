@@ -1,4 +1,4 @@
-/* ui/settings/display.c — the Display page.
+/* ui/settings/display.c: the Display page.
  *
  * The colour scheme, the display category, and how soundings follow it. The
  * three schemes are shown as their own palettes rather than named, because a
@@ -40,7 +40,7 @@ static const double LK_SCHEME_PALETTE[3][6][3] = {
 };
 
 /* A shore in one scheme: the depth shades stacked out to deep water, then land
-   behind a curved coastline. A piece of chart, not a colour chip — the same
+   behind a curved coastline. A piece of chart, not a colour chip, the same
    drawing the reference makes (SchemeSwatch, SettingsRows.swift), because a
    mariner picking a scheme is picking how the WATER will read, and six equal
    bars of colour do not answer that. */
@@ -185,14 +185,11 @@ lk_radio_row (GtkWidget    *section,
   GtkWidget *check = gtk_check_button_new ();
   GtkWidget *stack = gtk_box_new (GTK_ORIENTATION_VERTICAL, 1);
   GtkWidget *label = gtk_label_new (title);
-  GtkWidget *sub = gtk_label_new (desc);
+  GtkWidget *sub = lk_caption (desc);
   LkRadioBinding *binding = g_new0 (LkRadioBinding, 1);
 
   gtk_label_set_xalign (GTK_LABEL (label), 0.0);
-  gtk_label_set_xalign (GTK_LABEL (sub), 0.0);
   gtk_label_set_wrap (GTK_LABEL (sub), TRUE);
-  gtk_widget_add_css_class (sub, "dim-label");
-  gtk_widget_add_css_class (sub, "caption");
   gtk_box_append (GTK_BOX (stack), label);
   gtk_box_append (GTK_BOX (stack), sub);
 
@@ -222,7 +219,7 @@ lk_build_display_page (LkSettings *settings)
 
   /* "Colour scheme" here, the reference's settings header spelling, while the
      commands menu says "Color Scheme". Each mirrors macOS as it is. */
-  GtkWidget *scheme_section = lk_section_hinted (page, "Colour scheme", "Ctrl+L steps");
+  GtkWidget *scheme_section = lk_section_hinted (page, "Colour scheme", "Ctrl+L steps", NULL);
   lk_scheme_swatches (scheme_section, settings);
   lk_footer (scheme_section,
              "The palettes switch instantly. Night keeps your eyes dark-adapted.");
@@ -234,7 +231,7 @@ lk_build_display_page (LkSettings *settings)
     "Adds buoys, beacons, lights, restricted areas and ferry routes",
     "Adds spot soundings, contour labels, seabed quality and cables",
   };
-  GtkWidget *detail = lk_section_hinted (page, "Display category", "Ctrl+D adds Other");
+  GtkWidget *detail = lk_section_hinted (page, "Display category", "Ctrl+D adds Other", NULL);
   GtkWidget *cat_group = NULL;
   int cat = lk_mariner_get_display_category (settings->mariner);
   for (int i = 0; i < 3; i++)
@@ -251,7 +248,7 @@ lk_build_display_page (LkSettings *settings)
     "Spot depths, whatever the category",
     "No spot depths, whatever the category",
   };
-  GtkWidget *sound = lk_section_hinted (page, "Soundings", "Ctrl+Shift+S steps");
+  GtkWidget *sound = lk_section_hinted (page, "Soundings", "Ctrl+Shift+S steps", NULL);
   GtkWidget *snd_group = NULL;
   for (int i = 0; i < 3; i++)
     {

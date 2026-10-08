@@ -1,4 +1,4 @@
-/* ui/chart/pick-report.h — the cursor pick report.
+/* ui/chart/pick-report.h: the cursor pick report.
  *
  * One object at a time, decoded for the mariner: the operative fact as the
  * title, the attributes in chart language, and the raw S-57 rows one fold
@@ -41,9 +41,9 @@ typedef struct {
   char      *chip;
   char      *footnote;
   char      *raw;      /* the payload in METRES, as the cell states it */
-  GPtrArray *notes;    /* char *      — INFORM, promoted above the rows */
-  GPtrArray *rows;     /* LkPickRow * — the page */
-  GPtrArray *source;   /* LkPickRow * — the fold */
+  GPtrArray *notes;    /* char *     . INFORM, promoted above the rows */
+  GPtrArray *rows;     /* LkPickRow *, the page */
+  GPtrArray *source;   /* LkPickRow *, the fold */
   lookout_pick_empty empty;
 } LkPickDecoded;
 
@@ -68,7 +68,7 @@ char *lk_pick_plain_text (const LkPickDecoded *decoded);
  * scrolls inside it. */
 GtkWidget *lk_pick_report_new (LkAppModel *model, int width, int room);
 
-/* The mark on the object of the pick. Never takes a click — the chart under it
+/* The mark on the object of the pick. Never takes a click, the chart under it
  * stays grabbable. */
 GtkWidget *lk_pick_marker_new (void);
 

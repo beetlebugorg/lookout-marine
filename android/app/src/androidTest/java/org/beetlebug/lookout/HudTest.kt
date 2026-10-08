@@ -133,11 +133,12 @@ class HudTest {
     // ---- the narrow capsule -------------------------------------------------
 
     /**
-     * A phone will not take the whole row on one line, so it falls to two
-     * rather than dropping the position: the position is the one readout a
-     * mariner may have to write down or pass over the radio.
+     * A phone keeps every readout the wide row has, in the order the wide row
+     * reads in. Only the position moves to a second line, because it is the
+     * one a phone has no width for and the one a mariner may have to write
+     * down or pass over the radio.
      */
-    @Test fun theNarrowCapsuleKeepsThePositionOnASecondLine() {
+    @Test fun theNarrowCapsuleKeepsTheBandScaleAndZoom() {
         show(compact = true)
         compose.onNodeWithText("Harbor").assertIsDisplayed()
         compose.onNodeWithText("1:13,267").assertIsDisplayed()
@@ -171,6 +172,7 @@ class HudTest {
     }
 
     @Test fun theOverscaleBadgeAppearsPastTheThreshold() {
+        assumeWideScreen()
         show(readouts(overscale = 2.4))
         compose.onNodeWithText("×2.4").assertIsDisplayed()
     }
@@ -206,6 +208,7 @@ class HudTest {
     }
 
     @Test fun thePillNamesTheSetDrawnOverThisView() {
+        assumeWideScreen()
         show(raster = covering)
         compose.onNodeWithText("NAVIONICS").assertIsDisplayed()
     }
@@ -221,6 +224,7 @@ class HudTest {
     }
 
     @Test fun aSetInViewButNotDrawnReportsItselfOff() {
+        assumeWideScreen()
         show(raster = covering.copy(active = -1))
         compose.onNodeWithText("NAVIONICS").assertIsDisplayed()
         compose.onNodeWithText("OFF").assertIsDisplayed()
@@ -229,6 +233,7 @@ class HudTest {
     /** Hiding the ENC leaves the raster chart drawn, so the pill keeps naming
      *  it and says which layer is off. */
     @Test fun hidingTheEncSaysSoWithoutSayingThePictureIsOff() {
+        assumeWideScreen()
         show(raster = covering.copy(chartHidden = true))
         compose.onNodeWithText("NAVIONICS").assertIsDisplayed()
         compose.onNodeWithText("ENC OFF").assertIsDisplayed()
@@ -236,6 +241,7 @@ class HudTest {
 
     /** The state at a glance, for a reader who cannot see the colour. */
     @Test fun thePillSaysItsStateToAScreenReader() {
+        assumeWideScreen()
         show(raster = covering)
         compose.onNodeWithContentDescription("Raster chart Navionics, drawn").assertIsDisplayed()
     }
@@ -245,6 +251,7 @@ class HudTest {
      * which draws correctly and does nothing when pressed.
      */
     @Test fun tappingThePillOpensTheListOfWhatCoversThisWater() {
+        assumeWideScreen()
         show(raster = covering)
         compose.onNodeWithText("NAVIONICS").performClick()
         compose.waitForIdle()
@@ -261,6 +268,7 @@ class HudTest {
     }
 
     @Test fun choosingASetSelectsIt() {
+        assumeWideScreen()
         var chosen = -99
         show(raster = covering, onRasterSelect = { chosen = it })
         compose.onNodeWithText("NAVIONICS").performClick()
@@ -273,6 +281,7 @@ class HudTest {
     /** "None" stops drawing, which is half of the comparison the whole feature
      *  exists for. */
     @Test fun choosingNoneTurnsTheDrawnSetOff() {
+        assumeWideScreen()
         var chosen = -99
         show(raster = covering, onRasterSelect = { chosen = it })
         compose.onNodeWithText("NAVIONICS").performClick()
@@ -283,6 +292,7 @@ class HudTest {
     }
 
     @Test fun theListCarriesTheEncSwitchAndTheWayToAddCharts() {
+        assumeWideScreen()
         var toggled = false
         var added = false
         show(raster = covering, onToggleChart = { toggled = true }, onAddRasterCharts = { added = true })

@@ -12,7 +12,7 @@
 #include <wayland-client.h>
 #endif
 
-/* S-52 NODATA, day scheme — what lookout's first frame clears to (no white flash). */
+/* S-52 NODATA, day scheme: what lookout's first frame clears to (no white flash). */
 #define LK_NODATA_R 0.576
 #define LK_NODATA_G 0.682
 #define LK_NODATA_B 0.733
@@ -68,7 +68,7 @@ lk_native_surface_init_x11 (LkNativeSurface *self, GdkSurface *parent, GError **
       return FALSE;
     }
 
-  /* The connection's default screen — the one the toplevel lives on. */
+  /* The connection's default screen, the one the toplevel lives on. */
   int screen = DefaultScreen (xdisplay);
   Visual *visual = DefaultVisual (xdisplay, screen);
   int depth = DefaultDepth (xdisplay, screen);
@@ -244,7 +244,7 @@ lk_native_surface_new (GdkSurface  *parent,
     {
       if (error != NULL && *error == NULL)
         g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
-                             "no native chart surface for this GDK backend — "
+                             "no native chart surface for this GDK backend, "
                              "lookout renders Vulkan and needs a real X11 or "
                              "Wayland surface to present into");
       lk_native_surface_free (self);

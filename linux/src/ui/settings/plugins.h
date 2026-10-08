@@ -1,4 +1,4 @@
-/* ui/settings/plugins.h — the controls a plugin declared.
+/* ui/settings/plugins.h: the controls a plugin declared.
  *
  * The app knows nothing about what a plugin does. A number with a unit and a
  * range, a toggle, a text box, and a list of rows is the whole vocabulary.

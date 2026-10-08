@@ -29,10 +29,14 @@
 //! after that comes here, on stdout.
 //!
 //! EXIT CODE. 0 only when at least one frame rendered and no plugin trapped.
-//! 1 for a trap or no frame, 2 for a bad invocation or a chart that will not
-//! open.
+//! 1 for a trap, no frame, or no plugin layer while LOOKOUT_PLUGINS is set. 2
+//! for a bad invocation, or a chart that is missing or will not open.
 
 const std = @import("std");
+
+/// glibc places static TLS inside each thread's stack, and std's default
+/// 256 KB per-thread signal stack is static TLS.
+pub const std_options: std.Options = .{ .signal_stack_size = 128 * 1024 };
 const lk = @import("root.zig");
 const ov = @import("overlay.zig");
 const phost = @import("plugin/host.zig");
@@ -856,6 +860,9 @@ pub fn main(init: std.process.Init) !void {
         if (isDir(p)) {
             scanPmtiles(alloc, p, &chart_paths) catch fail("cannot scan {s}", .{p});
         } else {
+            // openCharts does not fail on a missing file, and the run went on
+            // with no chart under it.
+            std.Io.Dir.cwd().access(io, p, .{}) catch fail("no chart at {s}", .{p});
             try chart_paths.append(alloc, try alloc.dupeZ(u8, p));
         }
     }
@@ -904,8 +911,10 @@ pub fn main(init: std.process.Init) !void {
             else
                 emit("harness: no table {s}:{s} is declared\n", .{ w.id, w.key });
         }
-    } else if (a.plugins_dir != null) {
-        emit("harness: LOOKOUT_PLUGINS was set but no plugin layer came up\n", .{});
+    } else if (a.plugins_dir != null or std.c.getenv("LOOKOUT_PLUGINS") != null) {
+        emit("FAIL: LOOKOUT_PLUGINS was set but no plugin layer came up\n", .{});
+        l.close();
+        std.process.exit(1);
     }
 
     const v = a.view orelse l.fitChart();

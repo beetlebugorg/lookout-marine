@@ -21,6 +21,8 @@ import org.beetlebug.lookout.pick.pickReportWidth
 import org.beetlebug.lookout.plugins.AlertBanner
 import org.beetlebug.lookout.plugins.PluginTableDialog
 import org.beetlebug.lookout.plugins.PluginInstallDialogs
+import org.beetlebug.lookout.firstrun.FirstRunModel
+import org.beetlebug.lookout.firstrun.FirstRunSetup
 import org.beetlebug.lookout.settings.SettingsSheet
 
 import androidx.compose.foundation.layout.Arrangement
@@ -46,8 +48,12 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import org.beetlebug.lookout.charts.NoaaController
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.key
@@ -369,6 +375,93 @@ fun ChartScreen(
         )
     }
 
+    // A NOAA download, and the core's prepare of what it fetched. One watcher
+    // for both the places a download starts, setup and the Charts pane. The
+    // run ends once the prepare does. A prepare's end, or the end of a run
+    // that kept charts, reopens the chart with them.
+    val noaa = controller.noaaController
+    var watching by remember { mutableStateOf(0L) }
+    LaunchedEffect(noaa.run, noaa.outcome, noaa.preparing, noaa.prepared) {
+        var open = charts.noteNoaaPrepare(noaa)
+        if (noaa.outcome == NoaaController.OUTCOME_RUNNING) {
+            watching = noaa.run
+        } else if (watching != 0L && watching == noaa.run) {
+            watching = 0L
+            val kept = noaa.outcome == NoaaController.OUTCOME_FINISHED ||
+                (noaa.outcome == NoaaController.OUTCOME_CANCELLED && noaa.done > 0)
+            if (kept) open = true
+        }
+        if (open) charts.adoptNoaaPrepare()
+    }
+
+    // A followed NOAA order that failed. Setup shows the end in its own step.
+    noaa.failure?.let { f ->
+        if (!controller.firstRun.showing) {
+            AlertDialog(
+                onDismissRequest = { noaa.failure = null },
+                title = { Text("NOAA Charts") },
+                text = { Text(f.message) },
+                confirmButton = {
+                    if (f.canRetry) {
+                        TextButton(onClick = { noaa.retry() }) { Text("Retry") }
+                    } else {
+                        TextButton(onClick = { noaa.failure = null }) { Text("OK") }
+                    }
+                },
+                dismissButton = if (f.canRetry) {
+                    { TextButton(onClick = { noaa.failure = null }) { Text("OK") } }
+                } else {
+                    null
+                },
+            )
+        }
+    }
+
+    // The update check, when a chart opens and when the sets change. The core
+    // decides whether one is due, and counts the reissues against the sets.
+    LaunchedEffect(controller.chartHasCells, charts.sets) {
+        noaa.considerUpdateCheck()
+    }
+
+    // Setup, over the running chart. It comes up on any launch that settles on
+    // nothing to draw, and a published style counts as something: somebody
+    // sailing on one has no empty library to fill.
+    // The core decides from these facts whether it comes up and where it
+    // stands.
+    val setupFacts = FirstRunModel.Facts(
+        catalogReady = noaa.haveCatalog,
+        picked = noaa.picked.isNotEmpty(),
+        onLink = controller.chartLinkController.activeChartLink != null,
+        nothingToDraw = charts.chartPaths.isEmpty() && !charts.scanning,
+        hasCharts = charts.chartPaths.isNotEmpty(),
+        workRunning = charts.importer.state?.running == true || noaa.preparing,
+        downloading = noaa.phase == NoaaController.Phase.DOWNLOADING,
+        chartOpen = controller.chartHasCells,
+        noaaOutcome = noaa.outcome,
+        noaaRun = noaa.run,
+        pickCharts = if (noaa.cells > 0) noaa.cells else noaa.held,
+        pickBytes = if (noaa.cells > 0) noaa.bytes else noaa.heldBytes,
+    )
+    LaunchedEffect(setupFacts) {
+        controller.firstRun.note(setupFacts)
+        if (controller.firstRun.shouldBegin) {
+            controller.firstRun.begin()
+            controller.showWholeCountry()
+        }
+    }
+    if (controller.firstRun.showing) {
+        FirstRunSetup(
+            flow = controller.firstRun,
+            charts = charts,
+            controller = controller,
+            onOpenCharts = {
+                onRequestFileAccess()
+                settingsSection = "charts"
+                showSettings = true
+            },
+        )
+    }
+
     if (showSettings) {
         SettingsSheet(
             m = controller.mariner,
@@ -377,6 +470,7 @@ fun ChartScreen(
             tables = controller.tables,
             links = controller.chartLinkController,
             raster = controller.rasterController,
+            noaa = noaa,
             onRequestAccess = onRequestFileAccess,
             onDismiss = {
                 showSettings = false

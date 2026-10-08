@@ -6,6 +6,7 @@
 //! empty answer, so one shell binary serves both builds.
 
 const std = @import("std");
+const owned = @import("owned");
 
 const lk = @import("../root.zig");
 const capi = @import("../capi.zig");
@@ -299,14 +300,14 @@ pub const lookout_overlay_obj = extern struct {
 };
 
 fn fillObj(out: *lookout_overlay_obj, hit: lk.OverlayHit) void {
-    out.* = .{
+    owned.fill(lookout_overlay_obj, out, .{
         .id = hit.id.ptr,
         .id_len = hit.id.len,
         .info = if (hit.info.len > 0) hit.info.ptr else null,
         .info_len = hit.info.len,
         .lon = hit.at[0],
         .lat = hit.at[1],
-    };
+    });
 }
 
 /// The overlay symbol nearest a LOGICAL point, with its id and anchor: 1 when

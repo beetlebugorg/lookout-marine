@@ -1,12 +1,12 @@
-/* lk_table — the plugin tables, and the units they are read in.
+/* lk_table: the plugin tables, and the units they are read in.
  *
  * A plugin declares a table: a menu, a title, typed columns and a default
- * sort. The rows arrive already ordered by the core, band first — an alarmed
+ * sort. The rows arrive already ordered by the core, band first: an alarmed
  * vessel holds the top line whatever column the mariner sorted by.
  *
  * THE UNITS ARE THE SHELL'S. A column TYPE is the unit contract: distance in
  * metres, speed in metres per second, bearing in degrees true, duration in
- * seconds. The plugin sends SI and this converts for the mariner — the
+ * seconds. The plugin sends SI and this converts for the mariner: the
  * reverse of the pick report, which arrives formatted. Every shell converts
  * the same way, which is why it is worth one place and a test.
  *

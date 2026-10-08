@@ -34,8 +34,8 @@ struct ContentView: View {
         let started = Date()
         func poll() {
             let waited = Date().timeIntervalSince(started)
-            let drawing = model.charts.hasChart && model.charts.firstBuildDone
-            let noneComing = waited >= grace && !model.charts.isOpening && !model.charts.hasChart
+            let drawing = model.chartOpen.hasChart && model.chartOpen.firstBuildDone
+            let noneComing = waited >= grace && !model.chartOpen.isOpening && !model.chartOpen.hasChart
             if drawing || noneComing || waited >= timeout {
                 body()
                 return
@@ -54,11 +54,17 @@ struct ContentView: View {
         ChartView(model: model, controller: controller)
             .navigationTitle("Lookout Marine")
             .alert("Couldn't open chart", isPresented: Binding(
-                get: { model.charts.openError != nil },
-                set: { if !$0 { model.charts.openError = nil } })) {
-                Button("OK", role: .cancel) { model.charts.openError = nil }
+                get: { model.chartOpen.openError != nil },
+                set: { if !$0 { model.chartOpen.openError = nil } })) {
+                if let retry = model.chartOpen.openRetry {
+                    Button("Retry") {
+                        model.chartOpen.openError = nil
+                        retry()
+                    }
+                }
+                Button("OK", role: .cancel) { model.chartOpen.openError = nil }
             } message: {
-                Text(model.charts.openError ?? "")
+                Text(model.chartOpen.openError ?? "")
             }
             // The .lkplug consent sheet. Every install entry point sets
             // pendingInstall; the sheet is the only way from there to disk.

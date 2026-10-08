@@ -161,7 +161,7 @@ public final class LookoutView extends SurfaceView implements SurfaceHolder.Call
                 if (f > 0) {
                     final double dz = Math.log(f) / Math.log(2.0);
                     final float fx = det.getFocusX() / density, fy = det.getFocusY() / density;
-                    onEngine(l -> l.zoomAt(dz, fx, fy));
+                    onEngine(l -> l.zoomAbout(dz, fx, fy));
                 }
                 return true;
             }

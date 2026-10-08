@@ -88,7 +88,7 @@
          pill with the raster paths. A change to one feature is a change in
          one directory. See README.md. -->
     <LkSrc>$(MSBuildThisFileDirectory)src</LkSrc>
-    <LkSourceDirs>$(LkSrc)\app\ui;$(LkSrc)\chart;$(LkSrc)\chart\ui;$(LkSrc)\hud;$(LkSrc)\hud\ui;$(LkSrc)\library;$(LkSrc)\library\ui;$(LkSrc)\plugins;$(LkSrc)\plugins\ui;$(LkSrc)\settings\ui;$(LkSrc)\about;$(LkSrc)\about\ui;$(LkSrc)\engine;$(LkSrc)\util</LkSourceDirs>
+    <LkSourceDirs>$(LkSrc)\chrome;$(LkSrc)\app\ui;$(LkSrc)\chart;$(LkSrc)\chart\ui;$(LkSrc)\hud;$(LkSrc)\hud\ui;$(LkSrc)\library;$(LkSrc)\library\ui;$(LkSrc)\plugins;$(LkSrc)\plugins\ui;$(LkSrc)\settings\ui;$(LkSrc)\about;$(LkSrc)\about\ui;$(LkSrc)\engine;$(LkSrc)\util;$(LkSrc)\firstrun;$(LkSrc)\firstrun\ui</LkSourceDirs>
   </PropertyGroup>
 
   <ItemDefinitionGroup>
@@ -106,6 +106,8 @@
            step with build.zig.zon's version, the way linux/meson.build passes
            its own project version through as LK_VERSION. -->
       <PreprocessorDefinitions>LK_VERSION=0.1.0;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <!-- The development and screenshot hooks, compiled with DevHooks.cpp. -->
+      <PreprocessorDefinitions Condition="'$(Configuration)'=='Debug' Or '$(LookoutDevHooks)'=='true'">LOOKOUT_DEV_HOOKS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <WarningLevel>Level3</WarningLevel>
       <Optimization Condition="'$(Configuration)'=='Debug'">Disabled</Optimization>
       <Optimization Condition="'$(Configuration)'=='Release'">MaxSpeed</Optimization>
@@ -138,6 +140,9 @@
     <ClInclude Include="src\app\ui\App.xaml.h">
       <DependentUpon>App.xaml</DependentUpon>
     </ClInclude>
+    <ClInclude Include="src\chrome\WrapPanel.h">
+      <DependentUpon>WrapPanel.idl</DependentUpon>
+    </ClInclude>
     <ClInclude Include="src\app\ui\MainWindow.xaml.h">
       <DependentUpon>MainWindow.xaml</DependentUpon>
     </ClInclude>
@@ -165,7 +170,9 @@
       <DependentUpon>MainWindow.xaml</DependentUpon>
     </ClCompile>
     <ClCompile Include="src\app\ui\Menu.cpp" />
-    <ClCompile Include="src\app\ui\DevHooks.cpp" />
+    <!-- The development and screenshot hooks read environment variables to
+         drive the app. A shipped build has no use for them. -->
+    <ClCompile Include="src\app\ui\DevHooks.cpp" Condition="'$(Configuration)'=='Debug' Or '$(LookoutDevHooks)'=='true'" />
     <ClCompile Include="src\app\ui\winrt_glue.cpp" />
     <ClCompile Include="src\app\ui\lk_backdrop.cpp" />
   </ItemGroup>
@@ -185,6 +192,22 @@
     </ClCompile>
   </ItemGroup>
 
+  <!-- firstrun: setup. The model is pch-free so the test target builds it. -->
+  <ItemGroup>
+    <ClCompile Include="src\firstrun\ui\FirstRunFlow.cpp" />
+    <ClCompile Include="src\firstrun\ui\FirstRunNoaa.cpp" />
+    <ClCompile Include="src\firstrun\ui\FirstRunParts.cpp" />
+    <ClCompile Include="src\firstrun\ui\CoverageStep.cpp" />
+    <ClCompile Include="src\firstrun\ui\ImportingStep.cpp" />
+    <ClCompile Include="src\firstrun\ui\DepthStep.cpp" />
+    <ClCompile Include="src\firstrun\lk_firstrun_core.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="src\firstrun\lk_firstrun.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+  </ItemGroup>
+
   <!-- hud: the readouts, the scale, the loader, the overlay bubbles. -->
   <ItemGroup>
     <ClCompile Include="src\hud\ui\Hud.cpp" />
@@ -192,6 +215,8 @@
     <ClCompile Include="src\hud\ui\Overlay.cpp" />
     <ClCompile Include="src\hud\ui\Scale.cpp" />
     <ClCompile Include="src\hud\ui\lk_format.cpp" />
+    <ClCompile Include="src\chrome\lk_chrome.cpp" />
+    <ClCompile Include="src\chrome\WrapPanel.cpp" />
   </ItemGroup>
 
   <!-- library: the installed charts — sets, raster, the bake, charts by link. -->
@@ -201,6 +226,12 @@
     <ClCompile Include="src\library\ui\Raster.cpp" />
     <ClCompile Include="src\library\ui\Bake.cpp" />
     <ClCompile Include="src\library\lk_paths.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="src\library\lk_noaa.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="src\library\lk_chart_sets.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="src\library\lk_bake.cpp">
@@ -232,6 +263,7 @@
        pages read the core's mariner struct and the plugin registry direct. -->
   <ItemGroup>
     <ClCompile Include="src\settings\ui\Settings.cpp" />
+    <ClCompile Include="src\settings\ui\ChartsPage.cpp" />
   </ItemGroup>
 
   <!-- about: About and the licences. -->
@@ -269,6 +301,7 @@
   <ItemGroup>
     <Midl Include="src\app\ui\App.idl" />
     <Midl Include="src\app\ui\MainWindow.idl" />
+    <Midl Include="src\chrome\WrapPanel.idl" />
   </ItemGroup>
 
   <ItemGroup>
@@ -316,6 +349,20 @@
        Skipped when the directory is absent (a tree where build-core.ps1 has
        not run) rather than failing the build: the shell starts without
        plugins, it does not fail to link. -->
+  <!-- The first-run pictures. Each
+       shell keeps its own copy under its data directory, as they do for the
+       icons. -->
+  <Target Name="LkCopyFirstRunData" AfterTargets="Build">
+    <ItemGroup>
+      <LkFirstRunData Include="$(MSBuildThisFileDirectory)data\firstrun\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(LkFirstRunData)"
+          DestinationFolder="$(OutDir)data\firstrun"
+          SkipUnchangedFiles="true" />
+    <Message Importance="high"
+             Text="first-run data: @(LkFirstRunData->Count()) file(s) -> $(OutDir)data\firstrun" />
+  </Target>
+
   <Target Name="LkCopyBundledPlugins"
           AfterTargets="Build"
           Condition="Exists('$(LookoutBundledPluginDir)')">

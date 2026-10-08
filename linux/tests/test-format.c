@@ -1,4 +1,4 @@
-/* test-format.c — the shell's own readout geometry, and the link to the core's
+/* test-format.c: the shell's own readout geometry, and the link to the core's
  * format kit.
  *
  * The strings and the parsers are the core's, and `zig build test` holds their
@@ -49,7 +49,7 @@ test_scale_bar_cap (void)
 {
   /* The bar picks the largest nice distance that fits its target width, so the
      drawn width never passes the target cap. The nice table now reaches down to
-     1 m, so it fits every real chart scale — including the small scales near
+     1 m, so it fits every real chart scale, including the small scales near
      1:360 that once had no nice distance small enough. */
   static const double denominators[] = {
     100, 200, 360, 500, 1000, 5000, 13267, 50000, 250000, 1500000,

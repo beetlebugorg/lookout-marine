@@ -4,6 +4,10 @@
 //! re-tessellation) and a zoomed frame, then exits. The interactive host is
 //! the macOS app (apple/) — the demo is the headless render/parity tool.
 const std = @import("std");
+
+/// glibc places static TLS inside each thread's stack, and std's default
+/// 256 KB per-thread signal stack is static TLS.
+pub const std_options: std.Options = .{ .signal_stack_size = 128 * 1024 };
 const cc = @import("c.zig").c;
 const lk = @import("root.zig");
 const library = lk.library;
@@ -87,7 +91,7 @@ fn bakeRasters(alloc: std.mem.Allocator, in_dir: []const u8, out_dir: []const u8
 }
 
 /// Print what a folder holds, the way a shell's Add Charts panel reads it.
-/// This is the C ABI's lookout_scan_charts, run from the command line.
+/// It is the scan behind lookout_scan_read, from the command line.
 fn scanReport(alloc: std.mem.Allocator, path: []const u8) !void {
     const io = std.Io.Threaded.global_single_threaded.io();
     const t0 = clock.ticksMs();

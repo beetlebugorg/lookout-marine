@@ -1,6 +1,6 @@
 #pragma once
-// The markup-compiler stub (defines AppT directly — App is not in the IDL,
-// matching the official WinUI 3 C++ template).
+// The markup-compiler stub (defines AppT directly, since App is not in the
+// IDL, matching the official WinUI 3 C++ template).
 #include "App.xaml.g.h"
 
 namespace winrt::LookoutMarine::implementation

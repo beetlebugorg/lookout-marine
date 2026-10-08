@@ -1,4 +1,4 @@
-/* lk_store — what the shell keeps across launches.
+/* lk_store: what the shell keeps across launches.
  *
  * The CORE owns the file: one JSON object of groups at
  * %APPDATA%\lookout-marine\settings.json, with coalesced writes, one lock over
@@ -56,12 +56,12 @@ int  lk_store_load_settings_size(int *width, int *height);
 void lk_store_save_settings_size(int width, int height);
 
 /* One NAMED window frame (client size, physical px), for the windows that
- * should open where they were left — the vessel tables, one per plugin
+ * should open where they were left: the vessel tables, one per plugin
  * table key. load returns 1 when a size was saved. */
 int  lk_store_load_frame(const char *name, int *width, int *height);
 void lk_store_save_frame(const char *name, int width, int height);
 
-/* Raster charts: the installed list survives a change of ENC and a restart —
+/* Raster charts: the installed list survives a change of ENC and a restart:
  * the shell re-adds every stored path after each open. Each path carries its
  * own enabled flag (half-gigabyte downloads are switched off, not deleted).
  * load returns a NULL-terminated array of malloc'd paths, freed with
@@ -81,11 +81,11 @@ void   lk_store_set_rasters_enabled(const char *const *paths, int n, int enabled
 /* Forget the whole raster library, and the per-set hidden list with it:
  * hidden entries are keyed by set name, and leaving them behind means the
  * same file added again months later comes back not drawn with nothing on
- * screen to say why. The open chart is untouched — this takes effect at the
+ * screen to say why. The open chart is untouched: this takes effect at the
  * next open (the reference's clearRasterCharts). */
 void   lk_store_clear_rasters(void);
 
-/* Which raster SETS are not drawn, by set name — the pill's per-set choice,
+/* Which raster SETS are not drawn, by set name: the pill's per-set choice,
  * distinct from a path's enabled flag. load returns a NULL-terminated array
  * of malloc'd names, freed with lk_store_free_recents. save replaces the
  * whole list (entries for sets not installed this launch are kept by the
@@ -104,8 +104,8 @@ void  lk_store_save_chartlinks(const char *json);
 int   lk_store_load_chartlink_active(char *out, int out_len);
 void  lk_store_save_chartlink_active(const char *url);
 
-/* Plugin settings, kept as the config object each plugin was last handed —
- * `{"cpa_limit":926,"cpa_alarm":true,"connections":[…]}` — one string per
+/* Plugin settings, kept as the config object each plugin was last handed:
+ * `{"cpa_limit":926,"cpa_alarm":true,"connections":[…]}`, one string per
  * plugin id.
  *
  * The whole object rather than field by field, because a LIST is in it: the

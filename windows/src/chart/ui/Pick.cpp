@@ -23,7 +23,7 @@ namespace
     // already known-good UTF-8, so this never throws.
     winrt::hstring H(std::string const &s) { return winrt::to_hstring(s); }
 
-    // The callout's geometry is lk_pick_layout.h — arithmetic, with a test.
+    // The callout's geometry is lk_pick_layout.h: arithmetic, with a test.
     using lkw::kDetailWidth;
     using lkw::kMarkerSize;
 }
@@ -144,7 +144,7 @@ namespace winrt::LookoutMarine::implementation
 
         // The object list column, only when the pick found several objects:
         // the whole pick set stays in sight, there is no pager to walk blind.
-        // Meta objects (M_*) — the chart's notes — are pulled out of the
+        // Meta objects (M_*), the chart's notes, are pulled out of the
         // scrolling list onto a shelf pinned at the column's floor, so they
         // keep one place and never scroll away with a long list.
         PickList().Children().Clear();
@@ -278,7 +278,7 @@ namespace winrt::LookoutMarine::implementation
                 if (sel && scrolls)
                 {
                     // Keep the selection in sight, and move ONLY when it has
-                    // left the viewport — StartBringIntoView re-aligns on
+                    // left the viewport: StartBringIntoView re-aligns on
                     // every step, which reads as pinning to the top.
                     auto to_view = row.TransformToVisual(PickListScroll());
                     auto pos = to_view.TransformPoint({ 0, 0 });

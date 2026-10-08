@@ -1,4 +1,4 @@
-/* ui/open-dialogs.h — the file pickers, and the one route in.
+/* ui/open-dialogs.h: the file pickers, and the one route in.
  *
  * The window raises these from its actions and the settings charts page raises
  * them from its buttons, so they are their own unit rather than the window's.
@@ -13,6 +13,12 @@ G_BEGIN_DECLS
 
 /* The Open Chart picker. Selects a FOLDER of baked cells; the engine validates. */
 void lk_present_open_chart_dialog (GtkWindow *parent, LkAppModel *model);
+
+/* The other half of one pick: a FILE. An archive an agency published, a single
+ * cell, a chart already prepared, or a picture, whichever the core reads it
+ * as. One GtkFileDialog picks files or folders and never both, so the settings
+ * row offers the two together and each opens its own dialog. */
+void lk_present_open_chart_file_dialog (GtkWindow *parent, LkAppModel *model);
 
 /* The Open Chart picker for an exchange set that arrives as one .zip, which is
  * how a chart agency publishes one. Separate from the folder picker because
