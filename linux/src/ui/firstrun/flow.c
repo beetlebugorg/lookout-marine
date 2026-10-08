@@ -598,12 +598,11 @@ lk_first_run_consider (GtkWidget *page)
   if (!lk_first_run_should_run (self->flow))
     return;
 
-  /* Read the chart's mariner BEFORE the flow starts. Beginning it builds the
-   * first step, and the depth step writes the unit it asks in; a reload after
-   * that put the engine's own value back under the step. */
+  /* Read the chart's mariner and seed feet BEFORE the flow starts. Beginning
+   * it builds the first step, and the depth step reads the unit it asks in. */
   lk_mariner_reload (self->mariner);
-  lk_first_run_begin (self->flow);
   lk_first_run_frame_country (self);
+  lk_first_run_begin (self->flow);
 }
 
 gboolean
