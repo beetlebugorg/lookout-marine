@@ -84,7 +84,7 @@ namespace winrt::LookoutMarine::implementation
         FirstRunPhase(phases, L"Downloading charts",
                       want > 0 ? Thousands(shown.fetched) + L" of " + Thousands(want)
                                : std::wstring{},
-                      shown.downloading, order.has_value() && !shown.downloading);
+                      shown.downloading, first_run.ordered() && !shown.downloading);
         FirstRunPhase(phases, L"Finding charts",
                       shown.found > 0 ? Thousands(shown.found) + L" found" : std::wstring{},
                       shown.baking && shown.found == 0, shown.found > 0);
