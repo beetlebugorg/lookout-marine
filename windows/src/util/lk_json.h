@@ -1,14 +1,14 @@
-/* lk_json — a small JSON reader for the shell's model layer.
+/* lk_json: a small JSON reader for the shell's model layer.
  *
  * The core hands this shell JSON at every seam: the picked feature's report,
  * the plugin registry, the alert list, the table declarations, the licence
  * manifest. Windows has a JSON reader of its own in
- * winrt::Windows::Data::Json, and the shell used it — which bound every one of
+ * winrt::Windows::Data::Json, and the shell used it, which bound every one of
  * those parsers to WinRT, and through WinRT to a running XAML host. That is
  * why none of them could be tested.
  *
- * So this reads the subset JSON actually is — objects, arrays, strings,
- * numbers, booleans, null — the way linux/src/lk-json.c does for the GTK
+ * So this reads the subset JSON actually is: objects, arrays, strings,
+ * numbers, booleans, null: the way linux/src/lk-json.c does for the GTK
  * shell, with the same contracts, so a raw pick dump reads the same on both:
  *
  *   - A node owns its children; the tree goes when the root does.
@@ -67,7 +67,7 @@ namespace lkw::json
 
         size_t Length() const { return kind_ == Kind::Array ? items_.size() : 0; }
         Value const &At(size_t index) const;
-        /* An array's items, or nothing at all — so a `for (auto const &v :
+        /* An array's items, or nothing at all, so a `for (auto const &v :
          * node["rows"].Items())` over a missing member is an empty loop. */
         std::vector<Value> const &Items() const;
 

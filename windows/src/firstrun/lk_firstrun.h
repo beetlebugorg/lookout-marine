@@ -1,0 +1,321 @@
+// Setup: what it asks, in what order, and whether it runs.
+//
+// This is the model. It has no XAML, no WinRT and no core handle, so
+// windows/test/test_firstrun.cpp exercises the whole flow without a UI thread.
+// The pages in firstrun/ui read it and draw what it reports.
+//
+// Ported from android/.../firstrun/FirstRunModel.kt. It matches Apple and
+// Android on when setup runs. It differs on where the import counts are
+// latched: Android latches in the view with `remember`, and this latches in
+// Observe below, so a test covers the rule.
+#pragma once
+
+#include <cstdint>
+#include <lookout-library.h> // lookout_setup_state
+#include <lookout-shell.h>   // lookout_depth_plan
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace lkw
+{
+    // Where the charts come from. The source step asks this once.
+    enum class ChartSource
+    {
+        Noaa,
+        Online,
+        Files,
+    };
+
+    enum class FirstRunStep
+    {
+        Welcome,
+        Source,
+        Coverage,    // which waters, for NOAA
+        OnlineChart, // a published style, drawn as the chart
+        Importing,   // charts arriving and converting; setup stays open
+        Depths,      // the safety contour, once there is a chart to draw it on
+    };
+
+    // One usage band's share of the bake. Coarse band first. That is the order
+    // lookout_bake_order runs, and stopping partway then leaves charts
+    // covering the whole passage.
+    struct FirstRunBand
+    {
+        int          band{ 0 }; // 1..6
+        std::wstring name;      // "Overview", "General", ...
+        uint32_t     done{ 0 };
+        uint32_t     total{ 0 };
+
+        bool complete() const { return total > 0 && done >= total; }
+    };
+
+    // "Overview", "General", "Coastal", "Approach", "Harbor", "Berthing", else
+    // "Other". The same words the other shells use.
+    std::wstring FirstRunBandName(int band);
+
+    // The shape the other shells price a download in, so "226.5 MB" and
+    // "1,238". What the settings pane totals a library in as well.
+    std::wstring SizeText(uint64_t bytes);
+    std::wstring Thousands(uint64_t n);
+
+    // The depth step's two questions, and the four numbers the engine draws
+    // with, from the core's depth plan (lookout_depth_plan). The draft and the
+    // clearance are held in metres. The plan states them, and the settings,
+    // in the unit on screen. Defined in lk_firstrun_core.cpp, which calls the
+    // core, so the model suite does not build it.
+    class DepthChoice
+    {
+    public:
+        // The starting keelboat: 1.7 m with 0.6 m, or 5.5 ft with 2 ft.
+        explicit DepthChoice(bool feet = false);
+
+        bool feet() const { return feet_; }
+        wchar_t const *unit() const { return feet_ ? L"ft" : L"m"; }
+        // The clearance picked, in the unit on screen.
+        double clearance() const { return plan_.clearance; }
+        struct ::lookout_depth_plan const &plan() const { return plan_; }
+        std::vector<double> Clearances() const
+        {
+            return { std::begin(plan_.clearances), std::end(plan_.clearances) };
+        }
+        // The illustration's seabed and soundings, from the core
+        // (lookout_depth_preview).
+        struct ::lookout_depth_preview Preview() const;
+
+        void Step(int by);
+        // Read a draft the mariner typed, in the unit on screen. False when it
+        // is not a depth, in which case the draft stands.
+        bool ReadDraft(std::wstring const &text);
+        // A clearance in the unit on screen, one of Clearances().
+        void set_clearance(double c);
+        void SetUnit(bool feet);
+
+        // A depth in the unit on screen with its unit on it, and the draft
+        // alone for the field.
+        std::wstring Measure(double v) const;
+        std::wstring DraftText() const;
+
+    private:
+        void Plan();
+
+        bool               feet_{ false };
+        double             draft_m_{ 0 };
+        double             clearance_m_{ 0 };
+        struct ::lookout_depth_plan plan_{};
+    };
+
+    // The regions a download covers, as the core's own comma separated list
+    // ("d5,d8"). A mariner picks several: lookout_noaa_cost and
+    // lookout_noaa_download both take the list and answer for the union, which
+    // is why one total is stated rather than a price per region (the cells of
+    // neighbouring districts overlap, so per-region prices do not sum).
+    bool RegionPicked(std::string const &list, std::string const &id);
+    std::string RegionToggle(std::string const &list, std::string const &id);
+
+    // What of one region's water is on this device.
+    //
+    // The pick as a whole is priced by one cost call, and that total is what a
+    // download costs. These are separate calls, one for each region, and they
+    // state what the mariner already holds. The reference prices both, because
+    // a picker that shows only the price of a pick says nothing about the
+    // water a mariner downloaded last month.
+    struct RegionHold
+    {
+        uint32_t missing{ 0 };
+        uint32_t held{ 0 };
+
+        uint32_t Total() const { return missing + held; }
+        // Every cell covering this water is here.
+        bool Complete() const { return missing == 0 && held > 0; }
+        // Part of it is here. NOAA files a cell under one district that covers
+        // another's water, so a region is often partly held before it is ever
+        // picked.
+        bool Partial() const { return held > 0 && missing > 0; }
+        // Before a catalog is read every count is zero, and the pill says
+        // nothing.
+        bool Known() const { return Total() > 0; }
+    };
+
+    // What the pill says beside the region's name. Empty for water with none
+    // of it here, which is most of the map on a first run.
+    std::wstring RegionBadge(RegionHold const &hold);
+
+    // The pill's name for a screen reader, which states the counts the badge
+    // abbreviates to "installed".
+    std::wstring RegionLabel(std::wstring const &name, std::wstring const &blurb,
+                             RegionHold const &hold);
+
+    // What a pick costs, in the mariner's words. Water already here is left
+    // out of the price, so a pick wholly installed costs nothing and states
+    // what fetching it again would move instead.
+    std::wstring CostLine(uint32_t cells, uint64_t bytes, uint32_t held, uint64_t held_bytes);
+
+    // ---- the picker's two halves ------------------------------------------
+    //
+    // A picker opened from the Charts pane states what the mariner HOLDS:
+    // water already downloaded opens ticked, unticking it gives that water
+    // back, and Apply does both halves at once. There was no way to give water
+    // back before except by removing a whole chart set.
+
+    // What Apply is about to do, in the mariner's words. `removing` names the
+    // regions being given back. With nothing to do either way it states what
+    // the pick holds instead.
+    std::wstring PlanLine(uint32_t cells, uint64_t bytes, uint32_t held, uint64_t held_bytes,
+                          std::vector<std::wstring> const &removing);
+
+    // The question asked before charts are deleted.
+    std::wstring RemovalTitle(std::vector<std::wstring> const &removing);
+
+    // Whether Apply has anything to do: charts to fetch, or water to give
+    // back. Nothing to price from means nothing to apply.
+    bool ApplyEnabled(bool have_catalog, uint32_t cells, size_t removing);
+
+    // About how long preparing this many charts takes, for the question asked
+    // before a set's prepared charts are deleted: the mariner is deciding
+    // whether to throw away work, so the size of that work is the fact they
+    // need. A fifth of a second a chart, measured by the reference over a
+    // mixed Chesapeake set with every core working.
+    std::wstring PrepareEstimate(size_t charts);
+
+    // What the page says after a removal, in the mariner's words.
+    //
+    // Here beside PrepareEstimate for the same reason: these are the words the
+    // question about deleting charts and its answer are made of, and one file
+    // holds the words the tests can read.
+    //
+    // `removed` is how many charts went, `failed` how many a rename refused,
+    // which on Windows means something still has the file open. Nothing of
+    // either says the water was not this app's to give back.
+    std::wstring RemovalNote(size_t removed, size_t failed);
+
+    // One reading of the two services.
+    struct FirstRunLive
+    {
+        // The transfer (lookout_noaa_poll).
+        bool     downloading{ false };
+        uint32_t fetched{ 0 };
+        uint32_t expected{ 0 };
+        // The core's prepare of the download (lookout_noaa_poll).
+        bool     baking{ false };
+        uint32_t found{ 0 }; // how many the scan returned
+        uint32_t baked{ 0 }; // how many are through
+        std::vector<FirstRunBand> bands;
+    };
+
+    // The setup step's view model. The core's setup handle holds the state
+    // (lookout_setup, lookout-library.h). The shell reads it into this with
+    // Read, and this keeps the words, the order and the bar.
+    class FirstRun
+    {
+    public:
+        // ---- the core's setup state machine (lookout_setup) --------------
+        // Open and the calls below are defined in lk_firstrun_core.cpp, which
+        // links the core. A model that is never opened holds no handle, and
+        // the model suite reads state into it with Read.
+        void Open();
+        // Hand the core what the app observes, and read its state back.
+        void Note(lookout_setup_facts const &f);
+        // Note `f`, apply a LOOKOUT_SETUP_* action, and read the state back.
+        // Returns the LOOKOUT_SETUP_FROM_* source the shell acts on, or -1.
+        int Act(lookout_setup_facts const &f, int action, int arg);
+        // True when setup is down and has a reason to come up.
+        bool ShouldRun() const { return state_.should_run != 0; }
+
+        // ---- the core's state, as last read ------------------------------
+        void Read(lookout_setup_state const &s) { state_ = s; }
+        FirstRunStep step() const { return static_cast<FirstRunStep>(state_.step); }
+        // True while setup is over the chart.
+        bool showing() const { return state_.showing != 0; }
+        // True while setup is one step opened on its own.
+        bool picker_only() const { return state_.picker_only != 0; }
+        bool CanGoBack() const { return state_.can_go_back != 0; }
+        bool PrimaryEnabled() const { return state_.primary_enabled != 0; }
+        // NOAA's terms are up over the source step.
+        bool showing_enc_terms() const { return state_.terms_showing != 0; }
+        // Work ran on the import step, or the order finished. An import yet
+        // to start and one that has finished both have no work running.
+        bool saw_bake() const { return state_.saw_work != 0; }
+        // The order's run ended with no chart to continue to. Back returns
+        // to the coverage step.
+        bool import_stalled() const { return state_.import_ended != 0; }
+
+        ChartSource source() const { return source_; }
+        void        set_source(ChartSource s) { source_ = s; }
+
+        // What one run of setup holds. The shell clears it when setup comes
+        // up: a second download in one launch read the first run's bands and
+        // counts.
+        void Restart()
+        {
+            order_regions_.clear();
+            shown_ = FirstRunLive{};
+        }
+
+        // ---- what the pages read ------------------------------------------
+        std::wstring Title() const;
+        // The online step names the chart picked, `chart_name`, or reads
+        // Continue with none.
+        std::wstring PrimaryTitle(std::wstring const &chart_name = {}) const;
+
+        // The facts the line beside the primary action is composed from. The
+        // step decides which of them it uses.
+        struct Footnotes
+        {
+            bool         have_catalog{ false };
+            // The pick holds a chart to fetch or one already here, and the
+            // line that prices it: PlanLine for a picker, else CostLine.
+            bool         picked{ false };
+            std::wstring price;
+            std::wstring credit;
+            bool         have_charts{ false };
+            /* The regions being given back, by name. Only a picker opened
+             * from the Charts pane has any: setup has nothing to give back
+             * yet. */
+            std::vector<std::wstring> removing;
+        };
+        // The line beside the primary action: the coverage step prices the
+        // pick there, the depths step says where its numbers live afterwards,
+        // and the online step states the publisher's credit. Empty on the
+        // steps that have nothing to say.
+        std::wstring Footnote(Footnotes const &f) const;
+
+        // ---- the order, and the counts ------------------------------------
+        // The NOAA order as the core latched it when the mariner asked. The
+        // download service resets its counters when the transfer ends, and
+        // the page outlives the transfer. The shell keeps only the names.
+        bool ordered() const { return state_.ordered != 0; }
+        uint32_t order_charts() const { return state_.order_charts; }
+        uint64_t order_bytes() const { return state_.order_bytes; }
+        std::wstring const &order_regions() const { return order_regions_; }
+        void set_order_regions(std::wstring names) { order_regions_ = std::move(names); }
+
+        // Hand this every reading of the two services. It keeps the last
+        // figures each of them reported.
+        //
+        // Both services reset when their work ends. The transfer's counters go
+        // back to zero and the bake's last state has no total and no bands, so
+        // a page reading them live empties itself to "0 of 513" at the moment
+        // it finishes. A reading counts as news only when it has a total.
+        void Observe(FirstRunLive const &live);
+
+        // The figures to draw, after latching. Safe to call before any
+        // Observe.
+        FirstRunLive const &shown() const { return shown_; }
+        // How many charts the transfer is working towards: what it reported,
+        // else what the mariner ordered.
+        uint32_t expected() const;
+        // 0..1 across the whole job. One bar, because a bar per phase reads as
+        // three jobs. The transfer is the first 35%, since the bake is the
+        // longer part.
+        double Fraction() const;
+
+    private:
+        std::shared_ptr<lookout_setup> setup_;
+        lookout_setup_state          state_{};
+        ChartSource                  source_{ ChartSource::Noaa };
+        std::wstring                 order_regions_;
+        FirstRunLive                 shown_;
+    };
+}

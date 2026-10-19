@@ -1,4 +1,4 @@
-// winrt_glue.cpp — compile the cppwinrt/XAML generated TUs that this hand-
+// winrt_glue.cpp: compile the cppwinrt/XAML generated TUs that this hand-
 // authored command-line project doesn't auto-register for compilation (the VS
 // project system normally does). One TU, with the PCH.
 //
@@ -6,7 +6,7 @@
 //                           App.xaml.g.hpp + MainWindow.xaml.g.hpp (the markup
 //                           InitializeComponent impls), the wWinMain entry point
 //                           and the VSDesigner exports. The single home for all
-//                           of those — so the code-behind TUs must NOT also
+//                           of those, so the code-behind TUs must NOT also
 //                           include the .xaml.g.hpp (that would duplicate them).
 //   XamlTypeInfo.Impl.g.cpp -> XamlMetaDataProvider::GetXamlType/GetXmlnsDefinitions.
 //   XamlMetaDataProvider.g.cpp -> its cppwinrt factory.

@@ -1,4 +1,4 @@
-/* model/app-model.h — shared app state: chart open/recents, live readouts, and
+/* model/app-model.h: shared app state: chart open/recents, live readouts, and
  * headerbar actions. Holds the one LkChartController and funnels commands
  * through it. Readouts are GObject properties the HUD tracks via notify::. */
 #pragma once
@@ -9,8 +9,9 @@
 #include <gtk/gtk.h>
 
 #include "engine/controller.h"
-#include "library/links.h"
-#include "library/raster.h"
+#include "model/links.h"
+#include "model/noaa.h"
+#include "model/raster.h"
 
 G_BEGIN_DECLS
 
@@ -35,7 +36,7 @@ void lk_app_model_open_chart_directory (LkAppModel *self, const char *dir);
 
 /* ---- the chart library: installed sets -------------------------------------- */
 
-/* A SET is a folder the mariner added, or one .zip — how a chart agency
+/* A SET is a folder the mariner added, or one .zip: how a chart agency
  * publishes them. The list answers what is installed and what is being sailed
  * on: switching a set off keeps it installed and takes it out of the chart, and
  * the chart is composed as the UNION of the sets switched on. */
@@ -46,12 +47,50 @@ void lk_app_model_open_chart_directory (LkAppModel *self, const char *dir);
 GPtrArray *lk_app_model_get_chart_sets (LkAppModel *self);
 
 /* Switch one set into or out of the chart. Persists, and recomposes the open
- * chart from the sets that remain on — all of them off closes it. */
+ * chart from the sets that remain on, all of them off closes it. */
 void lk_app_model_set_chart_set_on (LkAppModel *self, const char *path, gboolean on);
 
-/* Take a set off the list. What Lookout prepared from it is deleted — it can
- * be made again — and the mariner's own folder is never touched. */
+/* Take a set off the list. What Lookout prepared from it is deleted. It can
+ * be made again, and the mariner's own folder is never touched. */
 void lk_app_model_remove_chart_set (LkAppModel *self, const char *path);
+
+/* ---- NOAA chart updates ----------------------------------------------------
+ *
+ * NOAA reissues a cell when its survey changes, and a mariner sailing on last
+ * season's edition has no way to know. The check reads the catalog and counts
+ * the managed cells whose edition it has passed. */
+
+/* How many managed charts NOAA has reissued, as the last check found. 0 until
+ * a check has run. */
+guint32 lk_app_model_noaa_outdated (LkAppModel *self);
+
+/* Start the check when the core finds one due by the store's cadence. The
+ * count arrives when the catalog read ends, through ::changed on the NOAA
+ * service. */
+void lk_app_model_check_noaa_updates (LkAppModel *self);
+
+/* Fetch the newer editions of every managed chart the check counted. */
+void lk_app_model_download_noaa_updates (LkAppModel *self);
+
+/* TRUE when sets ARE installed and every one of them is switched off.
+ *
+ * The one case where the library is not empty and the chart is still blank.
+ * Setup stays down for it: the mariner has charts, and the basemap with the
+ * chrome over it is what they get until they switch one back on. */
+gboolean lk_app_model_all_sets_off (LkAppModel *self);
+
+/* TRUE when a switched-on set holds a chart to draw. */
+gboolean lk_app_model_has_drawable_sets (LkAppModel *self);
+
+/* TRUE while a background scan has a set still to read. The library composes
+ * to the sets already read, so a chart opened now can be short or empty. Wait
+ * for ::chart-sets-changed and ask again. */
+gboolean lk_app_model_library_scanning (LkAppModel *self);
+
+/* The removal running behind the app, or NULL. Its own channel, not the
+ * bake's: a set can be removed while another is still importing, and a
+ * removal cannot be cancelled. ::removing says when to ask again. */
+const LkBakeProgress *lk_app_model_get_remove_progress (LkAppModel *self);
 
 /* ---- commands (headerbar / menu) ---------------------------------------- */
 
@@ -96,7 +135,7 @@ gboolean lk_app_model_get_fix (LkAppModel *self, double *out_lon, double *out_la
 
 /* Install the files the mariner chose, persist the list, and draw what was just
  * added when it covers this view. Files that will not open are reported
- * together through ::open-error, not one alert at a time — a folder of twenty
+ * together through ::open-error, not one alert at a time, a folder of twenty
  * asking twenty times would be unusable. */
 void lk_app_model_add_raster_charts (LkAppModel *self, const char *const *paths);
 
@@ -156,6 +195,38 @@ void lk_app_model_reapply_chart_link (LkAppModel *self);
  * tick: the changed flag has ONE consumer. */
 void lk_app_model_poll_chart_links (LkAppModel *self);
 
+/* ---- NOAA charts --------------------------------------------------------- */
+
+/* NOAA's catalog, the regions a mariner picks, and the downloads run from
+ * them. Owned here so the picker, the Charts page and setup read one object.
+ * See model/noaa.h for what a region selects. */
+LkNoaa *lk_app_model_get_noaa (LkAppModel *self);
+
+/* Download the regions the mariner picked, then prepare what arrives.
+ *
+ * The core unpacks each cell's exchange set into one staging directory, so the
+ * whole download is one folder of source cells and bakes as a single set. This
+ * follows the transfer to its end and starts that bake. `again` fetches the
+ * cells already installed as well, which is how a mariner repairs a set.
+ *
+ * A download that failed every cell bakes nothing: an empty directory would
+ * join the library as a set that never fills. */
+void lk_app_model_start_noaa_download (LkAppModel *self, gboolean again);
+
+/* Make the download hold the picker's pick, through lookout_noaa_apply. The
+ * water the pick gives back leaves the library at once and is deleted behind
+ * the app, reported through ::removing. What the pick lacks is downloaded and
+ * followed to its end. */
+void lk_app_model_apply_noaa_pick (LkAppModel *self);
+
+/* TRUE while the open error reports the end of a NOAA download.
+ * `out_retry` is TRUE when ordering again can clear the cause. */
+gboolean lk_app_model_noaa_alert (LkAppModel *self, gboolean *out_retry);
+
+/* Order the last NOAA download or update again. With no catalog loaded this
+ * reads the catalog first and orders when that read ends. */
+void lk_app_model_retry_noaa (LkAppModel *self);
+
 /* What the pill is built from. The sets are borrowed. */
 GPtrArray  *lk_app_model_get_raster_sets (LkAppModel *self);
 int         lk_app_model_get_raster_active (LkAppModel *self);
@@ -209,7 +280,7 @@ void lk_app_model_set_chart_open (LkAppModel *self, gboolean open, const char *p
 void lk_app_model_set_open_error (LkAppModel *self, const char *message);
 
 /* The pick from the last tap, and where on the chart it landed (logical points
- * in the chart view — the report stands beside the mark there). Transfer full;
+ * in the chart view, the report stands beside the mark there). Transfer full;
  * emits ::pick-results, which is what rebuilds the report. */
 void       lk_app_model_set_pick (LkAppModel *self, GPtrArray *results, double x, double y,
                                   double lon, double lat);
@@ -237,6 +308,22 @@ void  lk_app_model_set_pick_index (LkAppModel *self, guint index);
 /* ---- accessors the chrome reads ----------------------------------------- */
 
 gboolean lk_app_model_get_has_chart (LkAppModel *self);
+
+/* A chart is open and holds no vector charts, so it is drawing the basemap.
+ * Not the same as having nothing to draw: a library of pictures alone reads
+ * empty here and still draws. */
+gboolean lk_app_model_get_chart_is_empty (LkAppModel *self);
+
+/* Nothing is on the screen and nothing is on its way there.
+ *
+ * What the first-run page and setup read, rather than has-chart. A chart of no
+ * charts is OPEN, so has-chart says yes while the mariner looks at the
+ * basemap. This answers the question they are actually asking.
+ *
+ * FALSE while an open, a scan or a bake is in flight, so nothing raised off it
+ * covers a library that is still arriving. */
+gboolean lk_app_model_get_nothing_to_draw (LkAppModel *self);
+
 const char *lk_app_model_get_chart_path (LkAppModel *self);
 double   lk_app_model_get_center_lon (LkAppModel *self);
 double   lk_app_model_get_center_lat (LkAppModel *self);

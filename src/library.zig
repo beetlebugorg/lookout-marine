@@ -97,6 +97,34 @@ pub fn producerCode(stem: []const u8) ?[]const u8 {
     return null;
 }
 
+/// The hydrographic office a producer code belongs to. The code is the
+/// country's, and for these that is the office a mariner names. A code not
+/// listed returns null, and the set keeps its folder name.
+pub fn agency(code: []const u8) ?[:0]const u8 {
+    const offices = [_]struct { []const u8, [:0]const u8 }{
+        .{ "US", "NOAA" },
+        .{ "GB", "UKHO" },
+        .{ "CA", "CHS" },
+        .{ "AU", "AHO" },
+        .{ "NZ", "LINZ" },
+        .{ "NL", "Netherlands Hydrographic Office" },
+        .{ "DE", "BSH" },
+        .{ "FR", "Shom" },
+        .{ "NO", "Norwegian Hydrographic Service" },
+        .{ "DK", "Danish Geodata Agency" },
+        .{ "SE", "Swedish Maritime Administration" },
+        .{ "FI", "Finnish Transport Agency" },
+        .{ "IE", "INFOMAR" },
+        .{ "JP", "Japan Hydrographic Association" },
+        .{ "BR", "DHN" },
+        .{ "ZA", "SANHO" },
+    };
+    for (offices) |o| {
+        if (std.ascii.eqlIgnoreCase(code, o[0])) return o[1];
+    }
+    return null;
+}
+
 /// The usage band an S-57 dataset name states, or null when the name states
 /// none. An S-101 name states no band, and neither does a name that is not a
 /// dataset name.
@@ -135,12 +163,17 @@ pub fn cellName(basename: []const u8) ?[]const u8 {
 
 // ---- scanning a folder ------------------------------------------------------
 
-/// What tile57 reports about a baked archive.
+/// What tile57 reports about one chart file.
 pub const Facts = struct {
-    /// The compilation scale the bake embedded. 0 when the archive carries none.
+    /// The compilation scale the bake embedded. 0 when the archive states none.
     scale: i32 = 0,
-    /// West, south, east, north. Null when the archive carries no bounds.
+    /// West, south, east, north. Null when the archive states no bounds.
     bounds: ?[4]f64 = null,
+    /// DSID EDTN and UPDN, after the update chain is applied. Both 0 for a
+    /// file that states no dataset identity: a baked archive, a picture, or an
+    /// entry read from a zip listing.
+    edition: u32 = 0,
+    update: u32 = 0,
 };
 
 /// What a baked archive turned out to hold.
@@ -172,6 +205,9 @@ pub const InventoryRow = struct {
     bytes: u64 = 0,
     scale: i32 = 0,
     bounds: ?[4]f64 = null,
+    /// DSID EDTN and UPDN. 0 when the file states neither.
+    edition: u32 = 0,
+    update: u32 = 0,
 };
 
 /// What a path holds. Appends a row per file that looks like a chart and
@@ -309,6 +345,22 @@ pub fn scanWith(
             rows.deinit(alloc);
         }
         if (ask(inventory_ctx, alloc, root, &rows)) {
+            // The highest update file beside each base cell, keyed by the
+            // path without its extension: the folder and the stem. A base
+            // cell states UPDN 0 however many updates have been written beside
+            // it, and NOAA's catalog states the number of the last one, so a
+            // cell fully up to date read as one update behind for every update
+            // it had. An update file in another folder is for another copy of
+            // the cell.
+            var applied = std.StringHashMap(u32).init(alloc);
+            defer applied.deinit();
+            for (rows.items) |r| {
+                if (r.kind != .update) continue;
+                const p = split(r.path);
+                const n = std.fmt.parseInt(u32, p.ext, 10) catch continue;
+                const seen = applied.get(p.stem) orelse 0;
+                if (n > seen) applied.put(p.stem, n) catch {};
+            }
             for (rows.items) |r| {
                 switch (r.kind) {
                     .update => {
@@ -347,7 +399,15 @@ pub fn scanWith(
                     // states none.
                     .band = usageBand(name) orelse 0,
                     .bytes = r.bytes,
-                    .facts = .{ .scale = r.scale, .bounds = r.bounds },
+                    .facts = .{
+                        .scale = r.scale,
+                        .bounds = r.bounds,
+                        .edition = r.edition,
+                        .update = if (r.kind == .source)
+                            @max(r.update, applied.get(split(path).stem) orelse 0)
+                        else
+                            r.update,
+                    },
                 };
                 if (r.kind == .raster) try raster.append(alloc, cell) else try cells.append(alloc, cell);
             }
@@ -537,43 +597,6 @@ fn fileSize(io: std.Io, path: [:0]const u8) u64 {
     return st.size;
 }
 
-// ---- the JSON a shell reads -------------------------------------------------
-
-fn writeJsonString(out: *std.ArrayList(u8), alloc: std.mem.Allocator, s: []const u8) !void {
-    try out.append(alloc, '"');
-    for (s) |c| switch (c) {
-        '"' => try out.appendSlice(alloc, "\\\""),
-        '\\' => try out.appendSlice(alloc, "\\\\"),
-        '\n' => try out.appendSlice(alloc, "\\n"),
-        '\r' => try out.appendSlice(alloc, "\\r"),
-        '\t' => try out.appendSlice(alloc, "\\t"),
-        0...8, 11, 12, 14...31 => try out.print(alloc, "\\u{x:0>4}", .{c}),
-        else => try out.append(alloc, c),
-    };
-    try out.append(alloc, '"');
-}
-
-fn writeCell(out: *std.ArrayList(u8), alloc: std.mem.Allocator, c: Cell) !void {
-    try out.appendSlice(alloc, "{\"path\":");
-    try writeJsonString(out, alloc, c.path);
-    try out.appendSlice(alloc, ",\"name\":");
-    try writeJsonString(out, alloc, c.name);
-    try out.print(alloc, ",\"kind\":\"{s}\",\"band\":{d},\"bytes\":{d}", .{
-        @tagName(c.kind), c.band, c.bytes,
-    });
-    if (c.band >= 1 and c.band <= 6) {
-        try out.appendSlice(alloc, ",\"bandName\":");
-        try writeJsonString(out, alloc, bandName(c.band));
-    }
-    if (c.facts.scale != 0) try out.print(alloc, ",\"scale\":{d}", .{c.facts.scale});
-    if (c.facts.bounds) |b| try out.print(
-        alloc,
-        ",\"west\":{d},\"south\":{d},\"east\":{d},\"north\":{d}",
-        .{ b[0], b[1], b[2], b[3] },
-    );
-    try out.append(alloc, '}');
-}
-
 // ---- the read a shell draws ---------------------------------------------------
 
 /// What a scanned file is. The same six `Kind` names, as the header states
@@ -624,6 +647,14 @@ pub const File = extern struct {
     south: f64,
     east: f64,
     north: f64,
+    /// The dataset edition and update number from DSID. Both 0 when the file
+    /// states no identity.
+    edition: u32,
+    update: u32,
+    /// 1 when this source cell was written after the chart prepared from it,
+    /// so the chart draws an older edition until it is prepared again. 0 for
+    /// every other file.
+    stale: c_int = 0,
 };
 
 /// What one folder or archive holds.
@@ -662,7 +693,7 @@ pub const Read = struct {
     }
 };
 
-/// The scan as structs. Both this and `toJson` walk the same `Scan`.
+/// The scan as structs.
 pub fn toRead(gpa: std.mem.Allocator, s: *const Scan) !*Read {
     const self = try gpa.create(Read);
     errdefer gpa.destroy(self);
@@ -710,6 +741,8 @@ pub fn fileOf(a: std.mem.Allocator, c: Cell) !File {
         .south = if (c.facts.bounds) |b| b[1] else 0,
         .east = if (c.facts.bounds) |b| b[2] else 0,
         .north = if (c.facts.bounds) |b| b[3] else 0,
+        .edition = c.facts.edition,
+        .update = c.facts.update,
     };
 }
 
@@ -717,44 +750,10 @@ fn readFiles(a: std.mem.Allocator, cells: []const Cell) ![]const *const File {
     const out = try a.alloc(File, cells.len);
     const by_ptr = try a.alloc(*const File, cells.len);
     for (cells, out, by_ptr) |c, *dst, *p| {
-        dst.* = try fileOf(a, c);
+        owned.fill(File, dst, try fileOf(a, c));
         p.* = dst;
     }
     return by_ptr;
-}
-
-/// The scan as JSON, for a shell to read. The caller owns the bytes.
-///
-/// NUL terminated. The length is what a host should use, but a host that
-/// reaches for strlen must not read past the answer.
-pub fn toJson(alloc: std.mem.Allocator, s: *const Scan) ![:0]u8 {
-    var out: std.ArrayList(u8) = .empty;
-    errdefer out.deinit(alloc);
-    try out.appendSlice(alloc, "{\"root\":");
-    try writeJsonString(&out, alloc, s.root);
-    try out.print(alloc, ",\"updates\":{d},\"other\":{d},\"refused\":{d}", .{
-        s.updates, s.other, s.refused,
-    });
-    // Absent rather than empty when the charts disagree: a host that reads a
-    // producer knows every chart here came from it.
-    if (s.producer) |p| {
-        try out.appendSlice(alloc, ",\"producer\":");
-        try writeJsonString(&out, alloc, &p);
-    }
-    try out.print(alloc, ",\"sources\":{d},\"bytes\":{d},\"cells\":[", .{
-        s.sourceCount(), s.totalBytes(),
-    });
-    for (s.cells, 0..) |c, i| {
-        if (i > 0) try out.append(alloc, ',');
-        try writeCell(&out, alloc, c);
-    }
-    try out.appendSlice(alloc, "],\"raster\":[");
-    for (s.raster, 0..) |c, i| {
-        if (i > 0) try out.append(alloc, ',');
-        try writeCell(&out, alloc, c);
-    }
-    try out.appendSlice(alloc, "]}");
-    return out.toOwnedSliceSentinel(alloc, 0);
 }
 
 test "a baked archive and a source cell are charts" {
@@ -961,6 +960,146 @@ test "the engine's facts reach the cell" {
     try t.expectEqual(@as(usize, 0), s.refused);
 }
 
+/// An inventory of one source cell that states a DSID edition and update.
+fn oneEdition(
+    _: ?*anyopaque,
+    alloc: std.mem.Allocator,
+    _: []const u8,
+    out: *std.ArrayList(InventoryRow),
+) bool {
+    out.append(alloc, .{
+        .path = alloc.dupe(u8, "/Charts/ENC_ROOT/US5MD1MC/US5MD1MC.000") catch return false,
+        .name = alloc.dupe(u8, "US5MD1MC") catch return false,
+        .kind = .source,
+        .bytes = 4096,
+        .edition = 27,
+        .update = 3,
+    }) catch return false;
+    return true;
+}
+
+test "the dataset edition reaches the cell and the C struct" {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var s = try scanWith(t.allocator, io, "/Charts", null, null, oneEdition, null);
+    defer s.deinit();
+
+    try t.expectEqual(@as(usize, 1), s.cells.len);
+    try t.expectEqual(@as(u32, 27), s.cells[0].facts.edition);
+    try t.expectEqual(@as(u32, 3), s.cells[0].facts.update);
+
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const f = try fileOf(arena.allocator(), s.cells[0]);
+    try t.expectEqual(@as(u32, 27), f.edition);
+    try t.expectEqual(@as(u32, 3), f.update);
+}
+
+/// A base cell with three update files beside it, as an exchange set holds
+/// them after three updates.
+fn oneUpdatedCell(
+    _: ?*anyopaque,
+    alloc: std.mem.Allocator,
+    _: []const u8,
+    out: *std.ArrayList(InventoryRow),
+) bool {
+    out.append(alloc, .{
+        .path = alloc.dupe(u8, "/Charts/US1GC09M/US1GC09M.000") catch return false,
+        .name = alloc.dupe(u8, "US1GC09M") catch return false,
+        .kind = .source,
+        .bytes = 900,
+        .edition = 74,
+        .update = 0,
+    }) catch return false;
+    for ([_][]const u8{ "001", "002", "003" }) |ext| {
+        const path = std.fmt.allocPrint(alloc, "/Charts/US1GC09M/US1GC09M.{s}", .{ext}) catch return false;
+        out.append(alloc, .{
+            .path = path,
+            .name = alloc.dupe(u8, "US1GC09M") catch return false,
+            .kind = .update,
+            .bytes = 90,
+        }) catch return false;
+    }
+    return true;
+}
+
+test "a cell's update number is the last update written beside it" {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var s = try scanWith(t.allocator, io, "/Charts", null, null, oneUpdatedCell, null);
+    defer s.deinit();
+
+    try t.expectEqual(@as(usize, 1), s.cells.len);
+    try t.expectEqual(@as(u32, 74), s.cells[0].facts.edition);
+    // The base file states 0. The three updates beside it say otherwise, and
+    // NOAA's catalog states 3 for the same cell.
+    try t.expectEqual(@as(u32, 3), s.cells[0].facts.update);
+    try t.expectEqual(@as(usize, 3), s.updates);
+}
+
+/// Two copies of one cell in two folders, and three updates beside only the
+/// first.
+fn twoCopiesOneUpdated(
+    _: ?*anyopaque,
+    alloc: std.mem.Allocator,
+    _: []const u8,
+    out: *std.ArrayList(InventoryRow),
+) bool {
+    for ([_][]const u8{ "/Charts/old", "/Charts/new" }) |dir| {
+        out.append(alloc, .{
+            .path = std.fmt.allocPrint(alloc, "{s}/US1GC09M/US1GC09M.000", .{dir}) catch return false,
+            .name = alloc.dupe(u8, "US1GC09M") catch return false,
+            .kind = .source,
+            .bytes = 900,
+            .edition = 74,
+            .update = 0,
+        }) catch return false;
+    }
+    out.append(alloc, .{
+        .path = alloc.dupe(u8, "/Charts/old/US1GC09M/US1GC09M.003") catch return false,
+        .name = alloc.dupe(u8, "US1GC09M") catch return false,
+        .kind = .update,
+        .bytes = 90,
+    }) catch return false;
+    return true;
+}
+
+test "an update file counts only for the cell in its own folder" {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var s = try scanWith(t.allocator, io, "/Charts", null, null, twoCopiesOneUpdated, null);
+    defer s.deinit();
+
+    try t.expectEqual(@as(usize, 2), s.cells.len);
+    for (s.cells) |c| {
+        const want: u32 = if (std.mem.startsWith(u8, c.path, "/Charts/old/")) 3 else 0;
+        try t.expectEqual(want, c.facts.update);
+    }
+}
+
+test "a file that states no identity reports edition 0" {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var s = try scanWith(t.allocator, io, "/Charts", null, null, oneBaked, null);
+    defer s.deinit();
+
+    try t.expectEqual(@as(usize, 1), s.cells.len);
+    try t.expectEqual(@as(u32, 0), s.cells[0].facts.edition);
+    try t.expectEqual(@as(u32, 0), s.cells[0].facts.update);
+}
+
+/// An inventory of one baked archive, which states no DSID.
+fn oneBaked(
+    _: ?*anyopaque,
+    alloc: std.mem.Allocator,
+    _: []const u8,
+    out: *std.ArrayList(InventoryRow),
+) bool {
+    out.append(alloc, .{
+        .path = alloc.dupe(u8, "/Charts/US5MD1MC/US5MD1MC.pmtiles") catch return false,
+        .name = alloc.dupe(u8, "US5MD1MC") catch return false,
+        .kind = .baked,
+        .bytes = 900,
+    }) catch return false;
+    return true;
+}
+
 test "a single file scans as itself" {
     var tmp = t.tmpDir(.{ .iterate = true });
     defer tmp.cleanup();
@@ -977,7 +1116,7 @@ test "a single file scans as itself" {
     try t.expectEqualStrings("US5MD1MC", s.cells[0].name);
 }
 
-test "the JSON carries what a shell needs to draw the list" {
+test "the read has what a shell needs to draw the list" {
     var tmp = t.tmpDir(.{ .iterate = true });
     defer tmp.cleanup();
     const io = std.Io.Threaded.global_single_threaded.io();
@@ -987,26 +1126,19 @@ test "the JSON carries what a shell needs to draw the list" {
 
     var s = try scan(t.allocator, io, root, acceptAll, null);
     defer s.deinit();
-    const json = try toJson(t.allocator, &s);
-    defer t.allocator.free(json);
+    const r = try toRead(t.allocator, &s);
+    defer r.free();
 
-    var parsed = try std.json.parseFromSlice(std.json.Value, t.allocator, json, .{});
-    defer parsed.deinit();
-    const o = parsed.value.object;
-    try t.expectEqual(@as(usize, 2), o.get("cells").?.array.items.len);
-    try t.expectEqual(@as(i64, 1), o.get("sources").?.integer);
-    try t.expectEqual(@as(i64, 1), o.get("updates").?.integer);
-    try t.expectEqual(@as(i64, 4), o.get("other").?.integer);
+    try t.expectEqual(@as(usize, 2), r.cells.len);
+    try t.expectEqual(@as(usize, 1), r.found.sources);
+    try t.expectEqual(@as(usize, 1), r.found.updates);
+    try t.expectEqual(@as(usize, 4), r.found.other);
 
-    // A C host reads this through a pointer. Without the terminator, strlen
-    // runs off the end of the answer into whatever follows it.
-    try t.expectEqual(@as(u8, 0), json[json.len]);
-
-    const first = o.get("cells").?.array.items[0].object;
-    try t.expectEqualStrings("US4MD1PM", first.get("name").?.string);
-    try t.expectEqualStrings("baked", first.get("kind").?.string);
-    try t.expectEqualStrings("Approach", first.get("bandName").?.string);
-    try t.expectEqual(@as(i64, 12000), first.get("scale").?.integer);
+    const first = r.cells[0];
+    try t.expectEqualStrings("US4MD1PM", std.mem.span(first.name));
+    try t.expectEqual(FileKind.baked, first.kind);
+    try t.expectEqualStrings("Approach", std.mem.span(first.band_name));
+    try t.expectEqual(@as(f64, 12000), first.scale);
 }
 
 test "an archive's entries classify by name, like a folder's files" {
@@ -1078,9 +1210,9 @@ test "a library is named by the agency that made it" {
     try t.expect(s.producer != null);
     try t.expectEqualStrings("US", &s.producer.?);
 
-    const json = try toJson(a, &s);
-    defer a.free(json);
-    try t.expect(std.mem.indexOf(u8, json, "\"producer\":\"US\"") != null);
+    const r = try toRead(a, &s);
+    defer r.free();
+    try t.expectEqualStrings("US", std.mem.span(r.found.producer));
 }
 
 test "charts from two offices have no one name" {
@@ -1092,11 +1224,10 @@ test "charts from two offices have no one name" {
     defer s.deinit();
     try t.expect(s.producer == null);
 
-    // And the field is left out rather than sent empty, so a host cannot read
-    // a blank producer as an agency.
-    const json = try toJson(a, &s);
-    defer a.free(json);
-    try t.expect(std.mem.indexOf(u8, json, "producer") == null);
+    // The read states no producer with an empty string.
+    const r = try toRead(a, &s);
+    defer r.free();
+    try t.expectEqualStrings("", std.mem.span(r.found.producer));
 }
 
 test "a scan reaches S-101 cells in a subfolder" {
@@ -1134,72 +1265,4 @@ test "a folder of pictures has no producer to report" {
     });
     defer s.deinit();
     try t.expect(s.producer == null);
-}
-
-test "the typed scan says what the JSON says" {
-    var tmp = t.tmpDir(.{ .iterate = true });
-    defer tmp.cleanup();
-    const io = std.Io.Threaded.global_single_threaded.io();
-    try writeTestTree(&tmp, io);
-    const root = try tmpRoot(&tmp);
-    defer t.allocator.free(root);
-
-    var s = try scan(t.allocator, io, root, null, null);
-    defer s.deinit();
-
-    const json = try toJson(t.allocator, &s);
-    defer t.allocator.free(json);
-    var arena = std.heap.ArenaAllocator.init(t.allocator);
-    defer arena.deinit();
-    const doc = try std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), json, .{});
-    const o = doc.object;
-
-    const r = try toRead(t.allocator, &s);
-    defer r.free();
-
-    try t.expectEqualStrings(o.get("root").?.string, std.mem.span(r.found.root));
-    try t.expectEqual(@as(usize, @intCast(o.get("updates").?.integer)), r.found.updates);
-    try t.expectEqual(@as(usize, @intCast(o.get("other").?.integer)), r.found.other);
-    try t.expectEqual(@as(usize, @intCast(o.get("refused").?.integer)), r.found.refused);
-    try t.expectEqual(@as(usize, @intCast(o.get("sources").?.integer)), r.found.sources);
-    try t.expectEqual(@as(u64, @intCast(o.get("bytes").?.integer)), r.found.bytes);
-    // The JSON leaves the producer out when the charts disagree; the read
-    // says so with an empty string.
-    if (o.get("producer")) |p| {
-        try t.expectEqualStrings(p.string, std.mem.span(r.found.producer));
-    } else {
-        try t.expectEqualStrings("", std.mem.span(r.found.producer));
-    }
-
-    try expectSameFiles(o.get("cells").?.array.items, r.cells);
-    try expectSameFiles(o.get("raster").?.array.items, r.raster);
-}
-
-/// One of the scan's two lists, compared field for field against the JSON.
-fn expectSameFiles(list: []const std.json.Value, got: []const *const File) !void {
-    try t.expectEqual(list.len, got.len);
-    for (list, got) |item, f| {
-        const o = item.object;
-        try t.expectEqualStrings(o.get("path").?.string, std.mem.span(f.path));
-        try t.expectEqualStrings(o.get("name").?.string, std.mem.span(f.name));
-        try t.expectEqualStrings(o.get("kind").?.string, @tagName(f.kind));
-        try t.expectEqual(@as(c_int, @intCast(o.get("band").?.integer)), f.band);
-        try t.expectEqual(@as(u64, @intCast(o.get("bytes").?.integer)), f.bytes);
-        // bandName, scale and the bounds appear only when there is one.
-        if (o.get("bandName")) |b| {
-            try t.expectEqualStrings(b.string, std.mem.span(f.band_name));
-        } else {
-            try t.expectEqualStrings("", std.mem.span(f.band_name));
-        }
-        try t.expectEqual(if (o.get("scale")) |v| v.float else 0, f.scale);
-        if (o.get("west")) |w| {
-            try t.expectEqual(@as(c_int, 1), f.located);
-            try t.expectEqual(w.float, f.west);
-            try t.expectEqual(o.get("south").?.float, f.south);
-            try t.expectEqual(o.get("east").?.float, f.east);
-            try t.expectEqual(o.get("north").?.float, f.north);
-        } else {
-            try t.expectEqual(@as(c_int, 0), f.located);
-        }
-    }
 }

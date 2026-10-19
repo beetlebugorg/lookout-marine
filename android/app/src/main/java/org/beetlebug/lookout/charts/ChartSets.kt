@@ -43,11 +43,24 @@ object ChartSets {
          *  holds no cell with a band in its name. */
         val bandLo: Int,
         val bandHi: Int,
+        /** True when a downloader owns this set rather than the mariner. */
+        val managed: Boolean = false,
+        /** The charts this set holds that another switched-on set draws
+         *  instead. 0 for a set switched off. */
+        val heldBack: Int = 0,
+        /** The files still to prepare: `unprepared` less `refused`. */
+        val toPrepare: Int = 0,
+        /** Files a finished bake of this set did not prepare. */
+        val refused: Int = 0,
+        /** The vector charts by usage band, prepared or not. Band 1 first. */
+        val bandCount: List<Int> = List(6) { 0 },
     ) {
         val name: String get() = path.substringAfterLast('/').ifEmpty { path }
     }
 
-    @Volatile private var handle: Long = 0
+    /** The core's list, for lookout_noaa_open. 0 until [open]. */
+    @Volatile var handle: Long = 0
+        private set
 
     /**
      * Open the list off the shell's store and start the background scans.
@@ -99,8 +112,28 @@ object ChartSets {
      *  union, the list the engine opens. */
     fun compose(): List<String> = Lookout.chartSetsCompose(handle).toList()
 
+    /** Read a set again after a bake wrote into its prepared directory. */
+    fun rescan(path: String): Boolean = Lookout.chartSetsRescan(handle, path)
+
+    /** Mark a set as a downloader's. True when the mark changed. */
+    fun setManaged(path: String, managed: Boolean): Boolean =
+        Lookout.chartSetsSetManaged(handle, path, managed)
+
+    /** The files the core lists to prepare for one set: each that bakes or
+     *  lifts before it draws and has no current prepared chart, less the ones
+     *  a finished bake refused. Empty until the set is scanned. */
+    fun toPrepare(path: String): List<ChartScanRead.ChartFile> =
+        ChartScanRead.decodeFiles(Lookout.chartSetToPrepare(handle, path))
+
+    /** Record that the mariner stopped the prepare of the set at [path]. */
+    fun noteCancel(path: String) = Lookout.chartSetsNoteCancel(handle, path)
+
+    /** Record how the bake [job] of the set at [path] ended. Call once it has
+     *  stopped and before it is freed, then [rescan] the set. */
+    fun noteBake(path: String, job: Long): Boolean = Lookout.chartSetsNoteBake(handle, path, job)
+
     /**
-     * The flat read: eleven strings per set. `internal` so the suite drives the
+     * The flat read: twenty-one strings per set. `internal` so the suite drives the
      * same walk with no core.
      */
     internal fun decode(flat: Array<String>?): List<Set> {
@@ -121,6 +154,11 @@ object ChartSets {
                     bytes = flat[k + 8].toLongOrNull() ?: 0L,
                     bandLo = flat[k + 9].toIntOrNull() ?: 0,
                     bandHi = flat[k + 10].toIntOrNull() ?: 0,
+                    managed = flat[k + 11] != "0",
+                    heldBack = flat[k + 12].toIntOrNull() ?: 0,
+                    toPrepare = flat[k + 13].toIntOrNull() ?: 0,
+                    refused = flat[k + 14].toIntOrNull() ?: 0,
+                    bandCount = List(6) { b -> flat[k + 15 + b].toIntOrNull() ?: 0 },
                 ),
             )
             k += FIELDS
@@ -128,5 +166,5 @@ object ChartSets {
         return out
     }
 
-    private const val FIELDS = 11
+    private const val FIELDS = 21
 }

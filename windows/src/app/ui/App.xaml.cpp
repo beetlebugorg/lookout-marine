@@ -4,7 +4,7 @@
 
 #include <microsoft.ui.xaml.window.h> // IWindowNative, to publish the HWND
 // App's InitializeComponent + wWinMain live in App.xaml.g.hpp, which
-// XamlTypeInfo.g.cpp compiles — see winrt_glue.cpp. App is not in the IDL, so
+// XamlTypeInfo.g.cpp compiles: see winrt_glue.cpp. App is not in the IDL, so
 // there is no App.g.cpp factory.
 
 using namespace winrt;

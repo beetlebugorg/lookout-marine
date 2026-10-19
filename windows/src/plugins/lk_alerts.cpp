@@ -1,4 +1,4 @@
-/* lk_alerts — see lk_alerts.h. */
+/* lk_alerts: see lk_alerts.h. */
 #include "lk_alerts.h"
 
 namespace lkw

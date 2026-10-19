@@ -4,12 +4,18 @@
 //! hosts need no allocator.
 //!
 //! The rest of the ABI is in capi/: bake.zig, chartsets.zig, format.zig,
-//! frame.zig, library.zig, pick.zig, plugins.zig and settings.zig.
+//! frame.zig, library.zig, noaa.zig, pick.zig, plugins.zig, settings.zig and
+//! setup.zig.
 const std = @import("std");
+
+/// glibc places static TLS inside each thread's stack, and std's default
+/// 256 KB per-thread signal stack is static TLS.
+pub const std_options: std.Options = .{ .signal_stack_size = 128 * 1024 };
 const builtin = @import("builtin");
 
 const lk = @import("root.zig");
 const cc = @import("c.zig").c;
+const owned = @import("owned");
 
 /// The plugin host, for the install surface below. Present only when the
 /// build has one; every entry point checks, so a build without plugins keeps
@@ -196,7 +202,7 @@ export fn lookout_set_cache_dir(path: [*:0]const u8) void {
 export fn lookout_fit_chart(h: ?*lookout, out: *lookout_view) void {
     const l = locked(h);
     defer l.apiUnlock();
-    out.* = fromView(l.fitChart());
+    owned.fill(lookout_view, out, fromView(l.fitChart()));
 }
 /// The view to open with when the host has NOTHING saved: the library framed,
 /// pulled back to an overview zoom. Pair with lookout_set_view; a host that has
@@ -204,7 +210,7 @@ export fn lookout_fit_chart(h: ?*lookout, out: *lookout_view) void {
 export fn lookout_default_view(h: ?*lookout, out: *lookout_view) void {
     const l = locked(h);
     defer l.apiUnlock();
-    out.* = fromView(l.defaultView());
+    owned.fill(lookout_view, out, fromView(l.defaultView()));
 }
 export fn lookout_set_view(h: ?*lookout, v: *const lookout_view) void {
     const l = locked(h);
@@ -214,7 +220,7 @@ export fn lookout_set_view(h: ?*lookout, v: *const lookout_view) void {
 export fn lookout_get_view(h: ?*lookout, out: *lookout_view) void {
     const l = locked(h);
     defer l.apiUnlock();
-    out.* = fromView(l.view());
+    owned.fill(lookout_view, out, fromView(l.view()));
 }
 export fn lookout_resize(h: ?*lookout, width: u32, height: u32) c_int {
     const l = locked(h);
@@ -257,6 +263,11 @@ export fn lookout_zoom_at_logical(h: ?*lookout, dzoom: f64, x_pt: f32, y_pt: f32
     defer l.apiUnlock();
     l.zoomAtLogical(dzoom, x_pt, y_pt);
 }
+export fn lookout_zoom_about_logical(h: ?*lookout, dzoom: f64, x_pt: f32, y_pt: f32) void {
+    const l = locked(h);
+    defer l.apiUnlock();
+    l.zoomAboutLogical(dzoom, x_pt, y_pt);
+}
 export fn lookout_screen_to_geo(h: ?*lookout, x_px: f32, y_px: f32, lon: *f64, lat: *f64) void {
     const l = locked(h);
     defer l.apiUnlock();
@@ -274,12 +285,12 @@ export fn lookout_geo_to_screen(h: ?*lookout, lon: f64, lat: f64, x_px: *f32, y_
 
 // ---- mariner (ALL S-52 settings) -------------------------------------------
 export fn lookout_mariner_defaults(m: *cc.tile57_mariner) void {
-    cc.tile57_mariner_defaults(m);
+    owned.fill(cc.tile57_mariner, m, lk.marinerDefaults());
 }
 export fn lookout_get_mariner(h: ?*lookout, out: *cc.tile57_mariner) void {
     const l = locked(h);
     defer l.apiUnlock();
-    out.* = l.getMariner();
+    owned.fill(cc.tile57_mariner, out, l.getMariner());
 }
 export fn lookout_set_mariner(h: ?*lookout, m: *const cc.tile57_mariner) void {
     const l = locked(h);
@@ -292,6 +303,21 @@ export fn lookout_label_font_covers(codepoint: u32) c_int {
     var err: cc.tile57_error = undefined;
     if (cc.tile57_label_font_covers(codepoint, &covers, &err) != cc.TILE57_OK) return 0;
     return @intFromBool(covers);
+}
+
+/// One S-52 colour by token, for a shell drawing its own chart legend.
+/// See lookout.h.
+export fn lookout_s52_color(token: ?[*:0]const u8, scheme: u32, out: ?*[4]f32) c_int {
+    const t = token orelse return 0;
+    const dst = out orelse return 0;
+    // The header declares a uint32_t. translate-c tags tile57_scheme signed under
+    // the MSVC ABI and unsigned under Apple's, so the cast is what makes the
+    // call build for both. A value past the signed range is refused here
+    // rather than narrowed into a scheme that exists.
+    if (scheme > std.math.maxInt(i32)) return 0;
+    const rgba = lk.s52Color(std.mem.span(t), @intCast(scheme)) orelse return 0;
+    dst.* = rgba;
+    return 1;
 }
 
 /// True when a face can draw a codepoint. See lookout.h.
@@ -574,14 +600,14 @@ pub const lookout_marker = extern struct {
 };
 
 fn fillMarker(out: *lookout_marker, m: *const @import("markers.zig").Marker) void {
-    out.* = .{
+    owned.fill(lookout_marker, out, .{
         .id = m.id,
         .lon = m.lon,
         .lat = m.lat,
         .name = m.name.ptr,
         .name_len = m.name.len,
         .dropped_ms = m.dropped_ms,
-    };
+    });
 }
 
 /// Drop a marker at a geographic point, named at once. Returns its id, or 0
@@ -648,11 +674,13 @@ comptime {
     _ = @import("capi/format.zig");
     _ = @import("capi/frame.zig");
     _ = @import("capi/library.zig");
+    _ = @import("capi/noaa.zig");
     _ = @import("capi/pick.zig");
     _ = @import("capi/bake.zig");
     _ = @import("capi/chartsets.zig");
     _ = @import("capi/settings.zig");
     _ = @import("capi/plugins.zig");
+    _ = @import("capi/setup.zig");
     // The Android Java shell's JNI natives ride in the same archive (they
     // wrap this C ABI for org.beetlebug.lookout.Lookout). Only an android
     // target analyzes the file: it @cImports the NDK's jni.h, which only the

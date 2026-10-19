@@ -1,4 +1,4 @@
-/* util/json.h — a small JSON reader for the documents the core hands over as
+/* util/json.h: a small JSON reader for the documents the core hands over as
  * text.
  *
  * Most of the C API answers in structs. Three payloads do not, because their
@@ -31,7 +31,7 @@ typedef enum {
 typedef struct _LkJson LkJson;
 
 /* Parse `text`. NULL when it is not JSON, or when trailing junk follows the
- * value — a half-parsed report is worse than none. */
+ * value, a half-parsed report is worse than none. */
 LkJson *lk_json_parse (const char *text);
 void    lk_json_free (LkJson *node);
 
@@ -59,7 +59,7 @@ const LkJson *lk_json_at (const LkJson *node, guint index);
  * wants the cell's own digits asks for lk_json_text. */
 const char *lk_json_string (const LkJson *node);
 
-/* Any scalar as the text the cell wrote — a number keeps its own digits, so
+/* Any scalar as the text the cell wrote, a number keeps its own digits, so
  * "17" does not come back "17.0". Empty for a container or a NULL node. */
 const char *lk_json_text (const LkJson *node);
 
@@ -68,7 +68,7 @@ gboolean lk_json_bool (const LkJson *node, gboolean fallback);
 
 /* ---- member shorthands -------------------------------------------------- */
 
-/* NULL for a missing, null, or empty string member — the callers all treat an
+/* NULL for a missing, null, or empty string member, the callers all treat an
  * empty title the same as no title. */
 const char *lk_json_member_string (const LkJson *node, const char *name);
 int         lk_json_member_int (const LkJson *node, const char *name, int fallback);

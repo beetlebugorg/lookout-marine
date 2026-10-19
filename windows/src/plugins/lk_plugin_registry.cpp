@@ -1,4 +1,4 @@
-/* lk_plugin_registry — see lk_plugin_registry.h. */
+/* lk_plugin_registry: see lk_plugin_registry.h. */
 #include "lk_plugin_registry.h"
 
 #include <cmath>

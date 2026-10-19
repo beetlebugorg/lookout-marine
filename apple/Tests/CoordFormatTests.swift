@@ -80,6 +80,36 @@ final class CoordFormatTests: XCTestCase {
                        "38°58.578'N 076°28.920'W")
     }
 
+    // MARK: The phone's shorter forms
+
+    /// Two decimals of minutes, and the same degrees and hemispheres the full
+    /// form states.
+    func testTheCompactPositionKeepsDegreesAndHemispheres() {
+        XCTAssertEqual(CoordFormat.positionCompact(lat: 38.9763, lon: -76.482),
+                       "38°58.58'N 076°28.92'W")
+        XCTAssertEqual(CoordFormat.positionCompact(lat: -33.8688, lon: 151.2093),
+                       "33°52.13'S 151°12.56'E")
+    }
+
+    /// Minutes that round to 60 go to the next degree.
+    func testTheCompactPositionCarriesASixtiethMinute() {
+        XCTAssertEqual(CoordFormat.positionCompact(lat: 38.999999, lon: -0.0000001),
+                       "39°00.00'N 000°00.00'W")
+    }
+
+    /// Below a million the scale reads as it always has.
+    func testTheCompactScaleIsTheFullNumberBelowAMillion() {
+        XCTAssertEqual(CoordFormat.scaleCompact(13267.4), CoordFormat.scale(13267.4))
+        XCTAssertEqual(CoordFormat.scaleCompact(999_999), CoordFormat.scale(999_999))
+    }
+
+    /// From a million up it reads in millions, to three significant figures.
+    func testTheCompactScaleReadsInMillions() {
+        XCTAssertEqual(CoordFormat.scaleCompact(4_802_073), "1:4.80M")
+        XCTAssertEqual(CoordFormat.scaleCompact(1_000_000), "1:1.00M")
+        XCTAssertEqual(CoordFormat.scaleCompact(123_400_000), "1:123M")
+    }
+
     // MARK: Scale
 
     /// A denominator that is not a scale reads as no scale, never as 1:0.

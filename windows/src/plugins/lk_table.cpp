@@ -1,4 +1,4 @@
-/* lk_table — see lk_table.h. */
+/* lk_table: see lk_table.h. */
 #include "lk_table.h"
 
 #include <cmath>
@@ -98,8 +98,8 @@ namespace lkw
         case LOOKOUT_COLUMN_DURATION: return { FormatDuration(cell.number), false };
         default:
             /* A plain number is written whole when it is whole: "%g" alone
-             * turns an identifier past six digits — an MMSI in a number
-             * column — into 3.67123e+08, which is not a number anyone can
+             * turns an identifier past six digits: an MMSI in a number
+             * column: into 3.67123e+08, which is not a number anyone can
              * read back to a coastguard. */
             return { Trimmed(cell.number), false };
         }

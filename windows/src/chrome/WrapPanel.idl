@@ -1,0 +1,11 @@
+namespace LookoutMarine
+{
+    // Lays its children out left to right, and starts a new row when the
+    // next child runs past the width it is given.
+    runtimeclass WrapPanel : Microsoft.UI.Xaml.Controls.Panel
+    {
+        WrapPanel();
+        // The gap between children in a row, and between rows.
+        Double Spacing;
+    }
+}

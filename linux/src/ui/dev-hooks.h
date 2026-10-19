@@ -1,4 +1,4 @@
-/* ui/dev-hooks.h — the LOOKOUT_* development hooks.
+/* ui/dev-hooks.h: the LOOKOUT_* development hooks.
  *
  * The window applies them once it is built. Each hook names a change to make
  * after launch, so a screenshot run stages the app without a hand on the mouse.

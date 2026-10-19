@@ -1,4 +1,4 @@
-/* ui/hud/scale-bar.h — the distance bar at the bottom left of the chart.
+/* ui/hud/scale-bar.h: the distance bar at the bottom left of the chart.
  *
  * Four alternating segments under a round distance, so a mariner reads a
  * length off the chart without a scale in the head.

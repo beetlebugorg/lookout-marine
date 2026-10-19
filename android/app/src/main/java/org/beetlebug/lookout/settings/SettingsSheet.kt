@@ -3,6 +3,7 @@ package org.beetlebug.lookout.settings
 import org.beetlebug.lookout.plugins.PluginSettingsController
 
 import org.beetlebug.lookout.charts.ChartLinkController
+import org.beetlebug.lookout.charts.NoaaController
 import org.beetlebug.lookout.charts.RasterController
 import org.beetlebug.lookout.plugins.TableController
 
@@ -59,6 +60,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import org.beetlebug.lookout.charts.ChartsModel
 import org.beetlebug.lookout.charts.ChartsSection
@@ -109,6 +111,7 @@ fun SettingsSheet(
     tables: TableController,
     links: ChartLinkController,
     raster: RasterController,
+    noaa: NoaaController,
     onRequestAccess: () -> Unit,
     onDismiss: () -> Unit,
     initialSection: String? = null,
@@ -129,7 +132,14 @@ fun SettingsSheet(
     // so a stale selection falls back rather than showing a blank pane.
     val current = open?.takeIf { id -> sections.any { it.id == id } }
 
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+    // As wide as the screen. Material caps a bottom sheet at 640dp, which on a
+    // tablet left the two-pane form in a column down the middle with the chart
+    // showing either side of it, and a settings form is not a dialog.
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        sheetMaxWidth = Dp.Unspecified,
+    ) {
         // INSIDE the sheet's content, not beside it: ModalBottomSheet registers
         // its own back callback to dismiss itself, and the dispatcher gives the
         // most deeply composed enabled callback priority. Registered outside,
@@ -162,14 +172,14 @@ fun SettingsSheet(
                     VerticalDivider()
                     Box(Modifier.weight(1f)) {
                         current?.let {
-                            SectionPane(it, m, charts, plugins, tables, links, raster, registry, onRequestAccess, null, onDismiss)
+                            SectionPane(it, m, charts, plugins, tables, links, raster, noaa, registry, onRequestAccess, null, onDismiss)
                         }
                     }
                 }
             } else if (current == null) {
                 SectionList(sections = sections, selected = null, onOpen = { open = it })
             } else {
-                SectionPane(current, m, charts, plugins, tables, links, raster, registry, onRequestAccess, { open = null }, onDismiss)
+                SectionPane(current, m, charts, plugins, tables, links, raster, noaa, registry, onRequestAccess, { open = null }, onDismiss)
             }
         }
     }
@@ -274,6 +284,7 @@ private fun SectionPane(
     tables: TableController,
     links: ChartLinkController,
     raster: RasterController,
+    noaa: NoaaController,
     registry: PluginRegistry,
     onRequestAccess: () -> Unit,
     onBack: (() -> Unit)?,
@@ -341,7 +352,7 @@ private fun SectionPane(
                 "display" -> DisplaySection(m)
                 "depths" -> DepthsSection(m)
                 "text" -> SymbolsSection(m)
-                "charts" -> ChartsSection(charts, links, raster, onRequestAccess)
+                "charts" -> ChartsSection(charts, links, raster, noaa, onRequestAccess)
                 "plugins" -> PluginsManageSection(registry, plugins)
                 "advanced" -> AdvancedSection(m, onOpenLicenses = { licenses = true })
             }

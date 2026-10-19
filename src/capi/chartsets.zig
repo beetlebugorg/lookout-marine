@@ -10,6 +10,7 @@ const sets = @import("../chartsets.zig");
 const root = @import("../root.zig"); // the inventory the scan asks through
 const settings = @import("../settings.zig");
 const library = @import("../library.zig");
+const bakejob = @import("../bakejob.zig");
 
 const gpa = capi.gpa;
 const capi_io = capi.capi_io;
@@ -99,6 +100,11 @@ export fn lookout_chart_sets_is_on(s: ?*lookout_chart_sets, path: ?[*:0]const u8
     return @intFromBool(x.isOn(span(path)));
 }
 
+export fn lookout_chart_sets_set_managed(s: ?*lookout_chart_sets, path: ?[*:0]const u8, managed: c_int) c_int {
+    const x = s orelse return 0;
+    return @intFromBool(x.setManaged(span(path), managed != 0));
+}
+
 /// The charts to open. Borrowed until the next call that changes the list.
 export fn lookout_chart_sets_compose(s: ?*lookout_chart_sets, out_n: ?*usize) ?[*]const [*:0]const u8 {
     const x = s orelse {
@@ -109,4 +115,41 @@ export fn lookout_chart_sets_compose(s: ?*lookout_chart_sets, out_n: ?*usize) ?[
     count(out_n, paths.len);
     if (paths.len == 0) return null;
     return paths.ptr;
+}
+
+/// The files one set still has to prepare. See lookout-library.h.
+export fn lookout_chart_set_to_prepare(
+    s: ?*lookout_chart_sets,
+    path: ?[*:0]const u8,
+    out_n: ?*usize,
+) ?[*]const *const library.File {
+    const x = s orelse {
+        count(out_n, 0);
+        return null;
+    };
+    const list = x.toPrepare(span(path));
+    count(out_n, list.len);
+    if (list.len == 0) return null;
+    return list.ptr;
+}
+
+/// Record that the mariner stopped a set's prepare.
+export fn lookout_chart_sets_note_cancel(s: ?*lookout_chart_sets, path: ?[*:0]const u8) void {
+    const x = s orelse return;
+    x.noteCancel(span(path));
+}
+
+/// Record how a bake of one set ended. 0 while the bake runs. See
+/// lookout-library.h.
+export fn lookout_chart_sets_note_bake(
+    s: ?*lookout_chart_sets,
+    path: ?[*:0]const u8,
+    b: ?*const bakejob.Job,
+) c_int {
+    const x = s orelse return 0;
+    const job = b orelse return 0;
+    if (job.isRunning()) return 0;
+    const finished = job.poll().ok != 0 and !job.cancelled.load(.acquire);
+    x.noteBake(span(path), job.ins, finished);
+    return 1;
 }

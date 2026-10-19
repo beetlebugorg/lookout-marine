@@ -27,12 +27,16 @@ class ChartScanTest {
     /**
      * A path that is not a directory is taken as one file, because the open
      * panel takes one archive as readily as a folder of them. A path that is
-     * not there is then one file that is not a chart.
+     * not there holds no charts.
+     *
+     * The `other` count is not read here. Every shell scans through
+     * lookout_scan_read, which asks the engine for the inventory, and the
+     * engine lists the files it can read something from. A file it does not
+     * recognise is never in the answer, so nothing counts it.
      */
-    @Test fun aPathThatIsNotThereReadsAsOneFileThatIsNotAChart() {
+    @Test fun aPathThatIsNotThereReadsAsNoCharts() {
         val scan = ChartScanRead.read("/no/such/folder", zip = false)!!
         assertTrue(scan.files.isEmpty())
-        assertEquals(1, scan.other)
     }
 
     /** An empty folder is a read with no files, and the root it was given. */
@@ -42,12 +46,11 @@ class ChartScanTest {
         assertTrue(scan!!.files.isEmpty())
     }
 
-    /** A file that is not a chart is counted and never listed as one. */
-    @Test fun aFileThatIsNotAChartIsCountedAsOther() {
+    /** A file that is not a chart is never listed as one. */
+    @Test fun aFileThatIsNotAChartIsNotListed() {
         File(dir, "readme.txt").writeText("not a chart")
         val scan = ChartScanRead.read(dir.absolutePath, zip = false)!!
         assertTrue("a text file was listed as a chart", scan.files.none { it.name == "readme" })
-        assertTrue("it was not counted", scan.other >= 1)
     }
 
     // ---- the order --------------------------------------------------------

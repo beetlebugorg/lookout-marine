@@ -1,6 +1,6 @@
 // The chart context menu and the mariner's markers. Mirrors the macOS shell
 // (AppModel.openChartMenu / dropMarker / rename): every item acts on the
-// POINT the menu was raised at — not the map centre, and not where the cursor
+// POINT the menu was raised at: not the map centre, and not where the cursor
 // drifts to afterwards. The core owns the markers, names each drop itself
 // ("Mark 1", …) and draws them in mariner magenta; the shell adds no drawing
 // and stores nothing.
@@ -69,7 +69,7 @@ namespace winrt::LookoutMarine::implementation
 
         menu.Items().Append(Controls::MenuFlyoutSeparator{});
 
-        // The point's coordinates in the mariner's own format — the one the
+        // The point's coordinates in the mariner's own format: the one the
         // readout, the deck log and the radio all use.
         Controls::MenuFlyoutItem copy;
         copy.Text(L"Copy Position");
@@ -86,7 +86,7 @@ namespace winrt::LookoutMarine::implementation
     }
 
     // Rename is the separate, unhurried action. Enter commits (the dialog's
-    // primary button is the default); an EMPTY field keeps the old name — the
+    // primary button is the default); an EMPTY field keeps the old name: the
     // core decides that, so every shell agrees on what an emptied field means.
     fire_and_forget MainWindow::RenameMarkerDialog(uint64_t id, winrt::hstring current)
     {

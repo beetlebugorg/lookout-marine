@@ -67,7 +67,7 @@ fn capabilities(a: std.mem.Allocator, e: *const Entry) ![]const *const pl.Capabi
         try install.writeSentence(&sentence, a, cap, &e.manifest);
 
         const allows = try allowlist(a, &e.manifest, cap);
-        try recs.append(a, .{
+        pl.fill(pl.CapabilityRec, try recs.addOne(a), .{
             .capability = .{
                 .name = try pl.str(a, cap.name()),
                 .sentence = try pl.str(a, sentence.items),
@@ -109,7 +109,7 @@ fn allowlist(
 fn settings(a: std.mem.Allocator, e: *const Entry) ![]const *const pl.Setting {
     const recs = try a.alloc(pl.SettingRec, e.manifest.settings.len + e.manifest.lists.len);
     for (e.manifest.settings, e.values, recs[0..e.manifest.settings.len]) |f, v, *dst| {
-        dst.* = .{
+        pl.fill(pl.SettingRec, dst, .{
             .setting = scalar(try field(a, f, v)),
             .fields = undefined,
             .fields_len = 0,
@@ -117,10 +117,10 @@ fn settings(a: std.mem.Allocator, e: *const Entry) ![]const *const pl.Setting {
             .items_len = 0,
             .services = undefined,
             .services_len = 0,
-        };
+        });
     }
     for (e.manifest.lists, e.rows, recs[e.manifest.settings.len..]) |l, rows_json, *dst| {
-        dst.* = try listRec(a, l, rows_json);
+        pl.fill(pl.SettingRec, dst, try listRec(a, l, rows_json));
     }
     return pl.published(pl.SettingRec, "setting", a, recs);
 }
@@ -163,7 +163,7 @@ fn listRec(a: std.mem.Allocator, l: List, rows_json: []const u8) !pl.SettingRec 
     const none = try pl.str(a, "");
     const field_recs = try a.alloc(pl.SettingRec, l.items.len);
     for (l.items, field_recs) |f, *dst| {
-        dst.* = .{
+        pl.fill(pl.SettingRec, dst, .{
             .setting = try field(a, f, f.default_value),
             .fields = undefined,
             .fields_len = 0,
@@ -171,7 +171,7 @@ fn listRec(a: std.mem.Allocator, l: List, rows_json: []const u8) !pl.SettingRec 
             .items_len = 0,
             .services = undefined,
             .services_len = 0,
-        };
+        });
     }
     const fields = try pl.published(pl.SettingRec, "setting", a, field_recs);
     const items = try listItems(a, fields, rows_json);
@@ -246,7 +246,7 @@ fn values(
     object: std.json.ObjectMap,
 ) ![]const *const pl.Value {
     const vals = try a.alloc(pl.Value, fields.len);
-    for (fields, vals) |f, *dst| dst.* = try value(a, f, object.get(std.mem.span(f.key)));
+    for (fields, vals) |f, *dst| pl.fill(pl.Value, dst, try value(a, f, object.get(std.mem.span(f.key))));
     const out = try a.alloc(*const pl.Value, vals.len);
     for (vals, out) |*v, *dst| dst.* = v;
     return out;
@@ -299,7 +299,7 @@ fn presetValues(
             if (doc == .object) {
                 for (fields) |f| {
                     const v = doc.object.get(std.mem.span(f.key)) orelse continue;
-                    try vals.append(a, try value(a, f, v));
+                    pl.fill(pl.Value, try vals.addOne(a), try value(a, f, v));
                 }
             }
         } else |_| {}

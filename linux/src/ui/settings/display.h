@@ -1,4 +1,4 @@
-/* ui/settings/display.h — the Display page.
+/* ui/settings/display.h: the Display page.
  *
  * The colour scheme, the display category, and the soundings rule.
  */

@@ -5,7 +5,7 @@
 // alarm sounds, repeats until it is acknowledged, and never times out.
 // Looking at it is not acknowledging it.
 //
-// The watch runs at 1 s whenever a chart is open, independent of any pane —
+// The watch runs at 1 s whenever a chart is open, independent of any pane:
 // a collision alarm must not need the settings window. The list is rebuilt
 // only when the core's seq moves. An unreadable read clears the strip and
 // silences the siren but KEEPS POLLING: stopping would leave the boat deaf
@@ -292,7 +292,7 @@ namespace winrt::LookoutMarine::implementation
 
     void MainWindow::SirenStrike()
     {
-        // Stop, then play: restarted, never overlapped — an overlap goes
+        // Stop, then play: restarted, never overlapped, an overlap goes
         // silent. The system exclamation stands in for a real marine tone,
         // as the macOS shell's system sound does.
         PlaySoundW(nullptr, nullptr, 0);

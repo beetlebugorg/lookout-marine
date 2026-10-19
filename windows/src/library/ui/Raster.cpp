@@ -20,7 +20,7 @@ using lkw::WithAlpha;
 
 // The pill reports the raster chart, never the ENC: amber only while the set
 // is switched off; hiding the ENC keeps it blue (the picture is still drawn).
-// Both come out of the one palette (lk_format.h) — amber stays amber at night
+// Both come out of the one palette (lk_format.h): amber stays amber at night
 // because it means something, and the accent lightens to read on dark.
 
 namespace winrt::LookoutMarine::implementation
@@ -145,7 +145,7 @@ namespace winrt::LookoutMarine::implementation
         menu.ShowAt(RasterPill());
     }
 
-    // Ctrl+I. With nothing installed the step means "I want a picture here" —
+    // Ctrl+I. With nothing installed the step means "I want a picture here":
     // open the picker instead of doing nothing.
     void MainWindow::CycleRaster()
     {
@@ -168,7 +168,7 @@ namespace winrt::LookoutMarine::implementation
         /* A BSB/KAP sheet is a picture of a chart, not a chart the engine can
          * serve tiles from: it bakes first (decode and warp, tile57), and the
          * baked output comes back through this function. Ready files carry on
-         * below in the same call — picking a mixed folder must add what can be
+         * below in the same call: picking a mixed folder must add what can be
          * added and bake the rest, not fail half of it. */
         std::vector<std::string> ready;
         std::vector<std::string> sources;
@@ -211,7 +211,10 @@ namespace winrt::LookoutMarine::implementation
         // picked those files while looking at this water.
         if (!last_added.empty())
         {
-            std::string want = lookout_raster_set_name_for(last_added.c_str(), nullptr);
+            // The name has no NUL terminator. Read it by its length.
+            size_t want_len = 0;
+            char const *want_at = lookout_raster_set_name_for(last_added.c_str(), &want_len);
+            std::string want = want_at != nullptr ? std::string(want_at, want_len) : std::string();
             int count = lk_controller_raster_set_count(controller);
             for (int i = 0; i < count; ++i)
             {
@@ -251,7 +254,7 @@ namespace winrt::LookoutMarine::implementation
         auto lifetime = get_strong();
         Windows::Storage::Pickers::FileOpenPicker picker;
         picker.as<::IInitializeWithWindow>()->Initialize(top_hwnd);
-        // .mbtiles first as the hint; * because the extension is only a hint —
+        // .mbtiles first as the hint; * because the extension is only a hint:
         // the engine decides, and greying out the mariner's own downloads
         // would be worse than letting it say no.
         picker.FileTypeFilter().Append(L".mbtiles");
@@ -301,13 +304,13 @@ namespace winrt::LookoutMarine::implementation
     // ---- re-install at every open -------------------------------------------
 
     // A raster chart is attached to a lookout handle, and the open destroyed
-    // the old one — so the stored list is installed again with every chart,
+    // the old one, so the stored list is installed again with every chart,
     // which is also what carries it across a restart. Failures are logged,
     // never alerted: a missing SD card must not become a dialog at every
     // launch.
     /* Forget every stored raster chart, and the per-set hidden state with it
      * (the reference's clearRasterCharts). The picture on screen is left
-     * alone — the store is what the NEXT open re-installs from, and that is
+     * alone: the store is what the NEXT open re-installs from, and that is
      * the moment this takes effect. */
     void MainWindow::ForgetRasterCharts()
     {
@@ -350,7 +353,7 @@ namespace winrt::LookoutMarine::implementation
     // Put back which raster sets the mariner had drawn, then the saved
     // ENC-hidden switch. Adding a source draws its set, which is right for a
     // chart just picked and wrong for one being re-installed at launch, so
-    // every open has to correct it — before the first frame, or a set the
+    // every open has to correct it: before the first frame, or a set the
     // mariner switched off flashes on screen.
     //
     // Two passes. Hiding first and showing second is what keeps the election:
@@ -388,7 +391,7 @@ namespace winrt::LookoutMarine::implementation
             // With no survey open, the imagery IS the chart, and switching a
             // set off no longer means what it meant when it was said: the
             // mariner hid it to see the ENC underneath, and obeying that now
-            // leaves a blank sea. The set covering this water comes back on —
+            // leaves a blank sea. The set covering this water comes back on:
             // named in the pill and one click from off again, which a blank
             // screen is not. What they SAVED is not rewritten; add ENC charts
             // back and the set they hid is hidden again.
@@ -415,8 +418,8 @@ namespace winrt::LookoutMarine::implementation
     }
 
     // Record the engine's per-set drawn state, by name. Read back from the
-    // engine rather than tracked here: it owns the election — showing one set
-    // turns off the sets covering the same water — so what it says after the
+    // engine rather than tracked here: it owns the election, showing one set
+    // turns off the sets covering the same water, so what it says after the
     // change is the only account that can be right.
     void MainWindow::SaveRasterShown()
     {

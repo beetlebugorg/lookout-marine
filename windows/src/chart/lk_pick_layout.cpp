@@ -1,4 +1,4 @@
-/* lk_pick_layout — see lk_pick_layout.h. */
+/* lk_pick_layout: see lk_pick_layout.h. */
 #include "lk_pick_layout.h"
 
 #include <algorithm>

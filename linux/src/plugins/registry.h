@@ -1,9 +1,9 @@
-/* plugins/registry.h — the mariner's controls over the wasm plugins.
+/* plugins/registry.h: the mariner's controls over the wasm plugins.
  *
  * A plugin declares a settings schema in its manifest; the core hands the whole
  * registry over through lookout_plugins_read, and this turns that into
  * something the settings window can draw controls from. The shell knows nothing
- * about what any plugin does — a number field with a unit and a range, a toggle,
+ * about what any plugin does: a number field with a unit and a range, a toggle,
  * a text box, and a list the mariner adds rows to, is the whole vocabulary.
  *
  * The mariner never meets the plugin system. A field names the SECTION of the
@@ -15,7 +15,7 @@
  * through lookout_plugin_config_set, which the plugin handles live: no restart.
  * They are saved as the config object the plugin last accepted (see model/store.h).
  *
- * A LIST is a setting the mariner adds ROWS to — the NMEA connections are the
+ * A LIST is a setting the mariner adds ROWS to, the NMEA connections are the
  * first. The rows are the shell's: it assigns each one an id when it is added,
  * keeps the id for the row's whole life, and sends the whole array on every
  * edit. The plugin reports each row's state back under the same id, which is how
@@ -47,7 +47,7 @@ typedef struct {
   const char                 *placeholder;   /* ghost text for an empty text control; "" when none */
 } LkPluginField;
 
-/* One heading's worth of controls inside one settings section — the unit the
+/* One heading's worth of controls inside one settings section, the unit the
  * window draws, and the unit "Reset to defaults" acts on. A plugin whose schema
  * spans sections contributes one of these to each. */
 typedef struct {
@@ -137,7 +137,7 @@ void   lk_plugins_set_value (LkPlugins *self, const char *plugin_id, const char 
 /* Put one group back on the defaults its manifest declared. The group is what
  * the mariner sees, so it is what the reset acts on: resetting the collision
  * alarm must not move the target vectors in another section. A LIST is not
- * touched — a reset puts controls back, it does not throw away the connections
+ * touched. A reset puts controls back. It does not throw away the connections
  * the mariner typed in, which nothing else could get back. */
 void     lk_plugins_reset_group (LkPlugins *self, const LkPluginGroup *group);
 gboolean lk_plugins_group_changed (LkPlugins *self, const LkPluginGroup *group);
@@ -183,7 +183,7 @@ void lk_plugins_set_row_toggle (LkPlugins *self, const LkPluginList *list,
                                 const char *row_id, const char *key, gboolean on);
 
 /* What one row is doing, in the plugin's own words: "Connected · 44 msg/s".
- * NULL when the plugin says nothing about that row — a connection it has not
+ * NULL when the plugin says nothing about that row, a connection it has not
  * reached yet. *out_css_class (NULL to ignore) receives the GTK style class the
  * line reads in: "success" while it works, "warning" while it is trying,
  * "error" when it has given up, "dim-label" while it is switched off.

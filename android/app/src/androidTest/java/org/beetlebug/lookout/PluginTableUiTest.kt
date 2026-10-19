@@ -94,6 +94,7 @@ class PluginTableUiTest {
     // ---- the columns --------------------------------------------------------
 
     @Test fun theTableIsTitledAndCarriesItsDeclaredColumns() {
+        assumeWideScreen()
         show()
         compose.onNodeWithText("AIS Targets").assertIsDisplayed()
         compose.onNodeWithText("Vessel").assertIsDisplayed()
@@ -103,6 +104,7 @@ class PluginTableUiTest {
 
     /** The sorted column carries the arrow, and only that one. */
     @Test fun theSortedColumnIsMarkedAndTheOthersAreNot() {
+        assumeWideScreen()
         show(sortKey = "cpa", ascending = true)
         compose.onNodeWithText("CPA ▲").assertIsDisplayed()
         compose.onAllNodes(hasText("▲", substring = true)).assertCountEquals(1)
@@ -110,6 +112,7 @@ class PluginTableUiTest {
     }
 
     @Test fun theArrowFollowsTheDirection() {
+        assumeWideScreen()
         show(sortKey = "cpa", ascending = false)
         compose.onNodeWithText("CPA ▼").assertIsDisplayed()
     }

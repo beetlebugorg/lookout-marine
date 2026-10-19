@@ -1,4 +1,4 @@
-/* lk-test.h — the shared harness for the widget suites.
+/* lk-test.h: the shared harness for the widget suites.
  *
  * Each widget test runs the real widgets against the real model. The engine
  * has no chart open, so every lookout_* call answers its documented empty
@@ -34,7 +34,7 @@ lk_test_isolate (void)
   /* The chrome, not the chart, is under test: no GPU. */
   g_setenv ("GSK_RENDERER", "cairo", TRUE);
   /* No accessibility either. A build runner has no a11y bus, GTK says so with
-     a warning at init, and g_test_init has already made a warning fatal — so
+     a warning at init, and g_test_init has already made a warning fatal, so
      every widget suite trapped there before it ran a single test. GTK names
      this setting in that warning. It must be set before gtk_init reads it. */
   g_setenv ("GTK_A11Y", "none", TRUE);
@@ -136,7 +136,7 @@ lk_test_find_button (GtkWidget *root, const char *text)
   return lk_test_find (root, lk_test_match_button_label, text);
 }
 
-/* Visible along the whole ancestry up to `root` — the widget's own flag and
+/* Visible along the whole ancestry up to `root`, the widget's own flag and
  * every parent's. */
 static inline gboolean
 lk_test_shown (GtkWidget *widget, GtkWidget *root)

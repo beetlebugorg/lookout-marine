@@ -1,3 +1,4 @@
+#include "ui/caption.h"
 #include "ui/chrome/licenses.h"
 
 #include <lookout.h>
@@ -446,12 +447,9 @@ lk_licenses_row (const char *name, const char *summary, const char *trailing,
 
   if (summary[0] != '\0')
     {
-      GtkWidget *label = gtk_label_new (summary);
+      GtkWidget *label = lk_caption (summary);
 
-      gtk_label_set_xalign (GTK_LABEL (label), 0.0);
       gtk_label_set_ellipsize (GTK_LABEL (label), PANGO_ELLIPSIZE_END);
-      gtk_widget_add_css_class (label, "caption");
-      gtk_widget_add_css_class (label, "dim-label");
       gtk_box_append (GTK_BOX (left), label);
     }
 

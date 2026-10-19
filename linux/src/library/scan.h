@@ -52,6 +52,14 @@ gboolean lk_scanned_cell_needs_prepare (const LkScannedCell *cell);
 /* True when the cell is a picture rather than the survey. */
 gboolean lk_scanned_cell_is_raster (const LkScannedCell *cell);
 
+/* The pictures in a pick, as paths: the files that draw through the raster
+ * chart list instead of composing into the chart.
+ *
+ * A BSB or KAP sheet bakes into a chart first, so it belongs to the bake. A
+ * picture inside an archive has an entry name for a path, so the bake
+ * prepares that one instead. Transfer full strv, never NULL. */
+char **lk_chart_set_picture_paths (const LkChartSet *set);
+
 /* Every file under `dir` whose name ends in `suffix`, however it is cased,
  * depth first and sorted by path. Transfer full strv, never NULL. This is the
  * plain disk walk, not a scan: it reads names, not charts. */

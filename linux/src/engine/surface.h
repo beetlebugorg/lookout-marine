@@ -1,4 +1,4 @@
-/* engine/surface.h — the chart's own presentation surface, under GTK.
+/* engine/surface.h: the chart's own presentation surface, under GTK.
  *
  * lookout renders Vulkan and needs a real window-system surface, which GTK4
  * won't hand out per-widget. So the chart gets its own child surface under the
@@ -6,10 +6,10 @@
  * Wayland a wl_subsurface.
  *
  * It composites ABOVE the GTK widget tree, so no widget can draw over the chart
- * (hence edge-attached chrome, and identify results as a popover — separate GDK
+ * (hence edge-attached chrome, and identify results as a popover, separate GDK
  * surfaces still stack above us). It is INPUT-TRANSPARENT (X11: selects no
  * events; Wayland: empty input region), so input reaches the chart widget's own
- * gestures — nothing arrives at this file.
+ * gestures. Nothing arrives at this file.
  *
  * Geometry is in LOGICAL points plus the integer scale factor; each backend
  * converts (X11 multiplies out to pixels, Wayland carries density as buffer scale).

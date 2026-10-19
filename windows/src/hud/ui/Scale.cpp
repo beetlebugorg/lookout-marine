@@ -29,7 +29,7 @@ namespace
 
     // The accent at the strengths this panel wants it, whichever scheme is on.
     // The presets are BUILT ONCE, at construction, so their sublabel is
-    // re-inked by UpdateScalePanel rather than by the build — the panel would
+    // re-inked by UpdateScalePanel rather than by the build: the panel would
     // otherwise wear the theme the app launched in for the rest of the run.
     constexpr uint32_t Alpha(uint32_t argb, uint32_t a)
     {

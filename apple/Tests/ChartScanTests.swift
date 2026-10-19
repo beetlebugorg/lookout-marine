@@ -44,27 +44,24 @@ final class ChartScanTests: XCTestCase {
 
     /// A baked cell is ready to hand to the engine.
     func testABakedCellIsOpenable() throws {
-        let set = try XCTUnwrap(ChartScan.scan(try bakedChartDirectory()))
+        let dir = try bakedChartDirectory()
+        let set = try XCTUnwrap(ChartScan.scan(dir))
         XCTAssertEqual(set.openablePaths.count, 1)
-        XCTAssertEqual(set.needsBake, 0)
         XCTAssertFalse(set.isDerived)
     }
 
-    /// The producer code comes from the charts, not the folder name, and names
-    /// the office in the row.
-    func testTheProducerNamesTheOffice() throws {
-        let set = try XCTUnwrap(ChartScan.scan(try bakedChartDirectory()))
+    /// The producer code comes from the cell names in the folder.
+    func testTheProducerComesFromTheCharts() throws {
+        let dir = try bakedChartDirectory()
+        let set = try XCTUnwrap(ChartScan.scan(dir))
         XCTAssertEqual(set.producer, "US")
-        XCTAssertEqual(set.title, "NOAA")
         XCTAssertEqual(set.name, "charts")
     }
 
     func testASummaryOfWhatIsInstalled() throws {
-        let set = try XCTUnwrap(ChartScan.scan(try bakedChartDirectory()))
+        let dir = try bakedChartDirectory()
+        let set = try XCTUnwrap(ChartScan.scan(dir))
         XCTAssertTrue(set.summary.hasPrefix("1 chart · Harbor · "), set.summary)
-        XCTAssertEqual(set.bandCounts.map(\.band), [5])
-        XCTAssertEqual(set.bandCounts.map(\.name), ["Harbor"])
-        XCTAssertEqual(set.bandCounts.map(\.count), [1])
     }
 
     func testAFolderWithNoChartsIsNotASet() throws {
@@ -111,21 +108,23 @@ final class ChartSetTests: XCTestCase {
                     band: band, bytes: bytes, archived: archived)
     }
 
-    /// An office not listed keeps the folder name. A wrong agency on a chart
-    /// set is worse than a dull one.
-    func testTheOfficeForEachProducerCode() {
-        XCTAssertEqual(ChartSet.agency("US"), "NOAA")
-        XCTAssertEqual(ChartSet.agency("us"), "NOAA")
-        XCTAssertEqual(ChartSet.agency("GB"), "UKHO")
-        XCTAssertEqual(ChartSet.agency("NZ"), "LINZ")
-        XCTAssertNil(ChartSet.agency("XX"))
-        XCTAssertNil(ChartSet.agency(nil))
+    /// The core names the set. A set read without the core keeps its folder
+    /// name.
+    func testTheTitleIsTheCoresElseTheFolderName() {
+        var s = set(producer: "US")
+        XCTAssertEqual(s.title, "ENC_ROOT")
+        s.coreTitle = "NOAA"
+        XCTAssertEqual(s.title, "NOAA")
     }
 
-    func testAnUnlistedProducerKeepsTheFolderName() {
-        XCTAssertEqual(set(producer: "XX").title, "ENC_ROOT")
-        XCTAssertEqual(set(producer: nil).title, "ENC_ROOT")
-        XCTAssertEqual(set(producer: "US").title, "NOAA")
+    /// The ramp reads the core's counts, coarse to fine, and skips an empty
+    /// band.
+    func testTheBandCountsAreTheCores() {
+        var s = set()
+        s.bandCount = [0, 2, 0, 0, 7, 0]
+        XCTAssertEqual(s.bandCounts.map(\.band), [2, 5])
+        XCTAssertEqual(s.bandCounts.map(\.name), ["General", "Harbor"])
+        XCTAssertEqual(s.bandCounts.map(\.count), [2, 7])
     }
 
     func testTheSummaryCountsBothKindsAndTheBandRange() {
@@ -139,25 +138,26 @@ final class ChartSetTests: XCTestCase {
         XCTAssertTrue(set(cells: [cell("US5BB")]).summary.hasPrefix("1 chart · Harbor · "))
     }
 
-    /// The ladder says whether a set reaches the harbour a passage ends in.
-    func testTheBandLadderIsCoarseToFine() {
-        let s = set(cells: [cell("a", band: 5), cell("b", band: 2), cell("c", band: 5)])
-        XCTAssertEqual(s.bandCounts.map(\.band), [2, 5])
-        XCTAssertEqual(s.bandCounts.map(\.count), [1, 2])
-        XCTAssertEqual(s.bandCounts.map(\.name), ["General", "Harbor"])
+    func testEveryBandName() {
+        XCTAssertEqual((1...6).map(TextFormat.usageBand),
+                       ["Overview", "General", "Coastal", "Approach", "Harbor", "Berthing"])
+        XCTAssertEqual(TextFormat.usageBand(0), "Unknown")
     }
 
-    func testEveryBandName() {
-        XCTAssertEqual((1...6).map(ChartSet.bandName),
-                       ["Overview", "General", "Coastal", "Approach", "Harbor", "Berthing"])
-        XCTAssertEqual(ChartSet.bandName(0), "Unknown")
+    /// The band ramp reads the core's palette, in every scheme.
+    func testEveryBandHasAPaletteColour() {
+        for band in 1...6 {
+            for scheme: UInt32 in 0...2 {
+                XCTAssertNotNil(Chrome.s52("BAND\(band)", scheme: scheme), "BAND\(band) in \(scheme)")
+            }
+        }
+        XCTAssertNil(Chrome.s52("BAND7", scheme: 0))
     }
 
     /// A chart still inside an archive is not a path the engine can open.
     func testAnArchivedCellIsNotOpenable() {
         let s = set(cells: [cell("a"), cell("b", archived: true)])
         XCTAssertEqual(s.openablePaths.count, 1)
-        XCTAssertEqual(s.needsBake, 1)
     }
 
     /// A raw S-57 cell and a BSB sheet both prepare first.
@@ -171,12 +171,10 @@ final class ChartSetTests: XCTestCase {
         XCTAssertFalse(cell("a", kind: .baked).isRaster)
     }
 
-    /// Offering to prepare them again would say the work is unfinished when it
-    /// is as finished as it will get.
-    func testWhatIsLeftAfterAPrepareIsCountedAsRefused() {
+    /// A set Lookout prepared charts for is derived, and removing it deletes
+    /// them.
+    func testASetWithAPreparedDirectoryIsDerived() {
         let cells = [cell("a"), cell("b", kind: .source)]
-        XCTAssertEqual(set(cells: cells, prepared: nil).refusedCount, 0)
-        XCTAssertEqual(set(cells: cells, prepared: "/prepared").refusedCount, 1)
         XCTAssertTrue(set(cells: cells, prepared: "/prepared").isDerived)
         XCTAssertFalse(set(cells: cells).isDerived)
     }
@@ -203,5 +201,23 @@ final class ChartSetTests: XCTestCase {
                                           kind: .rasterSource, band: 0, bytes: 1)])
         XCTAssertTrue(s.rasterPaths.isEmpty)
         XCTAssertTrue(s.rasterGroups(label: RasterModel.providerLabel).isEmpty)
+    }
+
+    /// A set holding one prepared chart draws.
+    func testAPreparedCellIsSomethingToDraw() {
+        let s = set(cells: [
+            cell("US5MD1MC", kind: .baked),
+            cell("US5VA22M", kind: .source),
+        ], prepared: "/prepared/ENC_ROOT")
+        XCTAssertTrue(s.hasSomethingToDraw)
+    }
+
+    /// A set of raw cells has no chart to draw until they are prepared.
+    func testAnUnpreparedSetHasNothingToDraw() {
+        let s = set(cells: [
+            cell("US5MD1MC", kind: .source),
+            cell("US5VA22M", kind: .source),
+        ])
+        XCTAssertFalse(s.hasSomethingToDraw)
     }
 }

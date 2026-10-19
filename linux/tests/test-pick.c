@@ -1,4 +1,4 @@
-/* test-pick.c — the pick report's clipboard text and its callout geometry.
+/* test-pick.c: the pick report's clipboard text and its callout geometry.
  *
  * The engine composes the report and the core folds the payload; what is left
  * here is the shell's own: what Copy puts on the clipboard, and where the card

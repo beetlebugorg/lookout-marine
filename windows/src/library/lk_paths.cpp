@@ -27,6 +27,11 @@ namespace lkw
         return root.string();
     }
 
+    std::string NoaaDownloadDir()
+    {
+        return (std::filesystem::path(ChartLibraryDir()).parent_path() / "Downloads").string();
+    }
+
     namespace
     {
         std::string LowerExtOf(std::filesystem::path const &p)
@@ -58,7 +63,7 @@ namespace lkw
             return CollectCells(path);
         if (!std::filesystem::exists(path, ec))
             return {};
-        /* A raw source file — the .zip an import was baked FROM, a lone .000 —
+        /* A raw source file, the .zip an import was baked FROM, a lone .000,
          * is not a chart the open can draw: it stands for the library its bake
          * filled. Handing it to the vector open gets it skipped as
          * not-a-chart, and the app comes up blank. This holds for every
@@ -164,9 +169,9 @@ namespace lkw
         }
         {
             std::string first = most_recent != nullptr ? most_recent : "";
-            // A recent that names raw source — the .zip an import was baked
+            // A recent that names raw source: the .zip an import was baked
             // FROM, noted by builds before the bake learned to note the
-            // library — stands for the library the bake filled. Handing the
+            // library: stands for the library the bake filled. Handing the
             // zip to the vector open skips it as not-a-chart and the app
             // comes up blank.
             std::error_code ec;

@@ -214,8 +214,8 @@ typedef struct {
 } LkPickCard;
 
 /* The chart's own notes. An M_* object states something about the cell over
- * its whole area — the survey behind it, the horizontal datum, the quality of
- * the sounding data — so it is not the object under the cursor and does not
+ * its whole area, the survey behind it, the horizontal datum, the quality of
+ * the sounding data, so it is not the object under the cursor and does not
  * belong among the objects that are. */
 static gboolean
 lk_pick_is_note (const LkPickDecoded *decoded)
@@ -244,7 +244,7 @@ lk_pick_picture_key (GtkEventControllerKey *keys, guint keyval, guint keycode,
 /* The viewer a click on the inline picture opens: the picture in a window of
  * its own, at its own size up to the screen, scaling with the window from
  * there. A chart picture is a bridge clearance diagram or an anchorage
- * sketch — reading matter, and the report's column is too narrow to read it
+ * sketch, reading matter, and the report's column is too narrow to read it
  * in. Escape closes, as it closes the report. */
 static void
 lk_pick_picture_clicked (GtkGestureClick *gesture, int n_press, double x, double y,
@@ -512,7 +512,7 @@ lk_pick_flat_button (const char *icon_name, const char *tooltip)
 }
 
 /* The detail column for one object: the header, the body that scrolls, and
- * the provenance and the fold pinned under it — a control keeps its place. */
+ * the provenance and the fold pinned under it, a control keeps its place. */
 static GtkWidget *
 lk_pick_detail_new (LkPickCard *card, const LkPickDecoded *decoded)
 {
@@ -608,7 +608,7 @@ lk_pick_detail_new (LkPickCard *card, const LkPickDecoded *decoded)
 
   /* The provenance as one muted line, not a table: the mariner reads it once,
    * to decide how much to trust the rows above it. A cell that states none
-   * gets no line at all — an empty strip under a rule reads as a defect. */
+   * gets no line at all, an empty strip under a rule reads as a defect. */
   g_autofree char *footnote_text = g_strstrip (g_strdup (decoded->footnote));
   if (footnote_text[0] != '\0')
     {
@@ -667,7 +667,7 @@ lk_pick_card_hold_height (LkPickCard *card)
 
   /* An object that carries a lot scrolls; it does not take the window. The
    * body gives back exactly the overshoot, which is measured rather than
-   * assumed — the header and the provenance take a different share for every
+   * assumed, the header and the provenance take a different share for every
    * object, so no fixed reserve is right for all of them. */
   if (natural > card->ceiling && card->body != NULL)
     {
@@ -703,7 +703,7 @@ lk_pick_card_show (LkPickCard *card, guint index)
 
 /* The focus goes to the list on an idle, not in the map handler. The report is
  * built while the click that made the pick is still being delivered, and GTK
- * gives the focus to the widget under the pointer — the chart view — once that
+ * gives the focus to the widget under the pointer, the chart view, once that
  * delivery finishes. An idle runs after it, so the grab holds. */
 static gboolean
 lk_pick_focus_idle (gpointer data)
@@ -856,7 +856,7 @@ lk_pick_list_row (const LkPickDecoded *decoded, gboolean note)
 }
 
 /* One box of the object column: the objects, or the chart's notes. NULL when
- * the pick found none of that kind — an empty box under a rule reads as a
+ * the pick found none of that kind, an empty box under a rule reads as a
  * defect. */
 static GtkWidget *
 lk_pick_list_box (LkPickCard *card, GPtrArray *results, gboolean notes)

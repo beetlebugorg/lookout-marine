@@ -1,4 +1,4 @@
-/* lk_backdrop — a fully transparent system backdrop.
+/* lk_backdrop: a fully transparent system backdrop.
  *
  * The XAML island paints an opaque theme backstop; this replaces it so the
  * HWND-fallback chart shows through the region holes. */

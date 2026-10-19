@@ -5,6 +5,7 @@
 #include <cmath>
 
 #include "lk_format.h"
+#include "lk_chrome.h"
 
 using namespace winrt;
 using namespace Microsoft::UI::Xaml;
@@ -23,7 +24,7 @@ namespace winrt::LookoutMarine::implementation
     // chart. The settings pane is the reason: it is declared inside Root but
     // detached from it at construction and handed to a window of its own
     // (settings/ui/Settings.cpp), so it never sees Root's RequestedTheme and
-    // resolved its ThemeDictionary brushes against the SYSTEM theme instead —
+    // resolved its ThemeDictionary brushes against the SYSTEM theme instead:
     // while the rows built inside it in code asked DarkChrome(), which is the
     // chart's. A night chart under a light system theme gave a light pane
     // with night ink on it: white on white.
@@ -44,6 +45,21 @@ namespace winrt::LookoutMarine::implementation
         raster_pill_shown.clear();
         scalebar_pt = 0;
         scalebar_m = 0;
+
+        FlatChromeButtons();
+    }
+
+    // The buttons the markup leaves with no background of their own: the
+    // pick report's three, the scale panel's close, the scale in the HUD
+    // capsule and Set Up Later. Each gets its state fills in this scheme,
+    // because WinUI fades a button's background between states and a
+    // transparent one fades through a dark wash (lkw::ButtonFills).
+    void MainWindow::FlatChromeButtons()
+    {
+        bool const dark = DarkChrome();
+        for (auto const &b : { PickCopyBtn(), PickCloseBtn(), PickFoldBtn(),
+                               ScaleClose(), HudScaleBtn(), FirstRunLaterBtn() })
+            lkw::FlatFills(b, dark);
     }
 
     void MainWindow::UpdateReadouts()
@@ -61,7 +77,7 @@ namespace winrt::LookoutMarine::implementation
             ApplyChromeTheme(want);
 
         // A pick report describes the objects under one point of one view:
-        // any camera move the MARINER makes — pan, fling, zoom, rotate —
+        // any camera move the MARINER makes, pan, fling, zoom, rotate,
         // retires it. Follow moving the chart under way does not: the core
         // drops follow the moment they pan, so while follow is active every
         // pose change is the boat's, and a report they just opened must stay

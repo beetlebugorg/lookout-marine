@@ -3,10 +3,12 @@
 //! No chart handle: a bake runs before the charts it makes are opened.
 
 const std = @import("std");
+const owned = @import("owned");
 
 const capi = @import("../capi.zig");
 const bakejob = @import("../bakejob.zig");
 const rules = @import("../shell/bake.zig");
+const trash = @import("../trash.zig");
 
 const gpa = capi.gpa;
 
@@ -67,24 +69,19 @@ export fn lookout_bake_cancel(b: ?*lookout_bake) void {
 export fn lookout_bake_poll(b: ?*const lookout_bake, out: ?*lookout_bake_progress) void {
     const dst = out orelse return;
     const x = b orelse {
-        dst.* = .{
+        owned.fill(lookout_bake_progress, dst, .{
             .done = 0, .total = 0, .baked = 0, .ok = 0, .running = 0,
             .chart = @splat(0), .why = @splat(0),
-        };
+        });
         return;
     };
-    dst.* = x.poll();
+    owned.fill(lookout_bake_progress, dst, x.poll());
 }
 
 /// Join the worker and free the bake. Cancel first, or this blocks for about
 /// one chart's bake time.
 export fn lookout_bake_free(b: ?*lookout_bake) void {
     if (b) |x| x.free();
-}
-
-/// How many workers a bake on this machine runs. See lookout-library.h.
-export fn lookout_bake_workers(cores: u32) u32 {
-    return rules.workers(cores);
 }
 
 // ---- the rules ----------------------------------------------------------------
@@ -170,8 +167,8 @@ export fn lookout_bake_trash_prefix() [*:0]const u8 {
     return rules.trash_prefix;
 }
 
-/// True when a directory name is one a removal left behind.
-export fn lookout_bake_is_trash(name: ?[*:0]const u8) c_int {
-    const n = name orelse return 0;
-    return @intFromBool(rules.isTrash(std.mem.span(n)));
+/// Delete what removals left under `root`. See lookout-library.h.
+export fn lookout_bake_sweep(root: ?[*:0]const u8) usize {
+    const r = root orelse return 0;
+    return trash.sweep(gpa, std.mem.span(r));
 }

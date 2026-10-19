@@ -1,11 +1,13 @@
 //! The chart-library half of the C ABI (see include/lookout-library.h): the
-//! installed charts, the scan, the raster underlay, the host-supplied style
-//! the charts reached by link.
+//! installed charts, the scan, the raster underlay, the charts reached by
+//! link and the NOAA region table.
 
 const std = @import("std");
+const owned = @import("owned");
 
 const lk = @import("../root.zig");
 const clinks = @import("../chartlinks.zig");
+const noaa = @import("../noaa.zig");
 const craster = @import("../ct/raster.zig");
 const capi = @import("../capi.zig");
 
@@ -17,10 +19,6 @@ const capi_io = capi.capi_io;
 
 // ---- the chart library ------------------------------------------------------
 
-/// The last scan's JSON. Held so the pointer the shell reads stays good until
-/// the next scan.
-var scan_json: ?[:0]u8 = null;
-
 /// Add baked charts to the open library. See lookout.h.
 export fn lookout_charts_add(h: ?*lookout, paths: [*]const [*:0]const u8, n: usize) c_int {
     const l = locked(h);
@@ -31,42 +29,11 @@ export fn lookout_charts_add(h: ?*lookout, paths: [*]const [*:0]const u8, n: usi
     return @intCast(l.chartsAdd(list));
 }
 
-/// True while the library's ownership partition is being built. See lookout.h.
-export fn lookout_composing(h: ?*lookout) c_int {
-    const l = locked(h);
-    defer l.apiUnlock();
-    return if (l.loading or l.recomposing) 1 else 0;
-}
-
 /// How many charts the library holds. See lookout.h.
 export fn lookout_charts_count(h: ?*lookout) u32 {
     const l = locked(h);
     defer l.apiUnlock();
     return @intCast(l.charts.items.len);
-}
-
-/// Look through `path` for charts. See lookout.h.
-export fn lookout_scan_charts(path: [*:0]const u8, out_len: ?*usize) ?[*]const u8 {
-    if (scan_json) |old| gpa.free(old);
-    scan_json = null;
-    var s = lk.scanCharts(gpa, capi_io, std.mem.span(path)) catch return null;
-    defer s.deinit();
-    const json = lk.library.toJson(gpa, &s) catch return null;
-    scan_json = json;
-    if (out_len) |p| p.* = json.len;
-    return json.ptr;
-}
-
-/// lookout_scan_charts for a chart set that arrives as one .zip. See lookout.h.
-export fn lookout_scan_zip(path: [*:0]const u8, out_len: ?*usize) ?[*]const u8 {
-    if (scan_json) |old| gpa.free(old);
-    scan_json = null;
-    var s = lk.scanZip(gpa, std.mem.span(path)) catch return null;
-    defer s.deinit();
-    const json = lk.library.toJson(gpa, &s) catch return null;
-    scan_json = json;
-    if (out_len) |p| p.* = json.len;
-    return json.ptr;
 }
 
 pub const lookout_scan = lk.library.Read;
@@ -121,28 +88,10 @@ export fn lookout_scan_raster(s: ?*const lookout_scan, out_n: ?*usize) ?[*]const
     return x.raster.ptr;
 }
 
-/// Draw a host-supplied style instead of lookout's portrayal. See lookout.h.
-export fn lookout_alt_chart_style_json(h: ?*lookout, json: ?[*]const u8, len: usize) c_int {
-    const l = locked(h);
-    defer l.apiUnlock();
-    const bytes: ?[]const u8 = if (json != null and len != 0) json.?[0..len] else null;
-    l.setAltStyle(bytes) catch return 0;
-    return 1;
-}
-
 export fn lookout_alt_chart_style_active(h: ?*lookout) c_int {
     const l = locked(h);
     defer l.apiUnlock();
     return if (l.altStyleActive()) 1 else 0;
-}
-
-/// One sprite pack of the active alt style. See lookout.h.
-export fn lookout_alt_sprite_pack(h: ?*lookout, prefix: ?[*:0]const u8, index_json: [*]const u8, json_len: usize, png: [*]const u8, png_len: usize) c_int {
-    const l = locked(h);
-    defer l.apiUnlock();
-    if (json_len == 0 or png_len == 0) return 0;
-    const p: []const u8 = if (prefix) |pp| std.mem.span(pp) else "";
-    return @intCast(l.altSpritePack(p, index_json[0..json_len], png[0..png_len]));
 }
 
 // ---- charts by link --------------------------------------------------------
@@ -162,9 +111,15 @@ export fn lookout_set_http_provider(h: ?*lookout, get: ?lk.Lookout.HttpGetFn, ca
 /// call this from inside its own http_get callback, which runs with the api
 /// lock already held.
 export fn lookout_http_respond(h: ?*lookout, req_id: u64, bytes: ?[*]const u8, len: usize, status: c_int) void {
+    lookout_http_respond_chunk(h, req_id, bytes, len, status, 1);
+}
+
+/// Answer one GET a piece at a time. See lookout.h.
+export fn lookout_http_respond_chunk(h: ?*lookout, req_id: u64, bytes: ?[*]const u8, len: usize, status: c_int, done: c_int) void {
     if (h == null) return;
     const slice: []const u8 = if (bytes != null and len != 0) bytes.?[0..len] else &.{};
-    cast(h).links.respond(req_id, slice, status);
+    if (slice.len == 0 and done == 0) return;
+    cast(h).links.respondChunk(req_id, slice, status, done != 0);
 }
 
 /// Add a chart by link. See lookout.h.
@@ -187,6 +142,41 @@ export fn lookout_chart_link_remove(h: ?*lookout, url: ?[*:0]const u8) void {
     defer l.apiUnlock();
     const s = url orelse return;
     l.links.remove(std.mem.span(s));
+}
+
+/// One picture of a chart for a shell's chart list. See lookout-library.h.
+export fn lookout_chart_link_picture(
+    h: ?*lookout,
+    url: ?[*:0]const u8,
+    kind: c_int,
+    lon: f64,
+    lat: f64,
+    zoom: f64,
+    width: c_int,
+    height: c_int,
+    dst: ?[*]u8,
+) c_int {
+    const out = dst orelse return 0;
+    if (width <= 0 or height <= 0) return 0;
+    const k: lk.Lookout.PictureKind = switch (kind) {
+        0 => .tile,
+        1 => .render,
+        else => return 0,
+    };
+    const w: u32 = @intCast(width);
+    const ht: u32 = @intCast(height);
+    const l = locked(h);
+    defer l.apiUnlock();
+    const u: []const u8 = if (url) |s| std.mem.span(s) else "";
+    const len = @as(usize, w) * ht * 4;
+    return @intFromEnum(l.chartLinkPicture(u, k, lon, lat, zoom, w, ht, out[0..len]));
+}
+
+/// Drop every picture still pending. See lookout-library.h.
+export fn lookout_chart_link_pictures_cancel(h: ?*lookout) void {
+    const l = locked(h);
+    defer l.apiUnlock();
+    l.chartLinkPicturesCancel();
 }
 
 export fn lookout_chart_link_refresh(h: ?*lookout, url: ?[*:0]const u8) void {
@@ -267,7 +257,7 @@ export fn lookout_raster_cycle(h: ?*lookout) void {
     l.cycleRaster();
 }
 
-/// The active set's name (borrowed, valid until the next raster call), or "".
+/// The active set's name, or "". Borrowed until the set list changes.
 export fn lookout_raster_active_name(h: ?*lookout, out_len: ?*usize) [*:0]const u8 {
     const l = locked(h);
     defer l.apiUnlock();
@@ -390,3 +380,44 @@ export fn lookout_raster_set_count(h: ?*lookout) u32 {
     defer l.apiUnlock();
     return @intCast(l.rasterSetCount());
 }
+
+// ---- NOAA charts -----------------------------------------------------------
+
+/// One region a mariner picks. See lookout-library.h.
+pub const lookout_noaa_region = extern struct {
+    id: [*:0]const u8,
+    name: [*:0]const u8,
+    blurb: [*:0]const u8,
+    district: c_int,
+    west: f64,
+    south: f64,
+    east: f64,
+    north: f64,
+    panel: c_int,
+};
+
+/// The region table, built once from src/noaa.zig.
+const noaa_regions = blk: {
+    var out: [noaa.regions.len]lookout_noaa_region = undefined;
+    for (noaa.regions, 0..) |r, i| {
+        owned.fill(lookout_noaa_region, &out[i], .{
+            .id = r.id.ptr,
+            .name = r.name.ptr,
+            .blurb = r.blurb.ptr,
+            .district = r.district,
+            .west = r.west,
+            .south = r.south,
+            .east = r.east,
+            .north = r.north,
+            .panel = @intFromEnum(r.panel),
+        });
+    }
+    break :blk out;
+};
+
+/// The regions and how many. See lookout-library.h.
+export fn lookout_noaa_regions(out: ?*[*]const lookout_noaa_region) usize {
+    if (out) |o| o.* = &noaa_regions;
+    return noaa_regions.len;
+}
+

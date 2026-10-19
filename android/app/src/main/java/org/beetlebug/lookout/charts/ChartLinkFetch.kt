@@ -112,6 +112,24 @@ class ChartLinkFetch {
         wake?.invoke()
     }
 
+    /** One piece of an answer, same lock. Returns false once the fetcher has
+     *  stood down, and the read stops there. */
+    private fun respondPiece(
+        l: Lookout,
+        id: Long,
+        buf: ByteArray,
+        len: Int,
+        status: Int,
+        done: Boolean,
+    ): Boolean {
+        synchronized(respondLock) {
+            if (!live) return false
+            l.httpRespondChunk(id, buf, len, status, done)
+        }
+        wake?.invoke()
+        return true
+    }
+
     private fun fetch(l: Lookout, id: Long, url: String, allowFile: Boolean) {
         // The file:// boundary. lookout says when a url may be read off disk
         // (see lookout_http_get): the link the mariner typed, and what a
@@ -144,12 +162,23 @@ class ChartLinkFetch {
             conn.readTimeout = 8_000
             inFlight[id] = conn
             val code = conn.responseCode
-            val body = if (code in 200..299) {
-                conn.inputStream.use { it.readBytes() }
-            } else {
-                null
+            if (code !in 200..299) {
+                respond(l, id, null, code)
+                return
             }
-            respond(l, id, body, code)
+            // A piece at a time, into one buffer. A NOAA district downloads as
+            // a zip of a couple of hundred megabytes, and read into a ByteArray
+            // that is more than a phone's heap allows.
+            val buf = ByteArray(READ_CHUNK)
+            conn.inputStream.use { input ->
+                while (true) {
+                    val n = input.read(buf)
+                    if (n < 0) break
+                    if (n == 0) continue
+                    if (!respondPiece(l, id, buf, n, code, false)) return
+                }
+            }
+            respondPiece(l, id, buf, 0, code, true)
         } catch (e: Exception) {
             respond(l, id, null, 0)
         } finally {
@@ -172,6 +201,11 @@ class ChartLinkFetch {
          *  resolve does not feel stepped through, cheap enough to leave
          *  running while a link is up. */
         private const val POLL_MS = 16L
+
+        /** How much of a body goes in one piece. Big enough that a 200 MB
+         *  district is under a thousand handoffs, small enough that four of
+         *  them in flight are a megabyte of buffers. */
+        private const val READ_CHUNK = 256 * 1024
 
         /**
          * Say who is asking, on every chart-link request. Public tile hosts

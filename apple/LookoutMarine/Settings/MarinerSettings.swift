@@ -84,7 +84,7 @@ final class MarinerSettings: ObservableObject {
 
     // Display category (Base⊂Standard⊂Other) — live; soundings independent — live
     @Published var displayCategory: MarinerDisplayCategory = .standard
-    @Published var soundings: MarinerSoundings = .followCategory
+    @Published var soundings: MarinerSoundings = .forceOn
 
     // Text — live
     @Published var textNames = true

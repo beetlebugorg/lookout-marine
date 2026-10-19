@@ -1,4 +1,4 @@
-/* ui/hud/scale-entry.c — type a scale, or pick a band. */
+/* ui/hud/scale-entry.c: type a scale, or pick a band. */
 #include "ui/hud/scale-entry.h"
 #include "ui/hud/hud.h"
 

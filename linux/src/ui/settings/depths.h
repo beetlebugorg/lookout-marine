@@ -1,4 +1,4 @@
-/* ui/settings/depths.h — the Depths page.
+/* ui/settings/depths.h: the Depths page.
  *
  * Four contours, the unit they are read in, and how many shades of water sit
  * between them.

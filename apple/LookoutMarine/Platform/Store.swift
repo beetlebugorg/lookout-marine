@@ -24,13 +24,15 @@ final class Store {
 
     /// The core's group names, as Swift.
     enum Group {
-        static let view = String(cString: LOOKOUT_STORE_VIEW)
-        static let recents = String(cString: LOOKOUT_STORE_RECENTS)
-        static let raster = String(cString: LOOKOUT_STORE_RASTER)
-        static let mariner = String(cString: LOOKOUT_STORE_MARINER)
-        static let plugins = String(cString: LOOKOUT_STORE_PLUGINS)
-        static let chartlinks = String(cString: LOOKOUT_STORE_CHARTLINKS)
-        static let chartsets = String(cString: LOOKOUT_STORE_CHARTSETS)
+        // The header states each name as a string literal, so the macro
+        // imports as a String already.
+        static let view = LOOKOUT_STORE_VIEW
+        static let recents = LOOKOUT_STORE_RECENTS
+        static let raster = LOOKOUT_STORE_RASTER
+        static let mariner = LOOKOUT_STORE_MARINER
+        static let plugins = LOOKOUT_STORE_PLUGINS
+        static let chartlinks = LOOKOUT_STORE_CHARTLINKS
+        static let chartsets = LOOKOUT_STORE_CHARTSETS
     }
 
     /// The core's store. `lookout_set_store` reads it, so the engine keeps the

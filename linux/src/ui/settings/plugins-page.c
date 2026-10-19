@@ -1,4 +1,4 @@
-/* ui/settings/plugins-page.c — the Plugins page.
+/* ui/settings/plugins-page.c: the Plugins page.
  *
  * What is loaded, what each one may reach, and how to add or remove one. The
  * controls a plugin declared are on the pages they were filed under; this page
@@ -192,14 +192,11 @@ lk_build_plugins_page (LkSettings *settings)
       if (types != NULL)
         g_string_append_printf (about, " · reads %s files you open", types);
       about->str[0] = g_ascii_toupper (about->str[0]);
-      GtkWidget *where = gtk_label_new (about->str);
+      GtkWidget *where = lk_caption (about->str);
 
       gtk_widget_add_css_class (name, "heading");
       gtk_label_set_xalign (GTK_LABEL (name), 0.0);
-      gtk_widget_add_css_class (where, "dim-label");
-      gtk_widget_add_css_class (where, "caption");
       gtk_label_set_wrap (GTK_LABEL (where), TRUE);
-      gtk_label_set_xalign (GTK_LABEL (where), 0.0);
       gtk_widget_add_css_class (status, "caption");
       gtk_label_set_xalign (GTK_LABEL (status), 0.0);
 

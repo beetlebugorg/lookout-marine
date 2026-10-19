@@ -18,7 +18,7 @@ final class AppModel {
         didSet {
             // Each model gets the one seam it uses, not the controller. See
             // ChartEngine.swift.
-            charts.engine = controller
+            chartOpen.engine = controller
             chartLinks.engine = controller
             raster.engine = controller
             readouts.engine = controller
@@ -32,14 +32,22 @@ final class AppModel {
     // One per subject, each holding its own state and the calls that act on it.
 
     let chartLinks = ChartLinksModel()
+    /// NOAA's catalog, the regions a mariner picks, and the downloads run from
+    /// them. See src/noaa.zig for what a region selects.
+    let noaa = NoaaModel()
     let raster = RasterModel()
     let plugins = PluginsModel()
     let overlay = OverlayModel()
     let readouts = ReadoutsModel()
     let chrome = ChromeModel()
-    /// Adding a set installs the pictures it carries, so this one is built
-    /// with the raster model rather than beside it.
-    let charts: ChartsModel
+    /// Setup. It runs over an app that has settled on having no chart to
+    /// draw, on every launch that finds one. See lookout_setup_note.
+    let firstRun = FirstRunModel()
+    /// The chart being drawn, or opening.
+    let chartOpen: ChartOpen
+    /// The installed sets. Adding a set installs the pictures in it, so
+    /// this one is built with the raster model rather than beside it.
+    let charts: ChartLibrary
 
     // MARK: Across two areas
 
@@ -47,16 +55,72 @@ final class AppModel {
     /// front of the mariner. Every entry point lands here — Finder, a drop on
     /// the window, and Settings > Plugins > Install Plugin….
     func beginPluginInstall(_ path: String) {
-        guard charts.hasChart else {
+        guard chartOpen.hasChart else {
             plugins.pendingInstallPath = path
             return
         }
         plugins.begin(path)
     }
 
+    /// Apply the picker's pick. `givesBack` is true when the pick unticks
+    /// water that was held, and the library is read again after it.
+    func applyNoaaPick(givesBack: Bool) {
+        let whole = noaa.picked.isEmpty
+        guard let moved = noaa.apply(), givesBack else { return }
+        charts.noaaApplied(moved: moved, whole: whole)
+    }
+
+    /// What setup reads from the app. The overlay notes it on every change.
+    var setupFacts: FirstRunModel.Facts {
+        let n = noaa
+        return .init(
+            catalogReady: n.state.haveCatalog,
+            picked: !n.picked.isEmpty,
+            onLink: chartLinks.active != nil,
+            nothingToDraw: charts.nothingToDraw,
+            hasCharts: charts.sets.contains { $0.on && $0.hasSomethingToDraw },
+            workRunning: charts.chartWork != nil,
+            downloading: n.state.phase == .downloading,
+            chartOpen: chartOpen.hasChart && !chartOpen.chartIsEmpty,
+            noaaOutcome: n.state.outcome.rawValue,
+            noaaRun: n.state.run,
+            pickCharts: n.allInstalled ? n.cost.held : n.cost.cells,
+            pickBytes: n.allInstalled ? n.cost.heldBytes : n.cost.bytes)
+    }
+
+    /// Note the facts, and raise setup when the core has it come up.
+    func noteSetup() {
+        firstRun.note(setupFacts)
+        guard firstRun.shouldBegin else { return }
+        firstRun.begin()
+        showWholeCountry()
+    }
+
+    /// The three views the coverage picker photographs.
+    ///
+    /// One view cannot hold the lower 48, Alaska and Hawaii. The three need
+    /// 128 degrees of longitude, and at that scale their latitude span is
+    /// taller than the window. An atlas prints Alaska and Hawaii as insets for
+    /// the same reason.
+    static let countryView = lookout_view(lon: -96, lat: 38, zoom: 5.0, rotation_deg: 0)
+    static let alaskaView = lookout_view(lon: -152, lat: 63, zoom: 4.6, rotation_deg: 0)
+    static let hawaiiView = lookout_view(lon: -157.3, lat: 20.5, zoom: 7.0, rotation_deg: 0)
+
+    /// Frame the lower 48 behind setup, so the chart under the sheet shows the
+    /// coastline the mariner is choosing from.
+    func showWholeCountry() {
+        guard let controller else { return }
+        controller.setView(Self.countryView)
+        // United States charts label depths in feet, and setup is the one
+        // moment the unit can be chosen before the first sounding draws.
+        var mariner = controller.getMariner()
+        mariner.depth_unit = tile57_depth_unit(UInt32(MarinerDepthUnit.feet.rawValue))
+        controller.setMariner(mariner)
+    }
+
     /// A .lkplug that arrived before the chart did, now that the chart is up.
     func drainPendingInstall() {
-        guard charts.hasChart, let path = plugins.pendingInstallPath else { return }
+        guard chartOpen.hasChart, let path = plugins.pendingInstallPath else { return }
         plugins.pendingInstallPath = nil
         plugins.begin(path)
     }
@@ -65,7 +129,17 @@ final class AppModel {
         // What the mariner already has, out of the defaults domain and into
         // the core store. Once, before anything reads a setting.
         Store.shared.importDefaults()
-        charts = ChartsModel(raster: raster)
+        chartOpen = ChartOpen(raster: raster)
+        charts = ChartLibrary(raster: raster, chartOpen: chartOpen)
+        // The core prepares a download, so its Stop is the NOAA service's.
+        charts.cancelNoaaPrepare = { [weak self] in self?.noaa.cancel() }
+        charts.onSetsChanged = { [weak self] in
+            guard let self else { return }
+            // The core reads the held cells and the editions off the sets.
+            self.noaa.reprice()
+            self.noaa.recount()
+            self.noaa.considerUpdateCheck()
+        }
         // Anything a previous run renamed on its way to being deleted.
         ChartBake.sweepTrash()
         // The panel's list. The open itself does not wait on this: it takes
@@ -78,7 +152,24 @@ final class AppModel {
         // Every chart-link call goes through a lookout handle, which exists
         // only while a chart is open. Open a chart of no cells so a link
         // picked with no charts installed has a core to run through.
-        chartLinks.openChartForLink = { [weak self] in self?.charts.openEmpty() }
+        chartLinks.openChartForLink = { [weak self] in self?.chartOpen.openEmpty() }
+        noaa.useService()
+        noaa.onChange = { [weak self] ended in
+            guard let self else { return }
+            let st = self.noaa.state
+            self.charts.noteNoaaRemoval(st)
+            // A prepare the core resumed has no download to watch, so its end
+            // opens the charts as well.
+            if self.charts.noteNoaaPrepare(st) || ended { self.charts.adoptNoaaPrepare() }
+        }
+        noaa.onError = { [weak self] in self?.chartOpen.openError = $0 }
+        noaa.onFailed = { [weak self] message, retry in
+            // The Charts pane shows the end here. Setup shows it in its own
+            // step.
+            guard let self, !self.firstRun.showing else { return }
+            self.chartOpen.openError = message
+            if let retry { self.chartOpen.openRetry = retry }
+        }
     }
 
     /// A chart handle has just been created. The core reads its chart-link
@@ -86,6 +177,9 @@ final class AppModel {
     /// its fetcher, so nothing has to be replayed here — only the mariner's old
     /// UserDefaults list handed over, once.
     func chartDidOpen() {
+        // Setup frames the country, which goes through the chart handle.
+        if firstRun.showing { showWholeCountry() }
+        noaa.considerUpdateCheck()
         chartLinks.migrate()
         // The chart-link calls held while no chart was open.
         chartLinks.chartDidOpen()
@@ -112,7 +206,7 @@ final class AppModel {
     /// Install the raster charts the mariner chose. What would not open is
     /// reported as a chart error, which is the alert the shell already has.
     func addRasterCharts(_ picked: [String]) {
-        if let err = raster.add(picked) { charts.openError = err }
+        if let err = raster.add(picked) { chartOpen.openError = err }
     }
 
     /// Step to the next picture. Nothing installed: the cycle has nowhere to

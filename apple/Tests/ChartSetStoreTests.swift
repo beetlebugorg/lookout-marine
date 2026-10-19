@@ -89,6 +89,7 @@ final class ChartSetStoreTests: ShellTestCase {
 
     /// A raster chart added before sets existed arrives as the folder it lives
     /// in, once. One list means one list.
+    @MainActor
     func testRasterChartsArriveAsSetsOnce() throws {
         let dir = try temporaryDirectory()
         let file = (dir as NSString).appendingPathComponent("photo.mbtiles")
@@ -109,6 +110,7 @@ final class ChartSetStoreTests: ShellTestCase {
     /// Charts this app prepared already belong to the set they were made from,
     /// and each sits in a directory of its own name: a folder of 900 sheets
     /// would otherwise arrive as 900 sets.
+    @MainActor
     func testWhatThisAppPreparedIsNotCarriedAcross() throws {
         let root = try XCTUnwrap(ChartBake.chartsRoot)
         Store.shared.set([root + "/Set/US5MD1MC/US5MD1MC.pmtiles"], RasterModel.group, RasterModel.pathsKey)
@@ -118,6 +120,7 @@ final class ChartSetStoreTests: ShellTestCase {
     }
 
     /// A file that is no longer on the disk brings nothing across.
+    @MainActor
     func testAMissingRasterChartBringsNoFolder() {
         Store.shared.set(["/no/such/photo.mbtiles"], RasterModel.group, RasterModel.pathsKey)
         Store.shared.set(["/charts/a"], Store.Group.chartsets, "paths")

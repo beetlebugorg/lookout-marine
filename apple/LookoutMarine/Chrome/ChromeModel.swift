@@ -29,6 +29,10 @@ final class ChromeModel {
     var showSettingsStyleImporter = false
     /// Install Plugin… on iOS. A plugin file arrives through the Files app.
     var showSettingsPluginImporter = false
+    /// Get charts from NOAA… on iOS. The picker is presented by the form for
+    /// the same reason the importers are: owned by the row that raises it, it
+    /// went away with the row.
+    var showSettingsNoaaPicker = false
 
     // MARK: The settings form
 
